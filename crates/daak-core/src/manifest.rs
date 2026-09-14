@@ -236,6 +236,23 @@ impl Manifest {
         }
     }
 
+    pub fn batch(sender: DeviceRef, items: Vec<Item>) -> Result<Self> {
+        for (expected, item) in items.iter().enumerate() {
+            if item.index as usize != expected {
+                return Err(CoreError::Protocol(format!(
+                    "batch item indices must be contiguous from 0; found {} at position {expected}",
+                    item.index
+                )));
+            }
+        }
+        let kind = if items.len() > 1 {
+            PayloadKind::Batch
+        } else {
+            PayloadKind::Media
+        };
+        Ok(Self::new(kind, sender, items))
+    }
+
     pub fn text(text: &str) -> Self {
         let sender = DeviceRef {
             device_id: [0u8; 16],
