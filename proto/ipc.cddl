@@ -13,8 +13,10 @@
 ipc-message = {
   "v":   uint,                        ; IPC schema version; bump on breaking change
   "msg": ipc-request / ipc-response / ipc-event,
-  ? "extensions": { * tstr => any },  ; forward-compat fields: preserved, never fatal
+  ? "extensions": extensions,         ; forward-compat fields: preserved, never fatal
 }
+
+extensions = { * tstr => any }
 
 ; ---------- IpcRequest ----------
 ipc-request =
@@ -36,13 +38,15 @@ subscribe-request        = "Subscribe"
 devices-request          = "Devices"
 pair-request             = { "Pair": pair-args }
 send-request             = { "Send": send-args }
-cancel-request           = { "Cancel": { "transfer_id": tstr } }
-retry-request            = { "Retry": { "transfer_id": tstr } }
+cancel-request           = { "Cancel": transfer-ref }
+retry-request            = { "Retry": transfer-ref }
 list-transfers-request   = "ListTransfers"
 list-inbox-request       = "ListInbox"
-set-display-name-request = { "SetDisplayName": { "name": tstr } }
-set-presence-request     = { "SetPresence": { "state": tstr } }
+set-display-name-request = { "SetDisplayName": display-name-args }
+set-presence-request     = { "SetPresence": set-presence-args }
 shutdown-request         = "Shutdown"
+
+transfer-ref = { "transfer_id": tstr }
 
 start-args = {
   "data_dir":     tstr,
@@ -58,6 +62,10 @@ send-args = {
   "files":          [* tstr],
 }
 
+display-name-args = { "name": tstr }
+
+set-presence-args = { "state": tstr }
+
 ; ---------- IpcResponse ----------
 ipc-response =
     ok-response
@@ -66,9 +74,13 @@ ipc-response =
   / port-response
 
 ok-response    = "Ok"
-error-response = { "Error": { "message": tstr } }
-json-response  = { "Json": { "value": tstr } }
-port-response  = { "Port": { "port": uint } }
+error-response = { "Error": error-args }
+json-response  = { "Json": json-args }
+port-response  = { "Port": port-args }
+
+error-args = { "message": tstr }
+json-args  = { "value": tstr }
+port-args  = { "port": uint }
 
 ; ---------- IpcEvent (mirrors spec §6.1) ----------
 ipc-event =
@@ -80,10 +92,17 @@ ipc-event =
   / transfer-failed-event
   / inbox-received-event
 
-device-found-event      = { "DeviceFound": { "device_id": tstr, "name": tstr, "addr": tstr } }
-device-state-event      = { "DeviceState": { "device_id": tstr, "online": bool } }
-pairing-sas-event       = { "PairingSas": { "peer_device_id": tstr, "sas": tstr } }
-transfer-progress-event = { "TransferProgress": { "transfer_id": tstr, "bytes_done": uint, "bytes_total": uint } }
-transfer-done-event     = { "TransferDone": { "transfer_id": tstr } }
-transfer-failed-event   = { "TransferFailed": { "transfer_id": tstr, "error": tstr } }
-inbox-received-event    = { "InboxReceived": { "payload": tstr } }
+device-found-event      = { "DeviceFound": device-found-args }
+device-state-event      = { "DeviceState": device-state-args }
+pairing-sas-event       = { "PairingSas": pairing-sas-args }
+transfer-progress-event = { "TransferProgress": transfer-progress-args }
+transfer-done-event     = { "TransferDone": transfer-ref }
+transfer-failed-event   = { "TransferFailed": transfer-failed-args }
+inbox-received-event    = { "InboxReceived": inbox-received-args }
+
+device-found-args      = { "device_id": tstr, "name": tstr, "addr": tstr }
+device-state-args      = { "device_id": tstr, "online": bool }
+pairing-sas-args       = { "peer_device_id": tstr, "sas": tstr }
+transfer-progress-args = { "transfer_id": tstr, "bytes_done": uint, "bytes_total": uint }
+transfer-failed-args   = { "transfer_id": tstr, "error": tstr }
+inbox-received-args    = { "payload": tstr }
