@@ -1,5 +1,6 @@
 pub mod chunk;
 pub mod control;
+pub mod discovery;
 pub mod error;
 pub mod framing;
 pub mod hash;
