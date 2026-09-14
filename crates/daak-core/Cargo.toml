@@ -1,0 +1,23 @@
+[package]
+name = "daak-core"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+bytes.workspace = true
+serde.workspace = true
+ciborium.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+blake2.workspace = true
+rand.workspace = true
+mdns-sd.workspace = true
+socket2.workspace = true
+futures.workspace = true
+hostname.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
