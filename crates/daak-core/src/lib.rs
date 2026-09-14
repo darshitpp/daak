@@ -1,8 +1,10 @@
 pub mod chunk;
+pub mod control;
 pub mod error;
 pub mod framing;
 pub mod hash;
 pub mod manifest;
 pub mod net;
+pub mod transfer;
 
 pub use error::{CoreError, Result};
