@@ -12,6 +12,12 @@ importers:
         specifier: 2.3.3
         version: 2.3.3
 
+  packages/proto:
+    devDependencies:
+      typescript:
+        specifier: 5.6.3
+        version: 5.6.3
+
 packages:
 
   turbo-darwin-64@2.3.3:
@@ -48,6 +54,11 @@ packages:
     resolution: {integrity: sha512-DUHWQAcC8BTiUZDRzAYGvpSpGLiaOQPfYXlCieQbwUvmml/LRGIe3raKdrOPOoiX0DYlzxs2nH6BoWJoZrj8hA==}
     hasBin: true
 
+  typescript@5.6.3:
+    resolution: {integrity: sha512-hjcS1mhfuyi4WW8IWtjP7brDrG2cuDZukyrYrSauoXGNgx0S7zceP07adYkJycEr56BOUTNPzbInooiN3fn1qw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
 snapshots:
 
   turbo-darwin-64@2.3.3:
@@ -76,3 +87,5 @@ snapshots:
       turbo-linux-arm64: 2.3.3
       turbo-windows-64: 2.3.3
       turbo-windows-arm64: 2.3.3
+
+  typescript@5.6.3: {}

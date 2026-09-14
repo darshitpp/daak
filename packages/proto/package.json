@@ -1,0 +1,13 @@
+{
+  "name": "@daak/proto",
+  "version": "0.0.0",
+  "private": true,
+  "types": "../../proto/gen/ts/ipc/json-types.d.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3"
+  }
+}
