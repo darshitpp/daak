@@ -13,6 +13,11 @@ use crate::manifest::Manifest;
 use crate::net::tcp;
 use crate::transfer::{receive_transfer, send_transfer};
 
+/// A rejected peer is a per-connection event; anything else is a listener fault.
+fn accept_error_is_fatal(err: &crate::error::CoreError) -> bool {
+    !matches!(err, crate::error::CoreError::Protocol(_))
+}
+
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub display_name: String,
@@ -96,14 +101,25 @@ impl Engine {
             let tx = tx.clone();
             let out_dir = cfg.out_dir.clone();
             tokio::spawn(async move {
+                // JoinSet aborts any in-flight receivers when it is dropped, and the
+                // accept task's locals are dropped when shutdown aborts this task, so
+                // shutdown also stops in-flight receive_transfer calls.
+                let mut set = tokio::task::JoinSet::new();
                 loop {
                     let (mut conn, _peer) = match tcp::accept(&listener).await {
                         Ok(v) => v,
-                        Err(_) => break,
+                        Err(e) => {
+                            if accept_error_is_fatal(&e) {
+                                tracing::warn!("accept failed, stopping listener: {e}");
+                                break;
+                            }
+                            tracing::warn!("rejected connection: {e}");
+                            continue;
+                        }
                     };
                     let tx = tx.clone();
                     let out_dir = out_dir.clone();
-                    tokio::spawn(async move {
+                    set.spawn(async move {
                         match receive_transfer(&mut conn, &out_dir, |_| {}).await {
                             Ok(m) => {
                                 let _ = tx.send(EngineEvent::TransferDone {
@@ -118,6 +134,7 @@ impl Engine {
                             }
                         }
                     });
+                    while set.try_join_next().is_some() {}
                 }
             })
         };
@@ -304,5 +321,15 @@ mod tests {
 
         sender.shutdown().await.unwrap();
         receiver.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn accept_error_classifies_protocol_rejection_as_non_fatal() {
+        assert!(!accept_error_is_fatal(&crate::error::CoreError::Protocol(
+            "x".into()
+        )));
+        assert!(accept_error_is_fatal(&crate::error::CoreError::Io(
+            std::io::Error::other("boom")
+        )));
     }
 }
