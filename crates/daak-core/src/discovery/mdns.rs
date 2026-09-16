@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
@@ -93,11 +93,7 @@ pub fn announce_from_service(info: &ServiceInfo) -> Result<PeerAnnounce> {
         .get_property_val_str("v")
         .and_then(|v| v.parse().ok())
         .unwrap_or(PROTO_VERSION);
-    let addr = info
-        .get_addresses()
-        .iter()
-        .next()
-        .map(|ip| SocketAddr::new(*ip, info.get_port()))
+    let addr = pick_addr(info.get_addresses().iter().copied(), info.get_port())
         .ok_or_else(|| CoreError::Discovery("service has no address yet".into()))?;
     Ok(PeerAnnounce {
         device_id,
@@ -106,6 +102,20 @@ pub fn announce_from_service(info: &ServiceInfo) -> Result<PeerAnnounce> {
         port: info.get_port(),
         proto_version,
     })
+}
+
+pub fn pick_addr(addrs: impl Iterator<Item = IpAddr>, port: u16) -> Option<SocketAddr> {
+    fn rank(ip: IpAddr) -> u8 {
+        match ip {
+            IpAddr::V4(v4) if v4.is_private() => 0,
+            IpAddr::V4(v4) if v4.is_loopback() || v4.is_link_local() => 1,
+            IpAddr::V6(v6) if (v6.segments()[0] & 0xffc0) == 0xfe80 => 2,
+            _ => 3,
+        }
+    }
+    addrs
+        .min_by_key(|ip| (rank(*ip), *ip))
+        .map(|ip| SocketAddr::new(ip, port))
 }
 
 fn sanitize_host(name: &str) -> String {
@@ -168,5 +178,21 @@ mod tests {
         )
         .unwrap();
         assert!(announce_from_service(&info).is_err());
+    }
+
+    #[test]
+    fn pick_addr_prefers_private_ipv4_regardless_of_order() {
+        let mixed: Vec<IpAddr> = vec![
+            "8.8.8.8".parse().unwrap(),
+            "fe80::1".parse().unwrap(),
+            "192.168.1.20".parse().unwrap(),
+            "127.0.0.1".parse().unwrap(),
+        ];
+        let chosen = pick_addr(mixed.iter().copied(), 40001).unwrap();
+        assert_eq!(chosen.ip(), "192.168.1.20".parse::<IpAddr>().unwrap());
+
+        let reversed: Vec<IpAddr> = mixed.into_iter().rev().collect();
+        let chosen_rev = pick_addr(reversed.iter().copied(), 40001).unwrap();
+        assert_eq!(chosen_rev.ip(), "192.168.1.20".parse::<IpAddr>().unwrap());
     }
 }
