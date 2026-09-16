@@ -1,0 +1,15 @@
+[package]
+name = "daak-cli"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "daak"
+path = "src/main.rs"
+
+[dependencies]
+daak-core = { path = "../daak-core" }
+clap = { version = "4", features = ["derive"] }
+tokio.workspace = true
+anyhow = "1"
+rand.workspace = true
