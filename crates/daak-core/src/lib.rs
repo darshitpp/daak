@@ -7,5 +7,6 @@ pub mod hash;
 pub mod manifest;
 pub mod net;
 pub mod transfer;
+pub mod wordlist;
 
 pub use error::{CoreError, Result};
