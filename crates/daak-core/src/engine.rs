@@ -8,7 +8,7 @@ use tokio::sync::{broadcast, Mutex};
 use crate::discovery::{
     Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
 };
-use crate::error::Result;
+use crate::error::{ensure_compatible, Result};
 use crate::manifest::Manifest;
 use crate::net::tcp;
 use crate::transfer::{receive_transfer, send_transfer};
@@ -151,9 +151,16 @@ impl Engine {
                     device_id,
                     name,
                     addr,
+                    proto_version,
                     ..
                 }) = browser.recv().await
                 {
+                    if let Err(e) = ensure_compatible(proto_version) {
+                        tracing::warn!(
+                            "peer {name} ({addr}) advertises incompatible proto version {proto_version}: {e}"
+                        );
+                        continue;
+                    }
                     let info = DeviceInfo {
                         device_id,
                         name,

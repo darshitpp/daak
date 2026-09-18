@@ -18,12 +18,50 @@ pub enum CoreError {
     Discovery(String),
     #[error("naming: {0}")]
     Naming(String),
+    #[error("unsupported schema; update required")]
+    UnsupportedSchema,
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 
 pub fn io_err<E: Display>(ctx: &str, e: E) -> CoreError {
     CoreError::Io(std::io::Error::other(format!("{ctx}: {e}")))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    Network,
+    Crypto,
+    Disk,
+    PeerRejected,
+    UnsupportedSchema,
+}
+
+impl CoreError {
+    pub fn category(&self) -> ErrorCategory {
+        match self {
+            CoreError::Io(_) => ErrorCategory::Disk,
+            CoreError::FrameTooLarge(_) => ErrorCategory::Network,
+            CoreError::Protocol(m) if m.contains("aead") || m.contains("noise") => {
+                ErrorCategory::Crypto
+            }
+            CoreError::Protocol(_) => ErrorCategory::PeerRejected,
+            CoreError::Codec(_) | CoreError::Cbor(_) => ErrorCategory::PeerRejected,
+            CoreError::Transfer(_) => ErrorCategory::PeerRejected,
+            CoreError::Discovery(_) => ErrorCategory::Network,
+            CoreError::UnsupportedSchema => ErrorCategory::UnsupportedSchema,
+            _ => ErrorCategory::PeerRejected,
+        }
+    }
+}
+
+/// Refuse peers whose protocol major version (version / 100) differs from ours.
+pub fn ensure_compatible(peer_proto_version: u16) -> Result<()> {
+    if peer_proto_version / 100 == crate::manifest::MANIFEST_VERSION / 100 {
+        Ok(())
+    } else {
+        Err(CoreError::UnsupportedSchema)
+    }
 }
 
 #[cfg(test)]
@@ -34,5 +72,36 @@ mod tests {
     fn frame_too_large_displays_size() {
         let e = CoreError::FrameTooLarge(9_999_999);
         assert!(e.to_string().contains("9999999"));
+    }
+
+    #[test]
+    fn categories_cover_representative_errors() {
+        assert_eq!(
+            CoreError::Io(std::io::Error::other("x")).category(),
+            ErrorCategory::Disk
+        );
+        assert_eq!(
+            CoreError::Protocol("aead open failed".into()).category(),
+            ErrorCategory::Crypto
+        );
+        assert_eq!(
+            CoreError::FrameTooLarge(1).category(),
+            ErrorCategory::Network
+        );
+        assert_eq!(
+            CoreError::UnsupportedSchema.category(),
+            ErrorCategory::UnsupportedSchema
+        );
+    }
+
+    #[test]
+    fn version_mismatch_is_refused() {
+        use crate::discovery::mdns::PROTO_VERSION;
+        assert!(ensure_compatible(PROTO_VERSION).is_ok());
+        // /100 grouping: +100 steps to the next incompatible major version.
+        assert!(matches!(
+            ensure_compatible(PROTO_VERSION + 100),
+            Err(CoreError::UnsupportedSchema)
+        ));
     }
 }
