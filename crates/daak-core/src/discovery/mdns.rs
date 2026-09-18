@@ -15,6 +15,8 @@ pub struct PeerAnnounce {
     pub addr: SocketAddr,
     pub port: u16,
     pub proto_version: u16,
+    pub capabilities: u32,
+    pub status: String,
 }
 
 pub struct Advertiser {
@@ -24,11 +26,33 @@ pub struct Advertiser {
 
 impl Advertiser {
     pub fn start(name: &str, port: u16, device_id: [u8; 16]) -> Result<Self> {
+        Self::start_with_meta(name, port, device_id, "", "", 0, "online")
+    }
+
+    pub fn start_with_meta(
+        name: &str,
+        port: u16,
+        device_id: [u8; 16],
+        fp: &str,
+        pk: &str,
+        caps: u32,
+        status: &str,
+    ) -> Result<Self> {
         let daemon = ServiceDaemon::new().map_err(|e| CoreError::Discovery(e.to_string()))?;
         let mut props = HashMap::new();
         props.insert("id".to_string(), hex::encode(device_id));
         props.insert("name".to_string(), name.to_string());
         props.insert("v".to_string(), PROTO_VERSION.to_string());
+        let fp = fp.chars().take(20).collect::<String>();
+        if !fp.is_empty() {
+            props.insert("fp".to_string(), fp);
+        }
+        let pk = pk.chars().take(16).collect::<String>();
+        if !pk.is_empty() {
+            props.insert("pk".to_string(), pk);
+        }
+        props.insert("caps".to_string(), caps.to_string());
+        props.insert("st".to_string(), status.to_string());
         let host = format!("{}.local.", sanitize_host(name));
         let info = ServiceInfo::new(SERVICE_TYPE, &sanitize_host(name), &host, "", port, props)
             .map_err(|e| CoreError::Discovery(e.to_string()))?
@@ -93,6 +117,14 @@ pub fn announce_from_service(info: &ServiceInfo) -> Result<PeerAnnounce> {
         .get_property_val_str("v")
         .and_then(|v| v.parse().ok())
         .unwrap_or(PROTO_VERSION);
+    let capabilities = props
+        .get_property_val_str("caps")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let status = props
+        .get_property_val_str("st")
+        .unwrap_or("unknown")
+        .to_string();
     let addr = pick_addr(info.get_addresses().iter().copied(), info.get_port())
         .ok_or_else(|| CoreError::Discovery("service has no address yet".into()))?;
     Ok(PeerAnnounce {
@@ -101,6 +133,8 @@ pub fn announce_from_service(info: &ServiceInfo) -> Result<PeerAnnounce> {
         addr,
         port: info.get_port(),
         proto_version,
+        capabilities,
+        status,
     })
 }
 
@@ -194,5 +228,45 @@ mod tests {
         let reversed: Vec<IpAddr> = mixed.into_iter().rev().collect();
         let chosen_rev = pick_addr(reversed.iter().copied(), 40001).unwrap();
         assert_eq!(chosen_rev.ip(), "192.168.1.20".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn parses_capability_and_status_txt_records() {
+        let mut props = HashMap::new();
+        props.insert("id".into(), "0102030405060708090a0b0c0d0e0f10".into());
+        props.insert("v".into(), "1".into());
+        props.insert("name".into(), "Peer".into());
+        props.insert("caps".into(), "5".into());
+        props.insert("st".into(), "online".into());
+        let info = mdns_sd::ServiceInfo::new(
+            SERVICE_TYPE,
+            "peer",
+            "peer.local.",
+            "192.168.1.30",
+            40001,
+            props,
+        )
+        .unwrap();
+        let a = announce_from_service(&info).unwrap();
+        assert_eq!(a.capabilities, 5);
+        assert_eq!(a.status, "online");
+    }
+
+    #[test]
+    fn older_peer_without_caps_defaults_to_zero() {
+        let mut props = HashMap::new();
+        props.insert("id".into(), "0102030405060708090a0b0c0d0e0f10".into());
+        let info = mdns_sd::ServiceInfo::new(
+            SERVICE_TYPE,
+            "old",
+            "old.local.",
+            "192.168.1.31",
+            40002,
+            props,
+        )
+        .unwrap();
+        let a = announce_from_service(&info).unwrap();
+        assert_eq!(a.capabilities, 0);
+        assert_eq!(a.status, "unknown");
     }
 }
