@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Turborepo cache
+.turbo/
+
+# Design specs and implementation plans are intentionally local-only (not version-controlled)
+docs/superpowers/specs/
+docs/superpowers/plans/
+
+# SDD scratch workspace (ledgers, briefs, reports)
+.superpowers/
+
+# Rust build output
+/target/
+proto/gen/rust/*/target/
+proto/gen/rust/*/Cargo.lock
+
+# OS junk
+.DS_Store
