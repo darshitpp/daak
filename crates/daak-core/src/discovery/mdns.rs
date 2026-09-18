@@ -43,12 +43,10 @@ impl Advertiser {
         props.insert("id".to_string(), hex::encode(device_id));
         props.insert("name".to_string(), name.to_string());
         props.insert("v".to_string(), PROTO_VERSION.to_string());
-        let fp = fp.chars().take(20).collect::<String>();
-        if !fp.is_empty() {
+        if let Some(fp) = txt_short(fp, 20) {
             props.insert("fp".to_string(), fp);
         }
-        let pk = pk.chars().take(16).collect::<String>();
-        if !pk.is_empty() {
+        if let Some(pk) = txt_short(pk, 16) {
             props.insert("pk".to_string(), pk);
         }
         props.insert("caps".to_string(), caps.to_string());
@@ -166,6 +164,14 @@ fn sanitize_host(name: &str) -> String {
         .to_string()
 }
 
+fn txt_short(value: &str, max_chars: usize) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.chars().take(max_chars).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +274,16 @@ mod tests {
         let a = announce_from_service(&info).unwrap();
         assert_eq!(a.capabilities, 0);
         assert_eq!(a.status, "unknown");
+    }
+
+    #[test]
+    fn txt_short_omits_empty_and_truncates_by_chars() {
+        assert_eq!(txt_short("", 20), None);
+        let long = "abcdefghijklmnopqrstuvwxyz0123";
+        assert_eq!(txt_short(long, 20).unwrap().chars().count(), 20);
+        assert_eq!(txt_short(long, 16).unwrap().chars().count(), 16);
+        let multi = "é".repeat(30);
+        assert_eq!(txt_short(&multi, 20).unwrap().chars().count(), 20);
+        assert_eq!(txt_short(&multi, 16).unwrap().chars().count(), 16);
     }
 }
