@@ -94,7 +94,7 @@ impl PresenceSocket {
 mod tests {
     use super::*;
 
-    #[ignore = "multicast send returns EHOSTUNREACH off loopback in this environment; verified manually on a real LAN"]
+    #[ignore = "IPv4 multicast send returns EHOSTUNREACH off loopback in this environment, so the beacon needs a real LAN to run"]
     #[tokio::test]
     async fn two_sockets_on_one_host_exchange_beacons() {
         let a = PresenceSocket::bind().await.unwrap();

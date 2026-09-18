@@ -4,6 +4,7 @@ use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AckMsg {
+    #[serde(with = "crate::manifest::byte_array")]
     pub transfer_id: [u8; 16],
     pub item_index: u32,
     pub complete: bool,
@@ -24,6 +25,7 @@ impl AckMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NackMsg {
+    #[serde(with = "crate::manifest::byte_array")]
     pub transfer_id: [u8; 16],
     pub item_index: u32,
     pub ranges: Vec<(u64, u64)>,
@@ -54,5 +56,37 @@ mod tests {
             hash_ok: true,
         };
         assert_eq!(AckMsg::from_cbor(&a.to_cbor().unwrap()).unwrap(), a);
+    }
+
+    #[test]
+    fn transfer_id_encodes_as_cbor_bytes() {
+        use ciborium::value::Value;
+
+        let a = AckMsg {
+            transfer_id: [3u8; 16],
+            item_index: 2,
+            complete: true,
+            hash_ok: true,
+        };
+        let n = NackMsg {
+            transfer_id: [5u8; 16],
+            item_index: 1,
+            ranges: vec![(0, 1)],
+        };
+        for bytes in [a.to_cbor().unwrap(), n.to_cbor().unwrap()] {
+            let value: Value = ciborium::de::from_reader(bytes.as_slice()).unwrap();
+            let Value::Map(entries) = &value else {
+                panic!("expected map, got {value:?}");
+            };
+            let transfer_id = entries
+                .iter()
+                .find(|(k, _)| matches!(k, Value::Text(t) if t == "transfer_id"))
+                .map(|(_, v)| v)
+                .expect("missing transfer_id");
+            assert!(
+                matches!(transfer_id, Value::Bytes(b) if b.len() == 16),
+                "transfer_id must be a 16-byte CBOR bstr, got {transfer_id:?}"
+            );
+        }
     }
 }

@@ -4,7 +4,7 @@ use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 use crate::chunk::ChunkBitmap;
 use crate::control::AckMsg;
-use crate::error::{CoreError, Result};
+use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
 use crate::hash::blake2b256_reader;
 use crate::manifest::{Item, ItemType, Manifest, CHUNK_SIZE_MAX, CHUNK_SIZE_MIN};
@@ -35,6 +35,25 @@ fn item_output_path(out_dir: &Path, item: &Item) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn validate_manifest(manifest: &Manifest) -> Result<()> {
+    if manifest.items.len() > MAX_ITEMS {
+        return Err(CoreError::Protocol(format!(
+            "manifest has {} items exceeds cap {MAX_ITEMS}",
+            manifest.items.len()
+        )));
+    }
+    ensure_compatible(manifest.v)?;
+    for (pos, item) in manifest.items.iter().enumerate() {
+        if item.index as usize != pos {
+            return Err(CoreError::Protocol(format!(
+                "manifest item at position {pos} declares index {}",
+                item.index
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub async fn receive_transfer<S>(
     conn: &mut Connection<S>,
     out_dir: &Path,
@@ -51,12 +70,7 @@ where
         }
     };
 
-    if manifest.items.len() > MAX_ITEMS {
-        return Err(CoreError::Protocol(format!(
-            "manifest has {} items exceeds cap {MAX_ITEMS}",
-            manifest.items.len()
-        )));
-    }
+    validate_manifest(&manifest)?;
 
     tokio::fs::create_dir_all(out_dir).await?;
     let capacity = manifest.items.len().min(MAX_ITEMS);
@@ -547,5 +561,47 @@ mod tests {
 
         let res = receive_manifest_only(manifest, dst.path()).await;
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_misindexed_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.bin");
+        std::fs::write(&path, vec![1u8; 100]).unwrap();
+        let item0 = Item::from_file(0, &path, 64 * 1024).unwrap();
+        let mut item1 = Item::from_file(1, &path, 64 * 1024).unwrap();
+        item1.index = 7;
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item0, item1]);
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::Protocol(m)) if m.contains("position 1") && m.contains("7")
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_incompatible_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.bin");
+        std::fs::write(&path, vec![1u8; 100]).unwrap();
+        let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        let mut manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        manifest.v = crate::manifest::MANIFEST_VERSION + 100;
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::UnsupportedSchema)
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_accepts_sequential_indices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.bin");
+        std::fs::write(&path, vec![1u8; 100]).unwrap();
+        let items = vec![
+            Item::from_file(0, &path, 64 * 1024).unwrap(),
+            Item::from_file(1, &path, 64 * 1024).unwrap(),
+        ];
+        let manifest = Manifest::new(PayloadKind::Media, dev(), items);
+        validate_manifest(&manifest).unwrap();
     }
 }

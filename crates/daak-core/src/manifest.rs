@@ -15,7 +15,7 @@ pub fn clamp_chunk_size(requested: u32) -> u32 {
     requested.clamp(CHUNK_SIZE_MIN, CHUNK_SIZE_MAX)
 }
 
-mod byte_array {
+pub(crate) mod byte_array {
     use std::fmt;
 
     use serde::de::{Error, Visitor};

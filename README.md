@@ -2,7 +2,7 @@
 
 End-to-end encrypted LAN file and text sharing for iOS, Android, macOS, Windows, and Linux. No internet, no accounts.
 
-**Status:** pre-implementation. The architecture spec lives at `docs/superpowers/specs/2026-09-14-daak-architecture-design.md` (local-only, not version-controlled). Phase 1 (Rust transport core) is being implemented under `crates/`.
+**Status:** Phases 0-1 are implemented — the Rust transport core under `crates/` (discovery, framing, chunked transfer, CLI harness). Crypto, persistence, resume, the RR/daemon bindings, and all platform UIs are still to come. The architecture spec lives at `docs/superpowers/specs/2026-09-14-daak-architecture-design.md` (local-only, not version-controlled).
 
 ## Develop
 
