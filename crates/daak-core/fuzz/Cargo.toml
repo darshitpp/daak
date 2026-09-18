@@ -1,0 +1,31 @@
+[package]
+name = "daak-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bytes = "1.12.1"
+libfuzzer-sys = "0.4"
+
+[dependencies.daak-core]
+path = ".."
+
+[[bin]]
+name = "fuzz_frame_decode"
+path = "fuzz_targets/fuzz_frame_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_manifest_decode"
+path = "fuzz_targets/fuzz_manifest_decode.rs"
+test = false
+doc = false
+bench = false

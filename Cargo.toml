@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/daak-core", "crates/daak-cli"]
-exclude = ["proto/gen"]
+exclude = ["proto/gen", "crates/daak-core/fuzz"]
 
 [workspace.package]
 edition = "2021"

@@ -20,5 +20,6 @@ hostname.workspace = true
 hex.workspace = true
 
 [dev-dependencies]
+proptest = "1.11.0"
 tempfile.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
