@@ -71,6 +71,8 @@ impl Engine {
     pub async fn start(cfg: EngineConfig) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(256);
         let devices = Arc::new(Mutex::new(HashMap::new()));
+        let mut session_id = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut session_id);
 
         let (listener, local_addr) = tcp::bind(cfg.listen_addr).await?;
         let advertiser = Advertiser::start(&cfg.display_name, local_addr.port(), cfg.device_id)?;
@@ -82,6 +84,7 @@ impl Engine {
                 if let Err(e) = p
                     .announce(&Presence::new(
                         cfg.device_id,
+                        session_id,
                         cfg.display_name.clone(),
                         PresenceState::Online,
                     ))

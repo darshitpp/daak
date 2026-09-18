@@ -20,6 +20,7 @@ pub enum PresenceState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Presence {
     pub device_id: [u8; 16],
+    pub session_id: [u8; 16],
     pub name: String,
     pub state: PresenceState,
     pub seq: u64,
@@ -37,9 +38,15 @@ impl Presence {
         ciborium::de::from_reader(bytes).map_err(|e| CoreError::Cbor(e.to_string()))
     }
 
-    pub fn new(device_id: [u8; 16], name: String, state: PresenceState) -> Self {
+    pub fn new(
+        device_id: [u8; 16],
+        session_id: [u8; 16],
+        name: String,
+        state: PresenceState,
+    ) -> Self {
         Self {
             device_id,
+            session_id,
             name,
             state,
             seq: 0,
@@ -94,6 +101,7 @@ mod tests {
         let b = PresenceSocket::bind().await.unwrap();
         let p = Presence {
             device_id: [9u8; 16],
+            session_id: [0u8; 16],
             name: "Tester".into(),
             state: PresenceState::Online,
             seq: 1,
@@ -111,11 +119,27 @@ mod tests {
     fn presence_cbor_roundtrip() {
         let p = Presence {
             device_id: [1u8; 16],
+            session_id: [0u8; 16],
             name: "n".into(),
             state: PresenceState::Away,
             seq: 42,
             sent_at_ms: 7,
         };
         assert_eq!(Presence::from_cbor(&p.to_cbor().unwrap()).unwrap(), p);
+    }
+
+    #[test]
+    fn presence_cbor_roundtrip_includes_session_id() {
+        let p = Presence {
+            device_id: [1u8; 16],
+            session_id: [9u8; 16],
+            name: "n".into(),
+            state: PresenceState::Online,
+            seq: 1,
+            sent_at_ms: 7,
+        };
+        let back = Presence::from_cbor(&p.to_cbor().unwrap()).unwrap();
+        assert_eq!(back.session_id, [9u8; 16]);
+        assert_eq!(back, p);
     }
 }
