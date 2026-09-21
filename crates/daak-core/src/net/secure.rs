@@ -238,6 +238,7 @@ impl<T: FrameTransport + Send> FrameTransport for SecureConnection<T> {
 mod tests {
     use super::*;
     use crate::crypto::HandshakeDriver;
+    use crate::crypto::REKEY_BYTES;
     use crate::framing::RecordType;
     use bytes::Bytes;
     use tokio::sync::mpsc;
@@ -269,6 +270,30 @@ mod tests {
         let (a_tx, b_rx) = mpsc::channel(8);
         let (b_tx, a_rx) = mpsc::channel(8);
         (Chan { tx: a_tx, rx: a_rx }, Chan { tx: b_tx, rx: b_rx })
+    }
+
+    /// Wraps a Chan and counts the RecordType::Rekey frames that leave it, so a
+    /// test can prove the send path actually emitted the signal on the wire.
+    struct CountingChan {
+        inner: Chan,
+        rekeys: usize,
+    }
+
+    impl FrameTransport for CountingChan {
+        async fn send(
+            &mut self,
+            stream_id: u32,
+            kind: RecordType,
+            body: Bytes,
+        ) -> crate::Result<()> {
+            if kind == RecordType::Rekey {
+                self.rekeys += 1;
+            }
+            self.inner.send(stream_id, kind, body).await
+        }
+        async fn recv(&mut self) -> crate::Result<Option<Frame>> {
+            self.inner.recv().await
+        }
     }
 
     #[tokio::test]
@@ -318,6 +343,40 @@ mod tests {
         assert!(
             b.decrypt(1, RecordType::Chunk, &ct).is_err(),
             "replay must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_emits_rekey_and_the_peer_follows() {
+        let (a_io, b_io) = channel_pair();
+        let sending = CountingChan {
+            inner: a_io,
+            rekeys: 0,
+        };
+        // Mirrored directional keys; only a -> b is exercised here.
+        let (tx, rx) = ([1u8; 32], [2u8; 32]);
+        let mut a = SecureConnection::new(sending, tx, rx);
+        let mut b = SecureConnection::new(b_io, rx, tx);
+
+        // Retire the sender's epoch on the very next frame.
+        a.session.force_sent_bytes(REKEY_BYTES);
+
+        a.send(9, RecordType::Chunk, Bytes::from_static(b"payload"))
+            .await
+            .unwrap();
+
+        // The receiver follows the epoch change: recv absorbs the Rekey frame
+        // and returns the data frame that was sealed under the new epoch.
+        let f = b.recv().await.unwrap().unwrap();
+        assert_eq!(f.stream_id, 9);
+        assert_ne!(f.kind, RecordType::Rekey, "rekey must not be surfaced");
+        assert_eq!(&f.body[..], b"payload");
+
+        // Wire-level proof the signal was emitted: 0 without the will_rekey
+        // block in send, and the panic above would fire first anyway.
+        assert_eq!(
+            a.inner.rekeys, 1,
+            "send must emit one RecordType::Rekey frame before new-epoch data"
         );
     }
 }
