@@ -62,6 +62,15 @@ impl Db {
               static_dh_pub   BLOB NOT NULL,
               label           TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS replay_guard (
+              peer_device_id BLOB NOT NULL,
+              direction      TEXT NOT NULL,
+              max_counter    INTEGER NOT NULL,
+              epoch          INTEGER NOT NULL DEFAULT 0,
+              seen           BLOB NOT NULL DEFAULT x'',
+              PRIMARY KEY (peer_device_id, direction)
+            );
             "#,
         )?;
         Ok(())
