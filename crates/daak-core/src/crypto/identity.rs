@@ -21,29 +21,15 @@ pub struct Identity {
     static_sig: [u8; 64],
 }
 
-// serde only implements Serialize/Deserialize for arrays up to [T; 32];
-// adapt the 64-byte static signature as a plain byte string instead.
-mod sig64 {
-    use serde::{de, Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(sig: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_bytes(sig)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
-        let v = Vec::<u8>::deserialize(d)?;
-        let n = v.len();
-        v.try_into()
-            .map_err(|_| de::Error::invalid_length(n, &"64 bytes"))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdentityPublic {
+    #[serde(with = "crate::manifest::byte_array")]
     pub device_id: [u8; 16],
+    #[serde(with = "crate::manifest::byte_array")]
     pub ed25519: [u8; 32],
+    #[serde(with = "crate::manifest::byte_array")]
     pub x25519: [u8; 32],
-    #[serde(with = "sig64")]
+    #[serde(with = "crate::manifest::byte_array")]
     pub static_sig: [u8; 64],
 }
 
@@ -148,7 +134,10 @@ pub fn import_from_store(store: &dyn SecretStore) -> Result<Identity> {
         }
         (None, None) => {
             let id = Identity::generate()?;
-            store.set(STORE_SIGNING, id.signing.to_bytes().as_slice())?;
+            store.set(
+                STORE_SIGNING,
+                Zeroizing::new(id.signing.to_bytes().to_vec()).as_slice(),
+            )?;
             store.set(
                 STORE_STATIC,
                 Zeroizing::new(id.static_secret.to_bytes().to_vec()).as_slice(),
@@ -203,5 +192,35 @@ mod tests {
         let b = import_from_store(&store).unwrap();
         assert_eq!(a.device_id(), b.device_id());
         assert_eq!(a.public(), b.public());
+    }
+
+    #[test]
+    fn public_identity_roundtrips_as_cbor_byte_strings() {
+        let id = Identity::generate().unwrap();
+        let p = id.public();
+        let bytes = p.to_cbor().unwrap();
+        assert_eq!(IdentityPublic::from_cbor(&bytes).unwrap(), p);
+
+        let v: ciborium::Value = ciborium::from_reader(&bytes[..]).unwrap();
+        let map = v
+            .as_map()
+            .expect("IdentityPublic should encode as a CBOR map");
+        let check = |name: &str, want_len: usize| {
+            let found = map
+                .iter()
+                .find(|(k, _)| k.as_text() == Some(name))
+                .unwrap_or_else(|| panic!("missing field {name}"));
+            let field = &found.1;
+            match field {
+                ciborium::Value::Bytes(b) => {
+                    assert_eq!(b.len(), want_len, "field {name} length")
+                }
+                other => panic!("field {name} is {other:?}, expected a byte string"),
+            }
+        };
+        check("device_id", 16);
+        check("ed25519", 32);
+        check("x25519", 32);
+        check("static_sig", 64);
     }
 }
