@@ -42,7 +42,7 @@ pub enum ErrorCategory {
 impl CoreError {
     pub fn category(&self) -> ErrorCategory {
         match self {
-            CoreError::Io(_) => ErrorCategory::Disk,
+            CoreError::Io(_) | CoreError::Store(_) => ErrorCategory::Disk,
             CoreError::FrameTooLarge(_) => ErrorCategory::Network,
             CoreError::Protocol(m) if m.contains("aead") || m.contains("noise") => {
                 ErrorCategory::Crypto
@@ -80,6 +80,10 @@ mod tests {
     fn categories_cover_representative_errors() {
         assert_eq!(
             CoreError::Io(std::io::Error::other("x")).category(),
+            ErrorCategory::Disk
+        );
+        assert_eq!(
+            CoreError::Store(rusqlite::Error::QueryReturnedNoRows).category(),
             ErrorCategory::Disk
         );
         assert_eq!(
