@@ -1,5 +1,6 @@
 pub mod chunk;
 pub mod control;
+pub mod crypto;
 pub mod discovery;
 pub mod engine;
 pub mod error;

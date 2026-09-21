@@ -18,6 +18,19 @@ socket2.workspace = true
 futures.workspace = true
 hostname.workspace = true
 hex.workspace = true
+snow.workspace = true
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+rusqlite.workspace = true
+zeroize.workspace = true
+spake2.workspace = true
+base32.workspace = true
+subtle.workspace = true
+
+[features]
+dev-insecure-store = []
 
 [dev-dependencies]
 proptest = "1.11.0"
