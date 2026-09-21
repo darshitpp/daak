@@ -3,7 +3,10 @@ pub mod secure;
 pub mod tcp;
 
 pub use connection::{Connection, CONTROL_STREAM};
-pub use secure::{complete_handshake, confirm_keys, FrameTransport, SecureConnection};
+pub use secure::{
+    complete_handshake, confirm_keys, recv_secure_transfer, send_secure_transfer, FrameTransport,
+    SecureConnection,
+};
 
 use std::net::IpAddr;
 

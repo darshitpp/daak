@@ -1,11 +1,16 @@
 use bytes::Bytes;
+use std::path::{Path, PathBuf};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::control::Hello;
+use crate::crypto::noise::session_prologue;
 use crate::crypto::noise::HandshakeDriver;
 use crate::crypto::session::SecureSession;
 use crate::error::Result;
 use crate::framing::{Frame, RecordType};
+use crate::manifest::Manifest;
+use crate::transfer::{receive_transfer, send_transfer};
 
 use super::connection::Connection;
 
@@ -133,6 +138,42 @@ async fn recv_handshake<T: FrameTransport>(conn: &mut T) -> Result<Vec<u8>> {
 pub struct SecureConnection<T> {
     inner: T,
     session: SecureSession,
+}
+
+pub async fn send_secure_transfer<T: FrameTransport + Send>(
+    conn: &mut T,
+    static_secret: &[u8; 32],
+    peer_static: &[u8; 32],
+    device_id: [u8; 16],
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+) -> Result<()> {
+    let hello = Hello { device_id };
+    conn.send(0, RecordType::Control, Bytes::from(hello.to_cbor()?))
+        .await?;
+
+    let prologue = session_prologue(&x25519_public(static_secret), peer_static);
+    let driver = HandshakeDriver::initiator(static_secret, &prologue)?;
+    let (tx, rx, _hash) = complete_handshake(conn, driver, true).await?;
+    let mut secure = SecureConnection::new(conn, tx, rx);
+    send_transfer(&mut secure, manifest, paths, |_| {}).await
+}
+
+pub async fn recv_secure_transfer<T: FrameTransport + Send>(
+    conn: &mut T,
+    static_secret: &[u8; 32],
+    initiator_static: &[u8; 32],
+    out_dir: &Path,
+) -> Result<Manifest> {
+    let prologue = session_prologue(&x25519_public(static_secret), initiator_static);
+    let driver = HandshakeDriver::responder(static_secret, &prologue)?;
+    let (tx, rx, _hash) = complete_handshake(conn, driver, false).await?;
+    let mut secure = SecureConnection::new(conn, tx, rx);
+    receive_transfer(&mut secure, out_dir, |_| {}).await
+}
+
+fn x25519_public(secret: &[u8; 32]) -> [u8; 32] {
+    *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*secret)).as_bytes()
 }
 
 impl<T: FrameTransport> SecureConnection<T> {

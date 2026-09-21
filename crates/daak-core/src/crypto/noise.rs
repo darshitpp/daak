@@ -4,6 +4,20 @@ use crate::error::{CoreError, Result};
 
 pub const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 
+pub const SESSION_PROLOGUE_LABEL: &[u8] = b"daak-session";
+
+pub fn session_prologue(a_static: &[u8; 32], b_static: &[u8; 32]) -> Vec<u8> {
+    let (x, y) = if a_static <= b_static {
+        (a_static, b_static)
+    } else {
+        (b_static, a_static)
+    };
+    let mut p = SESSION_PROLOGUE_LABEL.to_vec();
+    p.extend_from_slice(x);
+    p.extend_from_slice(y);
+    p
+}
+
 fn params() -> Result<NoiseParams> {
     NOISE_PARAMS
         .parse()
@@ -122,5 +136,13 @@ mod tests {
         .is_err()
             || a.handshake_hash() != b.handshake_hash();
         assert!(broken, "mismatched prologue must break the handshake");
+    }
+
+    #[test]
+    fn session_prologue_is_order_independent() {
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        assert_eq!(session_prologue(&a, &b), session_prologue(&b, &a));
+        assert!(session_prologue(&a, &b).starts_with(SESSION_PROLOGUE_LABEL));
     }
 }

@@ -3,6 +3,24 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    #[serde(with = "crate::manifest::byte_array")]
+    pub device_id: [u8; 16],
+}
+
+impl Hello {
+    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        ciborium::ser::into_writer(self, &mut out).map_err(|e| CoreError::Cbor(e.to_string()))?;
+        Ok(out)
+    }
+
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+        ciborium::de::from_reader(bytes).map_err(|e| CoreError::Cbor(e.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AckMsg {
     #[serde(with = "crate::manifest::byte_array")]
     pub transfer_id: [u8; 16],
@@ -88,5 +106,29 @@ mod tests {
                 "transfer_id must be a 16-byte CBOR bstr, got {transfer_id:?}"
             );
         }
+    }
+
+    #[test]
+    fn hello_device_id_encodes_as_cbor_bytes() {
+        use ciborium::value::Value;
+
+        let h = Hello {
+            device_id: [3u8; 16],
+        };
+        assert_eq!(Hello::from_cbor(&h.to_cbor().unwrap()).unwrap(), h);
+
+        let value: Value = ciborium::de::from_reader(h.to_cbor().unwrap().as_slice()).unwrap();
+        let Value::Map(entries) = &value else {
+            panic!("expected map, got {value:?}");
+        };
+        let device_id = entries
+            .iter()
+            .find(|(k, _)| matches!(k, Value::Text(t) if t == "device_id"))
+            .map(|(_, v)| v)
+            .expect("missing device_id");
+        assert!(
+            matches!(device_id, Value::Bytes(b) if b.len() == 16),
+            "device_id must be a 16-byte CBOR bstr, got {device_id:?}"
+        );
     }
 }
