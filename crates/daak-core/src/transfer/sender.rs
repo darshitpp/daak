@@ -1,14 +1,13 @@
 use std::path::PathBuf;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::chunk::ChunkReader;
 use crate::control::AckMsg;
 use crate::error::{CoreError, Result};
 use crate::framing::RecordType;
 use crate::manifest::{ItemType, Manifest, CHUNK_SIZE_DEFAULT};
-use crate::net::{Connection, CONTROL_STREAM};
+use crate::net::{FrameTransport, CONTROL_STREAM};
 
 pub fn encode_chunk_body(item_index: u32, chunk_index: u64, data: &[u8]) -> Vec<u8> {
     let mut out = BytesMut::with_capacity(16 + data.len());
@@ -34,15 +33,12 @@ pub fn decode_chunk_body(body: &[u8]) -> Result<(u32, u64, Bytes)> {
     Ok((item_index, chunk_index, Bytes::copy_from_slice(&body[16..])))
 }
 
-pub async fn send_transfer<S>(
-    conn: &mut Connection<S>,
+pub async fn send_transfer<T: FrameTransport>(
+    conn: &mut T,
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
     mut on_progress: impl FnMut(u64),
-) -> Result<()>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<()> {
     conn.send(
         CONTROL_STREAM,
         RecordType::Manifest,

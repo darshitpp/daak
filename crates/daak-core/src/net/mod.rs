@@ -1,7 +1,9 @@
 pub mod connection;
+pub mod secure;
 pub mod tcp;
 
 pub use connection::{Connection, CONTROL_STREAM};
+pub use secure::{complete_handshake, confirm_keys, FrameTransport, SecureConnection};
 
 use std::net::IpAddr;
 

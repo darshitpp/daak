@@ -5,6 +5,7 @@ pub mod noise;
 pub mod replay;
 pub mod sas;
 pub mod secret_store;
+pub mod session;
 
 pub use aead::{nonce, open, seal};
 pub use keys::{derive_key, directional_keys, REKEY_BYTES};

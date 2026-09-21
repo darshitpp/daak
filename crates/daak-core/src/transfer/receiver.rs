@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use crate::chunk::ChunkBitmap;
 use crate::control::AckMsg;
@@ -8,7 +8,7 @@ use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
 use crate::hash::blake2b256_reader;
 use crate::manifest::{Item, ItemType, Manifest, CHUNK_SIZE_MAX, CHUNK_SIZE_MIN};
-use crate::net::{Connection, CONTROL_STREAM};
+use crate::net::{FrameTransport, CONTROL_STREAM};
 
 use super::sender::decode_chunk_body;
 
@@ -54,14 +54,11 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-pub async fn receive_transfer<S>(
-    conn: &mut Connection<S>,
+pub async fn receive_transfer<T: FrameTransport>(
+    conn: &mut T,
     out_dir: &Path,
     mut on_progress: impl FnMut(u64),
-) -> Result<Manifest>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<Manifest> {
     let manifest = loop {
         match conn.recv().await? {
             Some(f) if f.kind == RecordType::Manifest => break Manifest::from_cbor(&f.body)?,
