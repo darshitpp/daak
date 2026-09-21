@@ -4,7 +4,7 @@ use daak_core::engine::{Engine, EngineConfig};
 use daak_core::manifest::{DeviceRef, Item, Manifest, PayloadKind};
 use daak_core::net::secure::{recv_secure_transfer, send_secure_transfer};
 use daak_core::net::tcp;
-use daak_core::pairing::{pair, PairingBundle};
+use daak_core::pairing::{pair, PairMode, PairingBundle};
 use std::sync::Arc;
 
 fn bundles() -> (Identity, Identity, PairingBundle, PairingBundle) {
@@ -25,17 +25,33 @@ async fn both_sides_derive_the_same_sas() {
         let a_bundle = a_bundle.clone();
         tokio::spawn(async move {
             let (mut conn, _) = tcp::accept(&listener).await.unwrap();
-            let (_pairing, sas) = pair(&mut conn, &b, &b_bundle, &a_bundle, false)
-                .await
-                .unwrap();
+            let (_pairing, sas) = pair(
+                &mut conn,
+                &b,
+                &b_bundle,
+                &a_bundle,
+                false,
+                PairMode::Qr,
+                None,
+            )
+            .await
+            .unwrap();
             sas
         })
     };
 
     let mut conn = tcp::dial(addr).await.unwrap();
-    let (_pairing, client_sas) = pair(&mut conn, &a, &a_bundle, &b_bundle, true)
-        .await
-        .unwrap();
+    let (_pairing, client_sas) = pair(
+        &mut conn,
+        &a,
+        &a_bundle,
+        &b_bundle,
+        true,
+        PairMode::Qr,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         client_sas,
@@ -128,7 +144,9 @@ async fn engine_pairs_then_sends_encrypted_file() {
     let a_id = a.identity().device_id();
 
     // UI on B has scanned A's QR bundle and offers it to the engine.
-    b.offer_pairing(a.pairing_bundle()).await.unwrap();
+    b.offer_pairing(a.pairing_bundle(), PairMode::Qr, None)
+        .await
+        .unwrap();
 
     let b_for_server = b.clone();
     let server = tokio::spawn(async move { b_for_server.accept_pairing_once().await.unwrap() });
@@ -171,6 +189,77 @@ async fn engine_pairs_then_sends_encrypted_file() {
         std::fs::read(d2.path().join("f.bin")).unwrap(),
         b"engine secret"
     );
+
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn engine_pairs_with_manual_code_then_sends_encrypted_file() {
+    let d1 = tempfile::tempdir().unwrap();
+    let d2 = tempfile::tempdir().unwrap();
+    let a = Arc::new(engine(1, "a", d1.path().to_path_buf()).await);
+    let b = Arc::new(engine(2, "b", d2.path().to_path_buf()).await);
+
+    let b_addr = b.local_addr();
+    let b_id = b.pairing_bundle().identity.device_id;
+    let a_id = a.identity().device_id();
+
+    // B (responder) offers a manual code; A (initiator) enters the same code.
+    b.offer_code_pairing("123456".into()).await.unwrap();
+
+    let b_for_server = b.clone();
+    let server = tokio::spawn(async move { b_for_server.accept_pairing_once().await.unwrap() });
+
+    let (client_sas, peer_id) = a.pair_with_code(b_addr, "123456").await.unwrap();
+    let server_sas = server.await.unwrap();
+    assert_eq!(client_sas, server_sas);
+    assert_eq!(peer_id, b_id);
+
+    let src = tempfile::tempdir().unwrap();
+    let path = src.path().join("f.bin");
+    std::fs::write(&path, b"code secret").unwrap();
+    let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+    let manifest = Manifest::new(
+        PayloadKind::Media,
+        DeviceRef {
+            device_id: a_id,
+            name: "a".into(),
+        },
+        vec![item],
+    );
+
+    a.send_secure(b_id, b_addr, manifest, vec![Some(path)])
+        .await
+        .unwrap();
+
+    for _ in 0..50 {
+        if d2.path().join("f.bin").exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        std::fs::read(d2.path().join("f.bin")).unwrap(),
+        b"code secret"
+    );
+
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn mismatched_manual_code_fails() {
+    let d1 = tempfile::tempdir().unwrap();
+    let d2 = tempfile::tempdir().unwrap();
+    let a = Arc::new(engine(1, "a", d1.path().to_path_buf()).await);
+    let b = Arc::new(engine(2, "b", d2.path().to_path_buf()).await);
+
+    let b_addr = b.local_addr();
+    b.offer_code_pairing("123456".into()).await.unwrap();
+
+    // A different code on the initiator must fail the Noise handshake.
+    assert!(a.pair_with_code(b_addr, "654321").await.is_err());
 
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();

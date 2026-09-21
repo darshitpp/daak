@@ -7,7 +7,7 @@ use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::control::Hello;
-use crate::crypto::identity::Identity;
+use crate::crypto::identity::{verify_static_binding, Identity, IdentityPublic};
 use crate::discovery::{
     Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
 };
@@ -17,7 +17,7 @@ use crate::manifest::Manifest;
 use crate::net::secure::{recv_secure_transfer, send_secure_transfer};
 use crate::net::tcp;
 use crate::net::Connection;
-use crate::pairing::PairingBundle;
+use crate::pairing::{PairMode, PairingBundle};
 use crate::store::Db;
 
 /// A rejected peer is a per-connection event; anything else is a listener fault.
@@ -62,6 +62,8 @@ pub enum EngineEvent {
     },
 }
 
+type PendingPairing = (PairingBundle, PairMode, Option<String>);
+
 pub struct Engine {
     local_addr: SocketAddr,
     tx: broadcast::Sender<EngineEvent>,
@@ -74,7 +76,8 @@ pub struct Engine {
     display_name: String,
     identity: Arc<Identity>,
     db: Arc<Db>,
-    pending_pairing: Arc<Mutex<Option<PairingBundle>>>,
+    pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
+    pending_code: Arc<Mutex<Option<String>>>,
     pairing_rx: Mutex<mpsc::Receiver<String>>,
 }
 
@@ -119,6 +122,7 @@ impl Engine {
 
         let (pairing_tx, pairing_rx) = mpsc::channel(8);
         let pending_pairing = Arc::new(Mutex::new(None));
+        let pending_code = Arc::new(Mutex::new(None));
 
         let accept_task = {
             let identity = identity.clone();
@@ -126,6 +130,7 @@ impl Engine {
             let display_name = display_name.clone();
             let out_dir = out_dir.clone();
             let pending_pairing = pending_pairing.clone();
+            let pending_code = pending_code.clone();
             let pairing_tx = pairing_tx.clone();
             tokio::spawn(async move {
                 // JoinSet aborts any in-flight receivers when it is dropped, and the
@@ -149,6 +154,7 @@ impl Engine {
                     let display_name = display_name.clone();
                     let out_dir = out_dir.clone();
                     let pending_pairing = pending_pairing.clone();
+                    let pending_code = pending_code.clone();
                     let pairing_tx = pairing_tx.clone();
                     set.spawn(async move {
                         if let Err(e) = Self::handle_inbound(
@@ -157,6 +163,7 @@ impl Engine {
                             &out_dir,
                             &display_name,
                             &pending_pairing,
+                            &pending_code,
                             &pairing_tx,
                             &mut conn,
                         )
@@ -240,6 +247,7 @@ impl Engine {
             identity,
             db,
             pending_pairing,
+            pending_code,
             pairing_rx: Mutex::new(pairing_rx),
         })
     }
@@ -268,8 +276,21 @@ impl Engine {
         PairingBundle::new(self.identity.public(), self.display_name.clone())
     }
 
-    pub async fn offer_pairing(&self, peer: PairingBundle) -> Result<()> {
-        *self.pending_pairing.lock().await = Some(peer);
+    pub async fn offer_pairing(
+        &self,
+        peer: PairingBundle,
+        mode: PairMode,
+        code: Option<String>,
+    ) -> Result<()> {
+        *self.pending_pairing.lock().await = Some((peer, mode, code));
+        Ok(())
+    }
+
+    /// Offer a manual code for an inbound code-mode pairing. The peer's identity
+    /// is learned in-band (authenticated by the SPAKE2-derived Noise prologue),
+    /// so no QR bundle is required.
+    pub async fn offer_code_pairing(&self, code: String) -> Result<()> {
+        *self.pending_code.lock().await = Some(code);
         Ok(())
     }
 
@@ -300,8 +321,56 @@ impl Engine {
         )
         .await?;
         let local = self.pairing_bundle();
-        let (pairing, sas) =
-            crate::pairing::pair(&mut conn, self.identity.as_ref(), &local, &peer, true).await?;
+        let (pairing, sas) = crate::pairing::pair(
+            &mut conn,
+            self.identity.as_ref(),
+            &local,
+            &peer,
+            true,
+            PairMode::Qr,
+            None,
+        )
+        .await?;
+        self.db.upsert_pairing(&pairing)?;
+        Ok((sas, pairing.peer_device_id))
+    }
+
+    /// Manual-code pairing: no pre-scanned QR bundle. The initiator sends its
+    /// identity in-band, reads the responder's identity, then runs the SPAKE2
+    /// exchange inside `pairing::pair` with `PairMode::Code`.
+    pub async fn pair_with_code(&self, addr: SocketAddr, code: &str) -> Result<(String, [u8; 16])> {
+        let mut conn = tcp::dial(addr).await?;
+        conn.send(
+            0,
+            RecordType::Control,
+            Bytes::from(
+                Hello {
+                    device_id: self.identity.device_id(),
+                }
+                .to_cbor()?,
+            ),
+        )
+        .await?;
+        conn.send(
+            0,
+            RecordType::Control,
+            Bytes::from(self.identity.public().to_cbor()?),
+        )
+        .await?;
+        let peer_public = read_identity_public(&mut conn).await?;
+        let name = hex::encode(peer_public.device_id);
+        let peer = PairingBundle::new(peer_public, name);
+        let local = self.pairing_bundle();
+        let (pairing, sas) = crate::pairing::pair(
+            &mut conn,
+            self.identity.as_ref(),
+            &local,
+            &peer,
+            true,
+            PairMode::Code,
+            Some(code),
+        )
+        .await?;
         self.db.upsert_pairing(&pairing)?;
         Ok((sas, pairing.peer_device_id))
     }
@@ -333,23 +402,73 @@ impl Engine {
     }
 
     /// Called by the accept loop for every inbound connection.
+    #[allow(clippy::too_many_arguments)] // pending_pairing + pending_code are the two pairing slots
     pub(crate) async fn handle_inbound(
         identity: &Identity,
         db: &Db,
         out_dir: &Path,
         display_name: &str,
-        pending_pairing: &Mutex<Option<PairingBundle>>,
+        pending_pairing: &Mutex<Option<PendingPairing>>,
+        pending_code: &Mutex<Option<String>>,
         pairing_tx: &mpsc::Sender<String>,
         conn: &mut Connection<tokio::net::TcpStream>,
     ) -> Result<()> {
         let hello = read_hello(conn).await?;
         let local = PairingBundle::new(identity.public(), display_name.to_string());
-        if let Some(expected) = pending_pairing.lock().await.take() {
+        // Manual-code pairing: no QR bundle was offered, so the peer's identity
+        // arrives in-band and is authenticated by the SPAKE2-mixed prologue.
+        if let Some(code) = pending_code.lock().await.take() {
+            let peer_public = read_identity_public(conn).await?;
+            if hello.device_id != peer_public.device_id {
+                return Err(CoreError::Protocol(
+                    "code pairing hello device mismatch".into(),
+                ));
+            }
+            if !verify_static_binding(
+                &peer_public.ed25519,
+                &peer_public.x25519,
+                &peer_public.static_sig,
+            ) {
+                return Err(CoreError::Protocol(
+                    "code pairing peer identity binding failed".into(),
+                ));
+            }
+            conn.send(
+                0,
+                RecordType::Control,
+                Bytes::from(identity.public().to_cbor()?),
+            )
+            .await?;
+            let name = hex::encode(peer_public.device_id);
+            let expected = PairingBundle::new(peer_public, name);
+            let (pairing, sas) = crate::pairing::pair(
+                conn,
+                identity,
+                &local,
+                &expected,
+                false,
+                PairMode::Code,
+                Some(&code),
+            )
+            .await?;
+            db.upsert_pairing(&pairing)?;
+            let _ = pairing_tx.send(sas).await;
+            return Ok(());
+        }
+        if let Some((expected, mode, code)) = pending_pairing.lock().await.take() {
             if hello.device_id != expected.identity.device_id {
                 return Err(CoreError::Protocol("pairing hello device mismatch".into()));
             }
-            let (pairing, sas) =
-                crate::pairing::pair(conn, identity, &local, &expected, false).await?;
+            let (pairing, sas) = crate::pairing::pair(
+                conn,
+                identity,
+                &local,
+                &expected,
+                false,
+                mode,
+                code.as_deref(),
+            )
+            .await?;
             db.upsert_pairing(&pairing)?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
@@ -379,6 +498,18 @@ async fn read_hello(conn: &mut Connection<tokio::net::TcpStream>) -> Result<Hell
             Some(_) => continue,
             None => return Err(CoreError::Protocol("closed before hello".into())),
         }
+    }
+}
+
+async fn read_identity_public(
+    conn: &mut Connection<tokio::net::TcpStream>,
+) -> Result<IdentityPublic> {
+    match conn.recv().await? {
+        Some(f) if f.kind == RecordType::Control => IdentityPublic::from_cbor(&f.body),
+        Some(_) => Err(CoreError::Protocol(
+            "expected identity public, got non-control frame".into(),
+        )),
+        None => Err(CoreError::Protocol("closed before identity public".into())),
     }
 }
 
