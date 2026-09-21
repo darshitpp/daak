@@ -4,6 +4,8 @@ use std::fmt::Display;
 pub enum CoreError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("store: {0}")]
+    Store(#[from] rusqlite::Error),
     #[error("codec: {0}")]
     Codec(String),
     #[error("frame too large: {0}")]
