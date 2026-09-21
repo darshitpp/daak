@@ -8,8 +8,9 @@ name = "daak"
 path = "src/main.rs"
 
 [dependencies]
-daak-core = { path = "../daak-core" }
+daak-core = { path = "../daak-core", features = ["dev-insecure-store"] }
 clap = { version = "4", features = ["derive"] }
 tokio.workspace = true
 anyhow = "1"
 rand.workspace = true
+hex.workspace = true

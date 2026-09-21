@@ -1,15 +1,22 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use daak_core::crypto::identity::import_from_store;
+use daak_core::crypto::secret_store::FileSecretStore;
 use daak_core::discovery::{default_display_name, unique_display_name};
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
 use daak_core::manifest::{DeviceRef, Item, Manifest, PayloadKind, CHUNK_SIZE_DEFAULT};
+use daak_core::store::Db;
 
 #[derive(Parser)]
 #[command(name = "daak", about = "Daak LAN transfer harness")]
 struct Cli {
+    /// Directory for the identity keys and sqlite db.
+    #[arg(long, global = true)]
+    data_dir: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -30,10 +37,12 @@ enum Command {
         #[arg(long, default_value = "0")]
         port: u16,
     },
-    /// Send text or files to a peer
+    /// Send text or files to a paired peer
     Send {
         #[arg(long)]
         to: std::net::SocketAddr,
+        #[arg(long)]
+        device_id: String,
         #[arg(long)]
         text: Option<String>,
         #[arg(long, num_args = 0..)]
@@ -43,12 +52,14 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    match Cli::parse().command {
+    let Cli { data_dir, command } = Cli::parse();
+    let data_dir = data_dir.unwrap_or_else(default_data_dir);
+    match command {
         Command::Name => {
             println!("{}", default_display_name()?);
         }
         Command::Discover { secs } => {
-            let cfg = config("./daak-recv", 0)?;
+            let cfg = config(&data_dir, "./daak-recv", 0)?;
             let engine = Engine::start(cfg).await?;
             let mut events = engine.events();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
@@ -60,7 +71,7 @@ async fn main() -> Result<()> {
             engine.shutdown().await?;
         }
         Command::Serve { dir, port } => {
-            let cfg = config(&dir.to_string_lossy(), port)?;
+            let cfg = config(&data_dir, &dir.to_string_lossy(), port)?;
             let engine = Engine::start(cfg).await?;
             println!("listening on {}", engine.local_addr());
             let mut events = engine.events();
@@ -75,16 +86,22 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::Send { to, text, files } => {
+        Command::Send {
+            to,
+            device_id,
+            text,
+            files,
+        } => {
             if text.is_none() && files.is_empty() {
                 bail!("provide --text and/or --files");
             }
-            let cfg = config("./daak-send-staging", 0)?;
-            let me = DeviceRef {
-                device_id: cfg.device_id,
-                name: cfg.display_name.clone(),
-            };
+            let peer_id = parse_device_id(&device_id)?;
+            let cfg = config(&data_dir, "./daak-send-staging", 0)?;
             let engine = Engine::start(cfg).await?;
+            let me = DeviceRef {
+                device_id: engine.identity().device_id(),
+                name: engine.display_name().to_string(),
+            };
 
             let manifest = match (text, files.is_empty()) {
                 (Some(t), true) => Manifest::text(&t),
@@ -109,7 +126,7 @@ async fn main() -> Result<()> {
                 })
                 .collect::<Vec<_>>();
 
-            let id = engine.send_to(to, manifest, paths).await?;
+            let id = engine.send_secure(peer_id, to, manifest, paths).await?;
             println!("sent {}", hex_id(id));
             engine.shutdown().await?;
         }
@@ -117,24 +134,37 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn config(dir: &str, port: u16) -> Result<EngineConfig> {
+fn config(data_dir: &Path, dir: &str, port: u16) -> Result<EngineConfig> {
     let name = default_display_name()?;
     let taken: Vec<String> = vec![];
     let mut rng = rand::thread_rng();
+    let store = FileSecretStore::new(data_dir.join("keys"))?;
+    let identity = import_from_store(&store)?;
+    let db = Db::open(&data_dir.join("daak.db"))?;
+    db.migrate()?;
     Ok(EngineConfig {
         display_name: unique_display_name(&name, &taken, &mut rng),
-        device_id: cfg_device_id(),
         listen_addr: format!("0.0.0.0:{port}")
             .parse()
             .context("bad listen addr")?,
         out_dir: PathBuf::from(dir),
+        identity,
+        db: Arc::new(db),
     })
 }
 
-fn cfg_device_id() -> [u8; 16] {
-    let mut id = [0u8; 16];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut id);
-    id
+fn default_data_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".local/share/daak"))
+        .unwrap_or_else(|| PathBuf::from(".daak"))
+}
+
+fn parse_device_id(s: &str) -> Result<[u8; 16]> {
+    let bytes = hex::decode(s.trim()).context("device id must be hex")?;
+    bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow::anyhow!("device id must be 16 bytes, got {}", v.len()))
 }
 
 fn build_file_manifest(me: DeviceRef, files: &[PathBuf]) -> Result<Manifest> {

@@ -2,34 +2,37 @@ pub mod identity;
 pub mod pairings;
 
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::Connection;
 
 use crate::error::Result;
 
 pub struct Db {
-    conn: Connection,
+    // rusqlite Connection is Send but not Sync; the engine shares one Arc<Db>
+    // across the accept loop and its own tasks, so guard the connection here.
+    conn: Mutex<Connection>,
 }
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
         Ok(Self {
-            conn: Connection::open(path)?,
+            conn: Mutex::new(Connection::open(path)?),
         })
     }
 
     pub fn open_in_memory() -> Result<Self> {
         Ok(Self {
-            conn: Connection::open_in_memory()?,
+            conn: Mutex::new(Connection::open_in_memory()?),
         })
     }
 
-    pub fn conn(&self) -> &Connection {
-        &self.conn
+    pub fn conn(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().expect("db lock poisoned")
     }
 
     pub fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(
+        self.conn().execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
             PRAGMA foreign_keys = ON;

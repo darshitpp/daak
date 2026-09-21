@@ -14,13 +14,14 @@ pub struct Pairing {
 
 impl Db {
     pub fn upsert_pairing(&self, p: &Pairing) -> Result<()> {
-        self.conn().execute(
+        let conn = self.conn();
+        conn.execute(
             r#"INSERT INTO devices (device_id, display_name, state)
                    VALUES (?1, ?2, 'paired')
                ON CONFLICT(device_id) DO NOTHING"#,
             rusqlite::params![&p.peer_device_id[..], p.label.clone().unwrap_or_default()],
         )?;
-        self.conn().execute(
+        conn.execute(
             r#"INSERT INTO pairings
                  (peer_device_id, state, paired_at, verify_key, static_dh_pub, label)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -40,7 +41,8 @@ impl Db {
     }
 
     pub fn get_pairing(&self, id: &[u8; 16]) -> Result<Option<Pairing>> {
-        let mut stmt = self.conn().prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT peer_device_id, state, paired_at, verify_key, static_dh_pub, label
                FROM pairings WHERE peer_device_id = ?1",
         )?;
@@ -52,7 +54,8 @@ impl Db {
     }
 
     pub fn list_pairings(&self) -> Result<Vec<Pairing>> {
-        let mut stmt = self.conn().prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT peer_device_id, state, paired_at, verify_key, static_dh_pub, label FROM pairings",
         )?;
         let rows = stmt.query_map([], row_to_pairing)?;

@@ -10,7 +10,8 @@ impl Db {
         x25519_pub: &[u8; 32],
         display_name: &str,
     ) -> Result<()> {
-        self.conn().execute(
+        let conn = self.conn();
+        conn.execute(
             r#"INSERT INTO identity (id, device_id, ed25519_pub, x25519_pub, display_name, created_at)
                VALUES (1, ?1, ?2, ?3, ?4, strftime('%s','now'))
                ON CONFLICT(id) DO UPDATE SET

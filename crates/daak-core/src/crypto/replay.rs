@@ -123,7 +123,8 @@ impl ReplayWindow {
     }
 
     pub fn load(db: &Db, peer: &[u8; 16], dir: &str) -> Result<Self> {
-        let mut stmt = db.conn().prepare(
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
             "SELECT max_counter, seen FROM replay_guard WHERE peer_device_id = ?1 AND direction = ?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![&peer[..], dir])?;
