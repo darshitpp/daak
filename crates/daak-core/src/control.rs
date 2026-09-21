@@ -61,6 +61,23 @@ impl NackMsg {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ControlMsg {
+    Rekey { epoch: u32 },
+}
+
+impl ControlMsg {
+    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        ciborium::ser::into_writer(self, &mut out).map_err(|e| CoreError::Cbor(e.to_string()))?;
+        Ok(out)
+    }
+
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+        ciborium::de::from_reader(bytes).map_err(|e| CoreError::Cbor(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

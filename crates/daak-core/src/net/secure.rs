@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::control::Hello;
+use crate::control::{ControlMsg, Hello};
 use crate::crypto::noise::session_prologue;
 use crate::crypto::noise::HandshakeDriver;
 use crate::crypto::session::SecureSession;
@@ -196,17 +196,40 @@ impl<T: FrameTransport> SecureConnection<T> {
 
 impl<T: FrameTransport + Send> FrameTransport for SecureConnection<T> {
     async fn send(&mut self, stream_id: u32, kind: RecordType, body: Bytes) -> Result<()> {
+        // R3: a pending epoch change must be signalled before the first frame of
+        // the new epoch. The signal is sealed under the RETIRING epoch so the
+        // peer can still read it; the caller's frame below uses the new epoch.
+        if self.session.will_rekey(body.len() as u64) {
+            let rekey = ControlMsg::Rekey {
+                epoch: self.session.epoch() + 1,
+            };
+            let ct = self
+                .session
+                .seal_current(0, RecordType::Rekey, &rekey.to_cbor()?)?;
+            self.inner
+                .send(0, RecordType::Rekey, Bytes::from(ct))
+                .await?;
+        }
         let ct = self.session.encrypt(stream_id, kind, &body)?;
         self.inner.send(stream_id, kind, Bytes::from(ct)).await
     }
 
     async fn recv(&mut self) -> Result<Option<Frame>> {
-        match self.inner.recv().await? {
-            Some(f) => {
-                let pt = self.session.decrypt(f.stream_id, f.kind, &f.body)?;
-                Ok(Some(Frame::new(f.stream_id, f.kind, Bytes::from(pt))))
+        loop {
+            match self.inner.recv().await? {
+                Some(f) => {
+                    let pt = self.session.decrypt(f.stream_id, f.kind, &f.body)?;
+                    // R4: Rekey frames are control-plane only — apply the epoch
+                    // advance and never surface them to the transfer layer.
+                    if f.kind == RecordType::Rekey {
+                        let ControlMsg::Rekey { epoch } = ControlMsg::from_cbor(&pt)?;
+                        self.session.advance_recv_epoch(epoch)?;
+                        continue;
+                    }
+                    return Ok(Some(Frame::new(f.stream_id, f.kind, Bytes::from(pt))));
+                }
+                None => return Ok(None),
             }
-            None => Ok(None),
         }
     }
 }
