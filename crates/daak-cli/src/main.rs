@@ -9,6 +9,7 @@ use daak_core::crypto::secret_store::FileSecretStore;
 use daak_core::discovery::{default_display_name, unique_display_name};
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
 use daak_core::manifest::{DeviceRef, Item, Manifest, PayloadKind, CHUNK_SIZE_DEFAULT};
+use daak_core::pairing::{PairMode, PairingBundle};
 use daak_core::store::Db;
 
 #[derive(Parser)]
@@ -36,6 +37,26 @@ enum Command {
         dir: PathBuf,
         #[arg(long, default_value = "0")]
         port: u16,
+    },
+    /// Print the local pairing bundle as lowercase hex (the QR payload)
+    Bundle,
+    /// Pair with a peer as the initiator
+    Pair {
+        #[arg(long)]
+        to: std::net::SocketAddr,
+        #[arg(long)]
+        code: Option<String>,
+        #[arg(long)]
+        bundle: Option<String>,
+    },
+    /// Accept an inbound pairing as the responder
+    PairAccept {
+        #[arg(long, default_value = "0")]
+        port: u16,
+        #[arg(long)]
+        code: Option<String>,
+        #[arg(long)]
+        bundle: Option<String>,
     },
     /// Send text or files to a paired peer
     Send {
@@ -85,6 +106,41 @@ async fn main() -> Result<()> {
                     Err(_) => {}
                 }
             }
+        }
+        Command::Bundle => {
+            let cfg = config(&data_dir, "./daak-recv", 0)?;
+            let engine = Engine::start(cfg).await?;
+            println!("{}", hex::encode(engine.pairing_bundle().to_cbor()?));
+            engine.shutdown().await?;
+        }
+        Command::Pair { to, code, bundle } => {
+            let cfg = config(&data_dir, "./daak-recv", 0)?;
+            let engine = Engine::start(cfg).await?;
+            let (sas, peer_id) = match (code, bundle) {
+                (Some(code), None) => engine.pair_with_code(to, &code).await?,
+                (None, Some(bundle)) => engine.pair_with(to, bundle_from_hex(&bundle)?).await?,
+                _ => bail!("provide exactly one of --code or --bundle"),
+            };
+            println!("sas {sas}");
+            println!("peer {}", hex_id(peer_id));
+            engine.shutdown().await?;
+        }
+        Command::PairAccept { port, code, bundle } => {
+            let cfg = config(&data_dir, "./daak-recv", port)?;
+            let engine = Engine::start(cfg).await?;
+            println!("listening on {}", engine.local_addr());
+            match (code, bundle) {
+                (Some(code), None) => engine.offer_code_pairing(code).await?,
+                (None, Some(bundle)) => {
+                    engine
+                        .offer_pairing(bundle_from_hex(&bundle)?, PairMode::Qr, None)
+                        .await?
+                }
+                _ => bail!("provide exactly one of --code or --bundle"),
+            }
+            let sas = engine.accept_pairing_once().await?;
+            println!("sas {sas}");
+            engine.shutdown().await?;
         }
         Command::Send {
             to,
@@ -165,6 +221,11 @@ fn parse_device_id(s: &str) -> Result<[u8; 16]> {
     bytes
         .try_into()
         .map_err(|v: Vec<u8>| anyhow::anyhow!("device id must be 16 bytes, got {}", v.len()))
+}
+
+fn bundle_from_hex(s: &str) -> Result<PairingBundle> {
+    let bytes = hex::decode(s.trim()).context("bundle must be hex")?;
+    PairingBundle::from_cbor(&bytes).context("invalid pairing bundle")
 }
 
 fn build_file_manifest(me: DeviceRef, files: &[PathBuf]) -> Result<Manifest> {

@@ -1,6 +1,6 @@
 use daak_core::crypto::identity::Identity;
 use daak_core::crypto::noise::session_prologue;
-use daak_core::engine::{Engine, EngineConfig};
+use daak_core::engine::{Engine, EngineConfig, EngineEvent};
 use daak_core::manifest::{DeviceRef, Item, Manifest, PayloadKind};
 use daak_core::net::secure::{recv_secure_transfer, send_secure_transfer};
 use daak_core::net::tcp;
@@ -260,6 +260,71 @@ async fn mismatched_manual_code_fails() {
 
     // A different code on the initiator must fail the Noise handshake.
     assert!(a.pair_with_code(b_addr, "654321").await.is_err());
+
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn engine_reports_transfer_done_for_inbound_file() {
+    let d1 = tempfile::tempdir().unwrap();
+    let d2 = tempfile::tempdir().unwrap();
+    let a = Arc::new(engine(1, "a", d1.path().to_path_buf()).await);
+    let b = Arc::new(engine(2, "b", d2.path().to_path_buf()).await);
+
+    let b_addr = b.local_addr();
+    let b_bundle = b.pairing_bundle();
+    let a_id = a.identity().device_id();
+
+    b.offer_pairing(a.pairing_bundle(), PairMode::Qr, None)
+        .await
+        .unwrap();
+
+    let b_for_server = b.clone();
+    let server = tokio::spawn(async move { b_for_server.accept_pairing_once().await.unwrap() });
+
+    let (client_sas, _peer_id) = a.pair_with(b_addr, b_bundle.clone()).await.unwrap();
+    assert_eq!(client_sas, server.await.unwrap());
+
+    let src = tempfile::tempdir().unwrap();
+    let path = src.path().join("f.bin");
+    std::fs::write(&path, b"engine secret").unwrap();
+    let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+    let manifest = Manifest::new(
+        PayloadKind::Media,
+        DeviceRef {
+            device_id: a_id,
+            name: "a".into(),
+        },
+        vec![item],
+    );
+    let payload_id = manifest.payload_id;
+
+    // Subscribe to the receiver's events before sending so the TransferDone
+    // broadcast is not dropped for lack of a subscriber.
+    let mut events = b.events();
+
+    a.send_secure(
+        b_bundle.identity.device_id,
+        b_addr,
+        manifest,
+        vec![Some(path)],
+    )
+    .await
+    .unwrap();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Ok(EngineEvent::TransferDone { transfer_id })) => {
+                assert_eq!(transfer_id, payload_id);
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) => panic!("receiver event stream closed before TransferDone"),
+            Err(_) => panic!("timed out waiting for TransferDone"),
+        }
+    }
 
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();

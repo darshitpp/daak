@@ -140,4 +140,19 @@ mod tests {
         db.migrate().unwrap();
         assert!(db.get_pairing(&[9u8; 16]).unwrap().is_none());
     }
+
+    #[test]
+    fn pairing_survives_a_file_backed_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daak.db");
+        let p = example(9);
+        {
+            let db = crate::store::Db::open(&path).unwrap();
+            db.migrate().unwrap();
+            db.upsert_pairing(&p).unwrap();
+        }
+        let db = crate::store::Db::open(&path).unwrap();
+        db.migrate().unwrap();
+        assert_eq!(db.get_pairing(&[9u8; 16]).unwrap().unwrap(), p);
+    }
 }

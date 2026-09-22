@@ -132,6 +132,7 @@ impl Engine {
             let pending_pairing = pending_pairing.clone();
             let pending_code = pending_code.clone();
             let pairing_tx = pairing_tx.clone();
+            let tx = tx.clone();
             tokio::spawn(async move {
                 // JoinSet aborts any in-flight receivers when it is dropped, and the
                 // accept task's locals are dropped when shutdown aborts this task, so
@@ -156,6 +157,7 @@ impl Engine {
                     let pending_pairing = pending_pairing.clone();
                     let pending_code = pending_code.clone();
                     let pairing_tx = pairing_tx.clone();
+                    let tx = tx.clone();
                     set.spawn(async move {
                         if let Err(e) = Self::handle_inbound(
                             &identity,
@@ -165,6 +167,7 @@ impl Engine {
                             &pending_pairing,
                             &pending_code,
                             &pairing_tx,
+                            &tx,
                             &mut conn,
                         )
                         .await
@@ -411,6 +414,7 @@ impl Engine {
         pending_pairing: &Mutex<Option<PendingPairing>>,
         pending_code: &Mutex<Option<String>>,
         pairing_tx: &mpsc::Sender<String>,
+        tx: &broadcast::Sender<EngineEvent>,
         conn: &mut Connection<tokio::net::TcpStream>,
     ) -> Result<()> {
         let hello = read_hello(conn).await?;
@@ -477,8 +481,21 @@ impl Engine {
             .get_pairing(&hello.device_id)?
             .ok_or_else(|| CoreError::Protocol("unpaired inbound connection".into()))?;
         let static_secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
-        recv_secure_transfer(conn, &static_secret, &pairing.static_dh_pub, out_dir).await?;
-        Ok(())
+        match recv_secure_transfer(conn, &static_secret, &pairing.static_dh_pub, out_dir).await {
+            Ok(manifest) => {
+                let _ = tx.send(EngineEvent::TransferDone {
+                    transfer_id: manifest.payload_id,
+                });
+                Ok(())
+            }
+            Err(e) => {
+                let _ = tx.send(EngineEvent::TransferFailed {
+                    transfer_id: [0u8; 16],
+                    error: e.to_string(),
+                });
+                Err(e)
+            }
+        }
     }
 
     pub async fn shutdown(&self) -> Result<()> {
