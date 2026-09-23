@@ -9,6 +9,7 @@ pub mod hash;
 pub mod manifest;
 pub mod net;
 pub mod pairing;
+pub mod staging;
 pub mod store;
 pub mod transfer;
 pub mod wordlist;

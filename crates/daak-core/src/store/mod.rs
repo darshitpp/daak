@@ -1,5 +1,7 @@
 pub mod chunks;
 pub mod identity;
+pub mod inbox;
+pub mod outbox;
 pub mod pairings;
 pub mod transfers;
 
