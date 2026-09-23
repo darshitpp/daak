@@ -1,5 +1,7 @@
+pub mod chunks;
 pub mod identity;
 pub mod pairings;
+pub mod transfers;
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -74,6 +76,69 @@ impl Db {
               seen           BLOB NOT NULL DEFAULT x'',
               PRIMARY KEY (peer_device_id, direction)
             );
+            CREATE TABLE IF NOT EXISTS transfers (
+              transfer_id    BLOB PRIMARY KEY,
+              payload_id     BLOB NOT NULL,
+              peer_device_id BLOB NOT NULL,
+              direction      TEXT NOT NULL,
+              kind           TEXT NOT NULL,
+              state          TEXT NOT NULL,
+              bytes_total    INTEGER NOT NULL,
+              bytes_done     INTEGER NOT NULL DEFAULT 0,
+              item_count     INTEGER NOT NULL,
+              created_at     INTEGER NOT NULL,
+              updated_at     INTEGER NOT NULL,
+              manifest       BLOB NOT NULL,
+              error          TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_transfers_peer_state ON transfers(peer_device_id, state);
+
+            CREATE TABLE IF NOT EXISTS transfer_items (
+              transfer_id BLOB NOT NULL REFERENCES transfers(transfer_id) ON DELETE CASCADE,
+              item_index  INTEGER NOT NULL,
+              type        TEXT NOT NULL,
+              name        TEXT,
+              mime        TEXT,
+              size        INTEGER,
+              hash        BLOB,
+              dest_path   TEXT,
+              state       TEXT NOT NULL,
+              PRIMARY KEY (transfer_id, item_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS chunk_state (
+              transfer_id BLOB NOT NULL,
+              item_index  INTEGER NOT NULL,
+              word_index  INTEGER NOT NULL,
+              bitmap      INTEGER NOT NULL,
+              PRIMARY KEY (transfer_id, item_index, word_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS outbox (
+              id              BLOB PRIMARY KEY,
+              payload_id      BLOB NOT NULL,
+              peer_device_id  BLOB NOT NULL,
+              manifest        BLOB NOT NULL,
+              total_bytes     INTEGER NOT NULL,
+              attempts        INTEGER NOT NULL DEFAULT 0,
+              next_attempt_at INTEGER NOT NULL DEFAULT 0,
+              state           TEXT NOT NULL,
+              created_at      INTEGER NOT NULL,
+              updated_at      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_outbox_state_next ON outbox(state, next_attempt_at);
+
+            CREATE TABLE IF NOT EXISTS inbox_history (
+              id             BLOB PRIMARY KEY,
+              transfer_id    BLOB NOT NULL,
+              peer_device_id BLOB NOT NULL,
+              kind           TEXT NOT NULL,
+              item_count     INTEGER NOT NULL,
+              summary        TEXT NOT NULL,
+              received_at    INTEGER NOT NULL,
+              saved_paths    TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_inbox_received ON inbox_history(received_at DESC);
             "#,
         )?;
         Ok(())

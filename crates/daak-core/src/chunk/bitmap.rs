@@ -20,6 +20,16 @@ impl ChunkBitmap {
         self.len == 0
     }
 
+    pub fn words_for_persist(&self) -> &[u64] {
+        &self.words
+    }
+
+    pub fn set_word(&mut self, word_index: usize, word: u64) {
+        if word_index < self.words.len() {
+            self.words[word_index] = word;
+        }
+    }
+
     pub fn set(&mut self, index: u64) -> bool {
         if index >= self.len {
             return false;
