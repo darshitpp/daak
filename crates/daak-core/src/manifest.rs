@@ -7,6 +7,7 @@ use crate::error::{CoreError, Result};
 use crate::hash::blake2b256_reader;
 
 pub const MANIFEST_VERSION: u16 = 1;
+pub const SCHEMA_MINOR: u16 = 0;
 pub const CHUNK_SIZE_DEFAULT: u32 = 1024 * 1024;
 pub const CHUNK_SIZE_MIN: u32 = 64 * 1024;
 pub const CHUNK_SIZE_MAX: u32 = 4 * 1024 * 1024;
@@ -221,6 +222,12 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// Same major version is required; minor differences are forward-compatible.
+    /// The major version is the manifest's own `v` field (Phase 1's `MANIFEST_VERSION`).
+    pub fn is_compatible(&self, peer_major: u16) -> bool {
+        peer_major == crate::manifest::MANIFEST_VERSION
+    }
+
     pub fn new(kind: PayloadKind, sender: DeviceRef, items: Vec<Item>) -> Self {
         let mut payload_id = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut payload_id);

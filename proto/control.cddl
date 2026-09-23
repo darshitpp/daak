@@ -1,0 +1,3 @@
+hello = { "device_id": bstr .size 16 }
+ack   = { "transfer_id": bstr .size 16, "item_index": uint, "complete": bool, "hash_ok": bool }
+nack  = { "transfer_id": bstr .size 16, "item_index": uint, "ranges": [* [uint, uint]] }

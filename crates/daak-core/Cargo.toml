@@ -32,6 +32,7 @@ subtle.workspace = true
 dev-insecure-store = []
 
 [dev-dependencies]
+cddl = "0.9"
 proptest = "1.11.0"
 tempfile.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }

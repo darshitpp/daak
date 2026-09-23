@@ -1,0 +1,27 @@
+payload-manifest = {
+  "v":            uint,
+  "payload_id":   bstr .size 16,
+  "kind":         tstr, ; "text" | "media" | "batch" | future
+  "created_at":   uint,
+  "sender":       device-ref,
+  "items":        [* item],
+  ? "meta":       { * tstr => any },
+  ? "extensions": { * tstr => any },
+  ? "reply_to":   bstr .size 16,
+}
+
+device-ref = { "device_id": bstr .size 16, "name": tstr }
+
+item = {
+  "index":       uint,
+  "type":        tstr, ; "text" | "image" | "video" | "document" | "folder" | "custom" | future
+  ? "name":      tstr,
+  ? "mime":      tstr,
+  ? "size":      uint,
+  ? "hash":      bstr .size 32,
+  ? "text":      tstr,
+  ? "chunk_size": uint,
+  ? "chunk_count": uint,
+  ? "children":  [* item],
+  ? "attrs":     { * tstr => any },
+}
