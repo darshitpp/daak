@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use bytes::Bytes;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::manifest::clamp_chunk_size;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +39,21 @@ impl ChunkReader {
     }
 
     pub async fn next_chunk(&mut self) -> Result<Option<Chunk>> {
+        self.read_one().await
+    }
+
+    /// Read the chunk at 'index' by seeking to its offset. Used by the transfer
+    /// scheduler to emit chunks in interleaved (out-of-order) sequence.
+    pub async fn read_chunk_at(&mut self, index: u64) -> Result<Option<Chunk>> {
+        let offset = (self.chunk_size as u64).checked_mul(index).ok_or_else(|| {
+            CoreError::Protocol(format!("chunk index {index} overflows file offset"))
+        })?;
+        self.file.seek(std::io::SeekFrom::Start(offset)).await?;
+        self.next_index = index;
+        self.read_one().await
+    }
+
+    async fn read_one(&mut self) -> Result<Option<Chunk>> {
         let mut filled = 0usize;
         let target = self.chunk_size as usize;
         while filled < target {

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -8,6 +9,7 @@ use crate::error::{CoreError, Result};
 use crate::framing::RecordType;
 use crate::manifest::{ItemType, Manifest, CHUNK_SIZE_DEFAULT};
 use crate::net::{FrameTransport, CONTROL_STREAM};
+use crate::transfer::scheduler::{interleave, ScheduledItem};
 
 pub fn encode_chunk_body(item_index: u32, chunk_index: u64, data: &[u8]) -> Vec<u8> {
     let mut out = BytesMut::with_capacity(16 + data.len());
@@ -38,8 +40,7 @@ pub async fn send_transfer<T: FrameTransport>(
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
     // Per-item half-open chunk ranges to send; an empty Vec means "send all chunks".
-    // ponytail: unused until Task 7 wires NACK-driven resume.
-    _ranges: &[Vec<(u64, u64)>],
+    ranges: &[Vec<(u64, u64)>],
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
     conn.send(
@@ -49,6 +50,11 @@ pub async fn send_transfer<T: FrameTransport>(
     )
     .await?;
 
+    let mut scheduled = Vec::with_capacity(manifest.items.len());
+    // ponytail: one open reader per binary item for the whole transfer (mirrors the
+    // receiver's all-files-open pattern). A folder of many hundreds of items can
+    // hit the per-process fd limit; switch to lazy open/close per item if batches grow.
+    let mut readers: HashMap<u32, ChunkReader> = HashMap::new();
     for item in &manifest.items {
         if item.item_type == ItemType::Text {
             continue;
@@ -58,14 +64,32 @@ pub async fn send_transfer<T: FrameTransport>(
             .and_then(|p| p.clone())
             .ok_or_else(|| CoreError::Transfer(format!("missing path for item {}", item.index)))?;
         let chunk_size = item.chunk_size.unwrap_or(CHUNK_SIZE_DEFAULT);
-        let mut reader = ChunkReader::open(&path, chunk_size).await?;
-        let stream_id = 100 + item.index;
-        while let Some(chunk) = reader.next_chunk().await? {
-            let body = encode_chunk_body(item.index, chunk.index, &chunk.data);
-            on_progress(chunk.data.len() as u64);
-            conn.send(stream_id, RecordType::Chunk, Bytes::from(body))
-                .await?;
+        let chunk_count = item.chunk_count.ok_or_else(|| {
+            CoreError::Transfer(format!("item {} missing chunk_count", item.index))
+        })?;
+        readers.insert(item.index, ChunkReader::open(&path, chunk_size).await?);
+        scheduled.push(ScheduledItem {
+            index: item.index,
+            path,
+            chunk_size,
+            chunk_count,
+        });
+    }
+
+    for (item_index, chunk_index) in interleave(scheduled, 1) {
+        if !chunk_in_ranges(ranges, item_index, chunk_index) {
+            continue;
         }
+        let reader = readers
+            .get_mut(&item_index)
+            .ok_or_else(|| CoreError::Transfer(format!("no reader for item {item_index}")))?;
+        let chunk = reader.read_chunk_at(chunk_index).await?.ok_or_else(|| {
+            CoreError::Transfer(format!("chunk {chunk_index} missing for item {item_index}"))
+        })?;
+        let body = encode_chunk_body(item_index, chunk_index, &chunk.data);
+        on_progress(chunk.data.len() as u64);
+        conn.send(100 + item_index, RecordType::Chunk, Bytes::from(body))
+            .await?;
     }
 
     loop {
@@ -92,6 +116,21 @@ pub async fn send_transfer<T: FrameTransport>(
     }
 }
 
+/// True when the chunk is in scope for this transfer. An empty top-level
+/// 'ranges' slice, or an empty per-item range list, means "send all chunks".
+/// Otherwise a chunk is sent iff it falls inside a half-open [start, end) range.
+fn chunk_in_ranges(ranges: &[Vec<(u64, u64)>], item_index: u32, chunk_index: u64) -> bool {
+    let Some(item_ranges) = ranges.get(item_index as usize) else {
+        return true;
+    };
+    if item_ranges.is_empty() {
+        return true;
+    }
+    item_ranges
+        .iter()
+        .any(|&(start, end)| chunk_index >= start && chunk_index < end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +143,21 @@ mod tests {
             device_id: [1u8; 16],
             name: "sender".into(),
         }
+    }
+
+    #[test]
+    fn chunk_in_ranges_sends_all_when_empty_or_matches() {
+        // Empty top-level ranges => every chunk in scope.
+        assert!(chunk_in_ranges(&[], 0, 999));
+        // Empty per-item list => every chunk for that item.
+        assert!(chunk_in_ranges(&[vec![]], 0, 999));
+        // A non-empty list filters to half-open [start, end).
+        assert!(chunk_in_ranges(&[vec![(2, 5)]], 0, 2));
+        assert!(chunk_in_ranges(&[vec![(2, 5)]], 0, 4));
+        assert!(!chunk_in_ranges(&[vec![(2, 5)]], 0, 5));
+        assert!(!chunk_in_ranges(&[vec![(2, 5)]], 0, 1));
+        // Item without an entry => send all.
+        assert!(chunk_in_ranges(&[vec![(2, 5)]], 1, 7));
     }
 
     #[tokio::test]
