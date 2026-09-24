@@ -9,12 +9,14 @@ use crate::framing::RecordType;
 use crate::hash::blake2b256_reader;
 use crate::manifest::{Item, ItemType, Manifest, CHUNK_SIZE_MAX, CHUNK_SIZE_MIN};
 use crate::net::{FrameTransport, CONTROL_STREAM};
+use crate::store::Db;
 
 use super::sender::decode_chunk_body;
 
 const MAX_ITEM_CHUNKS: u64 = 1 << 24;
 const MAX_ITEMS: usize = 65536;
 const MAX_TOTAL_CHUNKS: u64 = 1 << 27;
+const BITMAP_PERSIST_INTERVAL: u64 = 256;
 
 fn safe_item_name(item: &Item) -> String {
     let raw = item.name.as_deref().unwrap_or("");
@@ -58,6 +60,7 @@ pub async fn receive_transfer<T: FrameTransport>(
     conn: &mut T,
     out_dir: &Path,
     mut on_progress: impl FnMut(u64),
+    db: Option<&Db>,
 ) -> Result<Manifest> {
     let manifest = loop {
         match conn.recv().await? {
@@ -117,7 +120,15 @@ pub async fn receive_transfer<T: FrameTransport>(
             )));
         }
         let path = item_output_path(out_dir, item)?;
-        files.push(Some(tokio::fs::File::create(&path).await?));
+        // Open without truncating: a resumed receive must preserve already-written
+        // partial chunks so the persisted bitmap still points at real on-disk data.
+        let f = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .await?;
+        files.push(Some(f));
         bitmaps.push(Some(ChunkBitmap::new(chunk_count)));
     }
 
@@ -127,10 +138,29 @@ pub async fn receive_transfer<T: FrameTransport>(
             .all(|b| b.as_ref().map(|b| b.is_complete()).unwrap_or(true))
     };
 
+    let mut received_any = false;
+    // ponytail: one counter shared across all items; an item completed well
+    // before a later hard-kill persists only on graceful early-close. Re-fetch is
+    // idempotent and the per-item BLAKE2b hash is the final authority, so this is
+    // an efficiency ceiling, not a correctness gap.
+    let mut chunks_since_persist: u64 = 0;
+
     while !all_received(&bitmaps) {
         let frame = match conn.recv().await? {
             Some(f) => f,
-            None => return Err(CoreError::Protocol("closed mid-transfer".into())),
+            None => {
+                if let Some(db) = db {
+                    if received_any {
+                        for (i, bm) in bitmaps.iter().enumerate() {
+                            if let Some(bm) = bm {
+                                db.save_bitmap(&manifest.payload_id, i as u32, bm)?;
+                            }
+                        }
+                    }
+                    return Err(CoreError::TransferInterrupted);
+                }
+                return Err(CoreError::Protocol("closed mid-transfer".into()));
+            }
         };
         if frame.kind != RecordType::Chunk {
             continue;
@@ -173,6 +203,14 @@ pub async fn receive_transfer<T: FrameTransport>(
             return Err(CoreError::Protocol(format!(
                 "chunk index {chunk_index} out of range for item {item_index}"
             )));
+        }
+        if let Some(db) = db {
+            received_any = true;
+            chunks_since_persist += 1;
+            if chunks_since_persist >= BITMAP_PERSIST_INTERVAL {
+                db.save_bitmap(&manifest.payload_id, item_index, bitmap)?;
+                chunks_since_persist = 0;
+            }
         }
     }
 
@@ -251,7 +289,7 @@ mod tests {
             .unwrap();
         });
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, out, |_| {}).await;
+        let res = receive_transfer(&mut conn, out, |_| {}, None).await;
         sender.await.unwrap();
         res
     }
@@ -275,6 +313,7 @@ mod tests {
                 &mut conn,
                 &sender_manifest,
                 &[Some(path.clone())],
+                &[],
                 |_| {},
             )
             .await
@@ -282,7 +321,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let got = receive_transfer(&mut conn, dst.path(), |_| {})
+        let got = receive_transfer(&mut conn, dst.path(), |_| {}, None)
             .await
             .unwrap();
         sender.await.unwrap();
@@ -309,11 +348,12 @@ mod tests {
             let (mut conn, _) = tcp::accept(&listener).await.unwrap();
             // The receiver will ack with hash_ok=false, so the sender is expected to fail.
             let _ =
-                crate::transfer::send_transfer(&mut conn, &m, &[Some(path.clone())], |_| {}).await;
+                crate::transfer::send_transfer(&mut conn, &m, &[Some(path.clone())], &[], |_| {})
+                    .await;
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, dst.path(), |_| {}).await;
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Transfer(_))));
         assert!(
@@ -354,7 +394,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, dst.path(), |_| {}).await;
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
     }
@@ -387,7 +427,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, dst.path(), |_| {}).await;
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
         let written = dst.path().join("o.bin");
@@ -418,6 +458,7 @@ mod tests {
                 &mut conn,
                 &sender_manifest,
                 &[Some(path.clone())],
+                &[],
                 |_| {},
             )
             .await
@@ -425,7 +466,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        receive_transfer(&mut conn, dst.path(), |_| {})
+        receive_transfer(&mut conn, dst.path(), |_| {}, None)
             .await
             .unwrap();
         sender.await.unwrap();
@@ -464,7 +505,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, dst.path(), |_| {}).await;
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
     }

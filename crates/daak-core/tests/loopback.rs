@@ -34,13 +34,13 @@ async fn transfers_four_gibibytes_with_bounded_memory() {
     let p = path.clone();
     let sender = tokio::spawn(async move {
         let (mut conn, _) = tcp::accept(&listener).await.unwrap();
-        send_transfer(&mut conn, &m, &[Some(p)], |_| {})
+        send_transfer(&mut conn, &m, &[Some(p)], &[], |_| {})
             .await
             .unwrap();
     });
 
     let mut conn = tcp::dial(addr).await.unwrap();
-    receive_transfer(&mut conn, dst.path(), |_| {})
+    receive_transfer(&mut conn, dst.path(), |_| {}, None)
         .await
         .unwrap();
     sender.await.unwrap();
@@ -80,11 +80,13 @@ async fn batch_of_many_files_roundtrips_over_tcp() {
     let m = manifest.clone();
     let sender = tokio::spawn(async move {
         let (mut conn, _) = tcp::accept(&listener).await.unwrap();
-        send_transfer(&mut conn, &m, &paths, |_| {}).await.unwrap();
+        send_transfer(&mut conn, &m, &paths, &[], |_| {})
+            .await
+            .unwrap();
     });
 
     let mut conn = tcp::dial(addr).await.unwrap();
-    let got = receive_transfer(&mut conn, dst.path(), |_| {})
+    let got = receive_transfer(&mut conn, dst.path(), |_| {}, None)
         .await
         .unwrap();
     sender.await.unwrap();

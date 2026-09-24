@@ -37,6 +37,9 @@ pub async fn send_transfer<T: FrameTransport>(
     conn: &mut T,
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
+    // Per-item half-open chunk ranges to send; an empty Vec means "send all chunks".
+    // ponytail: unused until Task 7 wires NACK-driven resume.
+    _ranges: &[Vec<(u64, u64)>],
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
     conn.send(
@@ -151,7 +154,7 @@ mod tests {
 
         let mut conn = tcp::dial(addr).await.unwrap();
         let paths = vec![Some(p.clone())];
-        send_transfer(&mut conn, &manifest, &paths, |_| {})
+        send_transfer(&mut conn, &manifest, &paths, &[], |_| {})
             .await
             .unwrap();
         server.await.unwrap();

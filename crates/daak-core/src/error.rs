@@ -16,6 +16,8 @@ pub enum CoreError {
     Protocol(String),
     #[error("transfer: {0}")]
     Transfer(String),
+    #[error("transfer interrupted; resume state persisted")]
+    TransferInterrupted,
     #[error("discovery: {0}")]
     Discovery(String),
     #[error("naming: {0}")]
@@ -50,6 +52,7 @@ impl CoreError {
             CoreError::Protocol(_) => ErrorCategory::PeerRejected,
             CoreError::Codec(_) | CoreError::Cbor(_) => ErrorCategory::PeerRejected,
             CoreError::Transfer(_) => ErrorCategory::PeerRejected,
+            CoreError::TransferInterrupted => ErrorCategory::Network,
             CoreError::Discovery(_) => ErrorCategory::Network,
             CoreError::UnsupportedSchema => ErrorCategory::UnsupportedSchema,
             _ => ErrorCategory::PeerRejected,
