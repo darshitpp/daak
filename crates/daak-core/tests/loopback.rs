@@ -71,7 +71,11 @@ async fn a_hundred_file_batch_roundtrips_over_tcp() {
         let p = src.path().join(format!("f{i}.bin"));
         let payload: Vec<u8> = (0..(50_000 + i)).map(|j| (j % 200) as u8).collect();
         std::fs::write(&p, &payload).unwrap();
-        items.push(Item::from_file(i, &p, 64 * 1024).unwrap());
+        // 1 MiB chunks (the wire default) against ~50 KB items would be one
+        // chunk each, so the 100-item run would never exercise interleaving.
+        // A 4 KiB chunk size makes every item ~13 chunks, so the scheduler is
+        // genuinely round-robining 100 streams.
+        items.push(Item::from_file(i, &p, 4 * 1024).unwrap());
         paths.push(Some(p));
     }
     let manifest = Manifest::batch(

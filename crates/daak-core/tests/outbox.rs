@@ -98,12 +98,18 @@ async fn an_offline_queued_item_auto_delivers_when_the_peer_comes_back() {
         "nothing may land on B before the peer is reachable"
     );
 
-    // The peer becomes reachable -- exactly what the presence/mDNS handler
-    // does when it records an address (engine.rs:315/330).
+    // The peer becomes reachable. In production that is the discovery/presence
+    // handler: it records the address in the device map (engine.rs:308) AND
+    // calls outbox.notify_peer_online (engine.rs:316/330). note_peer is the
+    // one-shot equivalent -- it seeds the same map entry and, since this wave,
+    // issues the same notify.
     a.note_peer(b_id, "b", b_addr).await;
 
-    // The failed attempt backed the row off (15s doubling from attempt 1), so
-    // auto-delivery happens when the backoff expires -- up to ~30s, not 5s.
+    // The wall clock here is the REAL retry backoff, not a sleep: the failed
+    // attempt above set next_attempt_at ~30s out (backoff_delay(1) = 15*2), and
+    // a notify cannot claim a row that is not due yet. That is correct
+    // production behaviour -- an unreachable peer must not be hammered -- so the
+    // test waits it out rather than shortening the schedule to look fast.
     for _ in 0..2000 {
         let done = a_db
             .get_outbox(&id)

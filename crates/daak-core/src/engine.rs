@@ -386,6 +386,12 @@ impl Engine {
                 name: name.to_string(),
                 addr,
             });
+        // Seeding an address means the peer is reachable NOW, so wake the drain
+        // the same way the discovery and presence handlers do. Without this the
+        // one-shot path (daak-cli `send --to`) would leave a queued row waiting
+        // for the 5s poll tick and its backoff, and the reconnect this method
+        // exists to enable would land up to one backoff late.
+        self.outbox.notify_peer_online(peer);
     }
 
     pub fn identity(&self) -> &Identity {
