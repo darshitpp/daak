@@ -197,6 +197,12 @@ describe('InProcessEngine', () => {
     await expect(engine.pair('d1', 'code', '123456')).rejects.toThrow(/manual-code/);
   });
 
+  it('refuses a qr pair with no bundle (m3)', async () => {
+    const native = fakeNative({ listDevices: async () => '[{"deviceId":"d1","addr":"10.0.0.2:9000"}]' });
+    const engine = new InProcessEngine(native, () => () => {});
+    await expect(engine.pair('d1', 'qr')).rejects.toThrow(/bundle/);
+  });
+
   it('parses the device list and rejects a non-array payload', async () => {
     const good = new InProcessEngine(fakeNative({
       listDevices: async () => '[{"deviceId":"d1","name":"peer","addr":"10.0.0.2:9000"}]',
@@ -231,5 +237,16 @@ describe('InProcessEngine', () => {
     await expect(engine.send({ peerDeviceId: 'd1' })).rejects.toThrow(/empty/);
     await expect(engine.send({ peerDeviceId: 'd1', text: '' })).rejects.toThrow(/empty/);
     await expect(engine.send({ peerDeviceId: 'd1', files: [] })).rejects.toThrow(/empty/);
+  });
+
+  it('accepts the native { event } envelope as well as a bare string (m2)', () => {
+    const emitted: DaakEvent[] = [];
+    const engine = new InProcessEngine(fakeNative(), (cb) => {
+      cb({ event: JSON.stringify({ type: 'transfer.done', transferId: 't3' }) });
+      cb({ event: 'not json' });
+      return () => {};
+    });
+    engine.on((e) => emitted.push(e));
+    expect(emitted).toEqual([{ type: 'transfer.done', transferId: 't3' }]);
   });
 });

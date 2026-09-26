@@ -315,6 +315,9 @@ fn inbox_received_parses_its_payload_string_rather_than_nesting_it() {
 /// checked-in fixture at FIXTURE is the cross-language contract with
 /// packages/core/src/engine/types.ts: if ffi_event_json renames or drops a
 /// field, this test fails AND the TS test that reads the same file fails.
+// ponytail: sample_events is hand-listed, so a NEW FfiEvent variant is not
+// caught here. Replace the strings with an exhaustive match when a variant is
+// added instead of re-running the ignored regenerator by hand.
 fn sample_events(hex: &str) -> Vec<(&'static str, FfiEvent)> {
     vec![
         (

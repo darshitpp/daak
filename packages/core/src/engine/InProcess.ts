@@ -7,12 +7,10 @@ import type { DaakEngine, DaakEvent, DeviceInfo, InboxEntry, SendRequest } from 
  * The channel name is exactly 'DaakEvent' (see supportedEvents() in
  * Daak.swift) and the payload is an OBJECT, { event: string } -- DaakModule.kt
  * does map.putString('event', json) and Daak.swift does
- * sendEvent(withName: 'DaakEvent', body: ['event': json]). Whoever writes the
- * production subscription factory is responsible for unwrapping .event and
- * passing the STRING here; if it forwards the object instead, JSON.parse below
- * throws on every event and the whole stream dies silently.
+ * sendEvent(withName: 'DaakEvent', body: ['event': json]). on() accepts either
+ * shape so a factory cannot kill the stream by forwarding the envelope.
  */
-export type EventSubscribe = (cb: (raw: string) => void) => () => void;
+export type EventSubscribe = (cb: (raw: string | { event: string }) => void) => () => void;
 
 function hexToBytes(hex: string): number[] {
   if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
@@ -48,7 +46,8 @@ export class InProcessEngine implements DaakEngine {
     // known devices. The `secret` is the bundle CBOR as hex.
     const device = (await this.devices()).find((d) => d.deviceId === deviceId);
     if (!device) throw new Error(`unknown device ${deviceId}`);
-    const { sas } = JSON.parse(await this.native.pairWith(device.addr, hexToBytes(secret ?? '')));
+    if (!secret) throw new Error('qr pairing needs the bundle hex');
+    const { sas } = JSON.parse(await this.native.pairWith(device.addr, hexToBytes(secret)));
     return { sas };
   }
 
@@ -76,9 +75,11 @@ export class InProcessEngine implements DaakEngine {
 
   on(cb: (e: DaakEvent) => void): () => void {
     return this.subscribe((raw) => {
+      const s = typeof raw === 'string' ? raw : raw?.event;
+      if (typeof s !== 'string') return;
       let e: DaakEvent | undefined;
       try {
-        const parsed = JSON.parse(raw) as DaakEvent;
+        const parsed = JSON.parse(s) as DaakEvent;
         if (typeof parsed?.type === 'string') e = parsed;
       } catch {
         // A Rust thread cannot reject a JS promise, so a malformed event is the
