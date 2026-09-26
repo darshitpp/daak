@@ -1,0 +1,10 @@
+{
+  "name": "@daak/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "codegenConfig": {
+    "name": "DaakSpec",
+    "type": "modules",
+    "jsSrcsDir": "../../packages/core/src"
+  }
+}
