@@ -110,6 +110,17 @@ impl Db {
         )?;
         Ok(())
     }
+
+    /// Crash recovery: any outbox row left mid-flight becomes pending again.
+    /// awaiting_ack is included now so a row interrupted mid-Ack (once
+    /// mark_outbox_awaiting_ack lands) is not permanently invisible.
+    pub fn reset_inflight_outbox(&self) -> Result<usize> {
+        let n = self.conn().execute(
+            "UPDATE outbox SET state = 'pending' WHERE state IN ('sending','awaiting_ack')",
+            [],
+        )?;
+        Ok(n)
+    }
 }
 
 #[cfg(test)]

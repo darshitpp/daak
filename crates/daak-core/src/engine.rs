@@ -97,11 +97,31 @@ impl Engine {
         let identity = Arc::new(cfg.identity);
         let device_id = identity.device_id();
         let db = cfg.db;
-        let display_name = cfg.display_name.clone();
+        let base_name = cfg.display_name.clone();
         let out_dir = cfg.out_dir.clone();
 
+        // Crash recovery: a previous run may have died mid-send. Both resets run
+        // BEFORE the accept loop and the outbox worker are spawned, so nothing
+        // can claim a row that is about to be re-queued. A failed recovery is
+        // logged, not fatal -- the engine must still start.
+        match db.reset_inflight_outbox() {
+            Ok(n) if n > 0 => tracing::warn!("requeued {n} in-flight outbox row(s)"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("outbox crash recovery failed: {e}"),
+        }
+        match db.reset_inflight_transfers() {
+            Ok(n) if n > 0 => tracing::warn!("requeued {n} in-flight transfer(s)"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("transfer crash recovery failed: {e}"),
+        }
+
         let (listener, local_addr) = tcp::bind(cfg.listen_addr).await?;
-        let advertiser = Advertiser::start(&display_name, local_addr.port(), device_id)?;
+        let (advertiser, display_name) = Advertiser::start_resolving(
+            &base_name,
+            local_addr.port(),
+            device_id,
+            &mut rand::thread_rng(),
+        )?;
         let browser = Arc::new(Browser::start()?);
         let presence = match PresenceSocket::bind().await {
             Ok(p) => {

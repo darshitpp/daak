@@ -109,13 +109,12 @@ impl Db {
     }
 
     /// Crash recovery: a transfer left active (mid-receive) or awaiting_ack
-    /// (mid-send, awaiting the peer Ack) on startup is reset to pending so the
-    /// outbox can re-send it. pending is the engine re-queue sentinel; the
-    /// transfer-state column is free-form TEXT and the re-queue path treats it
-    /// as not yet delivered.
+    /// (mid-send, awaiting the peer Ack) on startup is reset to queued so the
+    /// outbox can re-send it. queued is the engine re-queue sentinel (spec 4.2
+    /// transfer states: queued|active|paused|awaiting_ack|done|failed|canceled).
     pub fn reset_inflight_transfers(&self) -> Result<usize> {
         let n = self.conn().execute(
-            "UPDATE transfers SET state = 'pending' WHERE state IN ('active','awaiting_ack','paused')",
+            "UPDATE transfers SET state = 'queued' WHERE state IN ('active','awaiting_ack','paused')",
             [],
         )?;
         Ok(n)
@@ -240,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_inflight_transfers_moves_active_to_pending() {
+    fn reset_inflight_transfers_moves_active_to_queued() {
         let db = Db::open_in_memory().unwrap();
         db.migrate().unwrap();
         db.upsert_transfer(&row()).unwrap();
@@ -249,7 +248,7 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(
             db.get_transfer(&[1u8; 16]).unwrap().unwrap().state,
-            "pending"
+            "queued"
         );
     }
 }

@@ -2,8 +2,11 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use rand::Rng;
 
 use crate::error::{CoreError, Result};
+
+use super::naming::resolve_name;
 
 pub const SERVICE_TYPE: &str = "_daak._tcp.local.";
 pub const PROTO_VERSION: u16 = 1;
@@ -66,6 +69,65 @@ impl Advertiser {
         let _ = self.daemon.unregister(&self.fullname);
         let _ = self.daemon.shutdown();
     }
+
+    /// Advertise under `base_name`, unless a peer already claims it. Browses the
+    /// service type for `BROWSE_WINDOW`, then picks the final name from the
+    /// observed peer names via the pure [`resolve_name`]. Re-browses briefly
+    /// afterwards: mdns_sd does not report a name conflict, so the only way to
+    /// see a peer that booted inside our first window is to look again and
+    /// re-register under a different name. The decision itself stays pure.
+    pub fn start_resolving(
+        base_name: &str,
+        port: u16,
+        device_id: [u8; 16],
+        rng: &mut impl Rng,
+    ) -> Result<(Self, String)> {
+        let mut observed = browse_observed_names(BROWSE_WINDOW).unwrap_or_default();
+        let mut name = resolve_name(base_name, &observed, rng);
+        for _ in 0..2 {
+            let adv = Self::start(&name, port, device_id)?;
+            let late = browse_observed_names(RECHECK_WINDOW).unwrap_or_default();
+            if !late.iter().any(|n| n == &name) {
+                return Ok((adv, name));
+            }
+            adv.stop();
+            observed.extend(late);
+            name = resolve_name(base_name, &observed, rng);
+        }
+        Ok((Self::start(&name, port, device_id)?, name))
+    }
+}
+
+/// How long to re-browse after registering, to catch a peer that appeared
+/// during the initial window and took the same name.
+pub const RECHECK_WINDOW: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// How long to browse for a same-named peer before committing to a name.
+pub const BROWSE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Peer names seen on the LAN in `window`, excluding our own service. Best
+/// effort: a browse that cannot start yields an empty list, so a machine with no
+/// working mDNS keeps its base name instead of failing to start.
+fn browse_observed_names(window: std::time::Duration) -> Result<Vec<String>> {
+    let browser = Browser::start()?;
+    let deadline = std::time::Instant::now() + window;
+    let mut names = Vec::new();
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match browser.rx.recv_timeout(remaining) {
+            Ok(ServiceEvent::ServiceResolved(info)) => {
+                if let Ok(a) = announce_from_service(&info) {
+                    if !names.contains(&a.name) {
+                        names.push(a.name);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    browser.stop();
+    Ok(names)
 }
 
 pub struct Browser {

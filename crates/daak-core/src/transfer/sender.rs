@@ -39,7 +39,8 @@ pub async fn send_transfer<T: FrameTransport>(
     conn: &mut T,
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
-    // Per-item half-open chunk ranges to send; an empty Vec means "send all chunks".
+    // Per-item half-open chunk ranges; &[] or a missing entry = all chunks, a
+    // present-but-empty entry = none (R-T7-4).
     ranges: &[Vec<(u64, u64)>],
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
@@ -117,15 +118,15 @@ pub async fn send_transfer<T: FrameTransport>(
 }
 
 /// True when the chunk is in scope for this transfer. An empty top-level
-/// 'ranges' slice, or an empty per-item range list, means "send all chunks".
-/// Otherwise a chunk is sent iff it falls inside a half-open [start, end) range.
+/// 'ranges' slice, or a MISSING per-item entry, means "send all chunks". A
+/// PRESENT-BUT-EMPTY per-item list means "send nothing" (R-T7-4): that item was
+/// already fully received, so it never appears in a NACK -- re-sending it is
+/// exactly the duplicate the resume path must avoid. Otherwise a chunk is sent
+/// iff it falls inside a half-open [start, end) range.
 fn chunk_in_ranges(ranges: &[Vec<(u64, u64)>], item_index: u32, chunk_index: u64) -> bool {
     let Some(item_ranges) = ranges.get(item_index as usize) else {
         return true;
     };
-    if item_ranges.is_empty() {
-        return true;
-    }
     item_ranges
         .iter()
         .any(|&(start, end)| chunk_index >= start && chunk_index < end)
@@ -149,8 +150,9 @@ mod tests {
     fn chunk_in_ranges_sends_all_when_empty_or_matches() {
         // Empty top-level ranges => every chunk in scope.
         assert!(chunk_in_ranges(&[], 0, 999));
-        // Empty per-item list => every chunk for that item.
-        assert!(chunk_in_ranges(&[vec![]], 0, 999));
+        // Present-but-empty per-item list => send NOTHING (R-T7-4): a fully
+        // received item is absent from the NACK, and re-sending is a duplicate.
+        assert!(!chunk_in_ranges(&[vec![]], 0, 999));
         // A non-empty list filters to half-open [start, end).
         assert!(chunk_in_ranges(&[vec![(2, 5)]], 0, 2));
         assert!(chunk_in_ranges(&[vec![(2, 5)]], 0, 4));

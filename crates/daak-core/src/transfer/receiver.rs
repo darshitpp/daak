@@ -153,6 +153,8 @@ pub async fn receive_transfer<T: FrameTransport>(
                     if received_any {
                         for (i, bm) in bitmaps.iter().enumerate() {
                             if let Some(bm) = bm {
+                                // R-T7-5: keyed by manifest.payload_id, never a
+                                // transfer id -- the resuming peer must find these.
                                 db.save_bitmap(&manifest.payload_id, i as u32, bm)?;
                             }
                         }
@@ -208,6 +210,7 @@ pub async fn receive_transfer<T: FrameTransport>(
             received_any = true;
             chunks_since_persist += 1;
             if chunks_since_persist >= BITMAP_PERSIST_INTERVAL {
+                // R-T7-5: keyed by manifest.payload_id (see above).
                 db.save_bitmap(&manifest.payload_id, item_index, bitmap)?;
                 chunks_since_persist = 0;
             }
@@ -218,6 +221,17 @@ pub async fn receive_transfer<T: FrameTransport>(
         f.flush().await?;
     }
     drop(files);
+
+    // R-T7-3/R-T7-5: the receive is done, so no NACK can follow. Drop the resume
+    // rows (keyed by payload_id, the inbound resume key) instead of leaving
+    // stale chunk_state behind.
+    if let Some(db) = db {
+        for (i, bm) in bitmaps.iter().enumerate() {
+            if bm.is_some() {
+                db.clear_bitmap(&manifest.payload_id, i as u32)?;
+            }
+        }
+    }
 
     let mut hash_ok = true;
     let mut failed_item = 0u32;
