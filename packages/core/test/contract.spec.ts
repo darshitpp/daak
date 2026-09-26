@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { DaakEngine, DaakEvent, DeviceInfo } from '../src/engine/types';
 import { InProcessEngine } from '../src/engine/InProcess';
+import { runContractSuite } from './contract-suite';
 // Type-only: importing the module for value would run getEnforcing and throw
 // outside a React Native runtime.
 import type { Spec as NativeDaakSpec } from '../src/NativeDaak';
@@ -135,6 +136,13 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
 }
 
 describe('InProcessEngine', () => {
+  // A complete-enough native for the shared suite; the unit tests below keep
+  // using the deliberately partial fakeNative() so an unstubbed method is
+  // still a TypeError there rather than a silent lie.
+  runContractSuite('inprocess', async () =>
+    new InProcessEngine(fakeNative({ listDevices: async () => '[]' }), () => () => {}),
+  );
+
   it('lets a throwing consumer handler propagate (I1)', () => {
     let emit: (raw: string) => void = () => {};
     const engine = new InProcessEngine(fakeNative(), (cb) => {
