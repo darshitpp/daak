@@ -3,6 +3,7 @@ pub mod identity;
 pub mod inbox;
 pub mod outbox;
 pub mod pairings;
+pub mod settings;
 pub mod transfers;
 
 use std::path::Path;
@@ -141,6 +142,12 @@ impl Db {
               saved_paths    TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_inbox_received ON inbox_history(received_at DESC);
+
+            CREATE TABLE IF NOT EXISTS settings (
+              key   TEXT PRIMARY KEY,
+              value BLOB NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_devices_state ON devices(state);
             "#,
         )?;
         Ok(())

@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod chunk;
 pub mod control;
 pub mod crypto;
