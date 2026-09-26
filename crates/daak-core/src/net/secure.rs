@@ -70,7 +70,9 @@ pub async fn complete_handshake<T: FrameTransport>(
 }
 
 /// Explicit key confirmation (spec §3.5): both sides exchange
-/// `HMAC-BLAKE2b(handshake_hash, "daak-confirm")` and abort on mismatch.
+/// `keyed-BLAKE2s(key = "daak-confirm", message = handshake_hash)` and abort on
+/// mismatch. Keyed BLAKE2s, not HMAC — the constant is the key, the handshake
+/// hash is the message.
 pub async fn confirm_keys<T: FrameTransport>(
     conn: &mut T,
     hash: &[u8],
