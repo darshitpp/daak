@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/daak-core", "crates/daak-cli", "crates/daak-ffi", "crates/daak-ipc"]
+members = [
+    "crates/daak-core",
+    "crates/daak-cli",
+    "crates/daak-ffi",
+    "crates/daak-ipc",
+    "crates/daakd",
+]
 exclude = ["proto/gen", "crates/daak-core/fuzz"]
 
 [workspace.package]
