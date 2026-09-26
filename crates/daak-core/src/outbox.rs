@@ -25,8 +25,13 @@ pub fn enqueue(
             staging.stage(&manifest.payload_id, src)?;
         }
     }
-    let mut id = [0u8; 16];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut id);
+    // R-T10-11: the row id IS the payload id. Every other transfer id in the
+    // codebase is manifest.payload_id (send_secure_with returns it,
+    // record_inbox stores it as transfers.transfer_id), so a random primary key
+    // made cancel/retry unreachable -- no caller ever holds it. One payload is
+    // enqueued for exactly one peer and Manifest::new mints a fresh random
+    // payload_id per share, so the primary key stays unique.
+    let id = manifest.payload_id;
     let now = crate::manifest::now_ms() as i64 / 1000;
     db.enqueue_outbox(&OutboxRow {
         id,

@@ -52,27 +52,73 @@ impl Db {
                FROM outbox WHERE state = 'pending' AND next_attempt_at <= ?1
                ORDER BY created_at",
         )?;
-        let rows = stmt.query_map(rusqlite::params![now], |r| {
-            let id: Vec<u8> = r.get(0)?;
-            let pid: Vec<u8> = r.get(1)?;
-            let peer: Vec<u8> = r.get(2)?;
-            let a = |v: Vec<u8>| -> rusqlite::Result<[u8; 16]> {
-                v.try_into().map_err(|_| rusqlite::Error::InvalidQuery)
-            };
-            Ok(OutboxRow {
-                id: a(id)?,
-                payload_id: a(pid)?,
-                peer_device_id: a(peer)?,
-                manifest: r.get(3)?,
-                total_bytes: r.get::<_, i64>(4)? as u64,
-                attempts: r.get::<_, i64>(5)? as u32,
-                next_attempt_at: r.get(6)?,
-                state: r.get(7)?,
-                created_at: r.get(8)?,
-                updated_at: r.get(9)?,
-            })
-        })?;
+        let rows = stmt.query_map(rusqlite::params![now], row_to_outbox)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_outbox(&self, id: &[u8; 16]) -> Result<Option<OutboxRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, payload_id, peer_device_id, manifest, total_bytes, attempts,
+                    next_attempt_at, state, created_at, updated_at
+               FROM outbox WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![&id[..]])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(row_to_outbox(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn mark_outbox_awaiting_ack(&self, id: &[u8; 16]) -> Result<()> {
+        self.conn().execute(
+            // Guards the "sending -> awaiting_ack" edge: a drain whose send
+            // completed after the user canceled must not re-label the row.
+            "UPDATE outbox SET state = 'awaiting_ack', updated_at = ?2
+             WHERE id = ?1 AND state = 'sending'",
+            rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
+        )?;
+        Ok(())
+    }
+
+    /// Terminal failure. `error` is logged, not persisted: the outbox table has
+    /// no last_error column and this task does not add one (see task report).
+    pub fn mark_outbox_terminal_failed(&self, id: &[u8; 16], error: &str) -> Result<()> {
+        tracing::warn!("outbox row {} failed permanently: {error}", hex::encode(id));
+        self.conn().execute(
+            // Guards the "pending/sending -> failed" edge: cancel acts on a
+            // pending row and the drain's give-up path on a sending one; a row
+            // already "failed" or "done" is left alone, so a late terminal
+            // settle cannot relabel a delivered row.
+            "UPDATE outbox SET state = 'failed', updated_at = ?2
+             WHERE id = ?1 AND state IN ('pending','sending')",
+            rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
+        )?;
+        Ok(())
+    }
+
+    // ponytail: no engine caller yet; wire it in when outbox rows are pruned.
+    pub fn delete_outbox(&self, id: &[u8; 16]) -> Result<()> {
+        self.conn().execute(
+            "DELETE FROM outbox WHERE id = ?1",
+            rusqlite::params![&id[..]],
+        )?;
+        Ok(())
+    }
+
+    /// True only if the row was re-armed. Guards the "failed -> pending" edge of
+    /// the outbox state machine: manual retry must not re-arm a row a drain has
+    /// already claimed ("sending" -> double drain) or already delivered ("done"
+    /// -> duplicate delivery). A canceled row lives in "failed", so cancel then
+    /// retry is still the intended undo path.
+    pub fn retry_outbox_now(&self, id: &[u8; 16]) -> Result<bool> {
+        let now = crate::manifest::now_ms() as i64 / 1000;
+        let n = self.conn().execute(
+            "UPDATE outbox SET state = 'pending', attempts = 0, next_attempt_at = ?2, updated_at = ?2
+             WHERE id = ?1 AND state IN ('pending','failed')",
+            rusqlite::params![&id[..], now],
+        )?;
+        Ok(n > 0)
     }
 
     /// Claim a pending row for sending. True only for the caller that actually
@@ -96,8 +142,11 @@ impl Db {
             )
             .map(|v| v as u32)?;
         let next = now + backoff_delay(attempts + 1, jitter);
+        // Guards the "sending -> failed" edge: a settle from a drain that lost
+        // the claim (row since canceled or re-armed) must not re-pend the row.
         conn.execute(
-            "UPDATE outbox SET state = 'pending', attempts = attempts + 1, next_attempt_at = ?2, updated_at = ?3 WHERE id = ?1",
+            "UPDATE outbox SET state = 'pending', attempts = attempts + 1, next_attempt_at = ?2, updated_at = ?3
+             WHERE id = ?1 AND state = 'sending'",
             rusqlite::params![&id[..], next, now],
         )?;
         Ok(())
@@ -105,7 +154,9 @@ impl Db {
 
     pub fn mark_outbox_done(&self, id: &[u8; 16]) -> Result<()> {
         self.conn().execute(
-            "UPDATE outbox SET state = 'done', updated_at = ?2 WHERE id = ?1",
+            // Guards the "awaiting_ack -> done" edge, same race as above.
+            "UPDATE outbox SET state = 'done', updated_at = ?2
+             WHERE id = ?1 AND state = 'awaiting_ack'",
             rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
         )?;
         Ok(())
@@ -121,6 +172,28 @@ impl Db {
         )?;
         Ok(n)
     }
+}
+
+/// Shared row mapping for `due_outbox` and `get_outbox` (R-T10-4: one copy).
+fn row_to_outbox(r: &rusqlite::Row<'_>) -> rusqlite::Result<OutboxRow> {
+    let id: Vec<u8> = r.get(0)?;
+    let pid: Vec<u8> = r.get(1)?;
+    let peer: Vec<u8> = r.get(2)?;
+    let a = |v: Vec<u8>| -> rusqlite::Result<[u8; 16]> {
+        v.try_into().map_err(|_| rusqlite::Error::InvalidQuery)
+    };
+    Ok(OutboxRow {
+        id: a(id)?,
+        payload_id: a(pid)?,
+        peer_device_id: a(peer)?,
+        manifest: r.get(3)?,
+        total_bytes: r.get::<_, i64>(4)? as u64,
+        attempts: r.get::<_, i64>(5)? as u32,
+        next_attempt_at: r.get(6)?,
+        state: r.get(7)?,
+        created_at: r.get(8)?,
+        updated_at: r.get(9)?,
+    })
 }
 
 #[cfg(test)]
@@ -155,6 +228,7 @@ mod tests {
 
         // First failure at now=100: backoff_delay(attempts+1 = 1, 0) = 15 * 2^1 = 30,
         // so next_attempt_at = 130.
+        assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
         db.mark_outbox_failed(&[1u8; 16], 100, 0).unwrap();
         assert_eq!(
             db.due_outbox(100).unwrap().len(),
@@ -178,6 +252,10 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.migrate().unwrap();
         db.enqueue_outbox(&row()).unwrap();
+        // I-B: 'done' is only reachable from 'awaiting_ack', so walk the states
+        // the drain actually walks instead of short-cutting pending -> done.
+        db.mark_outbox_sending(&[1u8; 16]).unwrap();
+        db.mark_outbox_awaiting_ack(&[1u8; 16]).unwrap();
         db.mark_outbox_done(&[1u8; 16]).unwrap();
         assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
     }

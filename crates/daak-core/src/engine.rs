@@ -471,6 +471,25 @@ impl Engine {
         Ok(payload_id)
     }
 
+    /// Cancel a queued or in-flight outbound transfer and discard its staged files.
+    pub fn cancel(&self, transfer_id: [u8; 16]) -> Result<()> {
+        cancel_with(&self.db, &self.staging, transfer_id)
+    }
+
+    /// Re-arm a failed or backed-off outbound transfer and poke the outbox worker.
+    pub fn retry(&self, transfer_id: [u8; 16]) -> Result<()> {
+        match retry_with(&self.db, transfer_id)? {
+            Some(peer) => self.outbox.notify_peer_online(peer),
+            // M-2: without this, a UI tapping Retry on an actively-sending row
+            // gets Ok(()) and nothing at all happens.
+            None => tracing::info!(
+                "outbox retry refused: transfer {} is not in a re-armable state",
+                hex::encode(transfer_id)
+            ),
+        }
+        Ok(())
+    }
+
     /// Called from the accept loop after a successful inbound transfer.
     fn record_inbox(db: &Db, manifest: &Manifest) -> Result<()> {
         let summary = match manifest.kind {
@@ -650,12 +669,62 @@ struct DrainCtx {
     staging: Arc<Staging>,
 }
 
+/// Give up on a row after this many failed delivery attempts. 8 with the 4.3
+/// backoff (15s doubling, 10min cap) spans roughly 35 minutes of retrying, which
+/// covers a peer that is briefly away without pinning a staged file forever.
+// ponytail: fixed cap, no adaptive heuristics; raise it only alongside a UI
+// affordance for surfacing permanently-failed rows.
+const MAX_DELIVERY_ATTEMPTS: u32 = 8;
+
+/// R-T10-3: the UPDATEs in cancel/retry match zero rows for an unknown id, so
+/// without this guard both would silently 'succeed' on garbage.
+pub fn require_outbox(db: &Db, transfer_id: &[u8; 16]) -> Result<OutboxRow> {
+    db.get_outbox(transfer_id)?.ok_or_else(|| {
+        CoreError::Protocol(format!(
+            "no outbox row for transfer {}",
+            hex::encode(transfer_id)
+        ))
+    })
+}
+
+pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<()> {
+    let row = require_outbox(db, &transfer_id)?;
+    db.mark_outbox_terminal_failed(&transfer_id, "cancelled")?;
+    // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
+    // brief's "cancelled"; do not "fix" it back.
+    db.set_transfer_state(&transfer_id, "canceled")?;
+    staging.cleanup(&row.payload_id)
+}
+
+/// Returns the peer to notify, if the row was actually re-armed.
+pub fn retry_with(db: &Db, transfer_id: [u8; 16]) -> Result<Option<[u8; 16]>> {
+    let row = require_outbox(db, &transfer_id)?;
+    if !db.retry_outbox_now(&transfer_id)? {
+        return Ok(None);
+    }
+    // "queued" is spec 4.2's transfers.state for a re-armed send; "pending"
+    // is outbox vocabulary and is not a member of that enum.
+    db.set_transfer_state(&transfer_id, "queued")?;
+    Ok(Some(row.peer_device_id))
+}
+
+/// Back off and retry, or give up. The one decision the retry path makes.
+fn settle_failed_attempt(db: &Db, id: &[u8; 16], attempts: u32, jitter: u64) -> Result<()> {
+    let now = crate::manifest::now_ms() as i64 / 1000;
+    if attempts + 1 >= MAX_DELIVERY_ATTEMPTS {
+        db.mark_outbox_terminal_failed(id, &format!("gave up after {} attempts", attempts + 1))
+    } else {
+        db.mark_outbox_failed(id, now, jitter)
+    }
+}
+
 /// Rebuild a queued send from its row and push it, then settle the row state.
 async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
     let db = &ctx.db;
-    let now = || crate::manifest::now_ms() as i64 / 1000;
     let retry = |jitter: u64| {
-        let _ = db.mark_outbox_failed(&row.id, now(), jitter);
+        // R-T10-5: cap the retries. Without this a permanently unreachable peer
+        // (or a permanently bad file) retries forever and never leaves 'failed'.
+        let _ = settle_failed_attempt(db, &row.id, row.attempts, jitter);
     };
 
     // R-D: an unknown peer is a failure, not a panic -- the row goes back to
@@ -678,7 +747,9 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("outbox drain: row {} undecodable: {e}", hex::encode(row.id));
-            retry(0);
+            // An undecodable manifest is permanent: retrying re-reads the same
+            // bytes forever. Terminal instead of burning the attempt budget.
+            let _ = db.mark_outbox_terminal_failed(&row.id, &format!("undecodable manifest: {e}"));
             return;
         }
     };
@@ -703,8 +774,10 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
     )
     .await
     {
-        // R-C: no awaiting_ack hop here -- per-chunk ack wiring lands in Task 10.
+        // R-C: send_transfer already read the peer's Ack and returns Ok ONLY on
+        // complete && hash_ok (Err on mismatch/close), so Ok(()) IS the ack.
         Ok(_) => {
+            let _ = db.mark_outbox_awaiting_ack(&row.id);
             let _ = db.mark_outbox_done(&row.id);
         }
         Err(e) => {
@@ -741,5 +814,43 @@ mod tests {
         assert!(accept_error_is_fatal(&crate::error::CoreError::Io(
             std::io::Error::other("boom")
         )));
+    }
+
+    #[test]
+    fn retries_back_off_until_the_cap_then_goes_terminal() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&OutboxRow {
+            id: [1u8; 16],
+            payload_id: [2u8; 16],
+            peer_device_id: [3u8; 16],
+            manifest: vec![],
+            total_bytes: 0,
+            attempts: 0,
+            next_attempt_at: 0,
+            // A drain always settles the row it claimed, so the fixture starts
+            // 'pending' and the test claims it (I-2 guards the 'sending' state).
+            state: "pending".into(),
+            created_at: 0,
+            updated_at: 0,
+        })
+        .unwrap();
+
+        // Every attempt below the cap goes back to pending with a bumped count.
+        for want in 1..MAX_DELIVERY_ATTEMPTS {
+            assert!(
+                db.mark_outbox_sending(&[1u8; 16]).unwrap(),
+                "the drain re-claims the row it just re-pended"
+            );
+            settle_failed_attempt(&db, &[1u8; 16], want - 1, 0).unwrap();
+            let row = db.get_outbox(&[1u8; 16]).unwrap().unwrap();
+            assert_eq!(row.state, "pending", "attempt {want} must back off");
+            assert_eq!(row.attempts, want);
+        }
+
+        // The last one is terminal: a row that never leaves 'failed' is the bug.
+        db.mark_outbox_sending(&[1u8; 16]).unwrap();
+        settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0).unwrap();
+        assert_eq!(db.get_outbox(&[1u8; 16]).unwrap().unwrap().state, "failed");
     }
 }
