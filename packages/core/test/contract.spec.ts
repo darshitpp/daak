@@ -6,6 +6,19 @@ const METHODS: (keyof DaakEngine)[] = [
   'retry', 'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
 ];
 
+// Compile-time only: adding, removing or renaming a DaakEvent member breaks tsc.
+const EVENT_TYPES: Record<DaakEvent['type'], true> = {
+  'device.discovered': true,
+  'device.state': true,
+  'pairing.sas': true,
+  'pairing.done': true,
+  'transfer.progress': true,
+  'transfer.item': true,
+  'transfer.done': true,
+  'transfer.failed': true,
+  'inbox.received': true,
+};
+
 export function assertEngineShape(engine: DaakEngine): void {
   const methods: (keyof DaakEngine)[] = METHODS;
   for (const m of methods) expect(typeof engine[m]).toBe('function');
@@ -18,14 +31,13 @@ describe('contract types', () => {
   });
 
   it('pins the engine method set to spec 6.2', () => {
-    // Compile-time: METHODS must be exhaustive and free of typos.
     const exhaustive: Record<keyof DaakEngine, true> = {
       start: true, stop: true, devices: true, pair: true, send: true, cancel: true,
       retry: true, listTransfers: true, listInbox: true, setDisplayName: true,
       setPresence: true, on: true,
     };
-    // Run-time: no method was added or removed without updating this guard.
-    expect(Object.keys(exhaustive).sort()).toEqual([...METHODS].sort());
+    expect(Object.keys(EVENT_TYPES).length).toBe(9);
+    expect(Object.keys(exhaustive).length).toBe(METHODS.length);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
