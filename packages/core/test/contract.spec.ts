@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DaakEngine, DaakEvent, DeviceInfo } from '../src/engine/types';
+// Type-only: importing the module for value would run getEnforcing and throw
+// outside a React Native runtime.
+import type { Spec as NativeDaakSpec } from '../src/NativeDaak';
 
 const METHODS: (keyof DaakEngine)[] = [
   'start', 'stop', 'devices', 'pair', 'send', 'cancel',
@@ -17,6 +20,29 @@ const EVENT_TYPES: Record<DaakEvent['type'], true> = {
   'transfer.done': true,
   'transfer.failed': true,
   'inbox.received': true,
+};
+
+// Compile-time only: the native modules (DaakModule.kt, Daak.swift) override
+// exactly these methods, so adding, removing or renaming one here breaks tsc on
+// the spec and, at build time, the generated NativeDaakSpec.
+// getConstants is excluded because RN's TurboModule base declares it optional
+// and neither native module implements it; Exclude keeps the pin honest without
+// adding a key nothing overrides.
+type NativeMethods = Exclude<keyof NativeDaakSpec, 'getConstants'>;
+const NATIVE_METHODS: Record<NativeMethods, true> = {
+  start: true,
+  pairingBundle: true,
+  pairWith: true,
+  acceptPairing: true,
+  sendText: true,
+  sendFiles: true,
+  listDevices: true,
+  cancel: true,
+  retry: true,
+  localPort: true,
+  shutdown: true,
+  addListener: true,
+  removeListeners: true,
 };
 
 export function assertEngineShape(engine: DaakEngine): void {
@@ -38,6 +64,10 @@ describe('contract types', () => {
     };
     expect(Object.keys(EVENT_TYPES).length).toBe(9);
     expect(Object.keys(exhaustive).length).toBe(METHODS.length);
+  });
+
+  it('pins the TurboModule spec the native modules implement', () => {
+    expect(Object.keys(NATIVE_METHODS).length).toBe(13);
   });
 
   it('models a device without fabricating liveness (R11)', () => {

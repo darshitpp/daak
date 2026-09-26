@@ -101,6 +101,10 @@ pub enum FfiEvent {
 /// scaffolding supplies the foreign (vtable) side. Send + Sync are declared here
 /// rather than added at the use site: the event task moves the sink onto a
 /// multithreaded runtime, so the sink has to satisfy both.
+///
+/// The UDL callback carries an FfiEvent, not a string, so it cannot carry the
+/// event JSON itself. The platform sink calls ffi_event_json on what it gets
+/// here; packages/core/src/engine/types.ts is the other end of that JSON.
 pub trait EventSink: Send + Sync {
     fn on_event(&self, event: FfiEvent);
 }
@@ -377,6 +381,14 @@ impl DaakEngine {
         }
         Ok(())
     }
+
+    /// The UDL-declared half of ffi_event_json. The event callback hands the
+    /// platform an FfiEvent, not a string, so it calls this to get the JSON
+    /// packages/core/src/engine/types.ts defines. Takes ev by value because
+    /// that is the shape the generated scaffolding lowers to.
+    pub fn ffi_event_json(&self, ev: FfiEvent) -> Result<String, FfiError> {
+        ffi_event_json(&ev)
+    }
 }
 
 fn device_ref(engine: &Engine) -> DeviceRef {
@@ -384,6 +396,78 @@ fn device_ref(engine: &Engine) -> DeviceRef {
         device_id: engine.identity().device_id(),
         name: engine.display_name().to_string(),
     }
+}
+
+/// Encode one engine signal as the JSON the native modules forward on the
+/// `DaakEvent` channel. The key set below is the FROZEN TS DaakEvent shape
+/// (spec 6.1); packages/core/src/engine/types.ts is the other end of it, and
+/// Tasks 2/4/7 code against these exact names. The UDL callback carries an
+/// FfiEvent, not a string, so this is a plain Rust function the platform
+/// bindings call with the event they already received.
+///
+/// Exposed for the same reason to_ffi_event is: the whole mapping is testable
+/// without a live engine or a bound socket.
+pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
+    // serde_json orders keys, so the tests compare key SETS.
+    let json = match ev {
+        FfiEvent::DeviceFound { data } => serde_json::json!({
+            "type": "device.discovered",
+            "device": {
+                "deviceId": data.device_id,
+                "name": data.name,
+                "addr": data.addr,
+                "online": data.online,
+            },
+        }),
+        FfiEvent::DeviceState { data } => serde_json::json!({
+            "type": "device.state",
+            "deviceId": data.device_id,
+            // TS carries a string here, never a bool, so JS switches on one shape.
+            "state": if data.online { "online" } else { "offline" },
+        }),
+        FfiEvent::PairingSas { data } => serde_json::json!({
+            "type": "pairing.sas",
+            "peerDeviceId": data.peer_device_id,
+            "sas": data.sas,
+        }),
+        FfiEvent::TransferProgress { data } => serde_json::json!({
+            "type": "transfer.progress",
+            "transferId": data.transfer_id,
+            "bytesDone": data.bytes_done,
+            "bytesTotal": data.bytes_total,
+        }),
+        FfiEvent::TransferItem { data } => serde_json::json!({
+            "type": "transfer.item",
+            "transferId": data.transfer_id,
+            "itemIndex": data.item_index,
+            "state": data.state,
+            "destPath": data.dest_path,
+        }),
+        FfiEvent::TransferDone { data } => serde_json::json!({
+            "type": "transfer.done",
+            "transferId": data.transfer_id,
+        }),
+        // Queued reuses transfer.done on purpose: the TS union has no
+        // transfer.queued, because a queued send is a send() return value.
+        FfiEvent::TransferQueued { data } => serde_json::json!({
+            "type": "transfer.done",
+            "transferId": data.transfer_id,
+        }),
+        FfiEvent::TransferFailed { data } => serde_json::json!({
+            "type": "transfer.failed",
+            "transferId": data.transfer_id,
+            "error": data.error,
+        }),
+        // The engine hands over a JSON string and TS types it as an object, so
+        // parse it rather than nesting a stringified blob. A payload the engine
+        // could not have produced is a protocol error, not a silent null.
+        FfiEvent::InboxReceived { data } => serde_json::json!({
+            "type": "inbox.received",
+            "payload": serde_json::from_str::<serde_json::Value>(&data.payload_json)
+                .map_err(protocol_err)?,
+        }),
+    };
+    serde_json::to_string(&json).map_err(protocol_err)
 }
 
 /// The JSON shape Tasks 2/3 read: {cbor, name, device_id}. A free function, not

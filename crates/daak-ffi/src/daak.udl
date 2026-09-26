@@ -46,4 +46,9 @@ interface DaakEngine {
   [Throws=FfiError] void retry(string transfer_id);
   [Throws=FfiError] u16 local_port();
   [Throws=FfiError] void shutdown();
+  // The event callback carries an FfiEvent, not a string, so the platform
+  // sinks need this to turn one into the JSON packages/core reads. Same mapping
+  // as the ffi_event_json fn in lib.rs, declared here because only UDL items
+  // reach uniffi codegen.
+  [Throws=FfiError] string ffi_event_json(FfiEvent ev);
 };

@@ -5,6 +5,9 @@
   "codegenConfig": {
     "name": "DaakSpec",
     "type": "modules",
-    "jsSrcsDir": "../../packages/core/src"
+    "jsSrcsDir": "../../packages/core/src",
+    "android": {
+      "javaPackageName": "dev.darshit.daak"
+    }
   }
 }

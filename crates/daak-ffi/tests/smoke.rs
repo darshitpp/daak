@@ -174,3 +174,150 @@ fn an_inbound_pairing_sas_reaches_js_as_a_pairing_sas_event() {
         other => panic!("expected PairingSas, got {other:?}"),
     }
 }
+
+/// The JSON the native modules forward over the DaakEvent channel. The key set
+/// IS the contract with packages/core/src/engine/types.ts -- the other end of
+/// it -- so assert the exact keys, not just that it serialises.
+fn keys_of(ev: &FfiEvent) -> Vec<String> {
+    let json: serde_json::Value =
+        serde_json::from_str(&daak_ffi::ffi_event_json(ev).unwrap()).unwrap();
+    let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+#[test]
+fn ffi_event_json_carries_the_frozen_ts_daak_event_keys() {
+    let hex = "ab".repeat(16);
+
+    // device.discovered nests the device, unlike every other variant.
+    let found = FfiEvent::DeviceFound {
+        data: daak_ffi::DeviceFoundEvent {
+            device_id: hex.clone(),
+            name: "Laptop".into(),
+            addr: "192.168.1.5:7777".into(),
+            online: true,
+        },
+    };
+    assert_eq!(keys_of(&found), ["device", "type"].map(String::from));
+    let json: serde_json::Value =
+        serde_json::from_str(&daak_ffi::ffi_event_json(&found).unwrap()).unwrap();
+    assert_eq!(json["type"], "device.discovered");
+    assert_eq!(json["device"]["deviceId"], serde_json::json!(hex));
+    assert_eq!(json["device"]["online"], serde_json::json!(true));
+    // The nested object is a DeviceInfo in TS, so its key set is fixed too.
+    let mut device_keys: Vec<String> = json["device"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    device_keys.sort();
+    assert_eq!(
+        device_keys,
+        ["addr", "deviceId", "name", "online"].map(String::from)
+    );
+
+    // device.state flips one string, never a boolean, so JS can switch on it.
+    for (online, expected) in [(true, "online"), (false, "offline")] {
+        let ev = FfiEvent::DeviceState {
+            data: daak_ffi::DeviceStateEvent {
+                device_id: hex.clone(),
+                online,
+            },
+        };
+        assert_eq!(
+            keys_of(&ev),
+            ["deviceId", "state", "type"].map(String::from)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&daak_ffi::ffi_event_json(&ev).unwrap()).unwrap();
+        assert_eq!(json["type"], "device.state");
+        assert_eq!(json["deviceId"], serde_json::json!(hex));
+        assert_eq!(json["state"], serde_json::json!(expected));
+    }
+
+    let progress = FfiEvent::TransferProgress {
+        data: daak_ffi::ProgressEvent {
+            transfer_id: hex.clone(),
+            bytes_done: 7,
+            bytes_total: 42,
+        },
+    };
+    assert_eq!(
+        keys_of(&progress),
+        ["bytesDone", "bytesTotal", "transferId", "type"].map(String::from)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&daak_ffi::ffi_event_json(&progress).unwrap()).unwrap();
+    assert_eq!(json["type"], "transfer.progress");
+    assert_eq!(json["transferId"], serde_json::json!(hex));
+    assert_eq!(json["bytesDone"], serde_json::json!(7));
+    assert_eq!(json["bytesTotal"], serde_json::json!(42));
+
+    // The rest are pinned too, so no variant can drift silently.
+    assert_eq!(
+        keys_of(&FfiEvent::PairingSas {
+            data: daak_ffi::PairingSasEvent {
+                peer_device_id: hex.clone(),
+                sas: "123456".into(),
+            },
+        }),
+        ["peerDeviceId", "sas", "type"].map(String::from)
+    );
+    assert_eq!(
+        keys_of(&FfiEvent::TransferItem {
+            data: daak_ffi::TransferItemEvent {
+                transfer_id: hex.clone(),
+                item_index: 2,
+                state: "receiving".into(),
+                dest_path: "/tmp/a".into(),
+            },
+        }),
+        ["destPath", "itemIndex", "state", "transferId", "type"].map(String::from)
+    );
+    assert_eq!(
+        keys_of(&FfiEvent::TransferDone {
+            data: daak_ffi::DoneEvent {
+                transfer_id: hex.clone(),
+            },
+        }),
+        ["transferId", "type"].map(String::from)
+    );
+    assert_eq!(
+        keys_of(&FfiEvent::TransferFailed {
+            data: daak_ffi::FailedEvent {
+                transfer_id: hex.clone(),
+                error: "peer went away".into(),
+            },
+        }),
+        ["error", "transferId", "type"].map(String::from)
+    );
+
+    // Queued reuses transfer.done: the TS union has no transfer.queued, because
+    // a queued send is a send() return value, not an event.
+    let queued_json = daak_ffi::ffi_event_json(&FfiEvent::TransferQueued {
+        data: daak_ffi::DoneEvent {
+            transfer_id: hex.clone(),
+        },
+    })
+    .unwrap();
+    assert!(queued_json.contains("transfer.done"));
+    assert!(!queued_json.contains("transfer.queued"));
+}
+
+#[test]
+fn inbox_received_parses_its_payload_string_rather_than_nesting_it() {
+    // The engine hands over a JSON string; TS types it as an object, so the
+    // adapter must splice in the parsed value, not a stringified blob.
+    let ev = FfiEvent::InboxReceived {
+        data: daak_ffi::InboxReceivedEvent {
+            payload_json: r#"{"payloadId":"ab","itemCount":2}"#.into(),
+        },
+    };
+    let json: serde_json::Value =
+        serde_json::from_str(&daak_ffi::ffi_event_json(&ev).unwrap()).unwrap();
+    assert_eq!(json["type"], "inbox.received");
+    assert_eq!(json["payload"]["payloadId"], serde_json::json!("ab"));
+    assert_eq!(json["payload"]["itemCount"], serde_json::json!(2));
+}
