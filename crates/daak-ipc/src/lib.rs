@@ -7,7 +7,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// as a CBOR ARRAY, which is not what `bstr` means in proto/ipc.cddl. This is
 /// the same trick `daak-core`'s `manifest::byte_array` uses, duplicated because
 /// that module is `pub(crate)` and daak-ipc is a leaf crate with no
-/// daak-core dependency.
+/// daak-core dependency. The `visit_seq` arm is BACKWARD tolerance for an
+/// array-encoded peer (an older or buggy encoder), not forward compatibility;
+/// it is kept so a peer mid-upgrade does not hard-fail on a pairing bundle.
 mod bstr_bytes {
     use serde::de::{Error, Visitor};
     use serde::{Deserializer, Serializer};
@@ -457,6 +459,35 @@ mod version_tests {
         match block_on(read_message(&mut cur)).unwrap_err() {
             IpcError::UpdateRequired { min_major } => assert_eq!(min_major, IPC_MAJOR),
             other => panic!("expected UpdateRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_malformed_body_on_our_own_major_is_still_a_cbor_error() {
+        // Pins the other side of the version rule: a body we cannot decode on
+        // an ACCEPTED major is a Cbor error, never UpdateRequired. Moving the
+        // version check back after the body decode would break exactly this
+        // and leave every other test green.
+        #[derive(serde::Serialize)]
+        struct FutureFrame<'a> {
+            v: u16,
+            msg: &'a str,
+        }
+        let body = FutureFrame {
+            v: IPC_VERSION,
+            msg: "SubscribeV2",
+        };
+        let mut inner = Vec::new();
+        ciborium::ser::into_writer(&body, &mut inner).unwrap();
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&IPC_MAGIC);
+        wire.extend_from_slice(&(inner.len() as u32).to_be_bytes());
+        wire.extend_from_slice(&inner);
+
+        let mut cur = std::io::Cursor::new(wire);
+        match block_on(read_message(&mut cur)).unwrap_err() {
+            IpcError::Cbor(_) => {}
+            other => panic!("expected Cbor on our own major, got {other:?}"),
         }
     }
 
