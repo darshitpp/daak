@@ -7,14 +7,20 @@
 //! not before.
 
 use std::path::Path;
+#[cfg(unix)]
 use std::sync::Arc;
 
-use daak_ipc::{read_message, write_message, IpcEvent, IpcMessage, IpcRequest, IpcResponse};
+use daak_ipc::IpcEvent;
+#[cfg(unix)]
+use daak_ipc::{read_message, write_message};
+#[cfg(unix)]
+use daak_ipc::{IpcMessage, IpcRequest, IpcResponse};
 use tokio::sync::broadcast;
 
 const EVENT_BUFFER: usize = 1024;
 
 /// Bind daak_ipc::socket_path() and serve forever.
+#[cfg(unix)]
 pub async fn serve(path: &Path) -> std::io::Result<()> {
     // The receiver is dropped on purpose; each subscriber gets its own.
     let (events, _rx) = broadcast::channel::<IpcEvent>(EVENT_BUFFER);
@@ -23,6 +29,7 @@ pub async fn serve(path: &Path) -> std::io::Result<()> {
 
 /// Same as serve, but the event source is injected. Task 9 bridges the
 /// engine's event stream into this sender; the test needs it to publish.
+#[cfg(unix)]
 pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std::io::Result<()> {
     let listener = bind(path)?;
     let events = Arc::new(events);
@@ -37,9 +44,15 @@ pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std
             let (mut rd, mut wr) = stream.into_split();
             let mut rx = events.subscribe();
             let mut subscribed = false;
+            // read_message is NOT cancel-safe: it reads into fresh buffers, so
+            // dropping it mid-frame throws away every byte it already ate and
+            // the next read sees a frame tail as a magic. Keep ONE future
+            // alive across select! iterations and replace it only after it has
+            // completed, so a losing branch never discards bytes.
+            let mut rd_fut = Box::pin(read_message(&mut rd));
             loop {
                 tokio::select! {
-                    msg = read_message(&mut rd) => {
+                    msg = &mut rd_fut => {
                         // A clean disconnect (Ok(None)) and a truncated body
                         // (Err) both end this connection.
                         let Some(IpcMessage::Request(req)) = msg.ok().flatten() else {
@@ -58,6 +71,11 @@ pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std
                                 message: "unimplemented".into(),
                             }),
                         };
+                        // The read is done, so the future is spent: drop it
+                        // first (its borrow of rd dies with it) and pin a fresh
+                        // read for the next round.
+                        drop(rd_fut);
+                        rd_fut = Box::pin(read_message(&mut rd));
                         if write_message(&mut wr, &reply).await.is_err() {
                             break;
                         }
@@ -88,10 +106,23 @@ fn bind(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
         // Refuse rather than chmod a directory we do not own.
         // SAFETY: geteuid takes no arguments and cannot fail.
         check_owned_by_us(parent, unsafe { libc::geteuid() })?;
-        // A stale socket from a crashed daemon is ours to remove; anything
-        // else is not a socket and bind() refuses it below.
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
+        // A stale socket from a crashed daemon is ours to remove. Anything
+        // else at this path is a real file or a symlink: unlinking it would
+        // delete the user's data, so refuse and leave it alone.
+        match std::fs::symlink_metadata(path) {
+            Ok(md) => {
+                use std::os::unix::fs::FileTypeExt;
+                if !md.file_type().is_socket() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!(
+                            "{} exists and is not a socket; refusing to remove it",
+                            path.display()
+                        ),
+                    ));
+                }
+                std::fs::remove_file(path)?;
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
