@@ -13,7 +13,7 @@ use crate::discovery::{
 };
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
-use crate::manifest::{ItemType, Manifest, PayloadKind};
+use crate::manifest::{Manifest, PayloadKind};
 use crate::net::secure::{recv_secure_transfer, send_secure_transfer};
 use crate::net::tcp;
 use crate::net::Connection;
@@ -686,7 +686,7 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
     // `item.index as usize`), not by position among the items.
     let mut paths: Vec<Option<PathBuf>> = vec![None; manifest.items.len()];
     for item in &manifest.items {
-        if item.item_type != ItemType::Text {
+        if item.is_binary() {
             paths[item.index as usize] = Some(
                 ctx.staging
                     .staged_path(&row.payload_id, item.name.as_deref().unwrap_or_default()),

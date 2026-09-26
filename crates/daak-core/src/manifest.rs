@@ -119,18 +119,51 @@ pub enum PayloadKind {
     Batch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ItemType {
+    #[default]
     Text,
     Image,
     Video,
     Document,
     Folder,
-    Custom,
+    Custom(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl ItemType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ItemType::Text => "text",
+            ItemType::Image => "image",
+            ItemType::Video => "video",
+            ItemType::Document => "document",
+            ItemType::Folder => "folder",
+            ItemType::Custom(s) => s,
+        }
+    }
+}
+
+impl Serialize for ItemType {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ItemType {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        Ok(match raw.as_str() {
+            "text" => ItemType::Text,
+            "image" => ItemType::Image,
+            "video" => ItemType::Video,
+            "document" => ItemType::Document,
+            "folder" => ItemType::Folder,
+            _ => ItemType::Custom(raw),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Item {
     pub index: u32,
     #[serde(rename = "type")]
@@ -153,6 +186,14 @@ pub struct Item {
     pub chunk_size: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub chunk_count: Option<u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub children: Vec<Item>,
+    #[serde(
+        with = "byte_array::option",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub reply_to: Option<[u8; 16]>,
     #[serde(default)]
     pub attrs: BTreeMap<String, ciborium::value::Value>,
 }
@@ -184,25 +225,30 @@ impl Item {
             text: None,
             chunk_size: Some(chunk_size),
             chunk_count: Some(chunk_count),
+            children: Vec::new(),
+            reply_to: None,
             attrs: BTreeMap::new(),
         })
     }
-}
 
-impl Default for Item {
-    fn default() -> Self {
+    pub fn folder(index: u32, name: &str) -> Self {
         Self {
-            index: 0,
-            item_type: ItemType::Custom,
-            name: None,
-            mime: None,
-            size: None,
-            hash: None,
-            text: None,
-            chunk_size: None,
-            chunk_count: None,
-            attrs: BTreeMap::new(),
+            index,
+            item_type: ItemType::Folder,
+            name: Some(name.into()),
+            ..Self::default()
         }
+    }
+
+    /// Folders and unknown (custom) types carry no chunk series of their own and must
+    /// not enter the binary path. Folder materialization is not implemented yet:
+    /// a folder's children are walked by consumers. (# ponytail: add folder expansion
+    /// when a consumer needs to write a bundle to disk.)
+    pub fn is_binary(&self) -> bool {
+        !matches!(
+            self.item_type,
+            ItemType::Text | ItemType::Folder | ItemType::Custom(_)
+        )
     }
 }
 
@@ -215,6 +261,12 @@ pub struct Manifest {
     pub created_at: u64,
     pub sender: DeviceRef,
     pub items: Vec<Item>,
+    #[serde(
+        with = "byte_array::option",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub reply_to: Option<[u8; 16]>,
     #[serde(default)]
     pub meta: BTreeMap<String, ciborium::value::Value>,
     #[serde(default)]
@@ -238,6 +290,7 @@ impl Manifest {
             created_at: now_ms(),
             sender,
             items,
+            reply_to: None,
             meta: BTreeMap::new(),
             extensions: BTreeMap::new(),
         }
@@ -279,7 +332,16 @@ impl Manifest {
     }
 
     pub fn binary_items(&self) -> impl Iterator<Item = &Item> {
-        self.items.iter().filter(|i| i.item_type != ItemType::Text)
+        self.items.iter().filter(|i| i.is_binary())
+    }
+
+    /// Top-level items whose `type` this build does not understand. Folder
+    /// children are walked by consumers, not by this function.
+    pub fn unsupported_items(&self) -> Vec<&Item> {
+        self.items
+            .iter()
+            .filter(|i| matches!(&i.item_type, ItemType::Custom(_)))
+            .collect()
     }
 }
 

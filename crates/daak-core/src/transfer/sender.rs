@@ -7,7 +7,7 @@ use crate::chunk::ChunkReader;
 use crate::control::AckMsg;
 use crate::error::{CoreError, Result};
 use crate::framing::RecordType;
-use crate::manifest::{ItemType, Manifest, CHUNK_SIZE_DEFAULT};
+use crate::manifest::{Manifest, CHUNK_SIZE_DEFAULT};
 use crate::net::{FrameTransport, CONTROL_STREAM};
 use crate::transfer::scheduler::{interleave, ScheduledItem};
 
@@ -57,7 +57,7 @@ pub async fn send_transfer<T: FrameTransport>(
     // hit the per-process fd limit; switch to lazy open/close per item if batches grow.
     let mut readers: HashMap<u32, ChunkReader> = HashMap::new();
     for item in &manifest.items {
-        if item.item_type == ItemType::Text {
+        if !item.is_binary() {
             continue;
         }
         let path = paths

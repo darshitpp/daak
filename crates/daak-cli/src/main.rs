@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
                 .items
                 .iter()
                 .map(|i| {
-                    if i.item_type == daak_core::manifest::ItemType::Text {
+                    if !i.is_binary() {
                         None
                     } else {
                         files.get(i.index as usize).cloned()

@@ -7,7 +7,7 @@ use crate::control::AckMsg;
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
 use crate::hash::blake2b256_reader;
-use crate::manifest::{Item, ItemType, Manifest, CHUNK_SIZE_MAX, CHUNK_SIZE_MIN};
+use crate::manifest::{Item, Manifest, CHUNK_SIZE_MAX, CHUNK_SIZE_MIN};
 use crate::net::{FrameTransport, CONTROL_STREAM};
 use crate::store::Db;
 
@@ -78,7 +78,7 @@ pub async fn receive_transfer<T: FrameTransport>(
     let mut bitmaps: Vec<Option<ChunkBitmap>> = Vec::with_capacity(capacity);
     let mut total_chunks: u64 = 0;
     for item in &manifest.items {
-        if item.item_type == ItemType::Text {
+        if !item.is_binary() {
             files.push(None);
             bitmaps.push(None);
             continue;
@@ -276,7 +276,7 @@ pub async fn receive_transfer<T: FrameTransport>(
 mod tests {
     use super::*;
     use crate::framing::RecordType;
-    use crate::manifest::{DeviceRef, Item, PayloadKind};
+    use crate::manifest::{DeviceRef, Item, ItemType, PayloadKind};
     use crate::net::tcp;
     use crate::net::CONTROL_STREAM;
     use crate::transfer::encode_chunk_body;

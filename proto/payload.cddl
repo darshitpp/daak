@@ -23,5 +23,6 @@ item = {
   ? "chunk_size": uint,
   ? "chunk_count": uint,
   ? "children":  [* item],
+  ? "reply_to":  bstr .size 16,
   ? "attrs":     { * tstr => any },
 }
