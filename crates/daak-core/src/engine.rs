@@ -13,11 +13,15 @@ use crate::discovery::{
 };
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
-use crate::manifest::Manifest;
+use crate::manifest::{ItemType, Manifest, PayloadKind};
 use crate::net::secure::{recv_secure_transfer, send_secure_transfer};
 use crate::net::tcp;
 use crate::net::Connection;
+use crate::outbox::OutboxWorker;
 use crate::pairing::{PairMode, PairingBundle};
+use crate::staging::Staging;
+use crate::store::inbox::InboxRow;
+use crate::store::outbox::OutboxRow;
 use crate::store::Db;
 
 /// A rejected peer is a per-connection event; anything else is a listener fault.
@@ -76,6 +80,8 @@ pub struct Engine {
     display_name: String,
     identity: Arc<Identity>,
     db: Arc<Db>,
+    staging: Arc<Staging>,
+    outbox: Arc<OutboxWorker>,
     pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
     pending_code: Arc<Mutex<Option<String>>>,
     pairing_rx: Mutex<mpsc::Receiver<String>>,
@@ -84,7 +90,7 @@ pub struct Engine {
 impl Engine {
     pub async fn start(cfg: EngineConfig) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(256);
-        let devices = Arc::new(Mutex::new(HashMap::new()));
+        let devices = Arc::new(Mutex::new(HashMap::<[u8; 16], DeviceInfo>::new()));
         let mut session_id = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut session_id);
 
@@ -123,6 +129,30 @@ impl Engine {
         let (pairing_tx, pairing_rx) = mpsc::channel(8);
         let pending_pairing = Arc::new(Mutex::new(None));
         let pending_code = Arc::new(Mutex::new(None));
+
+        let staging = {
+            let dir = out_dir.join("staging");
+            std::fs::create_dir_all(&dir)?;
+            Arc::new(Staging::new(dir))
+        };
+        let outbox = Arc::new({
+            let drain_db = db.clone();
+            let drain_identity = identity.clone();
+            let drain_devices = devices.clone();
+            let drain_staging = staging.clone();
+            OutboxWorker::spawn(db.clone(), move |row| {
+                let ctx = DrainCtx {
+                    identity: drain_identity.clone(),
+                    db: drain_db.clone(),
+                    devices: drain_devices.clone(),
+                    staging: drain_staging.clone(),
+                };
+                // ponytail: per-row drain tasks are intentionally untracked (a JoinSet
+                // here costs more than it buys); a crash mid-drain is recovered at
+                // startup by Task 7's reset_inflight_outbox().
+                tokio::spawn(async move { drain_outbox_row(ctx, row).await });
+            })
+        });
 
         let accept_task = {
             let identity = identity.clone();
@@ -185,6 +215,7 @@ impl Engine {
             let devices = devices.clone();
             let browser = browser.clone();
             let me = device_id;
+            let outbox = outbox.clone();
             tokio::spawn(async move {
                 while let Some(PeerAnnounce {
                     device_id,
@@ -215,6 +246,10 @@ impl Engine {
                     if is_new {
                         let _ = tx.send(EngineEvent::DeviceFound(info));
                     }
+                    // Wake on EVERY announce, not just the first: a peer that
+                    // dropped off the map and reappeared is exactly the
+                    // reconnect case the outbox drain exists for.
+                    outbox.notify_peer_online(device_id);
                 }
             })
         };
@@ -222,10 +257,14 @@ impl Engine {
         let presence_task = {
             let tx = tx.clone();
             let me = device_id;
+            let outbox = outbox.clone();
             match presence.clone() {
                 Some(presence) => tokio::spawn(async move {
                     while let Ok((_from, p)) = presence.recv().await {
                         if p.device_id != me {
+                            if p.state == PresenceState::Online {
+                                outbox.notify_peer_online(p.device_id);
+                            }
                             let _ = tx.send(EngineEvent::Presence {
                                 device_id: p.device_id,
                                 state: p.state,
@@ -249,6 +288,8 @@ impl Engine {
             display_name,
             identity,
             db,
+            staging,
+            outbox,
             pending_pairing,
             pending_code,
             pairing_rx: Mutex::new(pairing_rx),
@@ -385,23 +426,53 @@ impl Engine {
         manifest: Manifest,
         paths: Vec<Option<PathBuf>>,
     ) -> Result<[u8; 16]> {
-        let transfer_id = manifest.payload_id;
-        let pairing = self
-            .db
-            .get_pairing(&peer_device_id)?
-            .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
-        let static_secret = zeroize::Zeroizing::new(self.identity.static_secret().to_bytes());
-        let mut conn = tcp::dial(addr).await?;
-        send_secure_transfer(
-            &mut conn,
-            &static_secret,
-            &pairing.static_dh_pub,
-            self.identity.device_id(),
-            &manifest,
-            &paths,
+        send_secure_with(
+            self.identity.as_ref(),
+            &self.db,
+            peer_device_id,
+            addr,
+            manifest,
+            paths,
         )
-        .await?;
-        Ok(transfer_id)
+        .await
+    }
+
+    /// Queue a send with no online peer present; the worker drains it on reconnect.
+    pub async fn enqueue_outbox_send(
+        &self,
+        peer_device_id: [u8; 16],
+        manifest: Manifest,
+        paths: Vec<PathBuf>,
+    ) -> Result<[u8; 16]> {
+        let payload_id = manifest.payload_id;
+        crate::outbox::enqueue(&self.db, &self.staging, &peer_device_id, &manifest, &paths)?;
+        // Try immediately in case the peer is already online; harmless if not.
+        self.outbox.notify_peer_online(peer_device_id);
+        Ok(payload_id)
+    }
+
+    /// Called from the accept loop after a successful inbound transfer.
+    fn record_inbox(db: &Db, manifest: &Manifest) -> Result<()> {
+        let summary = match manifest.kind {
+            PayloadKind::Text => manifest
+                .items
+                .first()
+                .and_then(|i| i.text.clone())
+                .unwrap_or_default(),
+            _ => format!("{} file(s)", manifest.binary_items().count()),
+        };
+        db.add_inbox(&InboxRow {
+            id: manifest.payload_id,
+            transfer_id: manifest.payload_id,
+            peer_device_id: manifest.sender.device_id,
+            kind: format!("{:?}", manifest.kind).to_lowercase(),
+            item_count: manifest.items.len() as u32,
+            summary,
+            received_at: crate::manifest::now_ms() as i64 / 1000,
+            // Placeholder: the real paths are filled in when the receive path
+            // reports them (later task).
+            saved_paths: "[]".into(),
+        })
     }
 
     /// Called by the accept loop for every inbound connection.
@@ -486,6 +557,9 @@ impl Engine {
                 let _ = tx.send(EngineEvent::TransferDone {
                     transfer_id: manifest.payload_id,
                 });
+                if let Err(e) = Self::record_inbox(db, &manifest) {
+                    tracing::warn!("failed to record inbox row: {e}");
+                }
                 Ok(())
             }
             Err(e) => {
@@ -514,6 +588,111 @@ async fn read_hello(conn: &mut Connection<tokio::net::TcpStream>) -> Result<Hell
             Some(f) if f.kind == RecordType::Control => return Hello::from_cbor(&f.body),
             Some(_) => continue,
             None => return Err(CoreError::Protocol("closed before hello".into())),
+        }
+    }
+}
+
+/// Dial + Noise XX + send a manifest and its staged/binary paths.
+/// Extracted from Engine::send_secure so the outbox drain can drive a send with
+/// only Arc<Identity> + Arc<Db> (Task 11 refactors this to a session registry).
+async fn send_secure_with(
+    identity: &Identity,
+    db: &Db,
+    peer_device_id: [u8; 16],
+    addr: SocketAddr,
+    manifest: Manifest,
+    paths: Vec<Option<PathBuf>>,
+) -> Result<[u8; 16]> {
+    let transfer_id = manifest.payload_id;
+    let pairing = db
+        .get_pairing(&peer_device_id)?
+        .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
+    let static_secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
+    let mut conn = tcp::dial(addr).await?;
+    send_secure_transfer(
+        &mut conn,
+        &static_secret,
+        &pairing.static_dh_pub,
+        identity.device_id(),
+        &manifest,
+        &paths,
+    )
+    .await?;
+    Ok(transfer_id)
+}
+
+/// What the outbox drain closure needs; the closure itself is a plain `Fn`, so
+/// the per-row state is cloned into a task per row.
+struct DrainCtx {
+    identity: Arc<Identity>,
+    db: Arc<Db>,
+    devices: Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>,
+    staging: Arc<Staging>,
+}
+
+/// Rebuild a queued send from its row and push it, then settle the row state.
+async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
+    let db = &ctx.db;
+    let now = || crate::manifest::now_ms() as i64 / 1000;
+    let retry = |jitter: u64| {
+        let _ = db.mark_outbox_failed(&row.id, now(), jitter);
+    };
+
+    // R-D: an unknown peer is a failure, not a panic -- the row goes back to
+    // pending with backoff and is retried on the next tick or reconnect.
+    let Some(addr) = ctx
+        .devices
+        .lock()
+        .await
+        .get(&row.peer_device_id)
+        .map(|d| d.addr)
+    else {
+        tracing::warn!(
+            "outbox drain: peer {} not discovered, re-queueing",
+            hex::encode(row.peer_device_id)
+        );
+        retry(0);
+        return;
+    };
+    let manifest = match Manifest::from_cbor(&row.manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("outbox drain: row {} undecodable: {e}", hex::encode(row.id));
+            retry(0);
+            return;
+        }
+    };
+    // `paths` is indexed by item index (sender.rs looks it up with
+    // `item.index as usize`), not by position among the items.
+    let mut paths: Vec<Option<PathBuf>> = vec![None; manifest.items.len()];
+    for item in &manifest.items {
+        if item.item_type != ItemType::Text {
+            paths[item.index as usize] = Some(
+                ctx.staging
+                    .staged_path(&row.payload_id, item.name.as_deref().unwrap_or_default()),
+            );
+        }
+    }
+    match send_secure_with(
+        ctx.identity.as_ref(),
+        db,
+        row.peer_device_id,
+        addr,
+        manifest,
+        paths,
+    )
+    .await
+    {
+        // R-C: no awaiting_ack hop here -- per-chunk ack wiring lands in Task 10.
+        Ok(_) => {
+            let _ = db.mark_outbox_done(&row.id);
+        }
+        Err(e) => {
+            tracing::warn!(
+                "outbox drain: send to {} failed: {e}",
+                hex::encode(row.peer_device_id)
+            );
+            retry(rand::random::<u64>() % 10);
         }
     }
 }

@@ -28,6 +28,11 @@ impl Staging {
         Ok(dest)
     }
 
+    /// Path a binary item lands at once staged: root / <hex payload_id> / <name>.
+    pub fn staged_path(&self, payload_id: &[u8; 16], name: &str) -> PathBuf {
+        self.payload_dir(payload_id).join(name)
+    }
+
     pub fn cleanup(&self, payload_id: &[u8; 16]) -> Result<()> {
         let dir = self.payload_dir(payload_id);
         if dir.exists() {

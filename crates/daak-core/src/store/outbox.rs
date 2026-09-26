@@ -75,12 +75,15 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn mark_outbox_sending(&self, id: &[u8; 16]) -> Result<()> {
-        self.conn().execute(
-            "UPDATE outbox SET state = 'sending', updated_at = ?2 WHERE id = ?1",
+    /// Claim a pending row for sending. True only for the caller that actually
+    /// flipped 'pending' -> 'sending', so concurrent drains cannot both deliver
+    /// the same row.
+    pub fn mark_outbox_sending(&self, id: &[u8; 16]) -> Result<bool> {
+        let n = self.conn().execute(
+            "UPDATE outbox SET state = 'sending', updated_at = ?2 WHERE id = ?1 AND state = 'pending'",
             rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
         )?;
-        Ok(())
+        Ok(n > 0)
     }
 
     pub fn mark_outbox_failed(&self, id: &[u8; 16], now: i64, jitter: u64) -> Result<()> {
@@ -166,5 +169,20 @@ mod tests {
         db.enqueue_outbox(&row()).unwrap();
         db.mark_outbox_done(&[1u8; 16]).unwrap();
         assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
+    }
+
+    #[test]
+    fn claim_sending_is_won_once() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&row()).unwrap();
+        assert!(
+            db.mark_outbox_sending(&[1u8; 16]).unwrap(),
+            "first claim wins"
+        );
+        assert!(
+            !db.mark_outbox_sending(&[1u8; 16]).unwrap(),
+            "second claim on an already-sending row must lose"
+        );
     }
 }
