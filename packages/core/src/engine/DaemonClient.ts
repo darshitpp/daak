@@ -92,9 +92,11 @@ export class DaemonClientEngine implements DaakEngine {
 
   private async json(req: unknown): Promise<string> {
     const r = await this.tx.request({ Request: req });
-    if (r && typeof r === 'object' && 'Json' in r) return r.Json.value;
-    if (r && typeof r === 'object' && 'Port' in r) return String(r.Port.port);
-    return 'null';
+    if (typeof r === 'object' && r !== null && 'Json' in r) return r.Json.value;
+    // No Port branch on purpose: nothing asks for one today, and a default of
+    // 'null' here turned a malformed reply into a null-deref or a silent null
+    // value instead of a named protocol error.
+    throw new Error(`expected a Json response, got ${JSON.stringify(r)}`);
   }
 
   private dispatch(ev: Record<string, Record<string, unknown>>): void {
@@ -125,6 +127,8 @@ export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent
     case 'PairingSas':
       return { type: 'pairing.sas', peerDeviceId: str(d.peer_device_id), sas: str(d.sas) };
     case 'TransferProgress':
+      // ponytail: u64 -> number is lossy above 2^53, which the 4 MiB frame cap
+      // and a 1 MiB chunk size make unreachable. Use bigint if that changes.
       return { type: 'transfer.progress', transferId: str(d.transfer_id), bytesDone: num(d.bytes_done), bytesTotal: num(d.bytes_total) };
     case 'TransferItem':
       return {

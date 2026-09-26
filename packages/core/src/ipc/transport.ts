@@ -20,13 +20,19 @@ export const MAGIC = Buffer.from('DAAK', 'ascii');
 /** daak_ipc::IPC_MAX_FRAME. */
 export const MAX_FRAME = 4 * 1024 * 1024;
 
-// All three options are load-bearing and none is cbor-x's default:
-//   useRecords:false     cbor-x otherwise tags a plain object as a record
-//                        (0xd9dfff83) and ciborium rejects the frame with
-//                        "invalid type: sequence, expected enum".
-//   variableMapSize:true definite-length map headers (a1), which is what serde
-//                        emits; cbor-x's default is the b9 indefinite form.
-//   mapsAsObjects:true   serde maps decode to plain objects, not Maps.
+// Measured against real Rust ciborium, not assumed:
+//   useRecords:false     THE load-bearing encoder option. cbor-x's default
+//                        tags a plain object with the record tag 0xd9dfff and
+//                        ciborium rejects the frame with "invalid type:
+//                        sequence, expected enum". Every other encoder
+//                        option is irrelevant once this is set.
+//   mapsAsObjects:true   Load-bearing, but on the DECODER: cbor-x's default
+//                        returns Map objects, and `msg.Event` on a Map is
+//                        undefined, which silently drops every event.
+//   variableMapSize:true Defensive only. It forces definite-length headers
+//                        (a1) so the bytes do not depend on this option; the
+//                        indefinite b9 form only appears with useRecords:false
+//                        and this unset.
 const encoder = new Encoder({ mapsAsObjects: true, useRecords: false, variableMapSize: true });
 const decoder = new Decoder({ mapsAsObjects: true });
 

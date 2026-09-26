@@ -61,6 +61,15 @@ describe('DaemonClientEngine', () => {
     expect(h.written).toEqual([{ Request: 'Devices' }]);
   });
 
+  it('names the protocol error when a non-Json reply arrives (I-2)', async () => {
+    // A bare Ok used to come back as the string 'null', so send() died with a
+    // null-deref and listInbox() could hand back null typed as an array.
+    const h = makeEngine();
+    const p = h.engine.devices();
+    h.reply('Ok');
+    await expect(p).rejects.toThrow(/expected a Json response, got "Ok"/);
+  });
+
   it('rejects a devices payload that is not an array', async () => {
     const h = makeEngine();
     const p = h.engine.devices();

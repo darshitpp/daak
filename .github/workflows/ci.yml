@@ -38,6 +38,11 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      # packages/core's daemon contract suite drives the real daakd binary over
+      # a Unix socket. Without this step that suite silently SKIPS and the
+      # in-process/daemon parity gate never runs.
+      - run: cargo build -p daakd
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo typecheck test
 
