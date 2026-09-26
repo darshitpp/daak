@@ -106,16 +106,17 @@ pub trait EventSink: Send + Sync {
 }
 
 /// Device and transfer ids cross the FFI boundary as lowercase hex, which is
-/// what the JS layer stores and hands back.
+/// what the JS layer stores and hands back. Both are 16 bytes, so they share
+/// one parser.
 pub fn to_hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
 }
 
-pub fn parse_device_id(s: &str) -> Result<[u8; 16], FfiError> {
+pub fn parse_id(s: &str) -> Result<[u8; 16], FfiError> {
     hex::decode(s)
         .map_err(|e| FfiError::Protocol(e.to_string()))?
         .try_into()
-        .map_err(|_| FfiError::Protocol("device id must be 32 hex chars".into()))
+        .map_err(|_| FfiError::Protocol("id must be 32 hex chars".into()))
 }
 
 fn engine_err(e: impl Into<CoreError>) -> FfiError {
@@ -129,6 +130,9 @@ fn protocol_err(e: impl std::fmt::Display) -> FfiError {
 /// Where the engine identity is loaded from: one 0600 file per key under
 /// <data_dir>/keys, so the device id and static key survive a restart and
 /// pairing does not silently break on relaunch.
+// The 0600 below comes from OpenOptions::mode, which applies only when the
+// file is CREATED; a later write to an existing key file leaves its mode as
+// it already was. It is also Unix-only -- mode has no meaning on Windows.
 /// ponytail: plaintext files guarded only by mode bits. The upgrade path is the
 /// OS-keystore TurboModule (iOS Keychain / Android Keystore / DPAPI), Phase 5.
 pub struct FileKeyStore {
@@ -154,13 +158,14 @@ impl SecretStore for FileKeyStore {
 
     fn set(&self, key: &str, value: &[u8]) -> daak_core::Result<()> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(self.dir.join(key))?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(self.dir.join(key))?;
         f.write_all(value)?;
         Ok(())
     }
@@ -179,6 +184,11 @@ pub struct DaakEngine {
     // UDL methods take &self, so the engine slot needs interior mutability.
     engine: Mutex<Option<Arc<Engine>>>,
     sink: Arc<dyn EventSink + Send + Sync>,
+    // Fan-out for inbound pairing SAS. Engine::accept_pairing_once() holds the
+    // engine's pairing_rx mutex for the whole wait, so exactly ONE task may
+    // ever wait on it; it emits the event AND republishes here so
+    // accept_pairing() can hand the same SAS back to a caller that asked.
+    pairing_sas: Mutex<Option<tokio::sync::broadcast::Sender<String>>>,
 }
 
 /// The name the plan and the JS layer use for the engine handle.
@@ -196,6 +206,7 @@ impl DaakEngine {
             rt: tokio::runtime::Runtime::new().expect("tokio runtime"),
             engine: Mutex::new(None),
             sink: Arc::from(sink),
+            pairing_sas: Mutex::new(None),
         }
     }
 
@@ -228,6 +239,25 @@ impl DaakEngine {
                 sink.on_event(to_ffi_event(ev));
             }
         });
+
+        // Exactly one pairing waiter, ever. accept_pairing_once() locks the
+        // engine's pairing_rx for the whole await, so a second waiter would
+        // block forever behind this one.
+        let (sas_tx, _) = tokio::sync::broadcast::channel(8);
+        *self.pairing_sas.lock().unwrap() = Some(sas_tx.clone());
+        let sink = self.sink.clone();
+        let pairing_engine = engine.clone();
+        self.rt.spawn(async move {
+            loop {
+                match pairing_engine.accept_pairing_once().await {
+                    Ok(sas) => {
+                        let _ = sas_tx.send(sas.clone());
+                        sink.on_event(to_pairing_sas_event(sas));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
         *self.engine.lock().unwrap() = Some(engine);
         Ok(())
     }
@@ -242,13 +272,7 @@ impl DaakEngine {
 
     pub fn pairing_bundle(&self) -> Result<String, FfiError> {
         let bundle = self.engine()?.pairing_bundle();
-        let cbor = to_hex(&bundle.to_cbor().map_err(engine_err)?);
-        let json = serde_json::json!({
-            "cbor": cbor,
-            "name": bundle.name,
-            "device_id": to_hex(&bundle.identity.device_id),
-        });
-        serde_json::to_string(&json).map_err(protocol_err)
+        pairing_bundle_json(&bundle)
     }
 
     pub fn pair_with(&self, addr: String, bundle_cbor: Vec<u8>) -> Result<String, FfiError> {
@@ -262,13 +286,32 @@ impl DaakEngine {
         serde_json::to_string(&json).map_err(protocol_err)
     }
 
+    /// Block until the next inbound pairing completes and return its SAS.
+    /// The event is pushed too, so an app that prefers the callback can ignore
+    /// this method; a caller that awaits it just gets the same SAS early.
+    pub fn accept_pairing(&self) -> Result<String, FfiError> {
+        let mut rx = self
+            .pairing_sas
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or_else(|| FfiError::Engine("engine not started".into()))?
+            .subscribe();
+        self.engine()?;
+        self.rt.block_on(async move {
+            rx.recv()
+                .await
+                .map_err(|e| FfiError::Engine(format!("pairing stream closed: {e}")))
+        })
+    }
+
     pub fn send_text(&self, peer_id: String, text: String) -> Result<String, FfiError> {
         let engine = self.engine()?;
         let mut manifest = Manifest::text(&text);
         manifest.sender = device_ref(&engine);
         let id = self
             .rt
-            .block_on(engine.enqueue_outbox_send(parse_device_id(&peer_id)?, manifest, vec![]))
+            .block_on(engine.enqueue_outbox_send(parse_id(&peer_id)?, manifest, vec![]))
             .map_err(engine_err)?;
         Ok(to_hex(&id))
     }
@@ -285,7 +328,7 @@ impl DaakEngine {
         let id = self
             .rt
             .block_on(engine.enqueue_outbox_send(
-                parse_device_id(&peer_id)?,
+                parse_id(&peer_id)?,
                 manifest,
                 paths.into_iter().map(PathBuf::from).collect(),
             ))
@@ -296,6 +339,9 @@ impl DaakEngine {
     pub fn list_devices(&self) -> Result<String, FfiError> {
         let devices = self.rt.block_on(self.engine()?.devices());
         // SocketAddr and [u8; 16] have no serde impls, so build the shape by hand.
+        // No "online" key: the engine never prunes this map, so any value here
+        // would be fabricated. device.state events own liveness, and the TS
+        // DeviceInfo type leaves the field optional for exactly this reason.
         let json: Vec<serde_json::Value> = devices
             .iter()
             .map(|d| {
@@ -303,7 +349,6 @@ impl DaakEngine {
                     "deviceId": to_hex(&d.device_id),
                     "name": d.name,
                     "addr": d.addr.to_string(),
-                    "online": true,
                 })
             })
             .collect();
@@ -313,12 +358,12 @@ impl DaakEngine {
     pub fn cancel(&self, transfer_id: String) -> Result<(), FfiError> {
         // Parse before the engine check: a malformed id is a caller bug whether
         // or not the engine happens to be running.
-        let id = parse_device_id(&transfer_id)?;
+        let id = parse_id(&transfer_id)?;
         self.engine()?.cancel(id).map_err(engine_err)
     }
 
     pub fn retry(&self, transfer_id: String) -> Result<(), FfiError> {
-        let id = parse_device_id(&transfer_id)?;
+        let id = parse_id(&transfer_id)?;
         self.engine()?.retry(id).map_err(engine_err)
     }
 
@@ -338,6 +383,29 @@ fn device_ref(engine: &Engine) -> DeviceRef {
     DeviceRef {
         device_id: engine.identity().device_id(),
         name: engine.display_name().to_string(),
+    }
+}
+
+/// The JSON shape Tasks 2/3 read: {cbor, name, device_id}. A free function, not
+/// a method, so the contract is testable without a live engine.
+pub fn pairing_bundle_json(bundle: &PairingBundle) -> Result<String, FfiError> {
+    let cbor = to_hex(&bundle.to_cbor().map_err(engine_err)?);
+    let json = serde_json::json!({
+        "cbor": cbor,
+        "name": bundle.name,
+        "device_id": to_hex(&bundle.identity.device_id),
+    });
+    serde_json::to_string(&json).map_err(protocol_err)
+}
+
+/// The SAS for an inbound pairing. accept_pairing_once() yields only the SAS
+/// string, so the peer id is unknown and left empty rather than invented.
+pub fn to_pairing_sas_event(sas: String) -> FfiEvent {
+    FfiEvent::PairingSas {
+        data: PairingSasEvent {
+            peer_device_id: String::new(),
+            sas,
+        },
     }
 }
 

@@ -343,6 +343,60 @@ mod tests {
         (Chan { tx: a_tx, rx: a_rx }, Chan { tx: b_tx, rx: b_rx })
     }
 
+    /// R6: recv_secure_transfer is what the Engine accept loop calls for an
+    /// inbound transfer, and production now passes Some(&db) there. This drives
+    /// the same function over MemConn -- no socket, no handshake state shared
+    /// with the TCP tests -- and proves the transfers row actually lands.
+    #[tokio::test]
+    async fn recv_secure_transfer_with_a_db_persists_the_transfers_row() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("r6.bin");
+        std::fs::write(&path, vec![9u8; 70_000]).unwrap();
+
+        let a = crate::crypto::identity::Identity::generate().unwrap();
+        let b = crate::crypto::identity::Identity::generate().unwrap();
+        let item = crate::manifest::Item::from_file(0, &path, 64 * 1024).unwrap();
+        let manifest = crate::manifest::Manifest::new(
+            crate::manifest::PayloadKind::Media,
+            crate::manifest::DeviceRef {
+                device_id: a.device_id(),
+                name: "a".into(),
+            },
+            vec![item],
+        );
+
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let b_pub = b.public().x25519;
+        let (mut mine, mut theirs) = MemConn::pair();
+        let a_secret = a.static_secret().to_bytes();
+        let b_secret = b.static_secret().to_bytes();
+        let a_pub = a.public().x25519;
+        let a_device_id = a.device_id();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let mut secure = open_secure(&mut theirs, &a_secret, &b_pub, a_device_id)
+                .await
+                .unwrap();
+            send_transfer(&mut secure, &m, &[Some(path.clone())], &[], |_| {})
+                .await
+                .unwrap();
+        });
+
+        let got = recv_secure_transfer(&mut mine, &b_secret, &a_pub, dst.path(), Some(&db))
+            .await
+            .unwrap();
+        sender.await.unwrap();
+
+        assert_eq!(got.payload_id, manifest.payload_id);
+        let row = db.get_transfer(&manifest.payload_id).unwrap().unwrap();
+        assert_eq!(row.direction, "in");
+        assert_eq!(row.state, "done");
+        assert_eq!(row.bytes_done, 70_000);
+    }
+
     /// Wraps a Chan and counts the RecordType::Rekey frames that leave it, so a
     /// test can prove the send path actually emitted the signal on the wire.
     struct CountingChan {

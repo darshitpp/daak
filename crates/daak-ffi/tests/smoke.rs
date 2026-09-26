@@ -26,6 +26,9 @@ fn engine_constructs_and_reports_not_started_instead_of_panicking() {
     assert!(matches!(engine.pairing_bundle(), Err(FfiError::Engine(_))));
     assert!(matches!(engine.list_devices(), Err(FfiError::Engine(_))));
     assert!(matches!(engine.local_port(), Err(FfiError::Engine(_))));
+    // Inbound pairing is reachable only through accept_pairing; before start()
+    // there is no pairing channel, and it says so instead of blocking.
+    assert!(matches!(engine.accept_pairing(), Err(FfiError::Engine(_))));
     assert!(matches!(
         engine.send_text("00".repeat(16), "hi".into()),
         Err(FfiError::Engine(_))
@@ -46,14 +49,14 @@ fn transfer_ids_round_trip_through_hex() {
     ];
     let s = daak_ffi::to_hex(&bytes);
     assert_eq!(s, "00010f1080ffabcd000000000000000f");
-    assert_eq!(daak_ffi::parse_device_id(&s).unwrap(), bytes);
+    assert_eq!(daak_ffi::parse_id(&s).unwrap(), bytes);
     // Wrong length and non-hex are both protocol errors, not panics.
     assert!(matches!(
-        daak_ffi::parse_device_id("abcd"),
+        daak_ffi::parse_id("abcd"),
         Err(FfiError::Protocol(_))
     ));
     assert!(matches!(
-        daak_ffi::parse_device_id("zz"),
+        daak_ffi::parse_id("zz"),
         Err(FfiError::Protocol(_))
     ));
 }
@@ -135,12 +138,39 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
 fn pairing_bundle_cbor_survives_the_json_string_the_js_layer_parses() {
     let id = daak_core::crypto::identity::Identity::generate().unwrap();
     let bundle = PairingBundle::new(id.public(), "Phone".into());
-    let cbor = bundle.to_cbor().unwrap();
 
-    // The JS layer hands the hex cbor straight back to pair_with, so the bytes
-    // must survive a hex encode/decode round trip untouched.
-    let hex = daak_ffi::to_hex(&cbor);
-    let back = hex::decode(&hex).unwrap();
-    assert_eq!(back, cbor);
+    // The JS layer reads these keys and hands the hex cbor straight back to
+    // pair_with, so the key set is the contract: {cbor, name, device_id}.
+    let json: serde_json::Value =
+        serde_json::from_str(&daak_ffi::pairing_bundle_json(&bundle).unwrap()).unwrap();
+    // serde_json orders object keys, so compare the SET, not the order.
+    let mut keys: Vec<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["cbor", "device_id", "name"]);
+    assert_eq!(json["name"], serde_json::json!("Phone"));
+    assert_eq!(
+        json["device_id"],
+        serde_json::json!(daak_ffi::to_hex(&id.public().device_id))
+    );
+
+    let back = hex::decode(json["cbor"].as_str().unwrap()).unwrap();
     assert_eq!(PairingBundle::from_cbor(&back).unwrap(), bundle);
+}
+
+#[test]
+fn an_inbound_pairing_sas_reaches_js_as_a_pairing_sas_event() {
+    // The core only surfaces the SAS string for an inbound pairing, so the
+    // event carries no peer id and the SAS is what JS must show the user.
+    match daak_ffi::to_pairing_sas_event("123456".into()) {
+        FfiEvent::PairingSas { data } => {
+            assert_eq!(data.sas, "123456");
+            assert!(data.peer_device_id.is_empty());
+        }
+        other => panic!("expected PairingSas, got {other:?}"),
+    }
 }

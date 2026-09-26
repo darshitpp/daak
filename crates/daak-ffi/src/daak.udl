@@ -38,6 +38,7 @@ interface DaakEngine {
   [Throws=FfiError] void start(string data_dir, string display_name, u16 listen_port);
   [Throws=FfiError] string pairing_bundle();
   [Throws=FfiError] string pair_with(string addr, sequence<u8> bundle_cbor);
+  [Throws=FfiError] string accept_pairing();
   [Throws=FfiError] string send_text(string peer_id, string text);
   [Throws=FfiError] string send_files(string peer_id, sequence<string> paths);
   [Throws=FfiError] string list_devices();
