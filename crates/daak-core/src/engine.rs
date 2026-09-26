@@ -462,13 +462,20 @@ impl Engine {
         if name.trim().is_empty() {
             return Err(CoreError::Protocol("display name must not be empty".into()));
         }
-        let mut p = self.profile.lock().await;
+        // Resolve OUTSIDE the lock. Advertiser::start_resolving does a std
+        // recv_timeout on a background thread (up to ~1.3s), and the announce
+        // below is a socket write; holding the profile mutex across both
+        // stalled every display_name() / pairing_bundle() reader for that long.
         let (advertiser, resolved) = Advertiser::start_resolving(
             &name,
             self.local_addr.port(),
             self.identity.device_id(),
             &mut rand::thread_rng(),
         )?;
+        let mut p = self.profile.lock().await;
+        // The new advertiser is created BEFORE the old one is stopped (above vs
+        // below), so there is no zero-advertisement window even though the lock
+        // is now taken later.
         p.advertiser.stop();
         p.advertiser = advertiser;
         p.base_name = name;
@@ -832,6 +839,11 @@ impl Engine {
         self.accept_task.abort();
         self.discovery_task.abort();
         self.presence_task.abort();
+        // B4: the outbox worker ticks every 5s and holds an Arc<Db> and the
+        // session registry. Without this it kept draining rows for an engine
+        // that is no longer serving anyone -- the last unreached production
+        // caller of OutboxWorker::shutdown.
+        self.outbox.shutdown();
         // The advertiser moved into the profile lock, so it is stopped through
         // it. A poisoned lock cannot happen on a tokio Mutex, so the expect is
         // unreachable rather than a recovery path.
@@ -940,10 +952,16 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
     // without this guard cancel would report success for a row that does not
     // exist. The guard is load-bearing, not defensive noise.
     let row = require_outbox(db, &transfer_id)?;
-    db.mark_outbox_terminal_failed(&transfer_id, "cancelled")?;
-    // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
-    // brief's "cancelled"; do not "fix" it back.
-    db.set_transfer_state(&transfer_id, "canceled")?;
+    let won = db.mark_outbox_terminal_failed(&transfer_id, "cancelled")?;
+    // B2: the outbox UPDATE is guarded on state IN ('pending','sending'), so a
+    // row that is already 'done' (delivered) or 'awaiting_ack' LOST the race and
+    // the transfers row must keep saying so. Writing 'canceled' unconditionally
+    // is how an already-delivered share was relabelled as cancelled.
+    if won {
+        // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
+        // brief's "cancelled"; do not "fix" it back.
+        db.set_transfer_state(&transfer_id, "canceled")?;
+    }
     staging.cleanup(&row.payload_id)
 }
 
@@ -988,12 +1006,22 @@ pub fn retry_item_with(
 }
 
 /// Back off and retry, or give up. The one decision the retry path makes.
-fn settle_failed_attempt(db: &Db, id: &[u8; 16], attempts: u32, jitter: u64) -> Result<()> {
+/// Returns the transfers.state the row should now show: `paused` while it is
+/// still retrying (B2 -- a row in backoff is not terminal, and 'failed' would
+/// be indistinguishable from the give-up) and `failed` once it gave up.
+fn settle_failed_attempt(
+    db: &Db,
+    id: &[u8; 16],
+    attempts: u32,
+    jitter: u64,
+) -> Result<&'static str> {
     let now = crate::manifest::now_ms() as i64 / 1000;
     if attempts + 1 >= MAX_DELIVERY_ATTEMPTS {
-        db.mark_outbox_terminal_failed(id, &format!("gave up after {} attempts", attempts + 1))
+        db.mark_outbox_terminal_failed(id, &format!("gave up after {} attempts", attempts + 1))?;
+        Ok("failed")
     } else {
-        db.mark_outbox_failed(id, now, jitter)
+        db.mark_outbox_failed(id, now, jitter)?;
+        Ok("paused")
     }
 }
 
@@ -1003,7 +1031,23 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
     let retry = |jitter: u64| {
         // R-T10-5: cap the retries. Without this a permanently unreachable peer
         // (or a permanently bad file) retries forever and never leaves 'failed'.
-        let _ = settle_failed_attempt(db, &row.id, row.attempts, jitter);
+        if let Ok(state) = settle_failed_attempt(db, &row.id, row.attempts, jitter) {
+            let _ = db.set_transfer_state(&row.id, state);
+        }
+    };
+
+    // Settle terminally, and only if this drain still OWNS the row. Used by
+    // the two permanent-failure paths below.
+    let terminal = |db: &Db, why: String| {
+        if db
+            .mark_outbox_terminal_failed(&row.id, &why)
+            .unwrap_or(false)
+        {
+            // B2: the transfers row was written 'queued' at enqueue; leaving it
+            // there forever is the one state the UI cannot explain. The outbox
+            // write is the authority, so this is gated on it.
+            let _ = db.set_transfer_state(&row.id, "failed");
+        }
     };
 
     let manifest = match Manifest::from_cbor(&row.manifest) {
@@ -1012,7 +1056,7 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
             tracing::warn!("outbox drain: row {} undecodable: {e}", hex::encode(row.id));
             // An undecodable manifest is permanent: retrying re-reads the same
             // bytes forever. Terminal instead of burning the attempt budget.
-            let _ = db.mark_outbox_terminal_failed(&row.id, &format!("undecodable manifest: {e}"));
+            terminal(db, format!("undecodable manifest: {e}"));
             return;
         }
     };
@@ -1021,10 +1065,26 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
     let mut paths: Vec<Option<PathBuf>> = vec![None; manifest.items.len()];
     for item in &manifest.items {
         if item.is_binary() {
-            paths[item.index as usize] = Some(
-                ctx.staging
-                    .staged_path(&row.payload_id, item.name.as_deref().unwrap_or_default()),
-            );
+            let path = ctx
+                .staging
+                .staged_path(&row.payload_id, item.name.as_deref().unwrap_or_default());
+            // B3: a staged file that is NOT THERE will still not be there on
+            // the next attempt, so retrying burns all 8 attempts over ~35
+            // minutes to arrive at the same failure. The reachable way to get
+            // here is cancel (which removes staging) followed by retry, which
+            // re-arms the row -- the SEMANTICS of that pair are parked for the
+            // user, but the harm (a 35 minute silent burn) is not. Terminal on
+            // the first attempt, exactly like an undecodable manifest above.
+            if !path.exists() {
+                tracing::warn!(
+                    "outbox drain: row {} staged file {} is gone",
+                    hex::encode(row.id),
+                    path.display()
+                );
+                terminal(db, format!("staged file is missing: {}", path.display()));
+                return;
+            }
+            paths[item.index as usize] = Some(path);
         }
     }
     // R-D: an unknown peer is a failure, not a panic -- the connect closure
@@ -1033,13 +1093,20 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
         // R-C: send_transfer already read the peer's Ack and returns Ok ONLY on
         // complete && hash_ok (Err on mismatch/close), so Ok(()) IS the ack.
         Ok(_) => {
-            let _ = db.mark_outbox_awaiting_ack(&row.id);
-            let _ = db.mark_outbox_done(&row.id);
-            // F4: the transfers row enqueue wrote has to follow the row to its
-            // end, or a delivered share stays "queued" in the UI forever. Same
-            // best-effort treatment as the outbox settles beside it: a missing
-            // row must not turn a successful send into a failed drain.
-            let _ = db.set_transfer_state(&row.id, "done");
+            // B2: gate the transfers write on the outbox transition actually
+            // having matched a row. A drain whose row was canceled mid-send
+            // matches nothing here, and reporting that share as 'done' to the
+            // UI is the worst possible direction for the wrong state.
+            if db.mark_outbox_awaiting_ack(&row.id).unwrap_or(false)
+                && db.mark_outbox_done(&row.id).unwrap_or(false)
+            {
+                // F4: the transfers row enqueue wrote has to follow the row to
+                // its end, or a delivered share stays "queued" in the UI
+                // forever. Same best-effort treatment as the settles beside it:
+                // a missing row must not turn a successful send into a failed
+                // drain.
+                let _ = db.set_transfer_state(&row.id, "done");
+            }
         }
         Err(e) => {
             tracing::warn!(
@@ -1047,12 +1114,6 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
                 hex::encode(row.peer_device_id)
             );
             retry(rand::random::<u64>() % 10);
-            // The send failed, so the row must not keep reading "queued". This
-            // is the state it holds once the retry budget runs out and the
-            // outbox row goes terminal; marking it on the first failure keeps
-            // the UI honest in the meantime. Best-effort, like the settles in
-            // retry().
-            let _ = db.set_transfer_state(&row.id, "failed");
         }
     }
 }
@@ -1081,6 +1142,174 @@ mod tests {
         assert!(accept_error_is_fatal(&crate::error::CoreError::Io(
             std::io::Error::other("boom")
         )));
+    }
+
+    // B2 (1): the drain settles a row whose outbox transition lost every
+    // guard, and the transfers write was unconditional -- so a share the user
+    // canceled mid-send was reported to the UI as DELIVERED. The outbox
+    // transition is the authority; the transfers row only follows it.
+    #[test]
+    fn a_row_canceled_mid_sending_is_never_relabelled_done() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let manifest = Manifest::text("race");
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[]).unwrap();
+
+        // The drain claimed the row, the user cancelled mid-flight, then the
+        // drain's send completed and settled.
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        cancel_with(&db, &staging, id).unwrap();
+        assert!(
+            !db.mark_outbox_awaiting_ack(&id).unwrap(),
+            "guard must lose"
+        );
+        assert!(!db.mark_outbox_done(&id).unwrap(), "guard must lose");
+
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "canceled",
+            "a canceled share must stay canceled, not become done"
+        );
+    }
+
+    // B2 (2): cancelling an already-DELIVERED row must not relabel it. The
+    // outbox UPDATE is guarded on state IN ('pending','sending') and loses, so
+    // the transfers write must not happen either.
+    #[test]
+    fn cancelling_a_delivered_row_leaves_it_done() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let manifest = Manifest::text("delivered");
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[]).unwrap();
+        db.mark_outbox_sending(&id).unwrap();
+        db.mark_outbox_awaiting_ack(&id).unwrap();
+        db.mark_outbox_done(&id).unwrap();
+        db.set_transfer_state(&id, "done").unwrap();
+
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(
+            db.get_outbox(&id).unwrap().unwrap().state,
+            "done",
+            "the outbox row stays delivered"
+        );
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "done",
+            "an already-delivered share must not read as cancelled"
+        );
+    }
+
+    // B2 (3): a transient failure is NOT terminal. 'paused' is spec 4.2's
+    // honest state for a row in retry backoff; 'failed' is the give-up. The
+    // old code wrote 'failed' on the FIRST failed attempt, which made a row
+    // about to be retried indistinguishable from one that gave up.
+    #[test]
+    fn a_backed_off_attempt_reads_paused_and_the_give_up_reads_failed() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&OutboxRow {
+            id: [1u8; 16],
+            payload_id: [2u8; 16],
+            peer_device_id: [3u8; 16],
+            manifest: vec![],
+            total_bytes: 0,
+            attempts: 0,
+            next_attempt_at: 0,
+            state: "pending".into(),
+            created_at: 0,
+            updated_at: 0,
+        })
+        .unwrap();
+
+        assert_eq!(
+            settle_failed_attempt(&db, &[1u8; 16], 0, 0).unwrap(),
+            "paused"
+        );
+        assert_eq!(
+            settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0).unwrap(),
+            "failed",
+            "the give-up is the only terminal failure"
+        );
+    }
+
+    // B3: cancel removes the staged bytes but leaves the outbox row in
+    // 'failed', which retry accepts -- so cancel->retry on a FILE share
+    // re-arms a row whose payload no longer exists. The SEMANTICS of that pair
+    // are a parked user decision; the HARM is not: the drain used to burn all
+    // 8 attempts over ~35 minutes to reach the same failure. A staged path
+    // that is absent is permanent (exactly like an undecodable manifest), so
+    // it settles terminally on the FIRST attempt.
+    #[tokio::test]
+    async fn a_rearmed_row_with_no_staged_file_settles_on_the_first_attempt() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join("a.bin");
+        std::fs::write(&f, b"data").unwrap();
+        let item =
+            crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT).unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![item],
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(
+            &db,
+            &staging,
+            &[9u8; 16],
+            &manifest,
+            std::slice::from_ref(&f),
+        )
+        .unwrap();
+
+        cancel_with(&db, &staging, id).unwrap();
+        // Phase 3 ruling R-T10-3, unchanged: retry DOES re-arm a canceled row.
+        assert_eq!(retry_with(&db, id).unwrap(), Some([9u8; 16]));
+        assert!(db.mark_outbox_sending(&id).unwrap());
+
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        // An empty registry means the send leg cannot be reached, which is the
+        // point: the missing-file check fires FIRST.
+        let sessions: SharedSessions = Arc::new(Mutex::new(SessionRegistry::new(
+            std::time::Duration::from_secs(1),
+            Box::new(|_| -> BoxFutureConn {
+                Box::pin(async { unreachable!("a missing staged file must not dial") })
+            }) as BoxConnect,
+        )));
+        drain_outbox_row(
+            DrainCtx {
+                db: db.clone(),
+                staging: staging.clone(),
+                sessions,
+            },
+            row,
+        )
+        .await;
+
+        let after = db.get_outbox(&id).unwrap().unwrap();
+        assert_eq!(after.state, "failed", "settled terminally");
+        assert_eq!(
+            after.attempts, 0,
+            "a permanent failure must not burn the retry budget"
+        );
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "failed",
+            "the transfers row follows the terminal settle (B2)"
+        );
+        assert!(
+            db.due_outbox(i64::MAX).unwrap().is_empty(),
+            "and it is not due again"
+        );
     }
 
     #[test]

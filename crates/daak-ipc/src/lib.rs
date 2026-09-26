@@ -64,7 +64,13 @@ pub enum IpcMessage {
 /// done|failed|canceled), which daak-core owns and which adding a variant to
 /// here would silently make the daemon accept a state no row can have. An
 /// unknown state filters to zero rows, which is the honest answer.
+///
+/// `deny_unknown_fields` is load-bearing and NOT forward-incompatible: a
+/// future 1.x filter key is a MINOR addition, and a client that sends it can
+/// be told to upgrade, whereas a key that is silently DROPPED here turns
+/// `listTransfers({peerDeviceId})` into a whole-table list (B1).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TransferFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,

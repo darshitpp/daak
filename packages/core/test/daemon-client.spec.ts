@@ -112,6 +112,31 @@ describe('DaemonClientEngine', () => {
     expect(h.written).toEqual([{ Request: 'Devices' }]);
   });
 
+  it('does NOT record startedWith when Start itself failed', async () => {
+    // A Start refused by the daemon (a bad data_dir, a conflicting engine)
+    // must leave the client willing to try again. Recording the args BEFORE the
+    // await meant every later start() skipped Start and went straight to
+    // Subscribe, so the client was stuck on "engine not started" forever.
+    // The transport REJECTS an IpcResponse::Error, so the fake transport is
+    // built with a rejecting `request`, which is the one thing makeEngine's
+    // reply/fail queue cannot express for a request the client has not made
+    // yet.
+    const written: IpcMessage[] = [];
+    const engine = new DaemonClientEngine({
+      onEvent: () => {},
+      onClose: () => {},
+      send: () => {},
+      close: () => {},
+      request: (m: IpcMessage) => {
+        written.push(m);
+        return Promise.reject(new Error('engine already started with different arguments'));
+      },
+    } as never);
+
+    await expect(engine.start()).rejects.toThrow(/already/);
+    expect(written).toEqual([{ Request: { Start: expect.anything() } }]);
+  });
+
   it('names the protocol error when a non-Json reply arrives (I-2)', async () => {
     // A bare Ok used to come back as the string 'null', so send() died with a
     // null-deref and listInbox() could hand back null typed as an array.
@@ -223,7 +248,12 @@ describe('DaemonClientEngine', () => {
     expect(await b).toEqual([]);
     expect(h.written[1]).toEqual({
       Request: {
-        ListTransfers: { filter: { state: 'pending', peerDeviceId: '00'.repeat(16) } },
+        // B1: snake_case. The TS type is camelCase but cbor-x writes property
+        // names VERBATIM and IpcRequest has no rename_all, so peerDeviceId on
+        // the wire is dropped by serde and the peer filter becomes None -- a
+        // whole-table list. TransferFilter is now deny_unknown_fields, so this
+        // casing is a decode ERROR instead.
+        ListTransfers: { filter: { state: 'pending', peer_device_id: '00'.repeat(16) } },
       },
     });
 

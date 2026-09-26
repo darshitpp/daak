@@ -21,26 +21,49 @@ pub fn backoff_delay(attempts: u32, jitter: u64) -> i64 {
     (base + jitter as i64).min(600)
 }
 
+/// Shared by `enqueue_outbox` and the atomic two-table enqueue, so both write
+/// byte-identical rows.
+pub(crate) fn insert_outbox(c: &rusqlite::Connection, o: &OutboxRow) -> Result<()> {
+    c.execute(
+        r#"INSERT INTO outbox
+             (id, payload_id, peer_device_id, manifest, total_bytes, attempts,
+              next_attempt_at, state, created_at, updated_at)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#,
+        rusqlite::params![
+            &o.id[..],
+            &o.payload_id[..],
+            &o.peer_device_id[..],
+            o.manifest,
+            o.total_bytes as i64,
+            o.attempts as i64,
+            o.next_attempt_at,
+            o.state,
+            o.created_at,
+            o.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
 impl Db {
     pub fn enqueue_outbox(&self, o: &OutboxRow) -> Result<()> {
-        self.conn().execute(
-            r#"INSERT INTO outbox
-                 (id, payload_id, peer_device_id, manifest, total_bytes, attempts,
-                  next_attempt_at, state, created_at, updated_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#,
-            rusqlite::params![
-                &o.id[..],
-                &o.payload_id[..],
-                &o.peer_device_id[..],
-                o.manifest,
-                o.total_bytes as i64,
-                o.attempts as i64,
-                o.next_attempt_at,
-                o.state,
-                o.created_at,
-                o.updated_at,
-            ],
-        )?;
+        insert_outbox(&self.conn(), o)
+    }
+
+    /// A queued share is ONE fact recorded in TWO tables. Inserting them in
+    /// separate statements meant a failure between them left a durable,
+    /// draining outbox row with no `transfers` row -- invisible to listTransfers
+    /// and un-cancelable. One transaction, or neither.
+    pub fn enqueue_outbox_with_transfer(
+        &self,
+        o: &OutboxRow,
+        t: &crate::store::transfers::TransferRow,
+    ) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        insert_outbox(&tx, o)?;
+        crate::store::transfers::insert_transfer(&tx, t)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -70,22 +93,27 @@ impl Db {
         }
     }
 
-    pub fn mark_outbox_awaiting_ack(&self, id: &[u8; 16]) -> Result<()> {
-        self.conn().execute(
+    /// True only for the caller that actually moved the row. B2: the drain
+    /// gates its `transfers` write on this, so a canceled row is never
+    /// relabelled 'done' in the transfers table.
+    pub fn mark_outbox_awaiting_ack(&self, id: &[u8; 16]) -> Result<bool> {
+        let n = self.conn().execute(
             // Guards the "sending -> awaiting_ack" edge: a drain whose send
             // completed after the user canceled must not re-label the row.
             "UPDATE outbox SET state = 'awaiting_ack', updated_at = ?2
              WHERE id = ?1 AND state = 'sending'",
             rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
         )?;
-        Ok(())
+        Ok(n > 0)
     }
 
     /// Terminal failure. `error` is logged, not persisted: the outbox table has
     /// no last_error column and this task does not add one (see task report).
-    pub fn mark_outbox_terminal_failed(&self, id: &[u8; 16], error: &str) -> Result<()> {
+    /// True only for the caller that actually moved the row; see
+    /// `mark_outbox_awaiting_ack`.
+    pub fn mark_outbox_terminal_failed(&self, id: &[u8; 16], error: &str) -> Result<bool> {
         tracing::warn!("outbox row {} failed permanently: {error}", hex::encode(id));
-        self.conn().execute(
+        let n = self.conn().execute(
             // Guards the "pending/sending -> failed" edge: cancel acts on a
             // pending row and the drain's give-up path on a sending one; a row
             // already "failed" or "done" is left alone, so a late terminal
@@ -94,7 +122,7 @@ impl Db {
              WHERE id = ?1 AND state IN ('pending','sending')",
             rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
         )?;
-        Ok(())
+        Ok(n > 0)
     }
 
     // ponytail: no engine caller yet; wire it in when outbox rows are pruned.
@@ -132,7 +160,9 @@ impl Db {
         Ok(n > 0)
     }
 
-    pub fn mark_outbox_failed(&self, id: &[u8; 16], now: i64, jitter: u64) -> Result<()> {
+    /// Back off for another attempt. True only for the caller that actually
+    /// moved the row; see `mark_outbox_awaiting_ack`.
+    pub fn mark_outbox_failed(&self, id: &[u8; 16], now: i64, jitter: u64) -> Result<bool> {
         let conn = self.conn();
         let attempts: u32 = conn
             .query_row(
@@ -144,22 +174,24 @@ impl Db {
         let next = now + backoff_delay(attempts + 1, jitter);
         // Guards the "sending -> failed" edge: a settle from a drain that lost
         // the claim (row since canceled or re-armed) must not re-pend the row.
-        conn.execute(
+        let n = conn.execute(
             "UPDATE outbox SET state = 'pending', attempts = attempts + 1, next_attempt_at = ?2, updated_at = ?3
              WHERE id = ?1 AND state = 'sending'",
             rusqlite::params![&id[..], next, now],
         )?;
-        Ok(())
+        Ok(n > 0)
     }
 
-    pub fn mark_outbox_done(&self, id: &[u8; 16]) -> Result<()> {
-        self.conn().execute(
+    /// True only for the caller that actually moved the row; see
+    /// `mark_outbox_awaiting_ack`.
+    pub fn mark_outbox_done(&self, id: &[u8; 16]) -> Result<bool> {
+        let n = self.conn().execute(
             // Guards the "awaiting_ack -> done" edge, same race as above.
             "UPDATE outbox SET state = 'done', updated_at = ?2
              WHERE id = ?1 AND state = 'awaiting_ack'",
             rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
         )?;
-        Ok(())
+        Ok(n > 0)
     }
 
     /// Crash recovery: any outbox row left mid-flight becomes pending again.

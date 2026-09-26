@@ -120,11 +120,18 @@ fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> serd
 }
 
 /// One inbox_history row as the TS `InboxEntry`. saved_paths is a JSON string
-/// in SQLite and a string[] in TS; a value that will not parse reads as an
-/// empty list rather than failing the whole listing.
+/// in SQLite and a string[] in TS. A value that will not parse becomes `null`,
+/// NOT `[]`: `[]` is a real answer ("this payload saved no files") and a
+/// corrupt row must not read as one. Mirrors daak-ffi's inbox_entry_json
+/// exactly -- the two must not disagree about what a corrupt row means.
 fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Value {
-    let saved_paths: serde_json::Value =
-        serde_json::from_str(&row.saved_paths).unwrap_or_else(|_| serde_json::json!([]));
+    let saved_paths: serde_json::Value = match serde_json::from_str(&row.saved_paths) {
+        Ok(v) => v,
+        // No log line: daakd has no tracing subscriber (and no tracing
+        // dependency to add one). ponytail: the null IS the signal; add a
+        // subscriber when the daemon gains one.
+        Err(_) => serde_json::Value::Null,
+    };
     serde_json::json!({
         "payloadId": hex::encode(row.id),
         "transferId": hex::encode(row.transfer_id),
@@ -239,8 +246,16 @@ pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std
                                 // four background tasks; a daemon that exits
                                 // without stopping them leaves a bound port
                                 // and an open SQLite file behind.
-                                if let Ok(engine) = state.engine().await {
-                                    let _ = engine.shutdown().await;
+                                //
+                                // B4: the engine is TAKEN out of the slot, not
+                                // just shut down in place. Left in the slot, a
+                                // later Start with the same args took the
+                                // idempotent branch and answered Port for a
+                                // port whose accept task was aborted. Taking
+                                // it also drops the last Arc, which is what
+                                // actually closes the DB and stops the tasks.
+                                if let Some(slot) = state.slot.write().await.take() {
+                                    let _ = slot.engine.shutdown().await;
                                 }
                                 break
                             }
@@ -527,6 +542,33 @@ mod tests {
             0o777
         );
     }
+
+    /// SHOULD-FIX 4: a corrupt saved_paths must NOT read as "no saved files".
+    /// `[]` is a real answer and `null` says "this row is broken", so the UI
+    /// can tell them apart. daak-ffi's identical function is the other half
+    /// of this contract; the shared contract suite pins the shape.
+    #[test]
+    fn a_corrupt_saved_paths_reads_as_null_not_as_an_empty_list() {
+        let mut row = daak_core::store::inbox::InboxRow {
+            id: [1u8; 16],
+            transfer_id: [1u8; 16],
+            peer_device_id: [2u8; 16],
+            kind: "text".into(),
+            item_count: 1,
+            summary: "hi".into(),
+            received_at: 0,
+            saved_paths: "{not json".into(),
+        };
+        assert!(inbox_entry_json(&row)["savedPaths"].is_null());
+        // A real empty list stays an empty list.
+        row.saved_paths = "[]".into();
+        assert_eq!(inbox_entry_json(&row)["savedPaths"], serde_json::json!([]));
+        row.saved_paths = r#"["/tmp/a.bin"]"#.into();
+        assert_eq!(
+            inbox_entry_json(&row)["savedPaths"],
+            serde_json::json!(["/tmp/a.bin"])
+        );
+    }
 }
 /// Create (or accept a repeat of) the daemon's single engine, and bridge its
 /// event stream into the broadcast channel exactly once.
@@ -589,17 +631,25 @@ async fn start_engine(
         Err(e) => return err(e),
     };
     let port = engine.local_addr().port();
-    bridge_events(&engine, sender.clone());
+    bridge_events(engine.events(), sender.clone());
     *guard = Some(EngineSlot { engine, args });
     IpcResponse::Port { port }
 }
 
-/// Forward the engine's events into the IPC broadcast. One task per engine;
-/// the receiver is created HERE, so events published between Engine::start and
-/// this line are lost, which is why it is called immediately after start.
+/// Forward an engine's events into the IPC broadcast. One task per engine;
+/// the receiver is created by the CALLER immediately after start, so events
+/// published between Engine::start and that call would be lost.
+///
+/// Takes the RECEIVER, not the engine: a real `Engine` cannot emit a single
+/// event without a second peer on the LAN, so taking `&Engine` made the one
+/// link between an EngineEvent and a subscribed IPC client impossible to
+/// exercise. With the receiver as the input the mapping and the fan-out are
+/// both reachable without inventing a fake engine.
 #[cfg(unix)]
-fn bridge_events(engine: &Arc<Engine>, sender: broadcast::Sender<IpcEvent>) {
-    let mut rx = engine.events();
+pub fn bridge_events(
+    mut rx: broadcast::Receiver<EngineEvent>,
+    sender: broadcast::Sender<IpcEvent>,
+) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {

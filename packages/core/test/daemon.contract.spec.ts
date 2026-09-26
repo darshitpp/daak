@@ -7,7 +7,7 @@
 //   DAAKD_BIN=../../target/debug/daakd pnpm --filter @daak/core test
 // Without DAAKD_BIN the suite is skipped rather than faked green -- see the
 // note in the ledger about which assertions are deferred to Task 9.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { existsSync } from 'node:fs';
@@ -24,9 +24,8 @@ import { runContractSuite } from './contract-suite';
 const BIN = process.env.DAAKD_BIN ?? join(import.meta.dirname, '../../../target/debug/daakd');
 // The daemon binds and chmods this directory; a world-writable tmp parent is
 // exactly what check_owned_by_us refuses, so the parent must already be ours.
-const dir = mkdtempSync(join(tmpdir(), 'daakd-contract-'));
-const sock = join(dir, 'daakd.sock');
-
+let dir: string;
+let sock: string;
 let daemon: ChildProcess | undefined;
 
 async function waitForSocket(): Promise<void> {
@@ -43,7 +42,15 @@ async function waitForSocket(): Promise<void> {
 }
 
 if (existsSync(BIN)) {
-  beforeAll(async () => {
+  // B4: a SHARED daemon is no longer honest. Once Shutdown really stops the
+  // engine (it used to leave a dead one in the slot), the contract suite's
+  // `stop()` test would leave every LATER test -- including the central
+  // obligation -- running against a stopped engine, and the central test was
+  // silently passing for that reason. Each test gets its own daemon, its own
+  // temp data dir and its own socket.
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'daakd-contract-'));
+    sock = join(dir, 'daakd.sock');
     // Keep stderr: a daemon that cannot bind (no privileges, stale socket)
     // exits immediately, and a bare 10s hook timeout hides the real reason.
     let err = '';
@@ -54,8 +61,9 @@ if (existsSync(BIN)) {
     );
     await Promise.race([waitForSocket(), exited]);
   });
-  afterAll(() => {
+  afterEach(() => {
     daemon?.kill();
+    daemon = undefined;
     rmSync(dir, { recursive: true, force: true });
   });
 }
@@ -65,7 +73,7 @@ if (existsSync(BIN)) {
 const describeDaemon = existsSync(BIN) ? describe : describe.skip;
 
 describeDaemon('DaemonClientEngine over a real daakd socket', () => {
-  runContractSuite('daemon', () => DaemonClientEngine.connect(sock));
+  runContractSuite('daemon', () => DaemonClientEngine.connect(sock!));
 
   it('daemon: answers Devices with the JSON string the client parses', async () => {
     const e = await DaemonClientEngine.connect(sock);
@@ -92,6 +100,10 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
 
   it('daemon: refuses a second concurrent request (no request ids on the wire)', async () => {
     const e = await DaemonClientEngine.connect(sock);
+    // A fresh daemon has no engine until it is started; this test is about
+    // request serialization, not the pre-start guard (crates/daakd covers
+    // that), so start it first.
+    await e.start();
     const a = e.devices();
     await expect(e.devices()).rejects.toThrow(/one request at a time/);
     expect(await a).toEqual([]);
@@ -108,6 +120,11 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
   // LAN is QUEUED (Engine::enqueue_outbox_send), not refused the way the
   // blocking send_secure would refuse it, and the queued row is what the UI's
   // next listTransfers() sees.
+  //
+  // Precondition, asserted honestly: beforeEach gave this test a FRESH daemon
+  // that has never received a Start, and this test issues its own start(), so
+  // the engine under test is a LIVE one. (Before the per-test daemon this ran
+  // against an engine a previous test's stop() had already shut down.)
   it('daemon: queues a share to an offline peer and lists the row', async () => {
     const e = await DaemonClientEngine.connect(sock);
     await e.start();
@@ -131,11 +148,12 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
     const canceled = await e.listTransfers({ peerDeviceId: peer });
     expect(canceled.find((r) => r.transferId === queued.transferId)!.state).toBe('canceled');
 
-    // A second cancel of an ALREADY-TERMINAL row is Ok: the outbox UPDATE is
-    // guarded on state IN ('pending','sending') and returns Ok either way, so
-    // this asserts the code's actual behaviour rather than a wished-for one.
-    // (An id with NO row at all is a different case and is an error -- R-T10-3.)
+    // A second cancel of an ALREADY-CANCELED row is Ok -- the outbox UPDATE is
+    // guarded on state IN ('pending','sending') and matches nothing -- and the
+    // row must STAY canceled rather than being relabelled.
     await e.cancel(queued.transferId);
+    const after = await e.listTransfers({ peerDeviceId: peer });
+    expect(after.find((r) => r.transferId === queued.transferId)!.state).toBe('canceled');
     // A malformed id, and a well-formed id with no row, are both refused.
     await expect(e.cancel('not-hex')).rejects.toThrow(/hex/);
     await expect(e.cancel('00'.repeat(16))).rejects.toThrow();

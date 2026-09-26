@@ -50,7 +50,7 @@ export class DaemonClientEngine implements DaakEngine {
   // Error{"engine not started"} until it lands.
   async start(): Promise<void> {
     if (!this.startedWith) {
-      this.startedWith = {
+      const args = {
         // snake_case, NOT camelCase: cbor-x writes JS property names verbatim
         // and IpcRequest has no rename_all, so these keys ARE the wire format.
         // camelCase here fails to deserialise and every later request then
@@ -62,7 +62,11 @@ export class DaemonClientEngine implements DaakEngine {
         // A fixed port would make two daemons on one machine collide.
         listen_port: 0,
       };
-      await this.tx.request({ Request: { Start: this.startedWith } });
+      // Assign only AFTER the await: a failed Start left the flag set, so
+      // every later start() skipped Start and the client was stuck on
+      // "engine not started" forever.
+      await this.tx.request({ Request: { Start: args } });
+      this.startedWith = args;
     }
     await this.tx.request({ Request: 'Subscribe' });
   }
@@ -126,8 +130,23 @@ export class DaemonClientEngine implements DaakEngine {
     // The filter is a map, not a bare string: the request variant is
     // ListTransfers { filter: Option<TransferFilter> } and an absent filter
     // lists EVERYTHING, which is a different query from any filter.
+    // B1: build the wire object EXPLICITLY. cbor-x writes property names
+    // verbatim and IpcRequest/TransferFilter have no rename_all, so passing
+    // the TS filter through sent `peerDeviceId`, which serde dropped -- the
+    // peer filter became None and the query returned the WHOLE table.
+    // TransferFilter is deny_unknown_fields, so a casing typo is now a decode
+    // error rather than a silently wider query. undefined keys are omitted so
+    // an absent filter field keeps meaning "no narrowing".
+    const wire = filter
+      ? {
+          ...(filter.state !== undefined ? { state: filter.state } : {}),
+          ...(filter.peerDeviceId !== undefined
+            ? { peer_device_id: filter.peerDeviceId }
+            : {}),
+        }
+      : null;
     return parseArray<TransferSummary>(
-      await this.json({ ListTransfers: { filter: filter ?? null } }),
+      await this.json({ ListTransfers: { filter: wire } }),
       'listTransfers',
     );
   }

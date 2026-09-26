@@ -308,6 +308,34 @@ describe('InProcessEngine', () => {
     ]);
   });
 
+  it('keeps a corrupt saved_paths row as null rather than coercing it to []', async () => {
+    // SHOULD-FIX 4. Both engines map an unparseable saved_paths JSON blob to
+    // `null`, because `[]` is a REAL answer ("this payload saved no files") and
+    // a corrupt row must stay distinguishable from it. The TS type is
+    // string[] | null to match; if it were string[], `?? []` here would be the
+    // bug and this test would fail.
+    const engine = new InProcessEngine(
+      fakeNative({
+        listInbox: async () =>
+          JSON.stringify([
+            {
+              payloadId: 'aa'.repeat(16),
+              transferId: 'aa'.repeat(16),
+              peerDeviceId: 'bb'.repeat(16),
+              kind: 'text',
+              itemCount: 1,
+              summary: 'hi',
+              receivedAt: 0,
+              savedPaths: null,
+            },
+          ]),
+      }),
+      () => () => {},
+    );
+    const [row] = await engine.listInbox();
+    expect(row.savedPaths).toBeNull();
+  });
+
   it('rejects a list payload that is not an array instead of returning it typed', async () => {
     const engine = new InProcessEngine(
       fakeNative({ listTransfers: async () => '{}', listInbox: async () => 'null' }),

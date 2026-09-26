@@ -94,6 +94,65 @@ fn a_camel_case_start_does_not_decode() {
     );
 }
 
+// B1: TransferFilter carries two Option<String> keys whose ABSENCE already
+// means "no narrowing". serde's default tolerance for unknown keys is
+// therefore not forward compatibility here, it is a silently WIDER query: a
+// camelCase `peerDeviceId` (the name the TS type uses) is dropped, the peer
+// filter stays None, and the SQL takes its `?2 IS NULL` arm and returns every
+// row. deny_unknown_fields makes that a decode error instead.
+#[test]
+fn a_camel_case_transfer_filter_does_not_decode() {
+    // Hand-built rather than serde_json: daak-ipc has no serde_json dependency
+    // and this crate must not gain one just to spell a test fixture.
+    let body = cbor_filter_frame("peerDeviceId");
+    let got: Result<IpcFrame, _> = ciborium::from_reader(&body[..]);
+    assert!(
+        got.is_err(),
+        "camelCase peerDeviceId decoded; a dropped key is a silently whole-DB list"
+    );
+
+    // The snake_case spelling the client actually sends still decodes.
+    let ok: IpcFrame = ciborium::from_reader(&cbor_filter_frame("peer_device_id")[..])
+        .expect("snake_case decodes");
+    assert_eq!(
+        ok.msg,
+        IpcMessage::Request(IpcRequest::ListTransfers {
+            filter: Some(daak_ipc::TransferFilter {
+                state: Some("queued".into()),
+                peer_device_id: Some("00".repeat(16)),
+            }),
+        })
+    );
+}
+
+/// `{"v":IPC_VERSION,"msg":{"Request":{"ListTransfers":{"filter":{...}}}}}`
+/// with the peer key spelled `peer_key`, which is the whole point: the same
+/// frame is built twice and only the casing differs.
+fn cbor_filter_frame(peer_key: &str) -> Vec<u8> {
+    use ciborium::value::Value;
+    let map = |k: &str, v: Value| (Value::Text(k.to_string()), v);
+    let filter = Value::Map(vec![
+        map("state", Value::Text("queued".into())),
+        map(peer_key, Value::Text("00".repeat(16))),
+    ]);
+    let frame = Value::Map(vec![
+        map("v", Value::Integer(IPC_VERSION.into())),
+        map(
+            "msg",
+            Value::Map(vec![map(
+                "Request",
+                Value::Map(vec![map(
+                    "ListTransfers",
+                    Value::Map(vec![map("filter", filter)]),
+                )]),
+            )]),
+        ),
+    ]);
+    let mut body = Vec::new();
+    ciborium::ser::into_writer(&frame, &mut body).unwrap();
+    body
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

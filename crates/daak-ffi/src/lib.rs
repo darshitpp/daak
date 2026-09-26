@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use daak_core::crypto::identity::import_from_store;
-use daak_core::crypto::SecretStore;
 use daak_core::discovery::PresenceState;
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
 use daak_core::manifest::{DeviceRef, Item, Manifest, CHUNK_SIZE_DEFAULT};
@@ -234,11 +233,17 @@ pub fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> 
 
 /// One inbox_history row as the InboxEntry TS type. saved_paths is a JSON
 /// string in SQLite and a string[] in TS, so it is parsed rather than passed
-/// through as a quoted blob; a value that will not parse is an error, not a
-/// silently empty list.
+/// through as a quoted blob. A value that will not parse becomes `null`, NOT
+/// `[]`: `[]` is a real answer ("this payload saved no files") and a corrupt
+/// row must not be indistinguishable from it -- saved_paths is the one field
+/// the inbox row exists to carry. daakd mirrors this exactly.
 pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Value {
-    let saved_paths: serde_json::Value =
-        serde_json::from_str(&row.saved_paths).unwrap_or_else(|_| serde_json::json!([]));
+    let saved_paths: serde_json::Value = match serde_json::from_str(&row.saved_paths) {
+        Ok(v) => v,
+        // No log line: daak-ffi has no tracing dependency, and the null IS the
+        // signal. Matches daakd's identical function exactly.
+        Err(_) => serde_json::Value::Null,
+    };
     serde_json::json!({
         "payloadId": to_hex(&row.id),
         "transferId": to_hex(&row.transfer_id),
@@ -251,57 +256,18 @@ pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::
     })
 }
 
-/// Where the engine identity is loaded from: one 0600 file per key under
-/// <data_dir>/keys, so the device id and static key survive a restart and
-/// pairing does not silently break on relaunch.
-// The 0600 below comes from OpenOptions::mode, which applies only when the
-// file is CREATED; a later write to an existing key file leaves its mode as
-// it already was. It is also Unix-only -- mode has no meaning on Windows.
-/// ponytail: plaintext files guarded only by mode bits. The upgrade path is the
-/// OS-keystore TurboModule (iOS Keychain / Android Keystore / DPAPI), Phase 5.
-pub struct FileKeyStore {
-    dir: PathBuf,
-}
-
-impl FileKeyStore {
-    pub fn new(dir: impl Into<PathBuf>) -> Result<Self, FfiError> {
-        let dir = dir.into();
-        std::fs::create_dir_all(&dir).map_err(engine_err)?;
-        Ok(Self { dir })
-    }
-}
-
-impl SecretStore for FileKeyStore {
-    fn get(&self, key: &str) -> daak_core::Result<Option<Vec<u8>>> {
-        match std::fs::read(self.dir.join(key)) {
-            Ok(v) => Ok(Some(v)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    fn set(&self, key: &str, value: &[u8]) -> daak_core::Result<()> {
-        use std::io::Write;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.create(true).truncate(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(self.dir.join(key))?;
-        f.write_all(value)?;
-        Ok(())
-    }
-
-    fn delete(&self, key: &str) -> daak_core::Result<()> {
-        match std::fs::remove_file(self.dir.join(key)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-}
+/// The identity store: one 0600 file per key under <data_dir>/keys, so the
+/// device id and static key survive a restart and pairing does not silently
+/// break on relaunch.
+///
+/// This was a private `FileKeyStore` here, line-for-line identical to
+/// daak-core's `PersistentFileStore` -- two implementations of the one piece of
+/// the identity that both deployments MUST agree on, free to drift. Use core's.
+/// ponytail: plaintext files guarded only by mode bits (0600 comes from
+/// OpenOptions::mode, which applies only on CREATE, and is Unix-only). The
+/// upgrade path is the OS-keystore TurboModule (iOS Keychain / Android
+/// Keystore / DPAPI), Phase 5.
+pub use daak_core::crypto::secret_store::PersistentFileStore as FileKeyStore;
 
 pub struct DaakEngine {
     rt: tokio::runtime::Runtime,
@@ -342,7 +308,7 @@ impl DaakEngine {
     ) -> Result<(), FfiError> {
         let dir = PathBuf::from(&data_dir);
         std::fs::create_dir_all(&dir).map_err(engine_err)?;
-        let store = FileKeyStore::new(dir.join("keys"))?;
+        let store = FileKeyStore::new(dir.join("keys")).map_err(engine_err)?;
         let db = Db::open(&dir.join("daak.db")).map_err(engine_err)?;
         db.migrate().map_err(engine_err)?;
         let cfg = EngineConfig {

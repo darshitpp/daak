@@ -477,6 +477,112 @@ async fn every_engine_event_maps_to_an_encodable_ipc_event() {
     }
 }
 
+// SHOULD-FIX 5: the ONE link between an EngineEvent and a subscribed IPC client
+// was untested, because bridge_events took an &Engine and a real Engine cannot
+// emit a single event without a second peer on the LAN. It now takes the
+// event RECEIVER, so the mapping and the fan-out are both reachable: a real
+// daak-core broadcast sender feeds the real bridge, which feeds the real IPC
+// broadcast a subscribed client is reading. No fake engine, no invented event.
+#[tokio::test]
+async fn a_real_engine_event_reaches_a_subscribed_ipc_client() {
+    let d = Daemon::spawn().await;
+    let mut s = connect(&d.sock).await;
+    d.start_engine(&mut s).await;
+    // Subscribe first: the daemon only fans out on a subscribed connection.
+    assert!(matches!(
+        d.call(&mut s, IpcRequest::Subscribe).await,
+        IpcResponse::Ok
+    ));
+
+    // The engine's OWN event channel. A real Engine publishes here; the test
+    // publishes on the same channel so the bridge under test is the production
+    // one, not a stand-in.
+    let (engine_tx, engine_rx) = broadcast::channel::<EngineEvent>(16);
+    let (ipc_tx, mut ipc_rx) = broadcast::channel::<IpcEvent>(16);
+    daakd::bridge_events(engine_rx, ipc_tx.clone());
+    let _client = ipc_tx.subscribe();
+
+    let peer = [7u8; 16];
+    engine_tx
+        .send(EngineEvent::DeviceFound(DeviceInfo {
+            device_id: peer,
+            name: "peer".into(),
+            addr: "10.0.0.2:9000".parse().unwrap(),
+        }))
+        .unwrap();
+
+    let got = tokio::time::timeout(Duration::from_secs(5), ipc_rx.recv())
+        .await
+        .expect("the bridge did not forward within 5s")
+        .expect("the IPC channel closed");
+    assert_eq!(
+        got,
+        IpcEvent::DeviceFound {
+            device_id: hex::encode(peer),
+            name: "peer".into(),
+            addr: "10.0.0.2:9000".into(),
+        }
+    );
+
+    // And it survives the REAL encoder, which is what a client actually reads.
+    let mut buf = Vec::new();
+    daak_ipc::write_message(&mut buf, &IpcMessage::Event(got))
+        .await
+        .unwrap();
+    assert!(!buf.is_empty());
+}
+
+// B4: Shutdown used to await engine.shutdown() but LEAVE the Arc in the slot,
+// so a later Start with the same args took the idempotent branch and answered
+// Port for a port whose accept task had been aborted -- a dead port reported
+// as a live one. The engine must be taken OUT of the slot, so the second Start
+// builds a fresh one.
+#[tokio::test]
+async fn shutdown_then_start_with_the_same_args_gets_a_live_engine() {
+    let d = Daemon::spawn().await;
+    let mut first = connect(&d.sock).await;
+    let IpcResponse::Port { port: _p1 } = d.start_engine(&mut first).await else {
+        panic!("the first Start must answer Port")
+    };
+
+    // Shutdown closes the connection without answering, so it is sent raw.
+    write_message(&mut first, &IpcMessage::Request(IpcRequest::Shutdown))
+        .await
+        .unwrap();
+    assert!(
+        read_message(&mut first).await.unwrap().is_none(),
+        "Shutdown drops the connection without a response"
+    );
+
+    // The SAME args as before: with the engine still in the slot this took the
+    // idempotent branch and answered the DEAD port.
+    let mut second = connect(&d.sock).await;
+    let IpcResponse::Port { port: p2 } = d.start_engine(&mut second).await else {
+        panic!("the second Start must answer Port, not an error")
+    };
+    // Not `p2 != p1`: the OS is free to hand back the same port number. What
+    // matters is whether anything is ACCEPTING on it -- the old engine's
+    // listener was aborted, so a reused number would be a dead port.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::TcpStream::connect(("127.0.0.1", p2)),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("nothing is accepting on the port Start answered ({p2})"))
+    .expect("connect to the fresh engine's port");
+
+    // The new engine really is serving: Devices is answered, and a request
+    // the OLD (dead) engine could not answer is refused, proving the slot is
+    // empty rather than holding a corpse.
+    match d.call(&mut second, IpcRequest::Devices).await {
+        IpcResponse::Json { value } => {
+            let v: serde_json::Value = serde_json::from_str(&value).unwrap();
+            assert!(v.as_array().unwrap().is_empty());
+        }
+        other => panic!("Devices must answer Json from the FRESH engine, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn a_start_error_surfaces_as_an_error_response() {
     let d = Daemon::spawn().await;

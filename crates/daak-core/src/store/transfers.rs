@@ -35,36 +35,42 @@ fn now() -> i64 {
     crate::manifest::now_ms() as i64 / 1000
 }
 
+/// The statement `upsert_transfer` runs, factored out so the atomic two-table
+/// enqueue can run it inside a transaction.
+pub(crate) fn insert_transfer(c: &rusqlite::Connection, t: &TransferRow) -> Result<()> {
+    c.execute(
+        r#"INSERT INTO transfers
+             (transfer_id, payload_id, peer_device_id, direction, kind, state,
+              bytes_total, bytes_done, item_count, created_at, updated_at, manifest, error)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+           ON CONFLICT(transfer_id) DO UPDATE SET
+             state = excluded.state,
+             bytes_total = excluded.bytes_total,
+             bytes_done = excluded.bytes_done,
+             updated_at = excluded.updated_at,
+             error = excluded.error"#,
+        rusqlite::params![
+            &t.transfer_id[..],
+            &t.payload_id[..],
+            &t.peer_device_id[..],
+            t.direction,
+            t.kind,
+            t.state,
+            t.bytes_total as i64,
+            t.bytes_done as i64,
+            t.item_count as i64,
+            t.created_at,
+            t.updated_at,
+            t.manifest,
+            t.error,
+        ],
+    )?;
+    Ok(())
+}
+
 impl Db {
     pub fn upsert_transfer(&self, t: &TransferRow) -> Result<()> {
-        self.conn().execute(
-            r#"INSERT INTO transfers
-                 (transfer_id, payload_id, peer_device_id, direction, kind, state,
-                  bytes_total, bytes_done, item_count, created_at, updated_at, manifest, error)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
-               ON CONFLICT(transfer_id) DO UPDATE SET
-                 state = excluded.state,
-                 bytes_total = excluded.bytes_total,
-                 bytes_done = excluded.bytes_done,
-                 updated_at = excluded.updated_at,
-                 error = excluded.error"#,
-            rusqlite::params![
-                &t.transfer_id[..],
-                &t.payload_id[..],
-                &t.peer_device_id[..],
-                t.direction,
-                t.kind,
-                t.state,
-                t.bytes_total as i64,
-                t.bytes_done as i64,
-                t.item_count as i64,
-                t.created_at,
-                t.updated_at,
-                t.manifest,
-                t.error,
-            ],
-        )?;
-        Ok(())
+        insert_transfer(&self.conn(), t)
     }
 
     pub fn get_transfer(&self, id: &[u8; 16]) -> Result<Option<TransferRow>> {

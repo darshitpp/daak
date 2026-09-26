@@ -34,26 +34,32 @@ pub fn enqueue(
     let id = manifest.payload_id;
     let now = crate::manifest::now_ms() as i64 / 1000;
     let total_bytes: u64 = manifest.items.iter().filter_map(|i| i.size).sum();
-    db.enqueue_outbox(&OutboxRow {
+    // Encoded once and reused by BOTH inserts below: they store the identical
+    // bytes, and a second to_cbor() is a second chance for the two rows to
+    // disagree.
+    let manifest_cbor = manifest.to_cbor()?;
+    let row = OutboxRow {
         id,
         payload_id: manifest.payload_id,
         peer_device_id: *peer,
-        manifest: manifest.to_cbor()?,
+        manifest: manifest_cbor.clone(),
         total_bytes,
         attempts: 0,
         next_attempt_at: now,
         state: "pending".into(),
         created_at: now,
         updated_at: now,
-    })?;
+    };
     // F4: the outbox table alone is not enough. A queued send is the one
     // transfer the user has NOT seen complete, so it is exactly the row the UI
     // lists and cancels; without it listTransfers cannot show a queued share and
     // cancel_with's set_transfer_state("canceled") updates zero rows, leaving
-    // nothing that records the cancellation. Only upsert_transfer's ON CONFLICT
-    // branch runs for a payload already present, so the inbound receiver's row
-    // is never clobbered here (and vice versa: same id, same values).
-    db.upsert_transfer(&crate::store::transfers::TransferRow {
+    // nothing that records the cancellation. The ON CONFLICT branch IS what
+    // runs for a payload already present (it rewrites state/bytes_done/
+    // updated_at); the reason that is safe is that Manifest::new mints a FRESH
+    // random payload_id per share, so a queued outbound row never collides
+    // with an inbound one in the first place.
+    let transfer = crate::store::transfers::TransferRow {
         transfer_id: id,
         payload_id: manifest.payload_id,
         peer_device_id: *peer,
@@ -68,9 +74,12 @@ pub fn enqueue(
         item_count: manifest.items.len() as u32,
         created_at: now,
         updated_at: now,
-        manifest: manifest.to_cbor()?,
+        manifest: manifest_cbor,
         error: None,
-    })?;
+    };
+    // One transaction: a durable outbox row with no `transfers` row is a share
+    // the UI cannot list and cancel cannot relabel.
+    db.enqueue_outbox_with_transfer(&row, &transfer)?;
     Ok(id)
 }
 
@@ -114,7 +123,11 @@ impl OutboxWorker {
         let _ = self.tx.try_send(peer);
     }
 
-    pub fn shutdown(self) {
+    /// Stop the worker. Takes &self, NOT self: the Engine holds the worker in
+    /// an Arc (the per-row drain closures need it) and reaches shutdown through
+    /// &self, so consuming it here would make the one call site impossible.
+    /// Abort is enough -- the task owns nothing that needs draining.
+    pub fn shutdown(&self) {
         self.task.abort();
     }
 }

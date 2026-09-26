@@ -16,7 +16,13 @@ export interface InboxEntry {
   itemCount: number;
   summary: string;
   receivedAt: number;
-  savedPaths: string[];
+  /**
+   * `null` when the stored value would not parse. `[]` is a real answer
+   * ("this payload saved no files"), so a corrupt row must stay
+   * distinguishable from it -- both engines (daakd and daak-ffi) return null
+   * for an unparseable saved_paths blob.
+   */
+  savedPaths: string[] | null;
 }
 
 export type DaakEvent =

@@ -78,8 +78,18 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     await e.start();
     const all = await e.listTransfers();
     expect(Array.isArray(all)).toBe(true);
-    const filtered = await e.listTransfers({ state: 'pending', peerDeviceId: '00'.repeat(16) });
-    expect(Array.isArray(filtered)).toBe(true);
+    // 'queued' is spec 4.2's transfers.state for a re-armed/queued send;
+    // 'pending' is OUTBOX vocabulary and is not a member of that enum, so
+    // filtering on it is vacuous.
+    //
+    // B1: these two are the assertion that would have caught the silently
+    // dropped `peerDeviceId` key -- `Array.isArray` was true for the WHOLE
+    // TABLE, which is what a dropped key produces. A filter that cannot match
+    // must come back EMPTY, on both engines.
+    expect(await e.listTransfers({ peerDeviceId: '00'.repeat(16) })).toEqual([]);
+    expect(await e.listTransfers({ state: 'no-such-state' })).toEqual([]);
+    const filtered = await e.listTransfers({ state: 'queued', peerDeviceId: '00'.repeat(16) });
+    expect(filtered).toEqual([]);
     await e.stop();
   });
 
