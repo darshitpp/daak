@@ -961,6 +961,13 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
         // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
         // brief's "cancelled"; do not "fix" it back.
         db.set_transfer_state(&transfer_id, "canceled")?;
+    } else {
+        // The row was already done (delivered) or awaiting_ack. Cancel did
+        // not win, so the outbox is the authority and the staged copy is
+        // still wanted: a delivered share's staging is what a later retry
+        // would re-send from. Deleting it here would turn a no-op cancel into
+        // silent data loss while the row still reads `done`.
+        return Ok(());
     }
     staging.cleanup(&row.payload_id)
 }
@@ -1009,19 +1016,26 @@ pub fn retry_item_with(
 /// Returns the transfers.state the row should now show: `paused` while it is
 /// still retrying (B2 -- a row in backoff is not terminal, and 'failed' would
 /// be indistinguishable from the give-up) and `failed` once it gave up.
+///
+/// `None` means the outbox transition LOST its guard -- the row was canceled
+/// or settled by someone else while this drain was in flight -- so there is no
+/// transfers write to make. Returning the state anyway is what relabelled a
+/// canceled share `paused` FOREVER, because its outbox row is terminal and is
+/// never re-pended.
 fn settle_failed_attempt(
     db: &Db,
     id: &[u8; 16],
     attempts: u32,
     jitter: u64,
-) -> Result<&'static str> {
+) -> Result<Option<&'static str>> {
     let now = crate::manifest::now_ms() as i64 / 1000;
     if attempts + 1 >= MAX_DELIVERY_ATTEMPTS {
-        db.mark_outbox_terminal_failed(id, &format!("gave up after {} attempts", attempts + 1))?;
-        Ok("failed")
+        let won = db
+            .mark_outbox_terminal_failed(id, &format!("gave up after {} attempts", attempts + 1))?;
+        Ok(won.then_some("failed"))
     } else {
-        db.mark_outbox_failed(id, now, jitter)?;
-        Ok("paused")
+        let won = db.mark_outbox_failed(id, now, jitter)?;
+        Ok(won.then_some("paused"))
     }
 }
 
@@ -1031,7 +1045,9 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
     let retry = |jitter: u64| {
         // R-T10-5: cap the retries. Without this a permanently unreachable peer
         // (or a permanently bad file) retries forever and never leaves 'failed'.
-        if let Ok(state) = settle_failed_attempt(db, &row.id, row.attempts, jitter) {
+        // Only write when this drain still OWNS the row; see the None arm on
+        // settle_failed_attempt.
+        if let Ok(Some(state)) = settle_failed_attempt(db, &row.id, row.attempts, jitter) {
             let _ = db.set_transfer_state(&row.id, state);
         }
     };
@@ -1144,6 +1160,44 @@ mod tests {
         )));
     }
 
+    // B2 (4): the FAILURE path was the one settle round 2 left ungated. A
+    // canceled row is terminal and is never re-pended, so writing `paused`
+    // there stranded a canceled share in a retrying state permanently -- the
+    // same wrong-direction bug as the success path, one branch over.
+    #[test]
+    fn a_lost_backoff_guard_writes_no_transfer_state_at_all() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let manifest = Manifest::text("race");
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[]).unwrap();
+
+        // Cancel owns the row; the drain's backoff guard matches nothing.
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(
+            settle_failed_attempt(&db, &id, 0, 0).unwrap(),
+            None,
+            "a lost guard must yield no state to write"
+        );
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "canceled",
+            "a canceled share must not read as retrying"
+        );
+        // The winning case still reports the state. Different text, because
+        // the outbox primary key IS the payload id and Manifest::text derives
+        // it from the content.
+        let other =
+            crate::outbox::enqueue(&db, &staging, &[4u8; 16], &Manifest::text("other"), &[])
+                .unwrap();
+        assert!(db.mark_outbox_sending(&other).unwrap());
+        assert_eq!(
+            settle_failed_attempt(&db, &other, 0, 0).unwrap(),
+            Some("paused")
+        );
+    }
+
     // B2 (1): the drain settles a row whose outbox transition lost every
     // guard, and the transfers write was unconditional -- so a share the user
     // canceled mid-send was reported to the UI as DELIVERED. The outbox
@@ -1225,13 +1279,33 @@ mod tests {
         })
         .unwrap();
 
+        // The backoff guard is `sending -> pending`, so a row that is still
+        // `pending` never matched it: this assertion passed VACUOUSLY before
+        // settle_failed_attempt started reporting the lost guard.
+        assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
         assert_eq!(
             settle_failed_attempt(&db, &[1u8; 16], 0, 0).unwrap(),
-            "paused"
+            Some("paused")
         );
+        // A SECOND row for the give-up: the first row is no longer `sending`
+        // (the backoff just moved it), so its guard would lose and the answer
+        // would be None for the wrong reason.
+        db.enqueue_outbox(&OutboxRow {
+            id: [9u8; 16],
+            payload_id: [8u8; 16],
+            peer_device_id: [3u8; 16],
+            manifest: vec![],
+            total_bytes: 0,
+            attempts: 0,
+            next_attempt_at: 0,
+            state: "sending".into(),
+            created_at: 0,
+            updated_at: 0,
+        })
+        .unwrap();
         assert_eq!(
-            settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0).unwrap(),
-            "failed",
+            settle_failed_attempt(&db, &[9u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0).unwrap(),
+            Some("failed"),
             "the give-up is the only terminal failure"
         );
     }

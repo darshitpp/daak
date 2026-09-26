@@ -75,6 +75,12 @@ export class DaemonClientEngine implements DaakEngine {
   // must not wait for one.
   async stop(): Promise<void> {
     this.tx.send({ Request: 'Shutdown' });
+    // Shutdown TAKES the engine out of the daemon's slot (B4), so a start()
+    // after a stop() must really send Start again -- otherwise the client
+    // skips it and every request answers "engine not started". This class
+    // still does NOT reconnect: a fresh DaemonClientEngine is the only way
+    // back onto a closed socket.
+    this.startedWith = undefined;
   }
 
   async devices(): Promise<DeviceInfo[]> {

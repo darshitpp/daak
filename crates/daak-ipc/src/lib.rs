@@ -65,10 +65,16 @@ pub enum IpcMessage {
 /// here would silently make the daemon accept a state no row can have. An
 /// unknown state filters to zero rows, which is the honest answer.
 ///
-/// `deny_unknown_fields` is load-bearing and NOT forward-incompatible: a
-/// future 1.x filter key is a MINOR addition, and a client that sends it can
-/// be told to upgrade, whereas a key that is silently DROPPED here turns
-/// `listTransfers({peerDeviceId})` into a whole-table list (B1).
+/// `deny_unknown_fields` is load-bearing. The alternative is a key that is
+/// silently DROPPED, which turns `listTransfers({peerDeviceId})` into a
+/// whole-table list (B1) -- a wrong ANSWER, which is worse than a loud one.
+///
+/// The cost, stated honestly: an unknown field on OUR OWN major is a plain
+/// `IpcError::Cbor` and daakd drops the connection on it, so a future 1.x
+/// client that adds a filter key cannot talk to a 1.0 daemon at all. That is
+/// a deliberate narrowing: the additive space for a MINOR bump is a new
+/// IpcRequest variant, not a new field inside an existing struct. A filter
+/// key added later needs a major bump of its own.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransferFilter {

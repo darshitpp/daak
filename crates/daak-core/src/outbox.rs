@@ -126,7 +126,12 @@ impl OutboxWorker {
     /// Stop the worker. Takes &self, NOT self: the Engine holds the worker in
     /// an Arc (the per-row drain closures need it) and reaches shutdown through
     /// &self, so consuming it here would make the one call site impossible.
-    /// Abort is enough -- the task owns nothing that needs draining.
+    /// Abort is enough for the TICKER. The per-row drain tasks it spawned are
+    /// detached (see engine.rs), so abort does not reach them: an in-flight
+    /// send can still finish and settle its row after shutdown. Harmless --
+    /// every settle is guarded on a state transition, and the Arc<Db> frees
+    /// when the last drain returns -- but the comment must not claim the
+    /// shutdown is total, because it is not.
     pub fn shutdown(&self) {
         self.task.abort();
     }
