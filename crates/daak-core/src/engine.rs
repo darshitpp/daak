@@ -666,7 +666,17 @@ impl Engine {
             .get_pairing(&hello.device_id)?
             .ok_or_else(|| CoreError::Protocol("unpaired inbound connection".into()))?;
         let static_secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
-        match recv_secure_transfer(conn, &static_secret, &pairing.static_dh_pub, out_dir).await {
+        // R6: the real Db, not None -- inbound transfers are persisted so the
+        // NACK-driven resume path (bitmaps, quarantine rows) is reachable.
+        match recv_secure_transfer(
+            conn,
+            &static_secret,
+            &pairing.static_dh_pub,
+            out_dir,
+            Some(db),
+        )
+        .await
+        {
             Ok(manifest) => {
                 let _ = tx.send(EngineEvent::TransferDone {
                     transfer_id: manifest.payload_id,
@@ -735,9 +745,7 @@ async fn send_secure_with(
     }
     // ponytail: the retry re-sends the WHOLE payload, so a transient error after
     // the receiver already wrote the bytes costs a full re-send. Upgrade to the
-    // NACK-driven ranges (transfer::resume) once receive is persisted --
-    // net::secure::recv_secure_transfer still passes `db: None`, so inbound
-    // resume is dormant and there is nothing to resume from yet.
+    // NACK-driven ranges (transfer::resume) once the receiver can use them.
     sessions.lock().await.remove(&peer_device_id);
     let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
     send_on_session(&handle, manifest, paths).await?;

@@ -10,6 +10,7 @@ use crate::crypto::session::SecureSession;
 use crate::error::Result;
 use crate::framing::{Frame, RecordType};
 use crate::manifest::Manifest;
+use crate::store::Db;
 use crate::transfer::{receive_transfer, send_transfer};
 
 use super::connection::Connection;
@@ -180,12 +181,13 @@ pub async fn recv_secure_transfer<T: FrameTransport + Send>(
     static_secret: &[u8; 32],
     initiator_static: &[u8; 32],
     out_dir: &Path,
+    db: Option<&Db>,
 ) -> Result<Manifest> {
     let prologue = session_prologue(&x25519_public(static_secret), initiator_static);
     let driver = HandshakeDriver::responder(static_secret, &prologue)?;
     let (tx, rx, _hash) = complete_handshake(conn, driver, false).await?;
     let mut secure = SecureConnection::new(conn, tx, rx);
-    receive_transfer(&mut secure, out_dir, |_| {}, None).await
+    receive_transfer(&mut secure, out_dir, |_| {}, db).await
 }
 
 fn x25519_public(secret: &[u8; 32]) -> [u8; 32] {

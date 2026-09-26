@@ -1,0 +1,48 @@
+namespace daak_ffi {};
+
+[Error]
+enum FfiError {
+  "Engine",
+  "Protocol",
+};
+
+callback interface EventSink {
+  void on_event(FfiEvent event);
+};
+
+// A single tagged union so the generated Rust enum and the callback match exactly.
+[Enum]
+interface FfiEvent {
+  DeviceFound(DeviceFoundEvent data);
+  DeviceState(DeviceStateEvent data);
+  PairingSas(PairingSasEvent data);
+  TransferProgress(ProgressEvent data);
+  TransferItem(TransferItemEvent data);
+  TransferDone(DoneEvent data);
+  TransferFailed(FailedEvent data);
+  TransferQueued(DoneEvent data);
+  InboxReceived(InboxReceivedEvent data);
+};
+
+dictionary DeviceFoundEvent { string device_id; string name; string addr; boolean online; };
+dictionary DeviceStateEvent { string device_id; boolean online; };
+dictionary PairingSasEvent { string peer_device_id; string sas; };
+dictionary ProgressEvent { string transfer_id; u64 bytes_done; u64 bytes_total; };
+dictionary TransferItemEvent { string transfer_id; u32 item_index; string state; string dest_path; };
+dictionary DoneEvent { string transfer_id; };
+dictionary FailedEvent { string transfer_id; string error; };
+dictionary InboxReceivedEvent { string payload_json; };
+
+interface DaakEngine {
+  constructor(EventSink sink);
+  [Throws=FfiError] void start(string data_dir, string display_name, u16 listen_port);
+  [Throws=FfiError] string pairing_bundle();
+  [Throws=FfiError] string pair_with(string addr, sequence<u8> bundle_cbor);
+  [Throws=FfiError] string send_text(string peer_id, string text);
+  [Throws=FfiError] string send_files(string peer_id, sequence<string> paths);
+  [Throws=FfiError] string list_devices();
+  [Throws=FfiError] void cancel(string transfer_id);
+  [Throws=FfiError] void retry(string transfer_id);
+  [Throws=FfiError] u16 local_port();
+  [Throws=FfiError] void shutdown();
+};
