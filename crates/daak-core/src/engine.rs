@@ -543,6 +543,17 @@ impl Engine {
         Ok(())
     }
 
+    /// R-T12-7: re-fetch one quarantined item without restarting the transfer.
+    /// Nothing consumes the "pending" state yet: the outbox worker has no row for
+    /// an INBOUND transfer, so the re-fetch itself is the parked resume wiring
+    /// and calling this today only marks the item.
+    pub fn retry_item(&self, transfer_id: [u8; 16], item_index: u32) -> Result<()> {
+        if let Some(peer) = retry_item_with(&self.db, transfer_id, item_index)? {
+            self.outbox.notify_peer_online(peer);
+        }
+        Ok(())
+    }
+
     /// Called from the accept loop after a successful inbound transfer.
     fn record_inbox(db: &Db, manifest: &Manifest) -> Result<()> {
         let summary = match manifest.kind {
@@ -791,6 +802,33 @@ pub fn retry_with(db: &Db, transfer_id: [u8; 16]) -> Result<Option<[u8; 16]>> {
     Ok(Some(row.peer_device_id))
 }
 
+/// Returns the peer to notify, if the item was found and re-armed.
+/// R-T12-7: Db::set_item_state matches zero rows for an unknown
+/// (transfer_id, item_index), so both rows are checked explicitly first --
+/// otherwise Retry on garbage returns Ok(()) and silently does nothing.
+pub fn retry_item_with(
+    db: &Db,
+    transfer_id: [u8; 16],
+    item_index: u32,
+) -> Result<Option<[u8; 16]>> {
+    let row = db.get_transfer(&transfer_id)?.ok_or_else(|| {
+        CoreError::Protocol(format!(
+            "no transfer {} to retry an item of",
+            hex::encode(transfer_id)
+        ))
+    })?;
+    db.get_item(&transfer_id, item_index)?.ok_or_else(|| {
+        CoreError::Protocol(format!(
+            "no item {item_index} on transfer {}",
+            hex::encode(transfer_id)
+        ))
+    })?;
+    // "pending" is the re-armed item state; transfers.state is a different
+    // enum (see retry_with) and is deliberately NOT touched here.
+    db.set_item_state(&transfer_id, item_index, "pending")?;
+    Ok(Some(row.peer_device_id))
+}
+
 /// Back off and retry, or give up. The one decision the retry path makes.
 fn settle_failed_attempt(db: &Db, id: &[u8; 16], attempts: u32, jitter: u64) -> Result<()> {
     let now = crate::manifest::now_ms() as i64 / 1000;
@@ -912,5 +950,63 @@ mod tests {
         db.mark_outbox_sending(&[1u8; 16]).unwrap();
         settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0).unwrap();
         assert_eq!(db.get_outbox(&[1u8; 16]).unwrap().unwrap().state, "failed");
+    }
+
+    /// R-T12-7: set_item_state matches zero rows for an unknown item, so a bare
+    /// call would return Ok(()) on garbage. These three cases pin the guards.
+    #[test]
+    fn retry_item_refuses_garbage_and_rearms_a_real_item() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        assert!(matches!(
+            retry_item_with(&db, [8u8; 16], 0),
+            Err(CoreError::Protocol(_))
+        ));
+
+        db.upsert_transfer(&crate::store::transfers::TransferRow {
+            transfer_id: [1u8; 16],
+            payload_id: [2u8; 16],
+            peer_device_id: [3u8; 16],
+            direction: "in".into(),
+            kind: "media".into(),
+            state: "done".into(),
+            bytes_total: 10,
+            bytes_done: 10,
+            item_count: 1,
+            created_at: 1,
+            updated_at: 1,
+            manifest: vec![],
+            error: None,
+        })
+        .unwrap();
+
+        assert!(matches!(
+            retry_item_with(&db, [1u8; 16], 5),
+            Err(CoreError::Protocol(_))
+        ));
+
+        db.upsert_item(&crate::store::transfers::ItemRow {
+            transfer_id: [1u8; 16],
+            item_index: 5,
+            item_type: "document".into(),
+            name: Some("a.bin".into()),
+            mime: None,
+            size: Some(10),
+            hash: None,
+            dest_path: None,
+            state: "quarantined".into(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            retry_item_with(&db, [1u8; 16], 5).unwrap(),
+            Some([3u8; 16]),
+            "the transfer's peer is who to poke"
+        );
+        assert_eq!(
+            db.get_item(&[1u8; 16], 5).unwrap().unwrap().state,
+            "pending"
+        );
     }
 }

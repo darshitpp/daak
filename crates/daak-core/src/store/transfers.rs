@@ -159,6 +159,22 @@ impl Db {
         )?;
         Ok(())
     }
+
+    /// R-T12-7: the UPDATE above matches zero rows for an unknown
+    /// (transfer_id, item_index), so a caller cannot tell "re-armed" from
+    /// "no such item". This is the read that makes the difference visible.
+    pub fn get_item(&self, transfer_id: &[u8; 16], item_index: u32) -> Result<Option<ItemRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT transfer_id, item_index, type, name, mime, size, hash, dest_path, state
+               FROM transfer_items WHERE transfer_id = ?1 AND item_index = ?2",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![&transfer_id[..], item_index as i64])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(row_to_item(r)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 fn row_to_transfer(r: &rusqlite::Row<'_>) -> rusqlite::Result<TransferRow> {
