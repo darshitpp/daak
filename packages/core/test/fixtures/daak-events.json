@@ -1,0 +1,50 @@
+{
+  "DeviceFound": {
+    "device": {
+      "addr": "192.168.1.5:7777",
+      "deviceId": "abababababababababababababababab",
+      "name": "Laptop",
+      "online": true
+    },
+    "type": "device.discovered"
+  },
+  "DeviceState": {
+    "deviceId": "abababababababababababababababab",
+    "state": "online",
+    "type": "device.state"
+  },
+  "InboxReceived": {
+    "payload": {
+      "itemCount": 2,
+      "payloadId": "ab"
+    },
+    "type": "inbox.received"
+  },
+  "PairingSas": {
+    "peerDeviceId": "abababababababababababababababab",
+    "sas": "123456",
+    "type": "pairing.sas"
+  },
+  "TransferDone": {
+    "transferId": "abababababababababababababababab",
+    "type": "transfer.done"
+  },
+  "TransferFailed": {
+    "error": "peer went away",
+    "transferId": "abababababababababababababababab",
+    "type": "transfer.failed"
+  },
+  "TransferItem": {
+    "destPath": "/tmp/a",
+    "itemIndex": 2,
+    "state": "receiving",
+    "transferId": "abababababababababababababababab",
+    "type": "transfer.item"
+  },
+  "TransferProgress": {
+    "bytesDone": 7,
+    "bytesTotal": 42,
+    "transferId": "abababababababababababababababab",
+    "type": "transfer.progress"
+  }
+}

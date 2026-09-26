@@ -310,3 +310,121 @@ fn inbox_received_parses_its_payload_string_rather_than_nesting_it() {
     assert_eq!(json["payload"]["payloadId"], serde_json::json!("ab"));
     assert_eq!(json["payload"]["itemCount"], serde_json::json!(2));
 }
+
+/// One entry per FfiEvent variant, built through the real encoder. The
+/// checked-in fixture at FIXTURE is the cross-language contract with
+/// packages/core/src/engine/types.ts: if ffi_event_json renames or drops a
+/// field, this test fails AND the TS test that reads the same file fails.
+fn sample_events(hex: &str) -> Vec<(&'static str, FfiEvent)> {
+    vec![
+        (
+            "DeviceFound",
+            FfiEvent::DeviceFound {
+                data: daak_ffi::DeviceFoundEvent {
+                    device_id: hex.into(),
+                    name: "Laptop".into(),
+                    addr: "192.168.1.5:7777".into(),
+                    online: true,
+                },
+            },
+        ),
+        (
+            "DeviceState",
+            FfiEvent::DeviceState {
+                data: daak_ffi::DeviceStateEvent {
+                    device_id: hex.into(),
+                    online: true,
+                },
+            },
+        ),
+        (
+            "PairingSas",
+            FfiEvent::PairingSas {
+                data: daak_ffi::PairingSasEvent {
+                    peer_device_id: hex.into(),
+                    sas: "123456".into(),
+                },
+            },
+        ),
+        (
+            "TransferProgress",
+            FfiEvent::TransferProgress {
+                data: daak_ffi::ProgressEvent {
+                    transfer_id: hex.into(),
+                    bytes_done: 7,
+                    bytes_total: 42,
+                },
+            },
+        ),
+        (
+            "TransferItem",
+            FfiEvent::TransferItem {
+                data: daak_ffi::TransferItemEvent {
+                    transfer_id: hex.into(),
+                    item_index: 2,
+                    state: "receiving".into(),
+                    dest_path: "/tmp/a".into(),
+                },
+            },
+        ),
+        (
+            "TransferDone",
+            FfiEvent::TransferDone {
+                data: daak_ffi::DoneEvent {
+                    transfer_id: hex.into(),
+                },
+            },
+        ),
+        (
+            "TransferFailed",
+            FfiEvent::TransferFailed {
+                data: daak_ffi::FailedEvent {
+                    transfer_id: hex.into(),
+                    error: "peer went away".into(),
+                },
+            },
+        ),
+        (
+            "InboxReceived",
+            FfiEvent::InboxReceived {
+                data: daak_ffi::InboxReceivedEvent {
+                    payload_json: r#"{"payloadId":"ab","itemCount":2}"#.into(),
+                },
+            },
+        ),
+    ]
+}
+
+fn fixture_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/core/test/fixtures/daak-events.json")
+}
+
+#[test]
+fn ffi_event_json_matches_the_shared_ts_fixture() {
+    let raw = std::fs::read_to_string(fixture_path()).expect("shared fixture must exist");
+    let expected: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
+    let hex = "ab".repeat(16);
+    for (name, ev) in sample_events(&hex) {
+        let actual: serde_json::Value =
+            serde_json::from_str(&daak_ffi::ffi_event_json(&ev).unwrap()).unwrap();
+        assert_eq!(actual, expected[name], "ffi_event_json drifted for {name}");
+    }
+}
+
+/// Regenerate the fixture from the live encoder, then print it. Run with
+/// --nocapture and copy the output; there is no build step that writes it.
+#[test]
+#[ignore = "manual: writes the shared fixture"]
+fn write_shared_fixture() {
+    let hex = "ab".repeat(16);
+    let mut out = serde_json::Map::new();
+    for (name, ev) in sample_events(&hex) {
+        let json: serde_json::Value =
+            serde_json::from_str(&daak_ffi::ffi_event_json(&ev).unwrap()).unwrap();
+        out.insert(name.to_string(), json);
+    }
+    let text = serde_json::to_string_pretty(&serde_json::Value::Object(out)).unwrap();
+    std::fs::write(fixture_path(), &text).unwrap();
+    println!("{text}");
+}
