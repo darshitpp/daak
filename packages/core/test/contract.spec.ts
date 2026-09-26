@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DaakEngine, DaakEvent, DeviceInfo } from '../src/engine/types';
+import { InProcessEngine } from '../src/engine/InProcess';
 // Type-only: importing the module for value would run getEnforcing and throw
 // outside a React Native runtime.
 import type { Spec as NativeDaakSpec } from '../src/NativeDaak';
@@ -73,5 +74,87 @@ describe('contract types', () => {
   it('models a device without fabricating liveness (R11)', () => {
     const discovered: DeviceInfo = { deviceId: 'd1', name: 'peer', addr: '10.0.0.2:9000' };
     expect(discovered.online).toBeUndefined();
+  });
+});
+
+// A native module stand-in. Only the methods a test touches are real; the rest
+// throw so an unstubbed call fails loudly instead of resolving undefined.
+function fakeNative(over: Partial<Record<string, unknown>> = {}): any {
+  return {
+    start: async () => {},
+    shutdown: async () => {},
+    localPort: async () => 1234,
+    pairingBundle: async () => '{}',
+    addListener: () => {},
+    removeListeners: () => {},
+    ...over,
+  };
+}
+
+describe('InProcessEngine', () => {
+  it('maps raw event JSON into the typed union (R17)', () => {
+    const emitted: DaakEvent[] = [];
+    const engine = new InProcessEngine(fakeNative(), (cb) => {
+      cb(JSON.stringify({ type: 'transfer.progress', transferId: 't1', bytesDone: 5, bytesTotal: 10 }));
+      return () => {};
+    });
+    engine.on((e) => emitted.push(e));
+    expect(emitted).toEqual([
+      { type: 'transfer.progress', transferId: 't1', bytesDone: 5, bytesTotal: 10 },
+    ]);
+  });
+
+  it('drops an unparseable event instead of throwing at the trust boundary', () => {
+    const emitted: DaakEvent[] = [];
+    const engine = new InProcessEngine(fakeNative(), (cb) => {
+      cb('not json');
+      cb(JSON.stringify({ nope: 1 }));
+      cb(JSON.stringify({ type: 'transfer.done', transferId: 't2' }));
+      return () => {};
+    });
+    engine.on((e) => emitted.push(e));
+    expect(emitted).toEqual([{ type: 'transfer.done', transferId: 't2' }]);
+  });
+
+  it('resolves the peer addr and hex bundle before pairing (R13)', async () => {
+    const calls: unknown[][] = [];
+    const native = fakeNative({
+      listDevices: async () => JSON.stringify([{ deviceId: 'd1', name: 'peer', addr: '10.0.0.2:9000' }]),
+      pairWith: async (addr: string, cbor: number[]) => {
+        calls.push([addr, cbor]);
+        return JSON.stringify({ sas: '1-2-3', peer_device_id: 'd1' });
+      },
+    });
+    const engine = new InProcessEngine(native, () => () => {});
+    expect(await engine.pair('d1', 'qr', 'a1b2')).toEqual({ sas: '1-2-3' });
+    expect(calls).toEqual([['10.0.0.2:9000', [0xa1, 0xb2]]]);
+  });
+
+  it('refuses to pair with an unknown device', async () => {
+    const native = fakeNative({ listDevices: async () => '[]' });
+    const engine = new InProcessEngine(native, () => () => {});
+    await expect(engine.pair('nope', 'qr', 'a1b2')).rejects.toThrow(/nope/);
+  });
+
+  it('parses the device list and rejects a non-array payload', async () => {
+    const good = new InProcessEngine(fakeNative({
+      listDevices: async () => '[{"deviceId":"d1","name":"peer","addr":"10.0.0.2:9000"}]',
+    }), () => () => {});
+    expect(await good.devices()).toEqual([{ deviceId: 'd1', name: 'peer', addr: '10.0.0.2:9000' }]);
+
+    const bad = new InProcessEngine(fakeNative({ listDevices: async () => '{}' }), () => () => {});
+    await expect(bad.devices()).rejects.toThrow(/listDevices/);
+  });
+
+  it('routes text-only to sendText, otherwise sendFiles, and always queues (R7)', async () => {
+    const calls: string[] = [];
+    const native = fakeNative({
+      sendText: async (peer: string) => { calls.push(`text:${peer}`); return 'abcd'; },
+      sendFiles: async (peer: string) => { calls.push(`files:${peer}`); return 'ef01'; },
+    });
+    const engine = new InProcessEngine(native, () => () => {});
+    expect(await engine.send({ peerDeviceId: 'd1', text: 'hi' })).toEqual({ transferId: 'abcd', queued: true });
+    expect(await engine.send({ peerDeviceId: 'd1', text: 'hi', files: ['/a'] })).toEqual({ transferId: 'ef01', queued: true });
+    expect(calls).toEqual(['text:d1', 'files:d1']);
   });
 });
