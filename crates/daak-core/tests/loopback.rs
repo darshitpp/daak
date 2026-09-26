@@ -53,14 +53,21 @@ async fn transfers_four_gibibytes_with_bounded_memory() {
     // and confirm it stays in the low hundreds of MiB.
 }
 
+/// W-FW-3: exit criterion 3, at the stated scale of 100 files with varying
+/// sizes. What this proves: 100 mixed-size items, every byte correct, through
+/// the real TCP transport. What it does NOT prove: scheduling ORDER -- the wire
+/// carries no completion signal per item, so fairness (small files finish
+/// first) is proven by the scheduler unit tests in transfer/scheduler.rs, not
+/// here. Observing order at the transport layer needs an instrumentation hook
+/// that Phase 4+ can add when a UI progress bar actually needs it.
 #[tokio::test]
-async fn batch_of_many_files_roundtrips_over_tcp() {
+async fn a_hundred_file_batch_roundtrips_over_tcp() {
     let src = tempfile::tempdir().unwrap();
     let dst = tempfile::tempdir().unwrap();
 
     let mut items = Vec::new();
     let mut paths: Vec<Option<PathBuf>> = Vec::new();
-    for i in 0..10u32 {
+    for i in 0..100u32 {
         let p = src.path().join(format!("f{i}.bin"));
         let payload: Vec<u8> = (0..(50_000 + i)).map(|j| (j % 200) as u8).collect();
         std::fs::write(&p, &payload).unwrap();
@@ -92,8 +99,8 @@ async fn batch_of_many_files_roundtrips_over_tcp() {
     sender.await.unwrap();
 
     assert_eq!(got.kind, PayloadKind::Batch);
-    assert_eq!(got.items.len(), 10);
-    for i in 0..10u32 {
+    assert_eq!(got.items.len(), 100);
+    for i in 0..100u32 {
         let expected = std::fs::read(src.path().join(format!("f{i}.bin"))).unwrap();
         let actual = std::fs::read(dst.path().join(format!("f{i}.bin"))).unwrap();
         assert_eq!(expected, actual, "file {i} mismatch");

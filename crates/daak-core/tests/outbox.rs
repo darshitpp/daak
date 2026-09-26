@@ -2,6 +2,135 @@ use daak_core::manifest::{DeviceRef, Item, Manifest, CHUNK_SIZE_DEFAULT};
 use daak_core::staging::Staging;
 use daak_core::store::Db;
 
+/// W-FW-2: the exit criterion "an offline-queued item auto-delivers when the
+/// peer's presence returns", end to end through a real Engine pair -- queueing,
+/// the outbox worker, the session registry, and real delivery over TCP.
+///
+/// Binds sockets, so it needs an unsandboxed run.
+#[tokio::test]
+async fn an_offline_queued_item_auto_delivers_when_the_peer_comes_back() {
+    use daak_core::engine::{Engine, EngineConfig};
+    use daak_core::pairing::PairMode;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    async fn engine(name: &str, out: std::path::PathBuf) -> (Engine, Arc<Db>) {
+        let store = Arc::new(daak_core::crypto::secret_store::MemorySecretStore::default());
+        let identity = daak_core::crypto::identity::import_from_store(store.as_ref()).unwrap();
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let caller_db = db.clone();
+        (
+            Engine::start(EngineConfig {
+                display_name: name.into(),
+                listen_addr: "127.0.0.1:0".parse().unwrap(),
+                out_dir: out,
+                identity,
+                db,
+            })
+            .await
+            .unwrap(),
+            caller_db,
+        )
+    }
+
+    let d1 = tempfile::tempdir().unwrap();
+    let d2 = tempfile::tempdir().unwrap();
+    let (a_engine, a_db) = engine("a", d1.path().to_path_buf()).await;
+    let a = Arc::new(a_engine);
+    let b = Arc::new(engine("b", d2.path().to_path_buf()).await.0);
+
+    let b_addr = b.local_addr();
+    let b_id = b.pairing_bundle().identity.device_id;
+
+    // Pair first, but DO NOT note_peer: A must not know where B is when the
+    // share is queued, which is the whole point of the outbox.
+    b.offer_pairing(a.pairing_bundle(), PairMode::Qr, None)
+        .await
+        .unwrap();
+    let b_for_server = b.clone();
+    let server = tokio::spawn(async move { b_for_server.accept_pairing_once().await.unwrap() });
+    let (_sas, peer_id) = a.pair_with(b_addr, b.pairing_bundle()).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(peer_id, b_id);
+
+    let src = tempfile::tempdir().unwrap();
+    let path = src.path().join("queued.bin");
+    let payload: Vec<u8> = (0..120_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&path, &payload).unwrap();
+    let manifest = Manifest::batch(
+        DeviceRef {
+            device_id: a.identity().device_id(),
+            name: "a".into(),
+        },
+        vec![Item::from_file(0, &path, CHUNK_SIZE_DEFAULT).unwrap()],
+    )
+    .unwrap();
+    let payload_id = manifest.payload_id;
+
+    // Queue it while the peer is unreachable.
+    let id = a
+        .enqueue_outbox_send(b_id, manifest, vec![path])
+        .await
+        .unwrap();
+    assert_eq!(id, payload_id);
+
+    // Wait for the drain to actually TRY and fail: an unresolvable peer is a
+    // failed attempt, not a silent no-op, and attempts >= 1 is the proof that
+    // the row really went through the worker.
+    for _ in 0..100 {
+        if a_db.get_outbox(&payload_id).unwrap().unwrap().attempts >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let row = a_db.get_outbox(&payload_id).unwrap().unwrap();
+    assert!(
+        row.attempts >= 1,
+        "the drain should have attempted the row once and failed to resolve the peer"
+    );
+    assert_eq!(
+        row.state, "pending",
+        "an unresolvable peer must leave the row queued, not delivered"
+    );
+    assert!(
+        !d2.path().join("queued.bin").exists(),
+        "nothing may land on B before the peer is reachable"
+    );
+
+    // The peer becomes reachable -- exactly what the presence/mDNS handler
+    // does when it records an address (engine.rs:315/330).
+    a.note_peer(b_id, "b", b_addr).await;
+
+    // The failed attempt backed the row off (15s doubling from attempt 1), so
+    // auto-delivery happens when the backoff expires -- up to ~30s, not 5s.
+    for _ in 0..2000 {
+        let done = a_db
+            .get_outbox(&id)
+            .unwrap()
+            .map(|r| r.state == "done")
+            .unwrap_or(false);
+        if done && d2.path().join("queued.bin").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert_eq!(
+        std::fs::read(d2.path().join("queued.bin")).unwrap(),
+        payload,
+        "the auto-delivered bytes must match, not just land"
+    );
+    assert_eq!(
+        a_db.get_outbox(&id).unwrap().unwrap().state,
+        "done",
+        "the row must settle to done once the Ack arrives"
+    );
+
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}
+
 /// One binary item + a real file, so enqueue actually stages it.
 fn binary_send(
     db: &Db,

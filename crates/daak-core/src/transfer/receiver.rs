@@ -322,10 +322,14 @@ pub async fn receive_transfer<T: FrameTransport>(
                     };
                     dest.to_str().map(|s| s.to_string())
                 },
+                // W-FW-1: "done", not "received" - spec 4.2 enumerates the
+                // only legal transfer_items.state values and "received" is
+                // not one of them. The DB is the source of truth, so an
+                // undocumented value here is a breaking contract for Phase 4.
                 state: if quarantined {
                     "quarantined".into()
                 } else {
-                    "received".into()
+                    "done".into()
                 },
             })?;
             if !quarantined {
@@ -564,7 +568,7 @@ mod tests {
             .map(|i| (i.item_index, i.state.as_str()))
             .collect();
         assert_eq!(states.get(&0), Some(&"quarantined"));
-        assert_eq!(states.get(&1), Some(&"received"));
+        assert_eq!(states.get(&1), Some(&"done"));
         // R-T12-6: the held path is what a retry needs to find the file again.
         assert!(items[0]
             .dest_path
@@ -621,7 +625,7 @@ mod tests {
 
         let items = db.list_items(&manifest.payload_id).unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].state, "received");
+        assert_eq!(items[0].state, "done");
         assert_eq!(items[0].size, Some(40_000));
         assert!(items[0].dest_path.as_deref().unwrap().ends_with("ok.bin"));
 

@@ -511,6 +511,11 @@ impl Engine {
     }
 
     /// Queue a send with no online peer present; the worker drains it on reconnect.
+    /// W-FW-2: this is the production share entry point and it has NO in-repo
+    /// caller yet, on purpose. daak-cli's `Send` must stay on blocking
+    /// send_secure (it prints "sent <id>" and exits, so a queued id would be a
+    /// lie). The caller that must be wired is the TurboModule/FFI share
+    /// surface, which is Phase 4 work.
     pub async fn enqueue_outbox_send(
         &self,
         peer_device_id: [u8; 16],

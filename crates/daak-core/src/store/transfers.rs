@@ -318,4 +318,72 @@ mod item_tests {
         db.set_item_state(&[4u8; 16], 7, "done").unwrap();
         assert_eq!(db.list_items(&[4u8; 16]).unwrap()[0].state, "done");
     }
+
+    /// W-FW-1: the states the RECEIVE PATH writes must stay inside the
+    /// vocabulary spec 4.2 enumerates for transfer_items.state. A plain
+    /// `&[&str]` literal here, not a const the code imports - the point is
+    /// that the production path and the spec agree, and a shared const would
+    /// let one edit move both sides at once and prove nothing.
+    #[test]
+    fn receive_path_item_states_are_inside_the_spec_vocabulary() {
+        const SPEC_VOCABULARY: &[&str] = &[
+            "pending",
+            "receiving",
+            "verifying",
+            "done",
+            "failed",
+            "quarantined",
+        ];
+        // Exactly the states transfer/receiver.rs writes for a received item.
+        const RECEIVE_PATH_STATES: &[&str] = &["done", "quarantined"];
+
+        for s in RECEIVE_PATH_STATES {
+            assert!(
+                SPEC_VOCABULARY.contains(s),
+                "the receive path writes transfer_items.state={s:?}, \
+                 which spec 4.2 does not enumerate"
+            );
+        }
+
+        // And they must land verbatim, unchanged, through the store.
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.upsert_transfer(&TransferRow {
+            transfer_id: [7u8; 16],
+            payload_id: [8u8; 16],
+            peer_device_id: [9u8; 16],
+            direction: "in".into(),
+            kind: "media".into(),
+            state: "done".into(),
+            bytes_total: 10,
+            bytes_done: 10,
+            item_count: 2,
+            created_at: 1,
+            updated_at: 1,
+            manifest: vec![1],
+            error: None,
+        })
+        .unwrap();
+        for (idx, state) in RECEIVE_PATH_STATES.iter().enumerate() {
+            db.upsert_item(&ItemRow {
+                transfer_id: [7u8; 16],
+                item_index: idx as u32,
+                item_type: "document".into(),
+                name: Some(format!("{idx}.bin")),
+                mime: None,
+                size: Some(5),
+                hash: None,
+                dest_path: Some(format!("/tmp/{idx}.bin")),
+                state: (*state).into(),
+            })
+            .unwrap();
+        }
+        let got: Vec<String> = db
+            .list_items(&[7u8; 16])
+            .unwrap()
+            .into_iter()
+            .map(|i| i.state)
+            .collect();
+        assert_eq!(got, ["done", "quarantined"]);
+    }
 }
