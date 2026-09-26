@@ -43,6 +43,10 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   listDevices: true,
   cancel: true,
   retry: true,
+  listTransfers: true,
+  listInbox: true,
+  setDisplayName: true,
+  setPresence: true,
   localPort: true,
   shutdown: true,
   addListener: true,
@@ -71,7 +75,7 @@ describe('contract types', () => {
   });
 
   it('pins the TurboModule spec the native modules implement', () => {
-    expect(Object.keys(NATIVE_METHODS).length).toBe(13);
+    expect(Object.keys(NATIVE_METHODS).length).toBe(17);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -129,6 +133,21 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
     shutdown: async () => {},
     localPort: async () => 1234,
     pairingBundle: async () => '{}',
+    // R-T10-3: an unknown id is an ERROR, not a silent success. The fake has to
+    // model that, or the shared suite's rejection assertion would be testing
+    // the fake rather than the contract.
+    cancel: async (id: string) => {
+      if (!/^[0-9a-f]{32}$/i.test(id)) throw new Error(`bad transfer id: ${id}`);
+      throw new Error(`no outbox row for transfer ${id}`);
+    },
+    retry: async (id: string) => {
+      if (!/^[0-9a-f]{32}$/i.test(id)) throw new Error(`bad transfer id: ${id}`);
+      throw new Error(`no outbox row for transfer ${id}`);
+    },
+    listTransfers: async () => '[]',
+    listInbox: async () => '[]',
+    setDisplayName: async () => {},
+    setPresence: async () => {},
     addListener: () => {},
     removeListeners: () => {},
     ...over,
@@ -256,5 +275,60 @@ describe('InProcessEngine', () => {
     });
     engine.on((e) => emitted.push(e));
     expect(emitted).toEqual([{ type: 'transfer.done', transferId: 't3' }]);
+  });
+
+  it('forwards cancel, retry, profile and list methods to the native engine', async () => {
+    const calls: unknown[][] = [];
+    const native = fakeNative({
+      cancel: async (id: string) => { calls.push(['cancel', id]); },
+      retry: async (id: string) => { calls.push(['retry', id]); },
+      listTransfers: async (filterJson: string) => { calls.push(['listTransfers', filterJson]); return '[]'; },
+      listInbox: async () => { calls.push(['listInbox']); return '[]'; },
+      setDisplayName: async (name: string) => { calls.push(['setDisplayName', name]); },
+      setPresence: async (state: string) => { calls.push(['setPresence', state]); },
+    });
+    const engine = new InProcessEngine(native, () => () => {});
+    await engine.cancel('00'.repeat(16));
+    await engine.retry('00'.repeat(16));
+    await engine.setDisplayName('renamed');
+    await engine.setPresence('away');
+    expect(await engine.listTransfers()).toEqual([]);
+    expect(await engine.listTransfers({ state: 'pending' })).toEqual([]);
+    expect(await engine.listInbox()).toEqual([]);
+    expect(calls).toEqual([
+      ['cancel', '00'.repeat(16)],
+      ['retry', '00'.repeat(16)],
+      ['setDisplayName', 'renamed'],
+      ['setPresence', 'away'],
+      // An absent filter is "{}" on the UDL boundary, which the Rust parser
+      // reads as None (list everything).
+      ['listTransfers', '{}'],
+      ['listTransfers', '{"state":"pending"}'],
+      ['listInbox'],
+    ]);
+  });
+
+  it('rejects a list payload that is not an array instead of returning it typed', async () => {
+    const engine = new InProcessEngine(
+      fakeNative({ listTransfers: async () => '{}', listInbox: async () => 'null' }),
+      () => () => {},
+    );
+    await expect(engine.listTransfers()).rejects.toThrow(/listTransfers/);
+    await expect(engine.listInbox()).rejects.toThrow(/listInbox/);
+  });
+
+  it('reports queued: true for a share to an offline peer, because the outbox took it', async () => {
+    // The native send returns a PAYLOAD ID with no delivery information, so
+    // `queued` is the only honest thing the return type can say: the row is
+    // durable and will drain on reconnect. Delivery is transfer.done /
+    // transfer.failed, not this return value.
+    const engine = new InProcessEngine(
+      fakeNative({ sendText: async () => 'aa'.repeat(16) }),
+      () => () => {},
+    );
+    expect(await engine.send({ peerDeviceId: 'ab'.repeat(16), text: 'offline' })).toEqual({
+      transferId: 'aa'.repeat(16),
+      queued: true,
+    });
   });
 });

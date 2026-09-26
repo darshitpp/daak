@@ -1961,38 +1961,83 @@ impl Deserialize for ListInboxRequest {
     }
 }
 
-impl cbor_event::se::Serialize for ListTransfersRequest {
+impl cbor_event::se::Serialize for ListTransfersArgs {
     fn serialize<'se>(
         &self,
         serializer: &'se mut Serializer,
     ) -> cbor_event::Result<&'se mut Serializer> {
-        match self {
-            ListTransfersRequest::ValueText4C6973745472616E7366657273 => {
-                serializer.write_text("ListTransfers")
-            }
+        serializer.write_map(cbor_event::Len::Len(match &self.filter {
+            Some(_) => 1,
+            None => 0,
+        }))?;
+        if let Some(field) = &self.filter {
+            serializer.write_text("filter")?;
+            field.serialize(serializer)?;
         }
+        Ok(serializer)
     }
 }
 
-impl Deserialize for ListTransfersRequest {
+impl Deserialize for ListTransfersArgs {
     fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
         (|| -> Result<_, DeserializeError> {
-            match raw.cbor_type()? {
-                cbor_event::Type::Text => {
-                    let value_text4_c6973745472616_e7366657273_value = raw.text()?;
-                    if value_text4_c6973745472616_e7366657273_value != "ListTransfers" {
-                        return Err(DeserializeFailure::FixedValueMismatch {
-                            found: Key::Str(value_text4_c6973745472616_e7366657273_value),
-                            expected: Key::Str(String::from("ListTransfers")),
-                        }
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            let mut filter = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
                         .into());
                     }
-                    Ok(ListTransfersRequest::ValueText4C6973745472616E7366657273)
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "filter" => {
+                            if filter.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "filter".into(),
+                                ))
+                                .into());
+                            }
+                            filter = Some(
+                                (|| -> Result<_, DeserializeError> {
+                                    read_len.read_elems(1)?;
+                                    TransferFilter::deserialize(raw)
+                                })()
+                                .map_err(|e| e.annotate("filter"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
                 }
-                _ => Err(DeserializeFailure::NoVariantMatched.into()),
+                read += 1;
             }
+            read_len.finish()?;
+            Ok(Self { filter })
         })()
-        .map_err(|e| e.annotate("ListTransfersRequest"))
+        .map_err(|e| e.annotate("ListTransfersArgs"))
     }
 }
 
@@ -3878,6 +3923,114 @@ impl Deserialize for TransferFailedEvent {
             Ok(Self { transfer_failed })
         })()
         .map_err(|e| e.annotate("TransferFailedEvent"))
+    }
+}
+
+impl cbor_event::se::Serialize for TransferFilter {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(
+            match &self.state {
+                Some(_) => 1,
+                None => 0,
+            } + match &self.peer_device_id {
+                Some(_) => 1,
+                None => 0,
+            },
+        ))?;
+        if let Some(field) = &self.state {
+            serializer.write_text("state")?;
+            serializer.write_text(field)?;
+        }
+        if let Some(field) = &self.peer_device_id {
+            serializer.write_text("peer_device_id")?;
+            serializer.write_text(field)?;
+        }
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for TransferFilter {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            let mut state = None;
+            let mut peer_device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "state" => {
+                            if state.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "state".into(),
+                                ))
+                                .into());
+                            }
+                            state = Some(
+                                (|| -> Result<_, DeserializeError> {
+                                    read_len.read_elems(1)?;
+                                    Ok(raw.text()?)
+                                })()
+                                .map_err(|e| e.annotate("state"))?,
+                            );
+                        }
+                        "peer_device_id" => {
+                            if peer_device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "peer_device_id".into(),
+                                ))
+                                .into());
+                            }
+                            peer_device_id = Some(
+                                (|| -> Result<_, DeserializeError> {
+                                    read_len.read_elems(1)?;
+                                    Ok(raw.text()?)
+                                })()
+                                .map_err(|e| e.annotate("peer_device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            read_len.finish()?;
+            Ok(Self {
+                state,
+                peer_device_id,
+            })
+        })()
+        .map_err(|e| e.annotate("TransferFilter"))
     }
 }
 

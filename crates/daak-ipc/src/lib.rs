@@ -54,6 +54,24 @@ pub enum IpcMessage {
     Event(IpcEvent),
 }
 
+/// The optional narrowing `IpcRequest::ListTransfers` carries. Both fields are
+/// Option and both default to absent, so `{}` and a missing filter mean the
+/// same thing (list everything) and the daemon can never confuse "no filter"
+/// with "filter on the empty string".
+///
+/// `state` is a String, not an enum, on purpose: the valid values are the
+/// transfers.state vocabulary in spec 4.2 (queued|active|paused|awaiting_ack|
+/// done|failed|canceled), which daak-core owns and which adding a variant to
+/// here would silently make the daemon accept a state no row can have. An
+/// unknown state filters to zero rows, which is the honest answer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TransferFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_device_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IpcRequest {
     Start {
@@ -81,7 +99,13 @@ pub enum IpcRequest {
     Retry {
         transfer_id: String,
     },
-    ListTransfers,
+    /// `filter` is Option because the UI's first call has none: an absent
+    /// filter lists EVERY transfer, which is a different SQL from any filter
+    /// combination, so a Default here would silently mean "state = ''".
+    ListTransfers {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<TransferFilter>,
+    },
     ListInbox,
     SetDisplayName {
         name: String,

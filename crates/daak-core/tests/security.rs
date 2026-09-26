@@ -140,11 +140,11 @@ async fn engine_pairs_then_sends_encrypted_file() {
     let b = Arc::new(engine(2, "b", d2.path().to_path_buf()).await);
 
     let b_addr = b.local_addr();
-    let b_bundle = b.pairing_bundle();
+    let b_bundle = b.pairing_bundle().await;
     let a_id = a.identity().device_id();
 
     // UI on B has scanned A's QR bundle and offers it to the engine.
-    b.offer_pairing(a.pairing_bundle(), PairMode::Qr, None)
+    b.offer_pairing(a.pairing_bundle().await, PairMode::Qr, None)
         .await
         .unwrap();
 
@@ -200,7 +200,7 @@ async fn engine_pairs_with_manual_code_then_sends_encrypted_file() {
     let b = Arc::new(engine(2, "b", d2.path().to_path_buf()).await);
 
     let b_addr = b.local_addr();
-    let b_id = b.pairing_bundle().identity.device_id;
+    let b_id = b.pairing_bundle().await.identity.device_id;
     let a_id = a.identity().device_id();
 
     // B (responder) offers a manual code; A (initiator) enters the same code.
@@ -272,10 +272,10 @@ async fn engine_reports_transfer_done_for_inbound_file() {
     let b = Arc::new(engine(2, "b", d2.path().to_path_buf()).await);
 
     let b_addr = b.local_addr();
-    let b_bundle = b.pairing_bundle();
+    let b_bundle = b.pairing_bundle().await;
     let a_id = a.identity().device_id();
 
-    b.offer_pairing(a.pairing_bundle(), PairMode::Qr, None)
+    b.offer_pairing(a.pairing_bundle().await, PairMode::Qr, None)
         .await
         .unwrap();
 

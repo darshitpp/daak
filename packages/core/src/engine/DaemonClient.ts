@@ -1,4 +1,14 @@
-import type { DaakEngine, DaakEvent, DeviceInfo, InboxEntry, ItemState, SendRequest } from './types';
+import type {
+  DaakEngine,
+  DaakEvent,
+  DeviceInfo,
+  InboxEntry,
+  ItemState,
+  SendRequest,
+  TransferFilter,
+  TransferSummary,
+} from './types';
+import { homedir } from 'node:os';
 import {
   IpcTransport,
   IpcUpdateRequiredError,
@@ -22,6 +32,9 @@ export { IpcUpdateRequiredError, IpcVersionError } from '../ipc/transport';
 // of which anything can exercise until the app exists.
 export class DaemonClientEngine implements DaakEngine {
   private handlers = new Set<(e: DaakEvent) => void>();
+  /** The args Start was sent with, so a second start() is a no-op rather than
+   * a conflicting Start the daemon would refuse. */
+  private startedWith?: { data_dir: string; display_name: string; listen_port: number };
 
   constructor(private tx: IpcTransport) {
     tx.onEvent = (ev: IpcEvent) => this.dispatch(ev);
@@ -31,12 +44,26 @@ export class DaemonClientEngine implements DaakEngine {
     return new DaemonClientEngine(await IpcTransport.connect(sockPath));
   }
 
-  // The daemon is already running, so start() only subscribes to the event
-  // stream. IpcRequest::Start (data_dir, display_name, listen_port) exists but
-  // daakd answers it "unimplemented" until Task 9 wires the engine, so
-  // sending it would make every desktop client fail to come up. Task 9
-  // restores it once the daemon owns an engine.
+  // Start creates the daemon's engine, so it MUST be sent before anything else
+  // and before Subscribe: without a Subscribe the event stream is never fanned
+  // out to this connection. Sent first because every other request answers
+  // Error{"engine not started"} until it lands.
   async start(): Promise<void> {
+    if (!this.startedWith) {
+      this.startedWith = {
+        // snake_case, NOT camelCase: cbor-x writes JS property names verbatim
+        // and IpcRequest has no rename_all, so these keys ARE the wire format.
+        // camelCase here fails to deserialise and every later request then
+        // answers "engine not started". Pinned by
+        // crates/daak-ipc/tests/schema.rs::a_camel_case_start_does_not_decode.
+        data_dir: defaultDataDir(),
+        display_name: 'daak',
+        // 0: the daemon picks a free port and answers IpcResponse::Port.
+        // A fixed port would make two daemons on one machine collide.
+        listen_port: 0,
+      };
+      await this.tx.request({ Request: { Start: this.startedWith } });
+    }
     await this.tx.request({ Request: 'Subscribe' });
   }
 
@@ -51,11 +78,28 @@ export class DaemonClientEngine implements DaakEngine {
     return parseArray<DeviceInfo>(await this.json('Devices'), 'devices');
   }
 
-  async pair(deviceId: string, _mode: 'qr' | 'code', _secret?: string): Promise<{ sas: string }> {
-    // Pair is not on the daemon's dispatch table until Task 9, and the FFI
-    // surface has no manual-code method at all (InProcess throws for it), so
-    // both modes fail here rather than sending a request that cannot work.
-    throw new Error(`pairing (${deviceId}) is not wired through daakd yet; see Task 9`);
+  async pair(deviceId: string, mode: 'qr' | 'code', secret?: string): Promise<{ sas: string }> {
+    // IpcRequest::Pair carries an addr plus a CBOR bstr, and there is no
+    // manual-code request on the wire (the FFI has no such method either, and
+    // InProcess throws for it), so code mode is refused rather than sent.
+    if (mode === 'code') throw new Error('manual-code pairing is not on the FFI surface yet');
+    if (!secret) throw new Error('qr pairing needs the bundle hex');
+    // The request takes an ip:port, not a device id (R13), so resolve it from
+    // the daemon's device list. `secret` is the bundle CBOR as hex.
+    const device = (await this.devices()).find((d) => d.deviceId === deviceId);
+    if (!device) throw new Error(`unknown device ${deviceId}`);
+    const r = JSON.parse(
+      await this.json({
+        Pair: {
+          addr: device.addr,
+          // A Node Buffer, NOT number[]: cbor-x encodes a number[] as a CBOR
+          // ARRAY and daak-ipc deserialises bundle_cbor as a bstr (R27).
+          bundle_cbor: Buffer.from(secret, 'hex'),
+        },
+      }),
+    ) as { sas?: string };
+    if (typeof r.sas !== 'string') throw new Error('daakd pair returned no sas');
+    return { sas: r.sas };
   }
 
   async send(req: SendRequest): Promise<{ transferId: string; queued: boolean }> {
@@ -78,8 +122,14 @@ export class DaemonClientEngine implements DaakEngine {
     await this.tx.request({ Request: { Retry: { transfer_id: transferId } } });
   }
 
-  async listTransfers(): Promise<unknown[]> {
-    return parseArray<unknown>(await this.json('ListTransfers'), 'listTransfers');
+  async listTransfers(filter?: TransferFilter): Promise<TransferSummary[]> {
+    // The filter is a map, not a bare string: the request variant is
+    // ListTransfers { filter: Option<TransferFilter> } and an absent filter
+    // lists EVERYTHING, which is a different query from any filter.
+    return parseArray<TransferSummary>(
+      await this.json({ ListTransfers: { filter: filter ?? null } }),
+      'listTransfers',
+    );
   }
 
   async listInbox(): Promise<InboxEntry[]> {
@@ -127,6 +177,24 @@ function parseArray<T>(json: string, what: string): T[] {
   const parsed = JSON.parse(json) as unknown;
   if (!Array.isArray(parsed)) throw new Error(what + ' did not return an array');
   return parsed as T[];
+}
+
+// Where the daemon keeps its state. Per-platform app-data directories, NOT
+// /tmp: the SQLite database and the identity keys must outlive a reboot and
+// must not be readable by another user.
+// ponytail: hard-coded, because the OS-native data dir is a platform-
+// packaging question (launchd/systemd/Win32 service install, Phase 8). Until
+// then this is the conventional location and it is per-user, not shared.
+function defaultDataDir(): string {
+  const home = homedir();
+  switch (process.platform) {
+    case 'darwin':
+      return `${home}/Library/Application Support/dev.darshit.daak`;
+    case 'win32':
+      return `${process.env.LOCALAPPDATA ?? `${home}/AppData/Local`}/Daak/DaakDaemon`;
+    default:
+      return `${process.env.XDG_DATA_HOME ?? `${home}/.local/share`}/daak`;
+  }
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));

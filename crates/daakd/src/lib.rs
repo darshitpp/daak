@@ -1,23 +1,178 @@
-//! The desktop daemon's IPC server. Skeleton: it binds the socket, serves the
-//! Subscribe/Devices handshake and fans engine events out to subscribers.
+//! The desktop daemon's IPC server. It binds the socket, owns ONE real
+//! `daak_core::engine::Engine`, answers every request from that engine and fans
+//! the engine's events out to subscribed clients.
 //!
-//! ponytail: no engine lives here yet, so every other request answers
-//! "unimplemented" and the broadcast channel has no producer. Task 9 wires the
-//! real daak_core::engine::Engine in; upgrade this to a dispatch table then,
-//! not before.
+//! `IpcRequest::Start` is what creates the engine; every other engine-backed
+//! request before it answers `Error{"engine not started; send Start first"}`
+//! rather than inventing data. Send goes through `Engine::enqueue_outbox_send`,
+//! NEVER `send_secure`: a share to a peer that is not on the LAN has to come
+//! back as a queued outbox row id, which is the whole reason the outbox exists.
 
 use std::path::Path;
 #[cfg(unix)]
 use std::sync::Arc;
 
+use daak_core::discovery::PresenceState;
+use daak_core::engine::{Engine, EngineConfig, EngineEvent};
+use daak_core::manifest::{DeviceRef, Item, Manifest, CHUNK_SIZE_DEFAULT};
+use daak_core::pairing::PairingBundle;
+use daak_core::store::Db;
 use daak_ipc::IpcEvent;
 #[cfg(unix)]
 use daak_ipc::{read_message, write_message};
 #[cfg(unix)]
 use daak_ipc::{IpcMessage, IpcRequest, IpcResponse};
 use tokio::sync::broadcast;
+use tokio::sync::RwLock as AsyncRwLock;
 
 const EVENT_BUFFER: usize = 1024;
+const NOT_STARTED: &str = "engine not started; send Start first";
+
+/// What `Start` was asked for, kept so a repeated identical Start is a no-op
+/// and a CONFLICTING one is refused instead of orphaning the running
+/// engine's listener and DB handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartArgs {
+    pub data_dir: String,
+    pub display_name: String,
+    pub listen_port: u16,
+}
+
+struct EngineSlot {
+    engine: Arc<Engine>,
+    args: StartArgs,
+}
+
+/// The daemon's whole mutable state. One engine per process; the RwLock is
+/// only ever held long enough to clone the Arc, never across an await on the
+/// engine, so a request never blocks another.
+pub struct DaemonState {
+    slot: AsyncRwLock<Option<EngineSlot>>,
+}
+
+impl DaemonState {
+    pub fn new() -> Self {
+        Self {
+            slot: AsyncRwLock::new(None),
+        }
+    }
+
+    async fn engine(&self) -> Result<Arc<Engine>, IpcResponse> {
+        let guard = self.slot.read().await;
+        match guard.as_ref() {
+            Some(slot) => Ok(slot.engine.clone()),
+            None => Err(IpcResponse::Error {
+                message: NOT_STARTED.into(),
+            }),
+        }
+    }
+}
+
+impl Default for DaemonState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 16 bytes of hex. Device ids, payload ids (the outbox primary key) and
+/// transfer ids are all the same shape, so cancel / retry / filters / send all
+/// share one parser. A malformed id is a caller bug and is refused rather than
+/// silently degrading into a filter that matches nothing.
+fn parse_id(s: &str) -> Result<[u8; 16], IpcResponse> {
+    let bytes = hex::decode(s).map_err(|e| IpcResponse::Error {
+        message: format!("id must be 32 hex chars: {e}"),
+    })?;
+    bytes.try_into().map_err(|_| IpcResponse::Error {
+        message: format!("id must be 32 hex chars, got {} chars", s.len()),
+    })
+}
+
+fn err(message: impl std::fmt::Display) -> IpcResponse {
+    IpcResponse::Error {
+        message: message.to_string(),
+    }
+}
+
+fn json(value: serde_json::Value) -> IpcResponse {
+    match serde_json::to_string(&value) {
+        Ok(s) => IpcResponse::Json { value: s },
+        Err(e) => err(e),
+    }
+}
+
+/// One transfers row as the TS `TransferSummary`. Same key set as
+/// daak-ffi's transfer_summary_json (R11) and the FFI cannot be a dependency
+/// here (it depends on daak-core, so daakd -> daak-ffi would be fine in
+/// principle but would drag the uniffi scaffolding into the daemon), so the
+/// two shapes are pinned by packages/core's shared contract suite instead.
+fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> serde_json::Value {
+    serde_json::json!({
+        "transferId": hex::encode(row.transfer_id),
+        "peerDeviceId": hex::encode(row.peer_device_id),
+        "direction": row.direction,
+        "kind": row.kind,
+        "state": row.state,
+        "bytesDone": row.bytes_done,
+        "bytesTotal": row.bytes_total,
+        "itemCount": row.item_count,
+        "updatedAt": row.updated_at,
+    })
+}
+
+/// One inbox_history row as the TS `InboxEntry`. saved_paths is a JSON string
+/// in SQLite and a string[] in TS; a value that will not parse reads as an
+/// empty list rather than failing the whole listing.
+fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Value {
+    let saved_paths: serde_json::Value =
+        serde_json::from_str(&row.saved_paths).unwrap_or_else(|_| serde_json::json!([]));
+    serde_json::json!({
+        "payloadId": hex::encode(row.id),
+        "transferId": hex::encode(row.transfer_id),
+        "peerDeviceId": hex::encode(row.peer_device_id),
+        "kind": row.kind,
+        "itemCount": row.item_count,
+        "summary": row.summary,
+        "receivedAt": row.received_at,
+        "savedPaths": saved_paths,
+    })
+}
+
+/// Map one engine signal onto the wire. Public (and pure) so the mapping is
+/// testable without binding a socket: a NEW EngineEvent variant that has no
+/// arm here is a compile error, which is the point.
+pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
+    match ev {
+        EngineEvent::DeviceFound(d) => IpcEvent::DeviceFound {
+            device_id: hex::encode(d.device_id),
+            name: d.name,
+            addr: d.addr.to_string(),
+        },
+        EngineEvent::DeviceLost(id) => IpcEvent::DeviceState {
+            device_id: hex::encode(id),
+            online: false,
+        },
+        EngineEvent::Presence { device_id, state } => IpcEvent::DeviceState {
+            device_id: hex::encode(device_id),
+            online: matches!(state, PresenceState::Online),
+        },
+        EngineEvent::TransferProgress {
+            transfer_id,
+            bytes_done,
+            bytes_total,
+        } => IpcEvent::TransferProgress {
+            transfer_id: hex::encode(transfer_id),
+            bytes_done,
+            bytes_total,
+        },
+        EngineEvent::TransferDone { transfer_id } => IpcEvent::TransferDone {
+            transfer_id: hex::encode(transfer_id),
+        },
+        EngineEvent::TransferFailed { transfer_id, error } => IpcEvent::TransferFailed {
+            transfer_id: hex::encode(transfer_id),
+            error,
+        },
+    }
+}
 
 /// Bind daak_ipc::socket_path() and serve forever.
 #[cfg(unix)]
@@ -32,17 +187,19 @@ pub async fn serve(path: &Path) -> std::io::Result<()> {
 #[cfg(unix)]
 pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std::io::Result<()> {
     let listener = bind(path)?;
-    let events = Arc::new(events);
+    let sender = Arc::new(events);
+    let state = Arc::new(DaemonState::new());
 
     loop {
         let (stream, _) = listener.accept().await?;
-        let events = events.clone();
+        let sender = sender.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             // The read and write halves are separate owners, so select! can
             // borrow one in each arm; a single &mut stream would not
             // borrow-check.
             let (mut rd, mut wr) = stream.into_split();
-            let mut rx = events.subscribe();
+            let mut rx = sender.subscribe();
             let mut subscribed = false;
             // read_message is NOT cancel-safe: it reads into fresh buffers, so
             // dropping it mid-frame throws away every byte it already ate and
@@ -77,13 +234,25 @@ pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std
                                 subscribed = true;
                                 IpcMessage::Response(IpcResponse::Ok)
                             }
-                            IpcRequest::Devices => {
-                                IpcMessage::Response(IpcResponse::Json { value: "[]".into() })
+                            IpcRequest::Shutdown => {
+                                // The engine owns a listener, a DB handle and
+                                // four background tasks; a daemon that exits
+                                // without stopping them leaves a bound port
+                                // and an open SQLite file behind.
+                                if let Ok(engine) = state.engine().await {
+                                    let _ = engine.shutdown().await;
+                                }
+                                break
                             }
-                            IpcRequest::Shutdown => break,
-                            _ => IpcMessage::Response(IpcResponse::Error {
-                                message: "unimplemented".into(),
-                            }),
+                            // `sender` is the broadcast Sender itself, so a
+                            // Start inside it can spawn the engine -> IpcEvent
+                            // bridge; the per-connection `rx` is already
+                            // subscribed above, so bridge events fan out.
+                            other => {
+                                IpcMessage::Response(
+                                    dispatch(&state, &sender, other).await,
+                                )
+                            }
                         };
                         // The read is done, so the future is spent: drop it
                         // first (its borrow of rd dies with it) and pin a fresh
@@ -107,6 +276,153 @@ pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std
                 }
             }
         });
+    }
+}
+
+/// Answer one request from the live engine. `sender` is the broadcast Sender
+/// the engine's event stream is bridged into, so a `Start` here can start the
+/// engine AND wire its events without the caller knowing how.
+#[cfg(unix)]
+async fn dispatch(
+    state: &DaemonState,
+    sender: &broadcast::Sender<IpcEvent>,
+    req: IpcRequest,
+) -> IpcResponse {
+    match req {
+        IpcRequest::Start {
+            data_dir,
+            display_name,
+            listen_port,
+        } => start_engine(state, sender, data_dir, display_name, listen_port).await,
+        IpcRequest::Devices => match state.engine().await {
+            Ok(engine) => {
+                let devices = engine.devices().await;
+                json(serde_json::Value::Array(
+                    devices
+                        .iter()
+                        .map(|d| {
+                            serde_json::json!({
+                                "deviceId": hex::encode(d.device_id),
+                                "name": d.name,
+                                "addr": d.addr.to_string(),
+                            })
+                        })
+                        .collect(),
+                ))
+            }
+            Err(e) => e,
+        },
+        IpcRequest::Send {
+            peer_device_id,
+            text,
+            files,
+        } => send(state, peer_device_id, text, files).await,
+        IpcRequest::Cancel { transfer_id } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&transfer_id).and_then(|id| match engine.cancel(id) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(err(e)),
+            }) {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => e,
+            },
+        },
+        IpcRequest::Retry { transfer_id } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&transfer_id).and_then(|id| match engine.retry(id) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(err(e)),
+            }) {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => e,
+            },
+        },
+        IpcRequest::ListTransfers { filter } => {
+            let (want_state, want_peer) = match filter {
+                None => (None, None),
+                Some(f) => {
+                    let peer = match &f.peer_device_id {
+                        None => None,
+                        Some(s) => match parse_id(s) {
+                            Ok(id) => Some(id),
+                            Err(e) => return e,
+                        },
+                    };
+                    (f.state, peer)
+                }
+            };
+            match state.engine().await {
+                Err(e) => e,
+                Ok(engine) => match engine.list_transfers(want_state.as_deref(), want_peer) {
+                    Ok(rows) => json(serde_json::Value::Array(
+                        rows.iter().map(transfer_summary_json).collect(),
+                    )),
+                    Err(e) => err(e),
+                },
+            }
+        }
+        IpcRequest::ListInbox => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match engine.list_inbox() {
+                Ok(rows) => json(serde_json::Value::Array(
+                    rows.iter().map(inbox_entry_json).collect(),
+                )),
+                Err(e) => err(e),
+            },
+        },
+        IpcRequest::SetDisplayName { name } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match engine.set_display_name(name).await {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => err(e),
+            },
+        },
+        IpcRequest::SetPresence { state: s } => {
+            // Only the states a device declares about ITSELF. 'offline' is
+            // what a PEER says about us; nothing withdraws our mDNS record
+            // on it, so honouring it here would be a claim the wire cannot
+            // back.
+            let presence = match s.as_str() {
+                "online" => PresenceState::Online,
+                "away" => PresenceState::Away,
+                other => {
+                    return err(format!(
+                        "presence state must be 'online' or 'away', got {other:?}"
+                    ))
+                }
+            };
+            match state.engine().await {
+                Err(e) => e,
+                Ok(engine) => match engine.set_presence(presence).await {
+                    Ok(()) => IpcResponse::Ok,
+                    Err(e) => err(e),
+                },
+            }
+        }
+        IpcRequest::Pair { addr, bundle_cbor } => {
+            let addr: std::net::SocketAddr = match addr.parse() {
+                Ok(a) => a,
+                Err(e) => return err(format!("pair addr must be ip:port: {e}")),
+            };
+            let bundle = match PairingBundle::from_cbor(&bundle_cbor) {
+                Ok(b) => b,
+                Err(e) => return err(e),
+            };
+            match state.engine().await {
+                Err(e) => e,
+                Ok(engine) => match engine.pair_with(addr, bundle).await {
+                    Ok((sas, peer)) => json(serde_json::json!({
+                        "sas": sas,
+                        "peer_device_id": hex::encode(peer),
+                    })),
+                    Err(e) => err(e),
+                },
+            }
+        }
+        // Handled by the caller before dispatch ever runs: they close or do
+        // not answer. Listed here so a new variant is a compile error rather
+        // than a silent Ok.
+        IpcRequest::Subscribe | IpcRequest::Shutdown => err(NOT_STARTED),
     }
 }
 
@@ -210,5 +526,152 @@ mod tests {
             std::fs::metadata(&sub).unwrap().permissions().mode() & 0o777,
             0o777
         );
+    }
+}
+/// Create (or accept a repeat of) the daemon's single engine, and bridge its
+/// event stream into the broadcast channel exactly once.
+#[cfg(unix)]
+async fn start_engine(
+    state: &DaemonState,
+    sender: &broadcast::Sender<IpcEvent>,
+    data_dir: String,
+    display_name: String,
+    listen_port: u16,
+) -> IpcResponse {
+    let args = StartArgs {
+        data_dir: data_dir.clone(),
+        display_name: display_name.clone(),
+        listen_port,
+    };
+    // A write lock over the whole Start is what makes "exactly one engine"
+    // true even if two clients race; the engine is created inside it.
+    let mut guard = state.slot.write().await;
+    if let Some(slot) = guard.as_ref() {
+        if slot.args == args {
+            return IpcResponse::Port {
+                port: slot.engine.local_addr().port(),
+            };
+        }
+        return err("engine already started with different arguments");
+    }
+    let dir = std::path::PathBuf::from(&data_dir);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return err(format!("data_dir {data_dir}: {e}"));
+    }
+    let store = match daak_core::crypto::secret_store::PersistentFileStore::new(dir.join("keys")) {
+        Ok(s) => s,
+        Err(e) => return err(e),
+    };
+    let identity = match daak_core::crypto::identity::import_from_store(&store) {
+        Ok(i) => i,
+        Err(e) => return err(e),
+    };
+    let db = match Db::open(&dir.join("daak.db")) {
+        Ok(d) => d,
+        Err(e) => return err(e),
+    };
+    if let Err(e) = db.migrate() {
+        return err(e);
+    }
+    let listen_addr = match format!("0.0.0.0:{listen_port}").parse() {
+        Ok(a) => a,
+        Err(e) => return err(e),
+    };
+    let cfg = EngineConfig {
+        display_name,
+        listen_addr,
+        out_dir: dir.join("downloads"),
+        identity,
+        db: std::sync::Arc::new(db),
+    };
+    let engine = match Engine::start(cfg).await {
+        Ok(e) => Arc::new(e),
+        Err(e) => return err(e),
+    };
+    let port = engine.local_addr().port();
+    bridge_events(&engine, sender.clone());
+    *guard = Some(EngineSlot { engine, args });
+    IpcResponse::Port { port }
+}
+
+/// Forward the engine's events into the IPC broadcast. One task per engine;
+/// the receiver is created HERE, so events published between Engine::start and
+/// this line are lost, which is why it is called immediately after start.
+#[cfg(unix)]
+fn bridge_events(engine: &Arc<Engine>, sender: broadcast::Sender<IpcEvent>) {
+    let mut rx = engine.events();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    // No subscribers yet is normal (the client subscribes
+                    // after Start), and a send error only means that.
+                    let _ = sender.send(to_ipc_event(ev));
+                }
+                // A lagged receiver means this daemon's own mapping task
+                // could not keep up. Re-subscribing drops the backlog, which
+                // is the honest outcome: a UI resyncs from ListTransfers.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    });
+}
+
+/// `IpcRequest::Send`, through the OUTBOX. This is the phase's central
+/// obligation: `send_secure` would fail for a peer that is not on the LAN, and
+/// a share surface that cannot queue is not the offline sharing Phase 3 built.
+#[cfg(unix)]
+async fn send(
+    state: &DaemonState,
+    peer_device_id: String,
+    text: Option<String>,
+    files: Vec<String>,
+) -> IpcResponse {
+    let peer = match parse_id(&peer_device_id) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let has_text = text.as_ref().is_some_and(|t| !t.is_empty());
+    let has_files = !files.is_empty();
+    if has_text && has_files {
+        return err("send takes text or files, not both");
+    }
+    if !has_text && !has_files {
+        return err("refusing an empty send");
+    }
+    let engine = match state.engine().await {
+        Ok(e) => e,
+        Err(e) => return e,
+    };
+    let sender_ref = DeviceRef {
+        device_id: engine.identity().device_id(),
+        name: engine.display_name().await,
+    };
+    let (manifest, paths) = if let Some(t) = text {
+        let mut m = Manifest::text(&t);
+        m.sender = sender_ref;
+        (m, Vec::new())
+    } else {
+        let mut items = Vec::with_capacity(files.len());
+        for (i, p) in files.iter().enumerate() {
+            match Item::from_file(i as u32, std::path::Path::new(p), CHUNK_SIZE_DEFAULT) {
+                Ok(item) => items.push(item),
+                Err(e) => return err(e),
+            }
+        }
+        match Manifest::batch(sender_ref, items) {
+            Ok(m) => (m, files.into_iter().map(std::path::PathBuf::from).collect()),
+            Err(e) => return err(e),
+        }
+    };
+    match engine.enqueue_outbox_send(peer, manifest, paths).await {
+        Ok(payload_id) => json(serde_json::json!({
+            "transferId": hex::encode(payload_id),
+            // What the outbox actually knows: the row is durable. It is NOT a
+            // delivery receipt; delivery shows up in transfers.state.
+            "queued": true,
+        })),
+        Err(e) => err(e),
     }
 }

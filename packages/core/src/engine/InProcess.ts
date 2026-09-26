@@ -1,5 +1,13 @@
 import type { Spec as NativeDaak } from '../NativeDaak';
-import type { DaakEngine, DaakEvent, DeviceInfo, InboxEntry, SendRequest } from './types';
+import type {
+  DaakEngine,
+  DaakEvent,
+  DeviceInfo,
+  InboxEntry,
+  SendRequest,
+  TransferFilter,
+  TransferSummary,
+} from './types';
 
 /**
  * Subscribes to engine events and calls `cb` with ONE raw event JSON string.
@@ -57,21 +65,47 @@ export class InProcessEngine implements DaakEngine {
     if (hasText && hasFiles) throw new Error('send takes text or files, not both');
     if (!hasText && !hasFiles) throw new Error('refusing an empty send');
     // Both native sends go through the outbox (R7), so the id comes back
-    // immediately whether or not the peer is online.
-    // ponytail: queued is always true because the outbox returns a row id, not
-    // a delivery state; widen it when the engine reports delivery.
+    // immediately whether or not the peer is online. `queued: true` is the
+    // HONEST reading: it means the share is durably queued, not delivered. The
+    // outbox returns a row id, not a delivery state, and spec 6.2's
+    // SendRequest -> {transferId, queued} has no third field to widen into.
+    // Delivery is a separate signal: transfers.state plus transfer.done /
+    // transfer.failed events.
     if (hasText) {
       return { transferId: await this.native.sendText(req.peerDeviceId, req.text as string), queued: true };
     }
     return { transferId: await this.native.sendFiles(req.peerDeviceId, req.files ?? []), queued: true };
   }
 
-  cancel(_: string): Promise<void> { return Promise.resolve(); }
-  retry(_: string): Promise<void> { return Promise.resolve(); }
-  listTransfers(): Promise<unknown[]> { return Promise.resolve([]); }
-  listInbox(): Promise<InboxEntry[]> { return Promise.resolve([]); }
-  setDisplayName(_: string): Promise<void> { return Promise.resolve(); }
-  setPresence(_: 'online' | 'away'): Promise<void> { return Promise.resolve(); }
+  async cancel(transferId: string): Promise<void> {
+    await this.native.cancel(transferId);
+  }
+
+  async retry(transferId: string): Promise<void> {
+    await this.native.retry(transferId);
+  }
+
+  // The UDL has no map type, so the filter crosses as JSON. "{}" means
+  // "no filter", which is exactly what an absent filter means on the engine.
+  async listTransfers(filter?: TransferFilter): Promise<TransferSummary[]> {
+    const parsed: unknown = JSON.parse(await this.native.listTransfers(JSON.stringify(filter ?? {})));
+    if (!Array.isArray(parsed)) throw new Error('listTransfers did not return an array');
+    return parsed as TransferSummary[];
+  }
+
+  async listInbox(): Promise<InboxEntry[]> {
+    const parsed: unknown = JSON.parse(await this.native.listInbox());
+    if (!Array.isArray(parsed)) throw new Error('listInbox did not return an array');
+    return parsed as InboxEntry[];
+  }
+
+  async setDisplayName(name: string): Promise<void> {
+    await this.native.setDisplayName(name);
+  }
+
+  async setPresence(state: 'online' | 'away'): Promise<void> {
+    await this.native.setPresence(state);
+  }
 
   on(cb: (e: DaakEvent) => void): () => void {
     return this.subscribe((raw) => {

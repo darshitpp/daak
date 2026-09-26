@@ -130,6 +130,127 @@ fn protocol_err(e: impl std::fmt::Display) -> FfiError {
     FfiError::Protocol(e.to_string())
 }
 
+/// The listTransfers filter, as the UDL's string method receives it. The TS
+/// side sends `JSON.stringify(filter ?? {})`, so "" (a caller with no filter
+/// at all) and "{}" both mean list everything and decode to `None`.
+///
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransferFilter {
+    pub state: Option<String>,
+    pub peer_device_id: Option<[u8; 16]>,
+}
+
+/// An absent or fully empty filter is `None`: one SQL with a NULL-means-unset
+/// test covers "list everything" and every filter combination, so the daemon
+/// and this crate agree on exactly one query shape.
+///
+/// Key names are camelCase because this JSON is authored by
+/// packages/core/src/engine/types.ts, not by a serde derive, so the default
+/// snake_case renaming the FFI and IPC pairs rely on does not apply. Read
+/// through serde_json::Value rather than a #[derive(Deserialize)] because
+/// daak-ffi deliberately depends on serde_json only: adding serde here for one
+/// two-field struct is not worth a dependency. The peer id is validated HERE
+/// rather than at the SQL layer so a typo'd hex cannot silently degrade into
+/// "no peer filter".
+pub fn parse_transfer_filter(json: &str) -> Result<Option<TransferFilter>, FfiError> {
+    if json.trim().is_empty() {
+        return Ok(None);
+    }
+    let v: serde_json::Value = serde_json::from_str(json).map_err(protocol_err)?;
+    let obj = v
+        .as_object()
+        .ok_or_else(|| FfiError::Protocol("listTransfers filter must be a JSON object".into()))?;
+    // An unknown key is a caller typo that would otherwise widen the query, so
+    // reject it rather than ignore it: a filter naming `peerId` must not read
+    // as "no peer filter" and return the whole list.
+    for k in obj.keys() {
+        if !matches!(k.as_str(), "state" | "peerDeviceId") {
+            return Err(FfiError::Protocol(format!(
+                "unknown listTransfers filter key {k:?}; expected state or peerDeviceId"
+            )));
+        }
+    }
+    let state = match obj.get("state") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        Some(other) => {
+            return Err(FfiError::Protocol(format!(
+                "listTransfers filter state must be a string, got {other}"
+            )))
+        }
+    };
+    let peer_device_id = match obj.get("peerDeviceId") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(parse_id(s)?),
+        Some(other) => {
+            return Err(FfiError::Protocol(format!(
+                "listTransfers filter peerDeviceId must be a string, got {other}"
+            )))
+        }
+    };
+    if state.is_none() && peer_device_id.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(TransferFilter {
+        state,
+        peer_device_id,
+    }))
+}
+
+/// 'online' | 'away' -- the states a device declares about ITSELF. Offline is
+/// what a PEER says about us, so accepting it here would let a caller claim a
+/// liveness the engine has no way to honour: nothing withdraws this device's
+/// mDNS record on Offline, so the claim would be a lie on the wire.
+pub fn parse_presence_state(s: &str) -> Result<PresenceState, FfiError> {
+    match s {
+        "online" => Ok(PresenceState::Online),
+        "away" => Ok(PresenceState::Away),
+        other => Err(FfiError::Protocol(format!(
+            "presence state must be 'online' or 'away', got {other:?}"
+        ))),
+    }
+}
+
+/// One transfers row as the TransferSummary TS type. A free function so the
+/// shape is testable without a live engine, and so daakd -- which has its own
+/// dispatch -- can reuse it instead of inventing a second projection that
+/// would drift from this one on the next field change.
+pub fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> serde_json::Value {
+    serde_json::json!({
+        // transferId is the row's transfer_id. For a SEND it is the payload id
+        // (the outbox primary key), which is what cancel/retry take; the UI's
+        // `transferId` is therefore always something it can act on.
+        "transferId": to_hex(&row.transfer_id),
+        "peerDeviceId": to_hex(&row.peer_device_id),
+        "direction": row.direction,
+        "kind": row.kind,
+        "state": row.state,
+        "bytesDone": row.bytes_done,
+        "bytesTotal": row.bytes_total,
+        "itemCount": row.item_count,
+        "updatedAt": row.updated_at,
+    })
+}
+
+/// One inbox_history row as the InboxEntry TS type. saved_paths is a JSON
+/// string in SQLite and a string[] in TS, so it is parsed rather than passed
+/// through as a quoted blob; a value that will not parse is an error, not a
+/// silently empty list.
+pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Value {
+    let saved_paths: serde_json::Value =
+        serde_json::from_str(&row.saved_paths).unwrap_or_else(|_| serde_json::json!([]));
+    serde_json::json!({
+        "payloadId": to_hex(&row.id),
+        "transferId": to_hex(&row.transfer_id),
+        "peerDeviceId": to_hex(&row.peer_device_id),
+        "kind": row.kind,
+        "itemCount": row.item_count,
+        "summary": row.summary,
+        "receivedAt": row.received_at,
+        "savedPaths": saved_paths,
+    })
+}
+
 /// Where the engine identity is loaded from: one 0600 file per key under
 /// <data_dir>/keys, so the device id and static key survive a restart and
 /// pairing does not silently break on relaunch.
@@ -274,7 +395,7 @@ impl DaakEngine {
     }
 
     pub fn pairing_bundle(&self) -> Result<String, FfiError> {
-        let bundle = self.engine()?.pairing_bundle();
+        let bundle = self.rt.block_on(self.engine()?.pairing_bundle());
         pairing_bundle_json(&bundle)
     }
 
@@ -311,7 +432,7 @@ impl DaakEngine {
     pub fn send_text(&self, peer_id: String, text: String) -> Result<String, FfiError> {
         let engine = self.engine()?;
         let mut manifest = Manifest::text(&text);
-        manifest.sender = device_ref(&engine);
+        manifest.sender = device_ref(&engine, self.rt.block_on(engine.display_name()));
         let id = self
             .rt
             .block_on(engine.enqueue_outbox_send(parse_id(&peer_id)?, manifest, vec![]))
@@ -327,7 +448,11 @@ impl DaakEngine {
                 Item::from_file(i as u32, Path::new(p), CHUNK_SIZE_DEFAULT).map_err(engine_err)?,
             );
         }
-        let manifest = Manifest::batch(device_ref(&engine), items).map_err(engine_err)?;
+        let manifest = Manifest::batch(
+            device_ref(&engine, self.rt.block_on(engine.display_name())),
+            items,
+        )
+        .map_err(engine_err)?;
         let id = self
             .rt
             .block_on(engine.enqueue_outbox_send(
@@ -370,6 +495,47 @@ impl DaakEngine {
         self.engine()?.retry(id).map_err(engine_err)
     }
 
+    /// The optional listTransfers filter, parsed from the JSON string the UDL
+    /// method takes. `None` for "" and "{}" -- both mean list everything, and
+    /// a filter object with no fields set is the same request.
+    pub fn list_transfers(&self, filter_json: String) -> Result<String, FfiError> {
+        let filter = parse_transfer_filter(&filter_json)?;
+        let engine = self.engine()?;
+        let (state, peer) = match &filter {
+            Some(f) => (f.state.as_deref(), f.peer_device_id),
+            None => (None, None),
+        };
+        let rows = engine.list_transfers(state, peer).map_err(engine_err)?;
+        let json: Vec<serde_json::Value> = rows.iter().map(transfer_summary_json).collect();
+        serde_json::to_string(&json).map_err(protocol_err)
+    }
+
+    pub fn list_inbox(&self) -> Result<String, FfiError> {
+        let rows = self.engine()?.list_inbox().map_err(engine_err)?;
+        let json: Vec<serde_json::Value> = rows.iter().map(inbox_entry_json).collect();
+        serde_json::to_string(&json).map_err(protocol_err)
+    }
+
+    /// Rename this device. The engine re-resolves the name against the LAN and
+    /// re-advertises, so this is NOT a local label edit: the next QR bundle
+    /// carries the new name and peers browsing mDNS see it.
+    pub fn set_display_name(&self, name: String) -> Result<(), FfiError> {
+        let engine = self.engine()?;
+        self.rt
+            .block_on(engine.set_display_name(name))
+            .map_err(engine_err)
+    }
+
+    pub fn set_presence(&self, state: String) -> Result<(), FfiError> {
+        // Parse before the engine check so a bad state is a caller bug whether
+        // or not the engine happens to be running -- same rule as cancel/retry.
+        let state = parse_presence_state(&state)?;
+        let engine = self.engine()?;
+        self.rt
+            .block_on(engine.set_presence(state))
+            .map_err(engine_err)
+    }
+
     pub fn local_port(&self) -> Result<u16, FfiError> {
         Ok(self.engine()?.local_addr().port())
     }
@@ -390,10 +556,10 @@ impl DaakEngine {
     }
 }
 
-fn device_ref(engine: &Engine) -> DeviceRef {
+fn device_ref(engine: &Engine, name: String) -> DeviceRef {
     DeviceRef {
         device_id: engine.identity().device_id(),
-        name: engine.display_name().to_string(),
+        name,
     }
 }
 

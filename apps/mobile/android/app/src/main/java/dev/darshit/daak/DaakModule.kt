@@ -92,6 +92,21 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().retry(transferId); null }
 
     @ReactMethod
+    override fun listTransfers(filterJson: String, promise: Promise) =
+        resolve(promise) { handle().listTransfers(filterJson) }
+
+    @ReactMethod
+    override fun listInbox(promise: Promise) = resolve(promise) { handle().listInbox() }
+
+    @ReactMethod
+    override fun setDisplayName(name: String, promise: Promise) =
+        resolve(promise) { handle().setDisplayName(name); null }
+
+    @ReactMethod
+    override fun setPresence(state: String, promise: Promise) =
+        resolve(promise) { handle().setPresence(state); null }
+
+    @ReactMethod
     override fun localPort(promise: Promise) = resolve(promise) { handle().localPort().toDouble() }
 
     @ReactMethod

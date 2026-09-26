@@ -36,6 +36,25 @@ export interface SendRequest {
   files?: string[];
 }
 
+export interface TransferSummary {
+  transferId: string;
+  peerDeviceId: string;
+  direction: 'in' | 'out';
+  kind: 'text' | 'media' | 'batch';
+  /** spec 4.2's transfers.state vocabulary, NOT transfer_items.state. */
+  state: string;
+  bytesDone: number;
+  bytesTotal: number;
+  itemCount: number;
+  updatedAt: number;
+}
+
+export interface TransferFilter {
+  state?: string;
+  /** 32 hex chars (16 bytes), the same shape every id in this API is. */
+  peerDeviceId?: string;
+}
+
 export interface DaakEngine {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -44,7 +63,7 @@ export interface DaakEngine {
   send(req: SendRequest): Promise<{ transferId: string; queued: boolean }>;
   cancel(transferId: string): Promise<void>;
   retry(transferId: string): Promise<void>;
-  listTransfers(): Promise<unknown[]>;
+  listTransfers(filter?: TransferFilter): Promise<TransferSummary[]>;
   listInbox(): Promise<InboxEntry[]>;
   setDisplayName(name: string): Promise<void>;
   setPresence(state: 'online' | 'away'): Promise<void>;

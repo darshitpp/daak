@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
         Command::Bundle => {
             let cfg = config(&data_dir, "./daak-recv", 0)?;
             let engine = Engine::start(cfg).await?;
-            println!("{}", hex::encode(engine.pairing_bundle().to_cbor()?));
+            println!("{}", hex::encode(engine.pairing_bundle().await.to_cbor()?));
             engine.shutdown().await?;
         }
         Command::Pair { to, code, bundle } => {
@@ -157,7 +157,7 @@ async fn main() -> Result<()> {
             let engine = Engine::start(cfg).await?;
             let me = DeviceRef {
                 device_id: engine.identity().device_id(),
-                name: engine.display_name().to_string(),
+                name: engine.display_name().await,
             };
 
             let manifest = match (text, files.is_empty()) {

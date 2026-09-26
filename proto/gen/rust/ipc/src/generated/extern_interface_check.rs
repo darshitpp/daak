@@ -17,6 +17,8 @@
 fn _assert_serialize<T: cbor_event::se::Serialize>() {}
 #[allow(dead_code)]
 fn _assert_deserialize<T: crate::generated::serialization::Deserialize>() {}
+#[allow(unused_imports)]
+use crate::generated::ListTransfersRequest as _;
 #[allow(dead_code)]
 fn _extern_interface_self_check() {
     _assert_serialize::<crate::generated::CancelRequest>();
@@ -59,8 +61,8 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::JsonResponse>();
     _assert_serialize::<crate::generated::ListInboxRequest>();
     _assert_deserialize::<crate::generated::ListInboxRequest>();
-    _assert_serialize::<crate::generated::ListTransfersRequest>();
-    _assert_deserialize::<crate::generated::ListTransfersRequest>();
+    _assert_serialize::<crate::generated::ListTransfersArgs>();
+    _assert_deserialize::<crate::generated::ListTransfersArgs>();
     _assert_serialize::<crate::generated::OkResponse>();
     _assert_deserialize::<crate::generated::OkResponse>();
     _assert_serialize::<crate::generated::PairArgs>();
@@ -105,6 +107,8 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::TransferFailedArgs>();
     _assert_serialize::<crate::generated::TransferFailedEvent>();
     _assert_deserialize::<crate::generated::TransferFailedEvent>();
+    _assert_serialize::<crate::generated::TransferFilter>();
+    _assert_deserialize::<crate::generated::TransferFilter>();
     _assert_serialize::<crate::generated::TransferItemArgs>();
     _assert_deserialize::<crate::generated::TransferItemArgs>();
     _assert_serialize::<crate::generated::TransferItemEvent>();

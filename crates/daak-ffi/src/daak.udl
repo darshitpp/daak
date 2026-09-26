@@ -43,6 +43,15 @@ interface DaakEngine {
   [Throws=FfiError] string list_devices();
   [Throws=FfiError] void cancel(string transfer_id);
   [Throws=FfiError] void retry(string transfer_id);
+  // The filter crosses as a JSON string because the UDL has no map type; an
+  // empty string or "{}" means no filter (list everything). Invalid JSON and a
+  // malformed peerDeviceId are FfiError.Protocol, not a silent unfiltered list.
+  [Throws=FfiError] string list_transfers(string filter_json);
+  [Throws=FfiError] string list_inbox();
+  [Throws=FfiError] void set_display_name(string name);
+  // 'online' or 'away' only; 'offline' is a peer's claim about us, not a state
+  // this device can declare about itself.
+  [Throws=FfiError] void set_presence(string state);
   [Throws=FfiError] u16 local_port();
   [Throws=FfiError] void shutdown();
   // The event callback carries an FfiEvent, not a string, so the platform

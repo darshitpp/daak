@@ -89,6 +89,31 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().retry(transferId: transferId); return nil }
   }
 
+  @objc func listTransfers(_ filterJson: String,
+                           resolve: @escaping RCTPromiseResolveBlock,
+                           reject: @escaping RCTPromiseRejectBlock) {
+    // The UDL has no map type, so the filter crosses as JSON; "" and "{}"
+    // both mean no filter and the Rust parser turns both into None.
+    run(resolve, reject) { try self.need().listTransfers(filterJson: filterJson) }
+  }
+
+  @objc func listInbox(_ resolve: @escaping RCTPromiseResolveBlock,
+                      reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().listInbox() }
+  }
+
+  @objc func setDisplayName(_ name: String,
+                           resolve: @escaping RCTPromiseResolveBlock,
+                           reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().setDisplayName(name: name); return nil }
+  }
+
+  @objc func setPresence(_ state: String,
+                        resolve: @escaping RCTPromiseResolveBlock,
+                        reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().setPresence(state: state); return nil }
+  }
+
   @objc func localPort(_ resolve: @escaping RCTPromiseResolveBlock,
                        reject: @escaping RCTPromiseRejectBlock) {
     run(resolve, reject) { try self.need().localPort() }

@@ -12,4 +12,4 @@ pub use keys::{derive_key, directional_keys, REKEY_BYTES};
 pub use noise::{session_prologue, HandshakeDriver, NOISE_PARAMS};
 pub use replay::ReplayWindow;
 pub use sas::{sas_from_handshake_hash, sas_matches};
-pub use secret_store::SecretStore;
+pub use secret_store::{PersistentFileStore, SecretStore};

@@ -73,7 +73,13 @@ pair-request             = { "Pair": pair-args }
 send-request             = { "Send": send-args }
 cancel-request           = { "Cancel": transfer-ref }
 retry-request            = { "Retry": transfer-ref }
-list-transfers-request   = "ListTransfers"
+; filter is OPTIONAL and its two fields are independently OPTIONAL, so
+; {"ListTransfers": {}} (list everything) is a DIFFERENT frame from
+; {"ListTransfers": "ListTransfers"}. daak-ipc's TransferFilter uses
+; skip_serializing_if so an empty filter encodes as {}, and the field is
+; Option so a missing filter is a unit variant. Both are pinned by
+; crates/daak-ipc/tests/schema.rs.
+list-transfers-request   = list-transfers-args
 list-inbox-request       = "ListInbox"
 set-display-name-request = { "SetDisplayName": display-name-args }
 set-presence-request     = { "SetPresence": set-presence-args }
@@ -97,6 +103,15 @@ send-args = {
 
 display-name-args = { "name": tstr }
 set-presence-args = { "state": tstr }
+
+list-transfers-args = {
+  ? "filter": transfer-filter,
+}
+
+transfer-filter = {
+  ? "state":           tstr,
+  ? "peer_device_id": tstr,
+}
 
 ; ---------- IpcResponse ----------
 ipc-response =

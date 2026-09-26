@@ -23,6 +23,7 @@ use crate::session::{BoxConnect, BoxFutureConn, SessionRegistry, SharedSessions}
 use crate::staging::Staging;
 use crate::store::inbox::InboxRow;
 use crate::store::outbox::OutboxRow;
+use crate::store::transfers::TransferRow;
 use crate::store::Db;
 
 /// A rejected peer is a per-connection event; anything else is a listener fault.
@@ -73,12 +74,17 @@ pub struct Engine {
     local_addr: SocketAddr,
     tx: broadcast::Sender<EngineEvent>,
     devices: Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>,
-    advertiser: Advertiser,
     browser: Arc<Browser>,
     accept_task: tokio::task::JoinHandle<()>,
     discovery_task: tokio::task::JoinHandle<()>,
     presence_task: tokio::task::JoinHandle<()>,
-    display_name: String,
+    /// The RESOLVED name (base name plus any collision suffix). It changes at
+    /// runtime -- set_display_name re-resolves and re-advertises -- so it and
+    /// the mDNS Advertiser built from it are behind one lock, swapped together
+    /// so a reader can never see a new name next to an advertiser still
+    /// publishing the old one. Presence announcements carry the name too, so
+    /// they are re-sent on a rename rather than left stale.
+    profile: Arc<Mutex<Profile>>,
     identity: Arc<Identity>,
     db: Arc<Db>,
     staging: Arc<Staging>,
@@ -89,6 +95,18 @@ pub struct Engine {
     pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
     pending_code: Arc<Mutex<Option<String>>>,
     pairing_rx: Mutex<mpsc::Receiver<String>>,
+}
+
+pub(crate) struct Profile {
+    /// The name the user last asked for, before collision resolution. A rename
+    /// re-resolves from THIS, not from the current resolved name, or a device
+    /// that booted as "daak-2" could never go back to "daak".
+    base_name: String,
+    resolved_name: String,
+    advertiser: Advertiser,
+    presence: Option<Arc<PresenceSocket>>,
+    session_id: [u8; 16],
+    presence_state: PresenceState,
 }
 
 impl Engine {
@@ -159,6 +177,20 @@ impl Engine {
             std::fs::create_dir_all(&dir)?;
             Arc::new(Staging::new(dir))
         };
+        // The accept loop needs the RESOLVED name to answer a pairing, and a
+        // rename takes this same lock, so hand the loop a shared handle rather
+        // than the frozen startup copy. Built HERE (before the accept task) so
+        // the loop can hold it; the advertiser and the presence socket move
+        // into it and out of the locals below.
+        let presence_rx = presence.clone();
+        let profile = Arc::new(Mutex::new(Profile {
+            base_name,
+            resolved_name: display_name.clone(),
+            advertiser,
+            presence,
+            session_id,
+            presence_state: PresenceState::Online,
+        }));
         // R-T11-3: the registry owns dialling. The connect closure resolves the
         // peer's SocketAddr from the device map and runs the ONE initiator
         // handshake (net::secure::open_secure) -- no second handshake anywhere.
@@ -221,7 +253,7 @@ impl Engine {
         let accept_task = {
             let identity = identity.clone();
             let db = db.clone();
-            let display_name = display_name.clone();
+            let profile = profile.clone();
             let out_dir = out_dir.clone();
             let pending_pairing = pending_pairing.clone();
             let pending_code = pending_code.clone();
@@ -246,18 +278,18 @@ impl Engine {
                     };
                     let identity = identity.clone();
                     let db = db.clone();
-                    let display_name = display_name.clone();
                     let out_dir = out_dir.clone();
                     let pending_pairing = pending_pairing.clone();
                     let pending_code = pending_code.clone();
                     let pairing_tx = pairing_tx.clone();
                     let tx = tx.clone();
+                    let profile = profile.clone();
                     set.spawn(async move {
                         if let Err(e) = Self::handle_inbound(
                             &identity,
                             &db,
                             &out_dir,
-                            &display_name,
+                            &profile,
                             &pending_pairing,
                             &pending_code,
                             &pairing_tx,
@@ -322,7 +354,7 @@ impl Engine {
             let tx = tx.clone();
             let me = device_id;
             let outbox = outbox.clone();
-            match presence.clone() {
+            match presence_rx {
                 Some(presence) => tokio::spawn(async move {
                     while let Ok((_from, p)) = presence.recv().await {
                         if p.device_id != me {
@@ -344,12 +376,11 @@ impl Engine {
             local_addr,
             tx,
             devices,
-            advertiser,
+            profile,
             browser,
             accept_task,
             discovery_task,
             presence_task,
-            display_name,
             identity,
             db,
             staging,
@@ -398,12 +429,107 @@ impl Engine {
         self.identity.as_ref()
     }
 
-    pub fn display_name(&self) -> &str {
-        &self.display_name
+    pub async fn display_name(&self) -> String {
+        self.profile.lock().await.resolved_name.clone()
     }
 
-    pub fn pairing_bundle(&self) -> PairingBundle {
-        PairingBundle::new(self.identity.public(), self.display_name.clone())
+    /// Every transfer row, newest first, narrowed by an optional state and an
+    /// optional peer. This is the ONLY reader listTransfers() needs: both the
+    /// FFI and daakd go through the Engine so the two deployments cannot
+    /// disagree on what the filter means or on the ordering.
+    pub fn list_transfers(
+        &self,
+        state: Option<&str>,
+        peer_device_id: Option<[u8; 16]>,
+    ) -> Result<Vec<TransferRow>> {
+        self.db.list_transfers(state, peer_device_id.as_ref())
+    }
+
+    /// Every received payload, newest first.
+    pub fn list_inbox(&self) -> Result<Vec<InboxRow>> {
+        self.db.list_inbox()
+    }
+
+    /// Rename this device and re-advertise. The new base name goes through the
+    /// SAME collision resolution startup uses, so two devices renamed "phone"
+    /// on one LAN do not end up advertising one name -- and the resolved name
+    /// (with any suffix) is what presence and the pairing bundle report.
+    ///
+    /// A resolution that fails leaves the OLD advertisement running and
+    /// returns the error: half-renamed (new name remembered, old mDNS record
+    /// still up) is the one state neither deployment can represent.
+    pub async fn set_display_name(&self, name: String) -> Result<()> {
+        if name.trim().is_empty() {
+            return Err(CoreError::Protocol("display name must not be empty".into()));
+        }
+        let mut p = self.profile.lock().await;
+        let (advertiser, resolved) = Advertiser::start_resolving(
+            &name,
+            self.local_addr.port(),
+            self.identity.device_id(),
+            &mut rand::thread_rng(),
+        )?;
+        p.advertiser.stop();
+        p.advertiser = advertiser;
+        p.base_name = name;
+        p.resolved_name = resolved.clone();
+        // Presence carries the name, so a rename that skipped this would leave
+        // peers showing the old one until their own announce refreshes.
+        if let Some(presence) = &p.presence {
+            if let Err(e) = presence
+                .announce(&Presence::new(
+                    self.identity.device_id(),
+                    p.session_id,
+                    resolved,
+                    p.presence_state,
+                ))
+                .await
+            {
+                // Best-effort, exactly like the startup announce: the mDNS
+                // record is already updated and presence is an enhancement.
+                tracing::warn!("presence announce after rename failed: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Set this device's advertised presence (online | away) and re-announce.
+    /// The state is remembered so a later rename re-announces the SAME state
+    /// instead of silently resetting the user to online.
+    pub async fn set_presence(&self, state: PresenceState) -> Result<()> {
+        let mut p = self.profile.lock().await;
+        // Remembered even if the announce below fails, so a later rename
+        // re-announces the state the user actually chose.
+        p.presence_state = state;
+        if let Some(presence) = &p.presence {
+            if let Err(e) = presence
+                .announce(&Presence::new(
+                    self.identity.device_id(),
+                    p.session_id,
+                    p.resolved_name.clone(),
+                    state,
+                ))
+                .await
+            {
+                // Best-effort, exactly like the startup announce and the
+                // announce after a rename. On a host that routes IPv4
+                // multicast only over loopback an announce is EHOSTUNREACH
+                // (the same condition as the deliberately-ignored
+                // two_sockets_on_one_host_exchange_beacons test), and a peer
+                // that cannot be told our new state must not make the local
+                // state change fail. The state is recorded above regardless.
+                tracing::warn!("presence announce on set_presence failed: {e}");
+            }
+        }
+        // Away is a self-declaration to peers, so the outbox drain must also
+        // stop treating us as reachable. Presence is what tells a peer that,
+        // and notify_peer_online only ever wakes the drain for OUR side, so
+        // there is nothing further to do here.
+        Ok(())
+    }
+
+    pub async fn pairing_bundle(&self) -> PairingBundle {
+        PairingBundle::new(self.identity.public(), self.display_name().await)
     }
 
     pub async fn offer_pairing(
@@ -450,7 +576,7 @@ impl Engine {
             ),
         )
         .await?;
-        let local = self.pairing_bundle();
+        let local = self.pairing_bundle().await;
         let (pairing, sas) = crate::pairing::pair(
             &mut conn,
             self.identity.as_ref(),
@@ -490,7 +616,7 @@ impl Engine {
         let peer_public = read_identity_public(&mut conn).await?;
         let name = hex::encode(peer_public.device_id);
         let peer = PairingBundle::new(peer_public, name);
-        let local = self.pairing_bundle();
+        let local = self.pairing_bundle().await;
         let (pairing, sas) = crate::pairing::pair(
             &mut conn,
             self.identity.as_ref(),
@@ -595,7 +721,7 @@ impl Engine {
         identity: &Identity,
         db: &Db,
         out_dir: &Path,
-        display_name: &str,
+        profile: &Mutex<Profile>,
         pending_pairing: &Mutex<Option<PendingPairing>>,
         pending_code: &Mutex<Option<String>>,
         pairing_tx: &mpsc::Sender<String>,
@@ -603,7 +729,13 @@ impl Engine {
         conn: &mut Connection<tokio::net::TcpStream>,
     ) -> Result<()> {
         let hello = read_hello(conn).await?;
-        let local = PairingBundle::new(identity.public(), display_name.to_string());
+        // Read the name INSIDE the lock and copy it: a rename swaps the whole
+        // Profile, and a pairing bundle answered with a stale name would show
+        // the peer a name this device no longer advertises.
+        let local = PairingBundle::new(
+            identity.public(),
+            profile.lock().await.resolved_name.clone(),
+        );
         // Manual-code pairing: no QR bundle was offered, so the peer's identity
         // arrives in-band and is authenticated by the SPAKE2-mixed prologue.
         if let Some(code) = pending_code.lock().await.take() {
@@ -700,7 +832,10 @@ impl Engine {
         self.accept_task.abort();
         self.discovery_task.abort();
         self.presence_task.abort();
-        self.advertiser.stop();
+        // The advertiser moved into the profile lock, so it is stopped through
+        // it. A poisoned lock cannot happen on a tokio Mutex, so the expect is
+        // unreachable rather than a recovery path.
+        self.profile.lock().await.advertiser.stop();
         self.browser.stop();
         Ok(())
     }
@@ -801,6 +936,9 @@ pub fn require_outbox(db: &Db, transfer_id: &[u8; 16]) -> Result<OutboxRow> {
 }
 
 pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<()> {
+    // R-T10-3: every UPDATE below matches zero rows for an unknown id, so
+    // without this guard cancel would report success for a row that does not
+    // exist. The guard is load-bearing, not defensive noise.
     let row = require_outbox(db, &transfer_id)?;
     db.mark_outbox_terminal_failed(&transfer_id, "cancelled")?;
     // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
@@ -811,6 +949,7 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
 
 /// Returns the peer to notify, if the row was actually re-armed.
 pub fn retry_with(db: &Db, transfer_id: [u8; 16]) -> Result<Option<[u8; 16]>> {
+    // R-T10-3, same reasoning as cancel_with.
     let row = require_outbox(db, &transfer_id)?;
     if !db.retry_outbox_now(&transfer_id)? {
         return Ok(None);
@@ -896,6 +1035,11 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
         Ok(_) => {
             let _ = db.mark_outbox_awaiting_ack(&row.id);
             let _ = db.mark_outbox_done(&row.id);
+            // F4: the transfers row enqueue wrote has to follow the row to its
+            // end, or a delivered share stays "queued" in the UI forever. Same
+            // best-effort treatment as the outbox settles beside it: a missing
+            // row must not turn a successful send into a failed drain.
+            let _ = db.set_transfer_state(&row.id, "done");
         }
         Err(e) => {
             tracing::warn!(
@@ -903,6 +1047,12 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
                 hex::encode(row.peer_device_id)
             );
             retry(rand::random::<u64>() % 10);
+            // The send failed, so the row must not keep reading "queued". This
+            // is the state it holds once the retry budget runs out and the
+            // outbox row goes terminal; marking it on the first failure keeps
+            // the UI honest in the meantime. Best-effort, like the settles in
+            // retry().
+            let _ = db.set_transfer_state(&row.id, "failed");
         }
     }
 }

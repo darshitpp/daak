@@ -365,15 +365,23 @@ impl ListInboxRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub enum ListTransfersRequest {
-    ValueText4C6973745472616E7366657273,
+pub struct ListTransfersArgs {
+    pub filter: Option<TransferFilter>,
 }
 
-impl ListTransfersRequest {
-    pub fn new_value_text4_c6973745472616_e7366657273() -> Self {
-        Self::ValueText4C6973745472616E7366657273
+impl ListTransfersArgs {
+    pub fn new() -> Self {
+        Self { filter: None }
     }
 }
+
+impl Default for ListTransfersArgs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type ListTransfersRequest = ListTransfersArgs;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub enum OkResponse {
@@ -632,6 +640,27 @@ pub struct TransferFailedEvent {
 impl TransferFailedEvent {
     pub fn new(transfer_failed: TransferFailedArgs) -> Self {
         Self { transfer_failed }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct TransferFilter {
+    pub state: Option<String>,
+    pub peer_device_id: Option<String>,
+}
+
+impl TransferFilter {
+    pub fn new() -> Self {
+        Self {
+            state: None,
+            peer_device_id: None,
+        }
+    }
+}
+
+impl Default for TransferFilter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

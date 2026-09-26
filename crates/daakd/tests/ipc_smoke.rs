@@ -37,22 +37,20 @@ async fn daemon_serves_a_subscribe_and_devices_request() {
         IpcMessage::Response(IpcResponse::Ok)
     ));
 
-    write_message(&mut stream, &IpcMessage::Request(IpcRequest::Devices))
-        .await
-        .unwrap();
-    assert!(matches!(
-        read_message(&mut stream).await.unwrap().unwrap(),
-        IpcMessage::Response(IpcResponse::Json { .. })
-    ));
-
-    // Everything the engine does not serve yet answers; it does not hang.
-    write_message(&mut stream, &IpcMessage::Request(IpcRequest::ListInbox))
-        .await
-        .unwrap();
-    assert!(matches!(
-        read_message(&mut stream).await.unwrap().unwrap(),
-        IpcMessage::Response(IpcResponse::Error { .. })
-    ));
+    // No engine yet: Devices says so instead of inventing an empty list, and
+    // every other engine-backed request answers rather than hanging. The
+    // engine-backed happy paths live in tests/engine_dispatch.rs.
+    for req in [IpcRequest::Devices, IpcRequest::ListInbox] {
+        write_message(&mut stream, &IpcMessage::Request(req))
+            .await
+            .unwrap();
+        match read_message(&mut stream).await.unwrap().unwrap() {
+            IpcMessage::Response(IpcResponse::Error { message }) => {
+                assert!(message.contains("Start"), "{message}")
+            }
+            other => panic!("expected an Error, got {other:?}"),
+        }
+    }
 
     handle.abort();
 }
@@ -118,12 +116,12 @@ async fn a_dropped_or_truncated_client_does_not_kill_the_daemon() {
     }
 
     let mut live = connect(&sock).await;
-    write_message(&mut live, &IpcMessage::Request(IpcRequest::Devices))
+    write_message(&mut live, &IpcMessage::Request(IpcRequest::Subscribe))
         .await
         .unwrap();
     assert!(matches!(
         read_message(&mut live).await.unwrap().unwrap(),
-        IpcMessage::Response(IpcResponse::Json { .. })
+        IpcMessage::Response(IpcResponse::Ok)
     ));
 
     handle.abort();
@@ -210,7 +208,7 @@ async fn a_frame_split_across_two_writes_survives_an_event_in_the_gap() {
 
     // Serialise the next request by hand so it can be written in two halves.
     let mut frame = Vec::new();
-    write_message(&mut frame, &IpcMessage::Request(IpcRequest::Devices))
+    write_message(&mut frame, &IpcMessage::Request(IpcRequest::ListInbox))
         .await
         .unwrap();
     assert_eq!(&frame[..4], &IPC_MAGIC);
@@ -234,7 +232,7 @@ async fn a_frame_split_across_two_writes_survives_an_event_in_the_gap() {
     for _ in 0..4 {
         match read_message(&mut stream).await.unwrap() {
             Some(IpcMessage::Event(_)) => saw_event = true,
-            Some(IpcMessage::Response(IpcResponse::Json { .. })) => {
+            Some(IpcMessage::Response(IpcResponse::Error { .. })) => {
                 assert!(saw_event, "expected the event before the response");
                 handle.abort();
                 return;

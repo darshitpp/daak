@@ -69,7 +69,10 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
 
   it('daemon: answers Devices with the JSON string the client parses', async () => {
     const e = await DaemonClientEngine.connect(sock);
-    // daakd hard-codes "[]" until Task 9 wires the engine's device table.
+    await e.start();
+    // The engine's real device table. A lone daemon on the LAN sees no peers,
+    // so the honest answer is an empty array, and the shape is the client's
+    // DeviceInfo[].
     expect(await e.devices()).toEqual([]);
   });
 
@@ -79,11 +82,11 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
     const seen: unknown[] = [];
     sub.on((e) => seen.push(e));
     await sub.start();
-    // Nothing publishes into daakd's broadcast channel yet (Task 9 bridges the
-    // engine), so the only honest assertion is that the SUBSCRIBED connection
-    // is alive and the UNSUBSCRIBED one is not being fed: both still answer
-    // their own requests, which is what the daemon's select! guarantees.
-    expect(await plain.devices()).toEqual([]);
+    // A real engine event is only produced by real LAN traffic, which a
+    // one-daemon test cannot create, so the fan-out itself is proven by the
+    // injected-sender test in crates/daakd. What is provable here is that both
+    // connections still answer their own requests after subscribing.
+    await plain.start();
     expect(seen).toEqual([]);
   });
 
@@ -101,11 +104,41 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
     await expect(e.devices()).rejects.toThrow(/closed|EPIPE|ECONNRESET/);
   });
 
-  it('daemon: surfaces Error{unimplemented} instead of an empty result', async () => {
+  // THE central obligation of Phase 4: a share to a peer that is not on the
+  // LAN is QUEUED (Engine::enqueue_outbox_send), not refused the way the
+  // blocking send_secure would refuse it, and the queued row is what the UI's
+  // next listTransfers() sees.
+  it('daemon: queues a share to an offline peer and lists the row', async () => {
     const e = await DaemonClientEngine.connect(sock);
-    // Everything except Subscribe/Devices/Shutdown is unimplemented until
-    // Task 9. This pins that the client REJECTS rather than inventing data.
-    await expect(e.listInbox()).rejects.toThrow('unimplemented');
-    await expect(e.cancel('t1')).rejects.toThrow('unimplemented');
+    await e.start();
+    // 'ab'.repeat(16) is 32 hex chars = 16 bytes, the same id shape as every
+    // other id in the API, and this peer is certainly not on the LAN.
+    const peer = 'ab'.repeat(16);
+    const queued = await e.send({ peerDeviceId: peer, text: 'offline' });
+    expect(queued.queued).toBe(true);
+    expect(queued.transferId).toMatch(/^[0-9a-f]{32}$/);
+
+    const rows = await e.listTransfers({ peerDeviceId: peer });
+    expect(rows.some((r) => r.transferId === queued.transferId)).toBe(true);
+    const row = rows.find((r) => r.transferId === queued.transferId)!;
+    expect(row.peerDeviceId).toBe(peer);
+    expect(row.direction).toBe('out');
+
+    // The row is cancelable by its payload id, and cancelling it moves the
+    // `transfers` row to canceled (F4: before the enqueue-time insert this
+    // updated zero rows and nothing recorded the cancellation).
+    await e.cancel(queued.transferId);
+    const canceled = await e.listTransfers({ peerDeviceId: peer });
+    expect(canceled.find((r) => r.transferId === queued.transferId)!.state).toBe('canceled');
+
+    // A second cancel of an ALREADY-TERMINAL row is Ok: the outbox UPDATE is
+    // guarded on state IN ('pending','sending') and returns Ok either way, so
+    // this asserts the code's actual behaviour rather than a wished-for one.
+    // (An id with NO row at all is a different case and is an error -- R-T10-3.)
+    await e.cancel(queued.transferId);
+    // A malformed id, and a well-formed id with no row, are both refused.
+    await expect(e.cancel('not-hex')).rejects.toThrow(/hex/);
+    await expect(e.cancel('00'.repeat(16))).rejects.toThrow();
   });
+
 });

@@ -8,7 +8,18 @@ import type { IpcEvent, IpcMessage, IpcResponse } from '../src/ipc/transport';
 function makeEngine() {
   const written: IpcMessage[] = [];
   const sent: IpcMessage[] = [];
-  let settle: (r: IpcResponse) => void = () => {};
+  // A request may itself issue another request (start -> Start then
+  // Subscribe; pair -> Devices then Pair), and those are separate microtasks,
+  // so the fake keeps a QUEUE of pending requests and hands out replies in
+  // arrival order. The transport has no request ids, so ordering IS the
+  // contract this pins.
+  const pending: ((r: IpcResponse) => void)[] = [];
+  const queued: IpcResponse[] = [];
+  const drain = () => {
+    while (pending.length > 0 && queued.length > 0) {
+      (pending.shift() as (r: IpcResponse) => void)(queued.shift() as IpcResponse);
+    }
+  };
   const tx = {
     // IpcTransport exposes onEvent/onClose as ASSIGNABLE properties, and the
     // engine assigns over them, so the fake must be an object literal too.
@@ -17,7 +28,10 @@ function makeEngine() {
     send: (m: IpcMessage) => { sent.push(m); },
     request: (m: IpcMessage) => {
       written.push(m);
-      return new Promise<IpcResponse>((resolve) => { settle = resolve; });
+      return new Promise<IpcResponse>((resolve) => {
+        pending.push(resolve);
+        drain();
+      });
     },
     close: () => {},
   };
@@ -25,32 +39,69 @@ function makeEngine() {
     engine: new DaemonClientEngine(tx as never),
     written,
     sent,
-    reply: (r: IpcResponse) => settle(r),
+    // Answer the requests that are in flight, in arrival order, and remember
+    // any extra for requests that have not been issued yet.
+    reply: (...rs: IpcResponse[]) => {
+      queued.push(...rs);
+      drain();
+    },
     event: (ev: IpcEvent) => tx.onEvent(ev),
   };
 }
 
 describe('DaemonClientEngine', () => {
-  it('subscribes on start, and does NOT send IpcRequest::Start', async () => {
-    // IpcRequest::Start exists, but daakd answers it Error{unimplemented}
-    // until Task 9 wires the engine, so a client that sent it could never
-    // start. Task 9 restores it once the daemon owns an engine.
+  it('sends Start (which creates the engine) then subscribes', async () => {
+    // Start MUST come first: every other request answers
+    // Error{engine not started} until it lands, and the event stream is only
+    // fanned out to a connection that has sent Subscribe.
     const h = makeEngine();
     const p = h.engine.start();
-    h.reply('Ok');
+    h.reply('Ok', 'Ok');
     await p;
-    expect(h.written).toEqual([{ Request: 'Subscribe' }]);
+    expect(h.written).toEqual([
+      { Request: { Start: { data_dir: expect.any(String), display_name: 'daak', listen_port: 0 } } },
+      { Request: 'Subscribe' },
+    ]);
   });
 
-  it('is safe to start twice (a second Subscribe is idempotent)', async () => {
+  it('is safe to start twice: one Start, two Subscribes', async () => {
+    // A second Start with the same args is a daemon no-op (a different one
+    // would be refused), so the client tracks its own args and does not resend.
     const h = makeEngine();
     const a = h.engine.start();
-    h.reply('Ok');
+    h.reply('Ok', 'Ok');
     await a;
+    // The fake settles one request at a time, so Start's own reply is already
+    // the first 'Ok'; the second start() only writes Subscribe.
     const b = h.engine.start();
     h.reply('Ok');
     await b;
-    expect(h.written).toEqual([{ Request: 'Subscribe' }, { Request: 'Subscribe' }]);
+    expect(h.written).toEqual([
+      { Request: { Start: { data_dir: expect.any(String), display_name: 'daak', listen_port: 0 } } },
+      { Request: 'Subscribe' },
+      { Request: 'Subscribe' },
+    ]);
+  });
+
+  it('encodes Start with the snake_case keys Rust actually deserialises', async () => {
+    // The casing is the whole contract here: cbor-x writes JS property names
+    // verbatim and IpcRequest has no rename_all, so a camelCase key is a serde
+    // error on the daemon, not a tolerated spelling. Assert on the real
+    // encoded bytes (the transport's own encoder settings) rather than on the
+    // object, because the object is what hid the bug.
+    const h = makeEngine();
+    const p = h.engine.start();
+    h.reply('Ok', 'Ok');
+    await p;
+    const { Encoder } = await import('cbor-x');
+    const enc = new Encoder({ mapsAsObjects: true, useRecords: false, variableMapSize: true });
+    const startMsg = h.written[0] as { Request: { Start: Record<string, unknown> } };
+    const bytes = Buffer.from(enc.encode({ v: 256, msg: startMsg })).toString('hex');
+    // data_dir / display_name / listen_port, spelled exactly as Rust spells them.
+    expect(bytes).toContain(Buffer.from('data_dir').toString('hex'));
+    expect(bytes).toContain(Buffer.from('display_name').toString('hex'));
+    expect(bytes).toContain(Buffer.from('listen_port').toString('hex'));
+    expect(bytes).not.toContain(Buffer.from('dataDir').toString('hex'));
   });
 
   it('parses the Json response value as JSON, not as an object', async () => {
@@ -90,11 +141,34 @@ describe('DaemonClientEngine', () => {
     expect((err as Error).message).toMatch(/update/i);
   });
 
-  it('refuses a qr or code pair instead of sending a request daakd cannot serve', async () => {
+  it('pairs by qr: resolves the addr and sends the bundle as a Buffer (bstr, not array)', async () => {
     const h = makeEngine();
-    await expect(h.engine.pair('d1', 'qr', 'a1b2')).rejects.toThrow(/Task 9/);
-    await expect(h.engine.pair('d1', 'code', '123456')).rejects.toThrow(/Task 9/);
-    expect(h.written).toEqual([]);
+    // pair() issues Devices first, then Pair: two requests, so two replies in
+    // arrival order.
+    const p = h.engine.pair('d1', 'qr', 'a1b2');
+    h.reply(
+      { Json: { value: '[{"deviceId":"d1","name":"peer","addr":"10.0.0.2:9000"}]' } },
+      { Json: { value: '{"sas":"1-2-3","peer_device_id":"d1"}' } },
+    );
+    expect(await p).toEqual({ sas: '1-2-3' });
+    expect(h.written[1]).toEqual({
+      Request: { Pair: { addr: '10.0.0.2:9000', bundle_cbor: Buffer.from([0xa1, 0xb2]) } },
+    });
+    // A number[] would encode as a CBOR ARRAY; daak-ipc deserialises
+    // bundle_cbor as a bstr (R27), so the value must be a Buffer.
+    expect(Buffer.isBuffer((h.written[1].Request as never as { Pair: { bundle_cbor: unknown } }).Pair.bundle_cbor)).toBe(true);
+  });
+
+  it('refuses a manual code and an unknown device instead of sending a doomed request', async () => {
+    const h = makeEngine();
+    await expect(h.engine.pair('d1', 'code', '123456')).rejects.toThrow(/manual-code/);
+    const q = h.engine.pair('nope', 'qr', 'a1b2');
+    h.reply({ Json: { value: '[]' } });
+    await expect(q).rejects.toThrow(/nope/);
+    await expect(h.engine.pair('d1', 'qr')).rejects.toThrow(/bundle/);
+    // Only the code-mode and no-bundle refusals send nothing; resolving the
+    // device id legitimately needs a Devices request first (R13).
+    expect(h.written).toEqual([{ Request: 'Devices' }]);
   });
 
   it('refuses a send with neither text nor files', async () => {
@@ -142,9 +216,20 @@ describe('DaemonClientEngine', () => {
     const a = h.engine.listTransfers();
     h.reply({ Json: { value: '[]' } });
     expect(await a).toEqual([]);
-    const b = h.engine.listInbox();
+    expect(h.written).toEqual([{ Request: { ListTransfers: { filter: null } } }]);
+
+    const b = h.engine.listTransfers({ state: 'pending', peerDeviceId: '00'.repeat(16) });
     h.reply({ Json: { value: '[]' } });
     expect(await b).toEqual([]);
+    expect(h.written[1]).toEqual({
+      Request: {
+        ListTransfers: { filter: { state: 'pending', peerDeviceId: '00'.repeat(16) } },
+      },
+    });
+
+    const c = h.engine.listInbox();
+    h.reply({ Json: { value: '[]' } });
+    expect(await c).toEqual([]);
   });
 
   it('shuts the daemon down on stop() without waiting for a response', async () => {

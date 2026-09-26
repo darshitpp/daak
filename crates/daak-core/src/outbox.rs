@@ -33,17 +33,43 @@ pub fn enqueue(
     // payload_id per share, so the primary key stays unique.
     let id = manifest.payload_id;
     let now = crate::manifest::now_ms() as i64 / 1000;
+    let total_bytes: u64 = manifest.items.iter().filter_map(|i| i.size).sum();
     db.enqueue_outbox(&OutboxRow {
         id,
         payload_id: manifest.payload_id,
         peer_device_id: *peer,
         manifest: manifest.to_cbor()?,
-        total_bytes: manifest.items.iter().filter_map(|i| i.size).sum::<u64>(),
+        total_bytes,
         attempts: 0,
         next_attempt_at: now,
         state: "pending".into(),
         created_at: now,
         updated_at: now,
+    })?;
+    // F4: the outbox table alone is not enough. A queued send is the one
+    // transfer the user has NOT seen complete, so it is exactly the row the UI
+    // lists and cancels; without it listTransfers cannot show a queued share and
+    // cancel_with's set_transfer_state("canceled") updates zero rows, leaving
+    // nothing that records the cancellation. Only upsert_transfer's ON CONFLICT
+    // branch runs for a payload already present, so the inbound receiver's row
+    // is never clobbered here (and vice versa: same id, same values).
+    db.upsert_transfer(&crate::store::transfers::TransferRow {
+        transfer_id: id,
+        payload_id: manifest.payload_id,
+        peer_device_id: *peer,
+        direction: "out".into(),
+        // The same lowercase-debug spelling transfer/receiver.rs uses.
+        kind: format!("{:?}", manifest.kind).to_lowercase(),
+        // spec 4.2's transfers.state enum; the outbox row above keeps its own
+        // "pending" vocabulary, and "queued" is NOT a transfers state.
+        state: "queued".into(),
+        bytes_total: total_bytes,
+        bytes_done: 0,
+        item_count: manifest.items.len() as u32,
+        created_at: now,
+        updated_at: now,
+        manifest: manifest.to_cbor()?,
+        error: None,
     })?;
     Ok(id)
 }
@@ -96,6 +122,69 @@ impl OutboxWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // F4: enqueue writes ONLY the outbox table, so a queued OUTBOUND share had
+    // no `transfers` row at all. Two things were invisible because of it:
+    // listTransfers could not show a queued send, and cancel_with's
+    // set_transfer_state(&id, "canceled") updated zero rows -- so cancelling a
+    // queued share left nothing behind to show it was cancelled. enqueue is the
+    // one place every queued send passes through, so the row belongs here.
+    #[test]
+    fn a_queued_outbound_send_is_a_visible_transfers_row() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+
+        let manifest = crate::manifest::Manifest::text("queued");
+        let id = enqueue(&db, &staging, &[9u8; 16], &manifest, &[]).unwrap();
+
+        let rows = db.list_transfers(None, None).unwrap();
+        let row = rows
+            .iter()
+            .find(|r| r.transfer_id == id)
+            .expect("a queued outbound send must be visible via list_transfers");
+        assert_eq!(row.direction, "out");
+        // spec 4.2's transfers.state enum, NOT the outbox's "pending".
+        assert_eq!(row.state, "queued");
+        assert_eq!(row.payload_id, manifest.payload_id);
+        assert_eq!(row.peer_device_id, [9u8; 16]);
+        assert_eq!(row.item_count as usize, manifest.items.len());
+        assert_eq!(row.bytes_done, 0);
+        // The same lowercase-debug spelling transfer/receiver.rs uses.
+        assert_eq!(row.kind, format!("{:?}", manifest.kind).to_lowercase());
+        assert_eq!(
+            row.bytes_total,
+            manifest.items.iter().filter_map(|i| i.size).sum()
+        );
+        assert!(row.error.is_none());
+
+        // The filter path the UI actually uses must find it too.
+        let by_peer = db.list_transfers(None, Some(&[9u8; 16])).unwrap();
+        assert!(by_peer.iter().any(|r| r.transfer_id == id));
+    }
+
+    // The other half of F4: cancel's set_transfer_state had nothing to update.
+    #[test]
+    fn cancelling_a_queued_send_marks_the_transfers_row_canceled() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+
+        let manifest = crate::manifest::Manifest::text("queued");
+        let id = enqueue(&db, &staging, &[9u8; 16], &manifest, &[]).unwrap();
+
+        crate::engine::cancel_with(&db, &staging, id).unwrap();
+        let row = db
+            .list_transfers(None, None)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.transfer_id == id)
+            .expect("cancel must not delete the row a UI is still showing");
+        // spec 4.2 spells it with ONE 'l'.
+        assert_eq!(row.state, "canceled");
+    }
 
     // Deviation from the brief: build the manifest with ONE binary item
     // (Item::from_file) so enqueue actually stages a file, then assert both the

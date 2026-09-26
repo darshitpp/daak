@@ -38,8 +38,87 @@ fn engine_constructs_and_reports_not_started_instead_of_panicking() {
         engine.cancel("nope".into()),
         Err(FfiError::Protocol(_))
     ));
+    // The four methods T9 adds must behave like the rest of the surface before
+    // start(): an engine error, not a panic and not a fabricated empty list.
+    for e in [
+        engine.list_transfers("{}".into()).unwrap_err(),
+        engine.list_inbox().unwrap_err(),
+    ] {
+        assert!(matches!(e, FfiError::Engine(_)), "got {e:?}");
+    }
+    assert!(matches!(
+        engine.set_display_name("x".into()),
+        Err(FfiError::Engine(_))
+    ));
+    assert!(matches!(
+        engine.set_presence("away".into()),
+        Err(FfiError::Engine(_))
+    ));
     // shutdown() on a never-started engine is a no-op, not a panic.
     engine.shutdown().unwrap();
+}
+
+/// list_transfers takes a JSON STRING because the UDL has no map type, so the
+/// filter crosses the boundary as text. An unparseable filter must be a
+/// PROTOCOL error, and a malformed peerDeviceId inside a parseable filter must
+/// be one too -- otherwise a typo silently lists everything, which is how a
+/// user ends up cancelling the wrong row.
+#[test]
+fn the_transfer_filter_is_parsed_not_ignored() {
+    assert!(daak_ffi::parse_transfer_filter("{}").unwrap().is_none());
+    assert!(daak_ffi::parse_transfer_filter("").unwrap().is_none());
+
+    let f = daak_ffi::parse_transfer_filter(r#"{"state":"queued"}"#)
+        .unwrap()
+        .unwrap();
+    assert_eq!(f.state.as_deref(), Some("queued"));
+    assert_eq!(f.peer_device_id, None);
+
+    let both = daak_ffi::parse_transfer_filter(&format!(
+        r#"{{"state":"done","peerDeviceId":"{}"}}"#,
+        "ab".repeat(16)
+    ))
+    .unwrap()
+    .unwrap();
+    assert_eq!(both.state.as_deref(), Some("done"));
+    assert_eq!(both.peer_device_id, Some([0xabu8; 16]));
+
+    assert!(matches!(
+        daak_ffi::parse_transfer_filter("not json"),
+        Err(FfiError::Protocol(_))
+    ));
+    assert!(matches!(
+        daak_ffi::parse_transfer_filter(r#"{"peerDeviceId":"zz"}"#),
+        Err(FfiError::Protocol(_))
+    ));
+    assert!(matches!(
+        daak_ffi::parse_transfer_filter(r#"{"peerDeviceId":"abcd"}"#),
+        Err(FfiError::Protocol(_))
+    ));
+}
+
+/// presence is 'online' | 'away' in TS. Anything else is a caller bug and must
+/// be rejected BEFORE the engine runs it, so a bad state can never reach the
+/// wire as an unknown PresenceState.
+#[test]
+fn presence_states_are_validated_at_the_boundary() {
+    for s in ["online", "away"] {
+        assert!(
+            daak_ffi::parse_presence_state(s).is_ok(),
+            "{s} must be valid"
+        );
+    }
+    // Offline is a PEER's state, never one this device sets on itself, so it
+    // is deliberately not accepted here.
+    for s in ["offline", "Away", "", "idle"] {
+        assert!(
+            matches!(
+                daak_ffi::parse_presence_state(s),
+                Err(FfiError::Protocol(_))
+            ),
+            "{s} must be rejected"
+        );
+    }
 }
 
 #[test]

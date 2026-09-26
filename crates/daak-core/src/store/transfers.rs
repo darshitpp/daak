@@ -92,6 +92,35 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Transfers newest-first, narrowed by an OPTIONAL state and an OPTIONAL
+    /// peer. listTransfers() carries both filters as Option, so ONE static
+    /// query with a NULL-means-unset test covers all four combinations and
+    /// leaves no room for a built SQL string. `?1 IS NULL OR state = ?1` is
+    /// exactly SQLite's own `IS` operator: `state IS ?1` would not do it,
+    /// because state is never NULL and so would only ever match a NULL state.
+    /// ponytail: ORDER BY is created_at/transfer_id rather than updated_at so
+    /// the order is a stable tiebreak; the UI re-sorts on updated_at itself.
+    pub fn list_transfers(
+        &self,
+        state: Option<&str>,
+        peer_device_id: Option<&[u8; 16]>,
+    ) -> Result<Vec<TransferRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT transfer_id, payload_id, peer_device_id, direction, kind, state,
+                    bytes_total, bytes_done, item_count, created_at, updated_at, manifest, error
+               FROM transfers
+              WHERE (?1 IS NULL OR state = ?1)
+                AND (?2 IS NULL OR peer_device_id = ?2)
+              ORDER BY created_at DESC, transfer_id",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![state, peer_device_id.map(<[u8; 16]>::as_slice)],
+            row_to_transfer,
+        )?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn set_transfer_state(&self, id: &[u8; 16], state: &str) -> Result<()> {
         self.conn().execute(
             "UPDATE transfers SET state = ?2, updated_at = ?3 WHERE transfer_id = ?1",
@@ -266,6 +295,41 @@ mod tests {
             db.get_transfer(&[1u8; 16]).unwrap().unwrap().state,
             "queued"
         );
+    }
+
+    // list_transfers feeds listTransfers(), whose filter is optional on both
+    // axes. Four static branches cover the four combinations; the None/None
+    // one is the list-everything case a UI shows before any filter is set.
+    fn seeded() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.upsert_transfer(&row()).unwrap();
+        let mut other = row();
+        other.transfer_id = [9u8; 16];
+        other.payload_id = [10u8; 16];
+        other.peer_device_id = [11u8; 16];
+        other.state = "done".into();
+        db.upsert_transfer(&other).unwrap();
+        db
+    }
+
+    #[test]
+    fn list_transfers_filters_by_state_and_peer_and_lists_everything() {
+        let db = seeded();
+        assert_eq!(db.list_transfers(None, None).unwrap().len(), 2);
+        assert_eq!(db.list_transfers(Some("queued"), None).unwrap().len(), 1);
+        assert_eq!(
+            db.list_transfers(Some("queued"), Some(&[3u8; 16])).unwrap()[0].transfer_id,
+            [1u8; 16]
+        );
+        // Both filters must apply AND, not OR: the peer of the done row is not
+        // the peer of the queued one, so this matches nothing.
+        assert!(db
+            .list_transfers(Some("done"), Some(&[3u8; 16]))
+            .unwrap()
+            .is_empty());
+        assert_eq!(db.list_transfers(None, Some(&[11u8; 16])).unwrap().len(), 1);
+        assert!(db.list_transfers(Some("nope"), None).unwrap().is_empty());
     }
 }
 

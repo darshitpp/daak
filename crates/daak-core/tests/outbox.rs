@@ -41,16 +41,16 @@ async fn an_offline_queued_item_auto_delivers_when_the_peer_comes_back() {
     let b = Arc::new(engine("b", d2.path().to_path_buf()).await.0);
 
     let b_addr = b.local_addr();
-    let b_id = b.pairing_bundle().identity.device_id;
+    let b_id = b.pairing_bundle().await.identity.device_id;
 
     // Pair first, but DO NOT note_peer: A must not know where B is when the
     // share is queued, which is the whole point of the outbox.
-    b.offer_pairing(a.pairing_bundle(), PairMode::Qr, None)
+    b.offer_pairing(a.pairing_bundle().await, PairMode::Qr, None)
         .await
         .unwrap();
     let b_for_server = b.clone();
     let server = tokio::spawn(async move { b_for_server.accept_pairing_once().await.unwrap() });
-    let (_sas, peer_id) = a.pair_with(b_addr, b.pairing_bundle()).await.unwrap();
+    let (_sas, peer_id) = a.pair_with(b_addr, b.pairing_bundle().await).await.unwrap();
     server.await.unwrap();
     assert_eq!(peer_id, b_id);
 

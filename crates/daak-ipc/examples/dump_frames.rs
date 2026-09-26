@@ -20,6 +20,9 @@ fn main() {
             addr: "10.0.0.2:9000".into(),
             bundle_cbor: vec![1, 2, 3],
         }),
+        // ListTransfers now carries an optional filter, so the frame is a MAP
+        // even with no filter, not the bare string "ListTransfers".
+        IpcMessage::Request(IpcRequest::ListTransfers { filter: None }),
     ];
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()

@@ -2,8 +2,7 @@
 // mirror crates/daak-ffi/src/daak.udl (the source of truth) exactly -- this file
 // is what codegen turns into the NativeDaakSpec base class DaakModule.kt extends.
 // UDL also has accept_pairing/cancel/retry, which the task brief's method list
-// omits; the UDL wins, so they are here. T9 still owns listTransfers,
-// listInbox, setDisplayName and setPresence -- no UDL methods back them yet.
+// omits; the UDL wins, so they are here.
 import type { TurboModule } from 'react-native';
 import { TurboModuleRegistry } from 'react-native';
 
@@ -26,6 +25,14 @@ export interface Spec extends TurboModule {
   cancel(transferId: string): Promise<void>;
   /** UDL: retry(string transfer_id) */
   retry(transferId: string): Promise<void>;
+  /** UDL: list_transfers(string filter_json) -> [{transferId, peerDeviceId, ...}] */
+  listTransfers(filterJson: string): Promise<string>;
+  /** UDL: list_inbox() -> [{payloadId, transferId, ..., savedPaths}] */
+  listInbox(): Promise<string>;
+  /** UDL: set_display_name(string name) */
+  setDisplayName(name: string): Promise<void>;
+  /** UDL: set_presence(string state) -- 'online' | 'away' */
+  setPresence(state: string): Promise<void>;
   /** UDL: local_port() -> u16 */
   localPort(): Promise<number>;
   /** UDL: shutdown() */

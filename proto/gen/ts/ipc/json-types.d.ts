@@ -57,7 +57,7 @@ export type IpcRequestJSON =
       RetryRequest: RetryRequestJSON;
     }
   | {
-      ListTransfersRequest: ListTransfersRequestJSON;
+      ListTransfersRequest: ListTransfersArgsJSON;
     }
   | {
       ListInboxRequest: ListInboxRequestJSON;
@@ -72,7 +72,6 @@ export type IpcRequestJSON =
       ShutdownRequest: ShutdownRequestJSON;
     };
 export type SubscribeRequestJSON = "ValueText537562736372696265";
-export type ListTransfersRequestJSON = "ValueText4C6973745472616E7366657273";
 export type ListInboxRequestJSON = "ValueText4C697374496E626F78";
 export type ShutdownRequestJSON = "ValueText53687574646F776E";
 export type IpcResponseJSON =
@@ -198,6 +197,13 @@ export interface SendArgsJSON {
 }
 export interface RetryRequestJSON {
   retry: TransferRefJSON;
+}
+export interface ListTransfersArgsJSON {
+  filter?: TransferFilterJSON | null;
+}
+export interface TransferFilterJSON {
+  peer_device_id?: string | null;
+  state?: string | null;
 }
 export interface SetDisplayNameRequestJSON {
   set_display_name: DisplayNameArgsJSON;

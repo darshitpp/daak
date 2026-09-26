@@ -1,22 +1,19 @@
 import { expect, it } from 'vitest';
 import type { DaakEngine } from '../src/engine/types';
 
-// The assertions BOTH engines must satisfy today, in Task 7.
+// The assertions BOTH engines must satisfy. Every method in the interface is
+// exercised here against the in-process TurboModule and against the real
+// daakd binary, so a divergence in either deployment is a test failure and
+// not a note in a comment.
 //
-// Deliberately NOT here, and deferred to Task 9 (which wires the real engine
-// into daakd and the UDL):
-//   - send() returning a transfer id. daakd answers IpcRequest::Send with
-//     Error{"unimplemented"} and no engine exists behind it, so there is
-//     nothing honest to assert. Task 9 adds it back for both engines.
-//   - pair() returning a sas. Same reason: Pair is not on daakd's dispatch
-//     table at all, and the FFI has no manual-code method.
-//   - listTransfers/listInbox/cancel/retry/setDisplayName/setPresence against
-//     a LIVE engine. The TS methods are written and pinned by
-//     daemon-client.spec.ts against the real wire shapes; only their engine
-//     backing is missing. Task 9's contract-suite edit is where they rejoin
-//     this suite, alongside the listTransfers(filter) signature change.
-// ponytail: adding a `skipped`/`todo` entry per deferred method would be a
-// parallel list to drift out of sync; this comment is the list.
+// Deliberately NOT here, and why:
+//   - pair() needs a second daakd on the LAN to pair WITH, which is a
+//     two-machine scenario no local test can create. The request shape and the
+//     refusal of an unknown device / a manual code are pinned by
+//     daemon-client.spec.ts and contract.spec.ts instead.
+//   - send()'s row is asserted in the daemon-backed spec only, because the
+//     in-process engine here runs against a FAKE native module that has no
+//     SQLite behind it.
 export function runContractSuite(name: string, factory: () => Promise<DaakEngine>): void {
   it(`${name}: exposes the full DaakEngine method set`, async () => {
     const e = await factory();
@@ -54,6 +51,44 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     expect(typeof off).toBe('function');
     off();
     expect(seen).toEqual([]);
+    await e.stop();
+  });
+
+  // The plan's Step 1 snippet cancelled the all-zero id and expected success,
+  // but the Phase 3 ruling (R-T10-3) outranks it: every UPDATE in cancel/retry
+  // matches zero rows for an unknown id, so without the require_outbox guard
+  // both would report success for a row that does not exist. A well-formed id
+  // with no row is therefore an ERROR on both engines. The POSITIVE half -- a
+  // real queued row cancelled through the daemon -- lives in
+  // daemon.contract.spec.ts, because the in-process engine here runs against a
+  // fake native module with no SQLite behind it.
+  it(`${name}: cancel and retry reject an unknown id`, async () => {
+    const e = await factory();
+    await e.start();
+    await expect(e.cancel('00'.repeat(16))).rejects.toThrow();
+    await expect(e.retry('00'.repeat(16))).rejects.toThrow();
+    // A malformed id is refused too, for the same reason.
+    await expect(e.cancel('not-hex')).rejects.toThrow();
+    await expect(e.retry('not-hex')).rejects.toThrow();
+    await e.stop();
+  });
+
+  it(`${name}: listTransfers accepts a filter`, async () => {
+    const e = await factory();
+    await e.start();
+    const all = await e.listTransfers();
+    expect(Array.isArray(all)).toBe(true);
+    const filtered = await e.listTransfers({ state: 'pending', peerDeviceId: '00'.repeat(16) });
+    expect(Array.isArray(filtered)).toBe(true);
+    await e.stop();
+  });
+
+  it(`${name}: listInbox, setDisplayName and setPresence wire through`, async () => {
+    const e = await factory();
+    await e.start();
+    expect(Array.isArray(await e.listInbox())).toBe(true);
+    await e.setDisplayName('renamed');
+    await e.setPresence('away');
     await e.stop();
   });
 }
