@@ -89,14 +89,25 @@ pub async fn send_transfer<T: FrameTransport>(
         })?;
         let body = encode_chunk_body(item_index, chunk_index, &chunk.data);
         on_progress(chunk.data.len() as u64);
-        conn.send(100 + item_index, RecordType::Chunk, Bytes::from(body))
-            .await?;
+        conn.send(
+            crate::session::item_stream(item_index),
+            RecordType::Chunk,
+            Bytes::from(body),
+        )
+        .await?;
     }
 
     loop {
         match conn.recv().await? {
             Some(f) if f.kind == RecordType::Ack => {
                 let ack = AckMsg::from_cbor(&f.body)?;
+                // Never trust the caller-side convention that only one transfer
+                // is in flight per connection: an Ack for another transfer is a
+                // protocol violation, and skipping it would hang on an Ack that
+                // is never coming.
+                if ack.transfer_id != manifest.payload_id {
+                    return Err(CoreError::Protocol("ack for a different transfer".into()));
+                }
                 if ack.complete {
                     if !ack.hash_ok {
                         return Err(CoreError::Transfer(format!(

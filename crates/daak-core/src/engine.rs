@@ -14,11 +14,12 @@ use crate::discovery::{
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
 use crate::manifest::{Manifest, PayloadKind};
-use crate::net::secure::{recv_secure_transfer, send_secure_transfer};
+use crate::net::secure::recv_secure_transfer;
 use crate::net::tcp;
 use crate::net::Connection;
 use crate::outbox::OutboxWorker;
 use crate::pairing::{PairMode, PairingBundle};
+use crate::session::{BoxConnect, BoxFutureConn, SessionRegistry, SharedSessions};
 use crate::staging::Staging;
 use crate::store::inbox::InboxRow;
 use crate::store::outbox::OutboxRow;
@@ -82,6 +83,9 @@ pub struct Engine {
     db: Arc<Db>,
     staging: Arc<Staging>,
     outbox: Arc<OutboxWorker>,
+    /// R-T11-3/R-T11-11: behind a Mutex because the Engine is only ever held by
+    /// &self, and the per-row outbox drain drives sends through the same Arc.
+    sessions: SharedSessions,
     pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
     pending_code: Arc<Mutex<Option<String>>>,
     pairing_rx: Mutex<mpsc::Receiver<String>>,
@@ -155,17 +159,57 @@ impl Engine {
             std::fs::create_dir_all(&dir)?;
             Arc::new(Staging::new(dir))
         };
+        // R-T11-3: the registry owns dialling. The connect closure resolves the
+        // peer's SocketAddr from the device map and runs the ONE initiator
+        // handshake (net::secure::open_secure) -- no second handshake anywhere.
+        let sessions: SharedSessions =
+            {
+                let db = db.clone();
+                let identity = identity.clone();
+                let devices = devices.clone();
+                let connect: BoxConnect =
+                    Box::new(move |peer: [u8; 16]| {
+                        let db = db.clone();
+                        let identity = identity.clone();
+                        let devices = devices.clone();
+                        Box::pin(async move {
+                            let addr = devices.lock().await.get(&peer).map(|d| d.addr).ok_or_else(
+                                || {
+                                    CoreError::Protocol(format!(
+                                        "peer {} is not discovered",
+                                        hex::encode(peer)
+                                    ))
+                                },
+                            )?;
+                            let pairing = db
+                                .get_pairing(&peer)?
+                                .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
+                            let secret =
+                                zeroize::Zeroizing::new(identity.static_secret().to_bytes());
+                            let conn = tcp::dial(addr).await?;
+                            crate::net::secure::open_secure(
+                                conn,
+                                &secret,
+                                &pairing.static_dh_pub,
+                                identity.device_id(),
+                            )
+                            .await
+                        }) as BoxFutureConn
+                    });
+                Arc::new(Mutex::new(SessionRegistry::new(
+                    SESSION_IDLE_TIMEOUT,
+                    connect,
+                )))
+            };
         let outbox = Arc::new({
             let drain_db = db.clone();
-            let drain_identity = identity.clone();
-            let drain_devices = devices.clone();
             let drain_staging = staging.clone();
+            let drain_sessions = sessions.clone();
             OutboxWorker::spawn(db.clone(), move |row| {
                 let ctx = DrainCtx {
-                    identity: drain_identity.clone(),
                     db: drain_db.clone(),
-                    devices: drain_devices.clone(),
                     staging: drain_staging.clone(),
+                    sessions: drain_sessions.clone(),
                 };
                 // ponytail: per-row drain tasks are intentionally untracked (a JoinSet
                 // here costs more than it buys); a crash mid-drain is recovered at
@@ -310,6 +354,7 @@ impl Engine {
             db,
             staging,
             outbox,
+            sessions,
             pending_pairing,
             pending_code,
             pairing_rx: Mutex::new(pairing_rx),
@@ -326,6 +371,21 @@ impl Engine {
 
     pub async fn devices(&self) -> Vec<DeviceInfo> {
         self.devices.lock().await.values().cloned().collect()
+    }
+
+    /// R-T11-3: the registry resolves a peer's address from the device map, so a
+    /// caller that was GIVEN an address (the CLI's `send --to`) must seed it.
+    /// Discovery inserts the same entry; this is the one-shot path.
+    pub async fn note_peer(&self, peer: [u8; 16], name: &str, addr: SocketAddr) {
+        self.devices
+            .lock()
+            .await
+            .entry(peer)
+            .or_insert_with(|| DeviceInfo {
+                device_id: peer,
+                name: name.to_string(),
+                addr,
+            });
     }
 
     pub fn identity(&self) -> &Identity {
@@ -442,19 +502,12 @@ impl Engine {
     pub async fn send_secure(
         &self,
         peer_device_id: [u8; 16],
-        addr: SocketAddr,
         manifest: Manifest,
         paths: Vec<Option<PathBuf>>,
     ) -> Result<[u8; 16]> {
-        send_secure_with(
-            self.identity.as_ref(),
-            &self.db,
-            peer_device_id,
-            addr,
-            manifest,
-            paths,
-        )
-        .await
+        let transfer_id = manifest.payload_id;
+        send_secure_with(&self.sessions, peer_device_id, &manifest, &paths).await?;
+        Ok(transfer_id)
     }
 
     /// Queue a send with no online peer present; the worker drains it on reconnect.
@@ -631,42 +684,72 @@ async fn read_hello(conn: &mut Connection<tokio::net::TcpStream>) -> Result<Hell
     }
 }
 
-/// Dial + Noise XX + send a manifest and its staged/binary paths.
-/// Extracted from Engine::send_secure so the outbox drain can drive a send with
-/// only Arc<Identity> + Arc<Db> (Task 11 refactors this to a session registry).
+/// A long-lived per-peer session is not free: it holds a TCP socket, a Noise
+/// session (with rekey state) and a replay window for as long as the peer stays
+/// in the map. 5 minutes of no sends is enough that the next send re-handshakes
+/// in a few ms on a LAN.
+const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Send a manifest and its staged/binary paths over the peer's registry session.
+///
+/// Both `Engine::send_secure` and the outbox drain land here, so a direct send
+/// and a drained send share one connection. R-T11-10: a send error drops the
+/// session and retries exactly ONCE through `get_or_connect`, which re-dials.
+/// One retry, not a loop -- an unbounded reconnect loop against a peer that
+/// refuses connections is a DoS.
+// ponytail: the registry lock is held across a full dial + Noise handshake, so
+// a cold peer serializes every other peer's connect. N is small (a room's worth
+// of devices) and a LAN handshake is ~ms; shard the registry per peer, or dial
+// outside the lock, if that ever stops being true.
 async fn send_secure_with(
-    identity: &Identity,
-    db: &Db,
+    sessions: &SharedSessions,
     peer_device_id: [u8; 16],
-    addr: SocketAddr,
-    manifest: Manifest,
-    paths: Vec<Option<PathBuf>>,
-) -> Result<[u8; 16]> {
-    let transfer_id = manifest.payload_id;
-    let pairing = db
-        .get_pairing(&peer_device_id)?
-        .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
-    let static_secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
-    let mut conn = tcp::dial(addr).await?;
-    send_secure_transfer(
-        &mut conn,
-        &static_secret,
-        &pairing.static_dh_pub,
-        identity.device_id(),
-        &manifest,
-        &paths,
-    )
-    .await?;
-    Ok(transfer_id)
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+) -> Result<()> {
+    let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
+    if send_on_session(&handle, manifest, paths).await.is_ok() {
+        return Ok(());
+    }
+    // ponytail: the retry re-sends the WHOLE payload, so a transient error after
+    // the receiver already wrote the bytes costs a full re-send. Upgrade to the
+    // NACK-driven ranges (transfer::resume) once receive is persisted --
+    // net::secure::recv_secure_transfer still passes `db: None`, so inbound
+    // resume is dormant and there is nothing to resume from yet.
+    sessions.lock().await.remove(&peer_device_id);
+    let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
+    send_on_session(&handle, manifest, paths).await?;
+    Ok(())
+}
+
+/// One send over an existing session, holding the session lock for the whole
+/// transfer (a session multiplexes one transfer at a time). A failure marks the
+/// session broken so nobody reuses the half-written connection.
+async fn send_on_session(
+    handle: &crate::session::SessionHandle,
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+) -> Result<()> {
+    let mut s = handle.lock().await;
+    let r = crate::transfer::send_transfer(&mut s.conn, manifest, paths, &[], |_| {}).await;
+    // touch on BOTH paths: `last_used` means "last attempted", which is what
+    // eviction wants -- a repeatedly-failing peer must not keep a stale
+    // last_used and pin the session past its idle timeout.
+    s.touch();
+    if r.is_err() {
+        s.mark_broken();
+    }
+    r
 }
 
 /// What the outbox drain closure needs; the closure itself is a plain `Fn`, so
 /// the per-row state is cloned into a task per row.
 struct DrainCtx {
-    identity: Arc<Identity>,
     db: Arc<Db>,
-    devices: Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>,
     staging: Arc<Staging>,
+    /// R-T11-12: the SAME sessions the Engine holds, so a drained send reuses
+    /// (and re-dials) the same per-peer connection a direct send would.
+    sessions: SharedSessions,
 }
 
 /// Give up on a row after this many failed delivery attempts. 8 with the 4.3
@@ -727,22 +810,6 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
         let _ = settle_failed_attempt(db, &row.id, row.attempts, jitter);
     };
 
-    // R-D: an unknown peer is a failure, not a panic -- the row goes back to
-    // pending with backoff and is retried on the next tick or reconnect.
-    let Some(addr) = ctx
-        .devices
-        .lock()
-        .await
-        .get(&row.peer_device_id)
-        .map(|d| d.addr)
-    else {
-        tracing::warn!(
-            "outbox drain: peer {} not discovered, re-queueing",
-            hex::encode(row.peer_device_id)
-        );
-        retry(0);
-        return;
-    };
     let manifest = match Manifest::from_cbor(&row.manifest) {
         Ok(m) => m,
         Err(e) => {
@@ -764,16 +831,9 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
             );
         }
     }
-    match send_secure_with(
-        ctx.identity.as_ref(),
-        db,
-        row.peer_device_id,
-        addr,
-        manifest,
-        paths,
-    )
-    .await
-    {
+    // R-D: an unknown peer is a failure, not a panic -- the connect closure
+    // returns "not discovered" and the row goes back to pending with backoff.
+    match send_secure_with(&ctx.sessions, row.peer_device_id, &manifest, &paths).await {
         // R-C: send_transfer already read the peer's Ack and returns Ok ONLY on
         // complete && hash_ok (Err on mismatch/close), so Ok(()) IS the ack.
         Ok(_) => {

@@ -170,14 +170,12 @@ async fn engine_pairs_then_sends_encrypted_file() {
     );
 
     // The engine accept loop receives over a paired secure session.
-    a.send_secure(
-        b_bundle.identity.device_id,
-        b_addr,
-        manifest,
-        vec![Some(path)],
-    )
-    .await
-    .unwrap();
+    // R-T11-3: send_secure resolves the address from the device map now, and
+    // these tests never run discovery, so seed the entry.
+    a.note_peer(b_bundle.identity.device_id, "b", b_addr).await;
+    a.send_secure(b_bundle.identity.device_id, manifest, vec![Some(path)])
+        .await
+        .unwrap();
 
     for _ in 0..50 {
         if d2.path().join("f.bin").exists() {
@@ -229,7 +227,8 @@ async fn engine_pairs_with_manual_code_then_sends_encrypted_file() {
         vec![item],
     );
 
-    a.send_secure(b_id, b_addr, manifest, vec![Some(path)])
+    a.note_peer(b_id, "b", b_addr).await;
+    a.send_secure(b_id, manifest, vec![Some(path)])
         .await
         .unwrap();
 
@@ -304,14 +303,10 @@ async fn engine_reports_transfer_done_for_inbound_file() {
     // broadcast is not dropped for lack of a subscriber.
     let mut events = b.events();
 
-    a.send_secure(
-        b_bundle.identity.device_id,
-        b_addr,
-        manifest,
-        vec![Some(path)],
-    )
-    .await
-    .unwrap();
+    a.note_peer(b_bundle.identity.device_id, "b", b_addr).await;
+    a.send_secure(b_bundle.identity.device_id, manifest, vec![Some(path)])
+        .await
+        .unwrap();
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {

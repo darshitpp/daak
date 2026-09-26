@@ -152,6 +152,7 @@ async fn main() -> Result<()> {
                 bail!("provide --text and/or --files");
             }
             let peer_id = parse_device_id(&device_id)?;
+            let peer_id_hex = device_id.clone();
             let cfg = config(&data_dir, "./daak-send-staging", 0)?;
             let engine = Engine::start(cfg).await?;
             let me = DeviceRef {
@@ -182,7 +183,11 @@ async fn main() -> Result<()> {
                 })
                 .collect::<Vec<_>>();
 
-            let id = engine.send_secure(peer_id, to, manifest, paths).await?;
+            // R-T11-3: send_secure no longer takes an addr -- the session
+            // registry resolves it from the device map, so seed the entry from
+            // the address the user gave us.
+            engine.note_peer(peer_id, &peer_id_hex, to).await;
+            let id = engine.send_secure(peer_id, manifest, paths).await?;
             println!("sent {}", hex_id(id));
             engine.shutdown().await?;
         }

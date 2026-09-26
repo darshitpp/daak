@@ -11,6 +11,7 @@ pub mod manifest;
 pub mod net;
 pub mod outbox;
 pub mod pairing;
+pub mod session;
 pub mod staging;
 pub mod store;
 pub mod transfer;

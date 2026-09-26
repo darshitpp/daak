@@ -148,15 +148,29 @@ pub async fn send_secure_transfer<T: FrameTransport + Send>(
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
 ) -> Result<()> {
+    let mut secure = open_secure(&mut *conn, static_secret, peer_static, device_id).await?;
+    send_transfer(&mut secure, manifest, paths, &[], |_| {}).await
+}
+
+/// R-T11-6: the ONE initiator handshake (Hello -> Noise XX), factored out of
+/// `send_secure_transfer` so the session registry's connect closure reuses it
+/// instead of writing a second handshake. Takes the transport BY VALUE, so the
+/// one-shot path passes `&mut *conn` and the registry passes an owned
+/// `Connection<TcpStream>` and gets an owned `SecureConnection` back.
+pub async fn open_secure<T: FrameTransport + Send>(
+    mut conn: T,
+    static_secret: &[u8; 32],
+    peer_static: &[u8; 32],
+    device_id: [u8; 16],
+) -> Result<SecureConnection<T>> {
     let hello = Hello { device_id };
     conn.send(0, RecordType::Control, Bytes::from(hello.to_cbor()?))
         .await?;
 
     let prologue = session_prologue(&x25519_public(static_secret), peer_static);
     let driver = HandshakeDriver::initiator(static_secret, &prologue)?;
-    let (tx, rx, _hash) = complete_handshake(conn, driver, true).await?;
-    let mut secure = SecureConnection::new(conn, tx, rx);
-    send_transfer(&mut secure, manifest, paths, &[], |_| {}).await
+    let (tx, rx, _hash) = complete_handshake(&mut conn, driver, true).await?;
+    Ok(SecureConnection::new(conn, tx, rx))
 }
 
 pub async fn recv_secure_transfer<T: FrameTransport + Send>(
@@ -191,6 +205,59 @@ impl<T: FrameTransport> SecureConnection<T> {
         plaintext: &[u8],
     ) -> Result<Vec<u8>> {
         self.session.encrypt(stream_id, kind, plaintext)
+    }
+
+    /// R-T11-2: a socket-free pair of connections over an in-memory channel,
+    /// with MIRRORED keys (the same [u8;32] as send_key and recv_key) so either
+    /// end can encrypt and the other decrypt symmetrically. This is what lets the
+    /// session-registry tests run without binding a port.
+    #[cfg(test)]
+    pub fn test_pair() -> (SecureConnection<MemConn>, SecureConnection<MemConn>) {
+        let (a, b) = MemConn::pair();
+        // Both ends get the SAME key, so a->b seals with it and b->a opens it.
+        let key = [7u8; 32];
+        (
+            SecureConnection::new(a, key, key),
+            SecureConnection::new(b, key, key),
+        )
+    }
+}
+
+/// R-T11-2: the in-memory FrameTransport behind `test_pair`. A send lands in the
+/// peer end's bounded queue and is read by whatever drives the peer end; a
+/// `send` fails only once the peer end (and so the channel) is dropped.
+// ponytail: the channel is bounded at 64 frames, so a real multi-chunk transfer
+// (>64 chunks / ~64 MiB at 1 MiB per chunk) blocks with no reader. Fine for the
+// single-manifest test; only raise the bound if a test ever streams that much.
+#[cfg(test)]
+pub struct MemConn {
+    tx: tokio::sync::mpsc::Sender<Frame>,
+    rx: tokio::sync::mpsc::Receiver<Frame>,
+}
+
+#[cfg(test)]
+impl MemConn {
+    /// Two connected ends, returned left to right.
+    pub fn pair() -> (MemConn, MemConn) {
+        let (a_tx, b_rx) = tokio::sync::mpsc::channel(64);
+        let (b_tx, a_rx) = tokio::sync::mpsc::channel(64);
+        (
+            MemConn { tx: a_tx, rx: a_rx },
+            MemConn { tx: b_tx, rx: b_rx },
+        )
+    }
+}
+
+#[cfg(test)]
+impl FrameTransport for MemConn {
+    async fn send(&mut self, stream_id: u32, kind: RecordType, body: Bytes) -> Result<()> {
+        self.tx
+            .send(Frame::new(stream_id, kind, body))
+            .await
+            .map_err(|e| crate::CoreError::Protocol(e.to_string()))
+    }
+    async fn recv(&mut self) -> Result<Option<Frame>> {
+        Ok(self.rx.recv().await)
     }
 }
 
