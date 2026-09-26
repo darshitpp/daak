@@ -10,4 +10,7 @@ ciborium.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-cddl = "0.9"
+# Pinned exactly: this is the validator the schema gate is written against, and
+# a fresh CI lockfile resolving a different 0.9.x must not be able to change
+# which frames pass. Matches the pinning discipline in proto/codegen.sh.
+cddl = "=0.9.5"

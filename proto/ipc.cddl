@@ -16,14 +16,18 @@
 ;   IpcResponse::Ok        -> {"Response": "Ok"}
 ;   IpcResponse::Json{..}  -> {"Response": {"Json": {"value": "<STRING>"}}}
 ;
-; cddl-codegen's output for this file does NOT match that encoding: it renames
-; every variant (IpcRequest::Subscribe becomes enum SubscribeRequest(String)
-; whose only value is the literal "ValueText44657669636573") and re-tags the
-; payloads as {"StartRequest": {"start": ..}}. Those types do not serialise to
-; the wire, so proto/gen is regenerated for REVIEW and schema-diff purposes
-; ONLY -- the Rust and TS types come from the serde derives, pinned against
-; this file by crates/daak-ipc/tests/schema.rs. Do not re-tag the enums to suit
-; the generator: that would break every hex fixture in
+; cddl-codegen's output for this file RENAMES every variant (IpcRequest::Subscribe
+; becomes enum SubscribeRequest with a ValueText... variant) and so looks like a
+; different wire. It is not: proto/gen/rust/ipc was MEASURED to emit the same
+; bytes for Subscribe, Ok, Start, Error and Pair. It is not used at runtime for
+; one concrete reason: its deserializer REJECTS an unknown map key
+; (DefiniteLenMismatch), which would break the forward compatibility the "v"
+; header exists to buy -- a 1.9 peer adding a field would be undecodable by a
+; 1.0 daemon built from these types. So the Rust and TS types come from the
+; serde derives, which ignore unknown fields, and this file is the source of
+; truth they are pinned against by crates/daak-ipc/tests/schema.rs. proto/gen
+; is committed for REVIEW and schema-diff purposes ONLY. Do not re-tag the
+; enums to suit the generator: that would break every hex fixture in
 ; packages/core/test/transport.spec.ts.
 ;
 ; "v" is the IPC schema version, a uint whose HIGH BYTE is the major and low

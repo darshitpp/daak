@@ -14,6 +14,12 @@ fn main() {
         IpcMessage::Event(IpcEvent::InboxReceived {
             payload_json: "{\"a\":1}".into(),
         }),
+        // Pair is the only frame carrying raw bytes: bundle_cbor must land on
+        // the wire as a CBOR bstr, which serde will NOT do for a bare Vec<u8>.
+        IpcMessage::Request(IpcRequest::Pair {
+            addr: "10.0.0.2:9000".into(),
+            bundle_cbor: vec![1, 2, 3],
+        }),
     ];
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()

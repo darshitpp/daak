@@ -33,6 +33,10 @@ fn assert_valid(msg: &IpcMessage) {
         .unwrap_or_else(|e| panic!("{msg:?} does not match proto/ipc.cddl: {e:?}"));
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[test]
 fn every_request_validates_against_the_cddl() {
     let msgs = [
@@ -91,6 +95,93 @@ fn every_response_validates_against_the_cddl() {
     ] {
         assert_valid(&m);
     }
+}
+
+// The `cddl` crate stops discriminating a field's type once the rule sits
+// inside a multi-arm choice, so the three tests above cannot prove
+// bundle_cbor is a bstr: both the real bstr frame and an array-for-bstr frame
+// validate against proto/ipc.cddl. Rooting pair-args does discriminate, so
+// this validates the args object on its own against a snippet whose FIRST rule
+// is that root (the third argument of validate_cbor_from_slice is a list of
+// control names, not rule names, so the root must be the file's entry point).
+// The accepted bytes are separately pinned in
+// version_tests::pair_carries_its_bundle_as_a_cbor_byte_string.
+#[test]
+fn the_cddl_rejects_a_pair_whose_bundle_is_a_cbor_array() {
+    // The real args object: cut out of a frame the engine actually emits, so
+    // this can never drift from the wire.
+    let real = frame_body(&IpcMessage::Request(IpcRequest::Pair {
+        addr: "10.0.0.2:9000".into(),
+        bundle_cbor: vec![1, 2, 3],
+    }));
+    let at = real
+        .windows(6)
+        .position(|w| *w == [0xa1, 0x64, b'P', b'a', b'i', b'r'][..])
+        .expect("a Pair frame carries an a1 64 Pair map header")
+        + 6;
+    cddl::validate_cbor_from_slice(&rooted_pair_args(), &real[at..], None)
+        .unwrap_or_else(|e| panic!("the real bstr pair-args must validate: {e:?}"));
+    // Guard the guard: the args object really is the bstr form, so if the
+    // bstr_bytes module ever regresses to serde's array this slice changes and
+    // the validate() below stops proving anything.
+    assert_eq!(
+        hex(&real[at..]),
+        "a264616464726d31302e302e302e323a393030306b62756e646c655f63626f7243010203",
+        "the extracted pair-args must be the a2 addr + bstr shape"
+    );
+
+    // The same frame with the bundle as a CBOR array, which is what serde
+    // emitted before daak-ipc gained its local bstr_bytes module: a `&[u8]`
+    // field serialises as an array exactly the way a bare Vec<u8> did.
+    #[derive(serde::Serialize)]
+    struct Frame<'a> {
+        v: u16,
+        msg: Msg<'a>,
+    }
+    #[derive(serde::Serialize)]
+    enum Msg<'a> {
+        Request(Req<'a>),
+    }
+    #[derive(serde::Serialize)]
+    enum Req<'a> {
+        Pair {
+            addr: &'a str,
+            bundle_cbor: &'a [u8],
+        },
+    }
+    let mut arr = Vec::new();
+    ciborium::ser::into_writer(
+        &Frame {
+            v: IPC_VERSION,
+            msg: Msg::Request(Req::Pair {
+                addr: "10.0.0.2:9000",
+                bundle_cbor: &[1, 2, 3],
+            }),
+        },
+        &mut arr,
+    )
+    .unwrap();
+    let at = arr
+        .windows(6)
+        .position(|w| *w == [0xa1, 0x64, b'P', b'a', b'i', b'r'][..])
+        .expect("a Pair frame carries an a1 64 Pair map header")
+        + 6;
+    assert!(
+        cddl::validate_cbor_from_slice(&rooted_pair_args(), &arr[at..], None).is_err(),
+        "the CDDL must reject an array bundle_cbor, or it is not checking the field"
+    );
+}
+
+/// The pair-args rule from proto/ipc.cddl, repeated as the FIRST (and so
+/// entry-point) rule of a minimal document so the validator roots there.
+fn rooted_pair_args() -> String {
+    let src = cddl_src();
+    let at = src
+        .find("pair-args =")
+        .expect("proto/ipc.cddl defines pair-args");
+    let rest = &src[at..];
+    let end = rest.find("\n\n").expect("pair-args is a single-line rule");
+    format!("{}\n", &rest[..end])
 }
 
 #[test]

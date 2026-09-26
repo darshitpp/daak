@@ -62,8 +62,13 @@ export type IpcResponse =
  * "update required" affordance, so it needs a name and the minimum major.
  */
 export class IpcVersionError extends Error {
-  constructor(readonly peerVersion: number) {
-    super(`daakd speaks IPC version 0x${peerVersion.toString(16)}; this build speaks major ${IPC_MAJOR}`);
+  /** `undefined` means the frame carried no "v" at all. */
+  constructor(readonly peerVersion: number | undefined) {
+    super(
+      peerVersion === undefined
+        ? `daakd sent no IPC version; this build speaks major ${IPC_MAJOR}`
+        : `daakd speaks IPC version 0x${peerVersion.toString(16)}; this build speaks major ${IPC_MAJOR}`,
+    );
     this.name = 'IpcVersionError';
   }
 }
@@ -91,7 +96,7 @@ export function encodeMessage(msg: IpcMessage, version: number = IPC_VERSION): B
 }
 
 /** Decode a whole frame: `{ v, msg }`. Callers want `.msg`. */
-export function decodeFrame(frame: Buffer): { v: number; msg: IpcMessage } {
+export function decodeFrame(frame: Buffer): { v?: number; msg: IpcMessage } {
   if (frame.length < 8 || !frame.subarray(0, 4).equals(MAGIC)) {
     throw new Error(`bad IPC magic in frame: ${Buffer.from(frame.subarray(0, 4)).toString('hex')}`);
   }
@@ -99,7 +104,11 @@ export function decodeFrame(frame: Buffer): { v: number; msg: IpcMessage } {
   if (n > MAX_FRAME) throw new Error(`frame of ${n} bytes exceeds the ${MAX_FRAME} cap`);
   if (frame.length < 8 + n) throw new Error(`frame claims ${n} bytes but carries ${frame.length - 8}`);
   const decoded = decoder.decode(frame.subarray(8, 8 + n)) as { v?: number; msg?: IpcMessage };
-  return { v: decoded.v ?? IPC_VERSION, msg: decoded.msg as IpcMessage };
+  // `v` is passed through as found, INCLUDING when absent: "v" is mandatory in
+  // proto/ipc.cddl and Rust defaults a missing one to 0, which is not our
+  // major. Defaulting to IPC_VERSION here would accept a version-less frame
+  // the Rust half of this contract refuses. decodeMessage does the checking.
+  return { v: decoded.v, msg: decoded.msg as IpcMessage };
 }
 
 /**
@@ -109,7 +118,9 @@ export function decodeFrame(frame: Buffer): { v: number; msg: IpcMessage } {
  */
 export function decodeMessage(frame: Buffer): IpcMessage {
   const { v, msg } = decodeFrame(frame);
-  if (v >> 8 !== IPC_MAJOR) throw new IpcVersionError(v);
+  // An ABSENT version is a pre-version peer, which is the same user-facing
+  // outcome as a foreign major: we cannot understand this frame.
+  if (v === undefined || v >> 8 !== IPC_MAJOR) throw new IpcVersionError(v);
   return msg;
 }
 

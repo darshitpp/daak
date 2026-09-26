@@ -3,6 +3,48 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// CBOR byte string for a `Vec<u8>` field. `serde` would otherwise encode it
+/// as a CBOR ARRAY, which is not what `bstr` means in proto/ipc.cddl. This is
+/// the same trick `daak-core`'s `manifest::byte_array` uses, duplicated because
+/// that module is `pub(crate)` and daak-ipc is a leaf crate with no
+/// daak-core dependency.
+mod bstr_bytes {
+    use serde::de::{Error, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(bytes)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        struct BytesVisitor;
+
+        impl<'de> Visitor<'de> for BytesVisitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a CBOR byte string")
+            }
+
+            fn visit_bytes<E: Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                Ok(v.to_vec())
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::with_capacity(a.size_hint().unwrap_or(0));
+                while let Some(b) = a.next_element::<u8>()? {
+                    out.push(b);
+                }
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_bytes(BytesVisitor)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IpcMessage {
     Request(IpcRequest),
@@ -21,6 +63,9 @@ pub enum IpcRequest {
     Devices,
     Pair {
         addr: String,
+        // A raw byte string, NOT a CBOR array: proto/ipc.cddl says bstr and a
+        // pairing bundle is bytes. serde's Vec<u8> would emit 83 01 02 03.
+        #[serde(with = "bstr_bytes")]
         bundle_cbor: Vec<u8>,
     },
     Send {
@@ -106,14 +151,29 @@ pub enum IpcEvent {
     },
 }
 
-/// The whole frame: a schema version plus the message. `#[serde(default)]` and
-/// the ABSENCE of `deny_unknown_fields` are load-bearing -- together they are
-/// what let a frame from a newer 1.x peer decode instead of erroring.
+/// The whole frame: a schema version plus the message. The ABSENCE of
+/// `deny_unknown_fields` is load-bearing -- it is what lets a frame from a
+/// newer 1.x peer (one that added a key) decode instead of erroring.
+/// `#[serde(default)]` on `v` is NOT forward compatibility: a frame with no
+/// version at all becomes 0 and is then refused by the major check, which is
+/// the intended behaviour and matches proto/ipc.cddl, where "v" is mandatory.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IpcFrame {
     #[serde(default)]
     pub v: u16,
     pub msg: IpcMessage,
+}
+
+/// Just the frame's version header. `read_message` deserializes this FIRST so a
+/// foreign major is reported as `UpdateRequired` before the body is decoded at
+/// all -- a major bump is usually accompanied by renamed variants, and those
+/// would otherwise be a hard serde error the version check never sees. It
+/// carries no `msg`, and the ABSENCE of `deny_unknown_fields` is what lets it
+/// read the version out of a frame whose body this build cannot name.
+#[derive(Debug, Deserialize)]
+struct FrameVersion {
+    #[serde(default)]
+    v: u16,
 }
 
 /// The IPC schema version this build speaks. HIGH byte = major, low byte =
@@ -174,16 +234,25 @@ pub async fn read_message<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<IpcM
     }
     let mut buf = vec![0u8; n];
     r.read_exact(&mut buf).await?;
-    let frame: IpcFrame =
+    // Read the VERSION before the body. The rule is:
+    //   body we cannot NAME  (unknown variant) -> UpdateRequired; we have no
+    //     idea what it means, and a peer that renamed its variants is exactly
+    //     what a major bump is for. Reporting a CBOR error here shows the user
+    //     a dropped socket instead of an update prompt.
+    //   body that is genuinely MALFORMED on an accepted major -> Cbor error;
+    //     telling that user to update would send them for a fix that cannot
+    //     help.
+    // Reading the body first conflated the two and made UpdateRequired
+    // unreachable for a realistic bump.
+    let version: FrameVersion =
         ciborium::de::from_reader(buf.as_slice()).map_err(|e| IpcError::Cbor(e.to_string()))?;
-    // Read the body BEFORE the version check: a body we cannot parse is a
-    // protocol bug, and reporting "update required" for it would send the user
-    // off to download a fix that cannot help.
-    if frame.v >> 8 != IPC_MAJOR {
+    if version.v >> 8 != IPC_MAJOR {
         return Err(IpcError::UpdateRequired {
             min_major: IPC_MAJOR,
         });
     }
+    let frame: IpcFrame =
+        ciborium::de::from_reader(buf.as_slice()).map_err(|e| IpcError::Cbor(e.to_string()))?;
     Ok(Some(frame.msg))
 }
 
@@ -363,6 +432,61 @@ mod version_tests {
     }
 
     #[test]
+    fn a_foreign_major_with_a_body_we_cannot_name_is_still_update_required() {
+        // The case the version header exists for: a peer on another major
+        // ALSO renamed or added variants, so our body enum cannot decode it.
+        // Decoding the body first turned this into a CBOR error and the peer
+        // only ever saw a closed socket.
+        #[derive(serde::Serialize)]
+        struct FutureFrame<'a> {
+            v: u16,
+            msg: &'a str,
+        }
+        let body = FutureFrame {
+            v: 2 << 8,
+            msg: "SubscribeV2",
+        };
+        let mut inner = Vec::new();
+        ciborium::ser::into_writer(&body, &mut inner).unwrap();
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&IPC_MAGIC);
+        wire.extend_from_slice(&(inner.len() as u32).to_be_bytes());
+        wire.extend_from_slice(&inner);
+
+        let mut cur = std::io::Cursor::new(wire);
+        match block_on(read_message(&mut cur)).unwrap_err() {
+            IpcError::UpdateRequired { min_major } => assert_eq!(min_major, IPC_MAJOR),
+            other => panic!("expected UpdateRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_frame_with_no_version_at_all_is_refused() {
+        // `v` is mandatory in proto/ipc.cddl. A frame without one is either a
+        // pre-version peer or a truncated header, and either way it is not a
+        // frame we can trust, so it must not decode as a normal message.
+        #[derive(serde::Serialize)]
+        struct Unversioned<'a> {
+            msg: &'a IpcMessage,
+        }
+        let body = Unversioned {
+            msg: &IpcMessage::Request(IpcRequest::Subscribe),
+        };
+        let mut inner = Vec::new();
+        ciborium::ser::into_writer(&body, &mut inner).unwrap();
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&IPC_MAGIC);
+        wire.extend_from_slice(&(inner.len() as u32).to_be_bytes());
+        wire.extend_from_slice(&inner);
+
+        let mut cur = std::io::Cursor::new(wire);
+        assert!(matches!(
+            block_on(read_message(&mut cur)),
+            Err(IpcError::UpdateRequired { .. })
+        ));
+    }
+
+    #[test]
     fn a_newer_minor_on_our_major_is_accepted() {
         // Forward compatible WITHIN a major: a 1.9 peer talks to a 1.0 daemon.
         let wire = frame_bytes(
@@ -438,5 +562,42 @@ mod version_tests {
             block_on(write_message(&mut wire, msg)).unwrap();
             assert_eq!(&hex(&wire), want, "frame bytes for {msg:?} changed");
         }
+    }
+
+    // Pair's bundle_cbor is the one place this wire carries raw bytes, and
+    // proto/ipc.cddl says bstr while a bare Vec<u8> would serialise as a CBOR
+    // ARRAY. The CDDL validator cannot prove the difference (it stops
+    // discriminating fields once a rule is a multi-arm choice), so the bytes
+    // are pinned here and in packages/core/test/transport.spec.ts instead.
+    #[test]
+    fn pair_carries_its_bundle_as_a_cbor_byte_string() {
+        let msg = IpcMessage::Request(IpcRequest::Pair {
+            addr: "10.0.0.2:9000".into(),
+            bundle_cbor: vec![1, 2, 3],
+        });
+        let mut body = Vec::new();
+        ciborium::ser::into_writer(
+            &IpcFrame {
+                v: IPC_VERSION,
+                msg: msg.clone(),
+            },
+            &mut body,
+        )
+        .unwrap();
+        assert!(
+            body.windows(2).any(|w| w == [0x43, 0x01]),
+            "bundle_cbor must be a 3-byte bstr (43 01 02 03), got {}",
+            hex(&body)
+        );
+
+        let mut wire = Vec::new();
+        block_on(write_message(&mut wire, &msg)).unwrap();
+        assert_eq!(
+            hex(&wire),
+            "4441414b0000003da26176190100636d7367a16752657175657374a16450616972a264616464726d31302e302e302e323a393030306b62756e646c655f63626f7243010203",
+            "pair frame bytes changed"
+        );
+        let mut cur = std::io::Cursor::new(wire);
+        assert_eq!(block_on(read_message(&mut cur)).unwrap(), Some(msg));
     }
 }

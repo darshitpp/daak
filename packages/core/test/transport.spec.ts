@@ -4,6 +4,7 @@ import {
   decodeFrame,
   decodeMessage,
   IpcTransport,
+  IpcVersionError,
   MAGIC,
   MAX_FRAME,
   IPC_MAJOR,
@@ -28,6 +29,11 @@ const RUST_ERROR =
   '4441414b00000032a26176190100636d7367a168526573706f6e7365a1654572726f72a1676d6573736167656d756e696d706c656d656e746564';
 const RUST_INBOX =
   '4441414b00000036a26176190100636d7367a1654576656e74a16d496e626f785265636569766564a16c7061796c6f61645f6a736f6e677b2261223a317d';
+// bundle_cbor is a CBOR bstr (43 01 02 03), not the array serde emits for a
+// bare Vec<u8> (83 01 02 03). proto/ipc.cddl says bstr and the CDDL validator
+// cannot tell the two apart, so the bytes are pinned on both sides.
+const RUST_PAIR =
+  '4441414b0000003da26176190100636d7367a16752657175657374a16450616972a264616464726d31302e302e302e323a393030306b62756e646c655f63626f7243010203';
 
 // Pinned hex is the INPUT; a decode must survive the version header and hand
 // back just the message.
@@ -40,6 +46,12 @@ function stripVersion(frame: Buffer): Record<string, unknown> {
 describe('ipc transport', () => {
   it('decodes the exact bytes daak-ipc writes for Subscribe', () => {
     expect(stripVersion(Buffer.from(RUST_SUBSCRIBE, 'hex'))).toEqual({ Request: 'Subscribe' });
+  });
+
+  it('decodes a Pair bundle as a byte string, matching the Rust encoder', () => {
+    expect(stripVersion(Buffer.from(RUST_PAIR, 'hex'))).toEqual({
+      Request: { Pair: { addr: '10.0.0.2:9000', bundle_cbor: Buffer.from([1, 2, 3]) } },
+    });
   });
 
   it('encodes a request the Rust side can decode', () => {
@@ -104,6 +116,19 @@ describe('ipc transport', () => {
 
   it('rejects a bad magic', () => {
     expect(() => decodeMessage(Buffer.from('NOPE', 'ascii'))).toThrow(/magic/);
+  });
+
+  it('refuses a frame with no version at all, exactly as the Rust side does', () => {
+    // proto/ipc.cddl makes "v" mandatory and Rust's default for a missing one
+    // is 0, which is not our major. Treating an absent version as OURS would
+    // accept a pre-version (or truncated-header) peer that Rust refuses.
+    const enc = new Encoder({ mapsAsObjects: true, useRecords: false, variableMapSize: true });
+    const inner = Buffer.from(enc.encode({ msg: { Request: 'Subscribe' } }));
+    const head = Buffer.alloc(8);
+    MAGIC.copy(head, 0);
+    head.writeUInt32BE(inner.length, 4);
+    const frame = Buffer.concat([head, inner]);
+    expect(() => decodeMessage(frame)).toThrow(IpcVersionError);
   });
 
   // The socket delivers arbitrary chunk boundaries, so a frame's 8-byte
