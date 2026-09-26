@@ -20,7 +20,6 @@ interface FfiEvent {
   TransferItem(TransferItemEvent data);
   TransferDone(DoneEvent data);
   TransferFailed(FailedEvent data);
-  TransferQueued(DoneEvent data);
   InboxReceived(InboxReceivedEvent data);
 };
 

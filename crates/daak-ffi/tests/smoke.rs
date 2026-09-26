@@ -293,17 +293,6 @@ fn ffi_event_json_carries_the_frozen_ts_daak_event_keys() {
         }),
         ["error", "transferId", "type"].map(String::from)
     );
-
-    // Queued reuses transfer.done: the TS union has no transfer.queued, because
-    // a queued send is a send() return value, not an event.
-    let queued_json = daak_ffi::ffi_event_json(&FfiEvent::TransferQueued {
-        data: daak_ffi::DoneEvent {
-            transfer_id: hex.clone(),
-        },
-    })
-    .unwrap();
-    assert!(queued_json.contains("transfer.done"));
-    assert!(!queued_json.contains("transfer.queued"));
 }
 
 #[test]

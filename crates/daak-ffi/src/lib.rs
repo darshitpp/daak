@@ -93,7 +93,6 @@ pub enum FfiEvent {
     TransferItem { data: TransferItemEvent },
     TransferDone { data: DoneEvent },
     TransferFailed { data: FailedEvent },
-    TransferQueued { data: DoneEvent },
     InboxReceived { data: InboxReceivedEvent },
 }
 
@@ -444,12 +443,6 @@ pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
             "destPath": data.dest_path,
         }),
         FfiEvent::TransferDone { data } => serde_json::json!({
-            "type": "transfer.done",
-            "transferId": data.transfer_id,
-        }),
-        // Queued reuses transfer.done on purpose: the TS union has no
-        // transfer.queued, because a queued send is a send() return value.
-        FfiEvent::TransferQueued { data } => serde_json::json!({
             "type": "transfer.done",
             "transferId": data.transfer_id,
         }),
