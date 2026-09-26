@@ -1,22 +1,51 @@
 ; proto/ipc.cddl
 ;
-; IPC schema for the desktop DaemonClientEngine <-> daakd protocol (spec §6.3).
-; Mirrors the IpcMessage / IpcRequest / IpcResponse / IpcEvent enums defined in
-; docs/superpowers/plans/2026-09-14-phase-4-ffi-turbomodule-daemon.md (Task 5),
-; with one addition: every top-level frame carries the schema version "v" so a
-; version mismatch is explicit rather than a decode failure (spec §1.3.5).
+; IPC schema for the desktop daakd <-> DaemonClientEngine protocol (spec 6.3).
+; This file is the schema source of truth; the wire layout is documented in
+; crates/daak-ipc/src/lib.rs and the encoding is CHECKED against this file by
+; crates/daak-ipc/tests/schema.rs.
 ;
-; This file is the source of truth. Rust and TypeScript types are generated from
-; it by proto/codegen.sh. Never edit proto/gen by hand.
+; GENERATED FROM / CHECKED AGAINST THE SERDE DERIVES, not the other way round.
+; The Rust enums use serde's default EXTERNALLY TAGGED representation, which
+; is what T7 byte-verified against the cbor-x config in
+; packages/core/src/ipc/transport.ts. So a message is a ONE-KEY MAP whose key
+; is the PascalCase variant name, and a UNIT variant is a bare string:
+;
+;   IpcRequest::Subscribe   -> {"Request": "Subscribe"}
+;   IpcRequest::Start{..}   -> {"Request": {"Start": {..}}}
+;   IpcResponse::Ok        -> {"Response": "Ok"}
+;   IpcResponse::Json{..}  -> {"Response": {"Json": {"value": "<STRING>"}}}
+;
+; cddl-codegen's output for this file does NOT match that encoding: it renames
+; every variant (IpcRequest::Subscribe becomes enum SubscribeRequest(String)
+; whose only value is the literal "ValueText44657669636573") and re-tags the
+; payloads as {"StartRequest": {"start": ..}}. Those types do not serialise to
+; the wire, so proto/gen is regenerated for REVIEW and schema-diff purposes
+; ONLY -- the Rust and TS types come from the serde derives, pinned against
+; this file by crates/daak-ipc/tests/schema.rs. Do not re-tag the enums to suit
+; the generator: that would break every hex fixture in
+; packages/core/test/transport.spec.ts.
+;
+; "v" is the IPC schema version, a uint whose HIGH BYTE is the major and low
+; byte the minor (spec 1.3.5). A peer is compatible when (v >> 8) == IPC_MAJOR,
+; so a newer minor is accepted and a different major is refused with
+; IpcResponse::UpdateRequired / IpcError::UpdateRequired.
 
-; ---------- envelope ----------
-ipc-message = {
-  "v":   uint,                        ; IPC schema version; bump on breaking change
-  "msg": ipc-request / ipc-response / ipc-event,
-  ? "extensions": extensions,         ; forward-compat fields: preserved, never fatal
+; ---------- frame ----------
+ipc-frame = {
+  "v":   uint,
+  "msg": ipc-message,
 }
 
-extensions = { * tstr => any }
+; Each arm is its OWN named rule, not an inline map: the pinned cddl-codegen
+; rejects a heterogeneous inline map used as a type inside a choice group
+; ("Anonymous groups not allowed: a heterogeneous inline map is used where a
+; type is required").
+ipc-message = request-arm / response-arm / event-arm
+
+request-arm  = { "Request":  ipc-request }
+response-arm = { "Response": ipc-response }
+event-arm    = { "Event":    ipc-event }
 
 ; ---------- IpcRequest ----------
 ipc-request =
@@ -63,7 +92,6 @@ send-args = {
 }
 
 display-name-args = { "name": tstr }
-
 set-presence-args = { "state": tstr }
 
 ; ---------- IpcResponse ----------
@@ -72,22 +100,29 @@ ipc-response =
   / error-response
   / json-response
   / port-response
+  / update-required-response
 
 ok-response    = "Ok"
 error-response = { "Error": error-args }
 json-response  = { "Json": json-args }
 port-response  = { "Port": port-args }
 
-error-args = { "message": tstr }
-json-args  = { "value": tstr }
-port-args  = { "port": uint }
+; Answered when the peer's frame major does not match ours. min_major is the
+; lowest major this daemon understands, so an old client knows what to fetch.
+update-required-response = { "UpdateRequired": update-required-args }
 
-; ---------- IpcEvent (mirrors spec §6.1) ----------
+error-args           = { "message": tstr }
+json-args            = { "value": tstr }
+port-args            = { "port": uint }
+update-required-args = { "min_major": uint }
+
+; ---------- IpcEvent (mirrors spec 6.1) ----------
 ipc-event =
     device-found-event
   / device-state-event
   / pairing-sas-event
   / transfer-progress-event
+  / transfer-item-event
   / transfer-done-event
   / transfer-failed-event
   / inbox-received-event
@@ -96,6 +131,7 @@ device-found-event      = { "DeviceFound": device-found-args }
 device-state-event      = { "DeviceState": device-state-args }
 pairing-sas-event       = { "PairingSas": pairing-sas-args }
 transfer-progress-event = { "TransferProgress": transfer-progress-args }
+transfer-item-event     = { "TransferItem": transfer-item-args }
 transfer-done-event     = { "TransferDone": transfer-ref }
 transfer-failed-event   = { "TransferFailed": transfer-failed-args }
 inbox-received-event    = { "InboxReceived": inbox-received-args }
@@ -104,5 +140,8 @@ device-found-args      = { "device_id": tstr, "name": tstr, "addr": tstr }
 device-state-args      = { "device_id": tstr, "online": bool }
 pairing-sas-args       = { "peer_device_id": tstr, "sas": tstr }
 transfer-progress-args = { "transfer_id": tstr, "bytes_done": uint, "bytes_total": uint }
+transfer-item-args     = { "transfer_id": tstr, "item_index": uint, "state": tstr, "dest_path": tstr }
 transfer-failed-args   = { "transfer_id": tstr, "error": tstr }
-inbox-received-args    = { "payload": tstr }
+; payload_json is a raw JSON STRING, not an InboxEntry: the daemon does not
+; parse it and the client JSON.parses it before handing the event to TS.
+inbox-received-args    = { "payload_json": tstr }

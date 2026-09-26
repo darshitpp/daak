@@ -8,10 +8,8 @@
 )]
 
 extern crate alloc;
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-pub mod any_cbor;
 pub mod error;
 mod extern_interface_check;
 pub mod json_schema_gen;
@@ -124,16 +122,25 @@ impl ErrorResponse {
     }
 }
 
-pub type Extensions = BTreeMap<String, crate::generated::any_cbor::AnyCbor>;
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct EventArm {
+    pub event: IpcEvent,
+}
+
+impl EventArm {
+    pub fn new(event: IpcEvent) -> Self {
+        Self { event }
+    }
+}
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct InboxReceivedArgs {
-    pub payload: String,
+    pub payload_json: String,
 }
 
 impl InboxReceivedArgs {
-    pub fn new(payload: String) -> Self {
-        Self { payload }
+    pub fn new(payload_json: String) -> Self {
+        Self { payload_json }
     }
 }
 
@@ -154,6 +161,7 @@ pub enum IpcEvent {
     DeviceStateEvent(DeviceStateEvent),
     PairingSasEvent(PairingSasEvent),
     TransferProgressEvent(TransferProgressEvent),
+    TransferItemEvent(TransferItemEvent),
     TransferDoneEvent(TransferDoneEvent),
     TransferFailedEvent(TransferFailedEvent),
     InboxReceivedEvent(InboxReceivedEvent),
@@ -176,6 +184,10 @@ impl IpcEvent {
         Self::TransferProgressEvent(transfer_progress_event)
     }
 
+    pub fn new_transfer_item_event(transfer_item_event: TransferItemEvent) -> Self {
+        Self::TransferItemEvent(transfer_item_event)
+    }
+
     pub fn new_transfer_done_event(transfer_done_event: TransferDoneEvent) -> Self {
         Self::TransferDoneEvent(transfer_done_event)
     }
@@ -190,22 +202,35 @@ impl IpcEvent {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct IpcMessage {
+pub struct IpcFrame {
     pub v: u64,
-    pub msg: IpcRequestOrIpcResponseOrIpcEvent,
-    #[serde(with = "crate::generated::any_cbor::natural_any_cbor_opt_btreemap")]
-    #[serde(default)]
-    #[schemars(schema_with = "crate::generated::any_cbor::natural_any_cbor_map_schema")]
-    pub extensions: Option<Extensions>,
+    pub msg: IpcMessage,
+}
+
+impl IpcFrame {
+    pub fn new(v: u64, msg: IpcMessage) -> Self {
+        Self { v, msg }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub enum IpcMessage {
+    RequestArm(RequestArm),
+    ResponseArm(ResponseArm),
+    EventArm(EventArm),
 }
 
 impl IpcMessage {
-    pub fn new(v: u64, msg: IpcRequestOrIpcResponseOrIpcEvent) -> Self {
-        Self {
-            v,
-            msg,
-            extensions: None,
-        }
+    pub fn new_request_arm(request_arm: RequestArm) -> Self {
+        Self::RequestArm(request_arm)
+    }
+
+    pub fn new_response_arm(response_arm: ResponseArm) -> Self {
+        Self::ResponseArm(response_arm)
+    }
+
+    pub fn new_event_arm(event_arm: EventArm) -> Self {
+        Self::EventArm(event_arm)
     }
 }
 
@@ -276,32 +301,12 @@ impl IpcRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub enum IpcRequestOrIpcResponseOrIpcEvent {
-    IpcRequest(IpcRequest),
-    IpcResponse(IpcResponse),
-    IpcEvent(IpcEvent),
-}
-
-impl IpcRequestOrIpcResponseOrIpcEvent {
-    pub fn new_ipc_request(ipc_request: IpcRequest) -> Self {
-        Self::IpcRequest(ipc_request)
-    }
-
-    pub fn new_ipc_response(ipc_response: IpcResponse) -> Self {
-        Self::IpcResponse(ipc_response)
-    }
-
-    pub fn new_ipc_event(ipc_event: IpcEvent) -> Self {
-        Self::IpcEvent(ipc_event)
-    }
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub enum IpcResponse {
     OkResponse(OkResponse),
     ErrorResponse(ErrorResponse),
     JsonResponse(JsonResponse),
     PortResponse(PortResponse),
+    UpdateRequiredResponse(UpdateRequiredResponse),
 }
 
 impl IpcResponse {
@@ -319,6 +324,10 @@ impl IpcResponse {
 
     pub fn new_port_response(port_response: PortResponse) -> Self {
         Self::PortResponse(port_response)
+    }
+
+    pub fn new_update_required_response(update_required_response: UpdateRequiredResponse) -> Self {
+        Self::UpdateRequiredResponse(update_required_response)
     }
 }
 
@@ -445,6 +454,28 @@ pub struct PortResponse {
 impl PortResponse {
     pub fn new(port: PortArgs) -> Self {
         Self { port }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct RequestArm {
+    pub request: IpcRequest,
+}
+
+impl RequestArm {
+    pub fn new(request: IpcRequest) -> Self {
+        Self { request }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ResponseArm {
+    pub response: IpcResponse,
+}
+
+impl ResponseArm {
+    pub fn new(response: IpcResponse) -> Self {
+        Self { response }
     }
 }
 
@@ -605,6 +636,36 @@ impl TransferFailedEvent {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct TransferItemArgs {
+    pub transfer_id: String,
+    pub item_index: u64,
+    pub state: String,
+    pub dest_path: String,
+}
+
+impl TransferItemArgs {
+    pub fn new(transfer_id: String, item_index: u64, state: String, dest_path: String) -> Self {
+        Self {
+            transfer_id,
+            item_index,
+            state,
+            dest_path,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct TransferItemEvent {
+    pub transfer_item: TransferItemArgs,
+}
+
+impl TransferItemEvent {
+    pub fn new(transfer_item: TransferItemArgs) -> Self {
+        Self { transfer_item }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct TransferProgressArgs {
     pub transfer_id: String,
     pub bytes_done: u64,
@@ -640,5 +701,27 @@ pub struct TransferRef {
 impl TransferRef {
     pub fn new(transfer_id: String) -> Self {
         Self { transfer_id }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct UpdateRequiredArgs {
+    pub min_major: u64,
+}
+
+impl UpdateRequiredArgs {
+    pub fn new(min_major: u64) -> Self {
+        Self { min_major }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct UpdateRequiredResponse {
+    pub update_required: UpdateRequiredArgs,
+}
+
+impl UpdateRequiredResponse {
+    pub fn new(update_required: UpdateRequiredArgs) -> Self {
+        Self { update_required }
     }
 }

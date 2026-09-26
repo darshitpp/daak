@@ -17,8 +17,6 @@
 fn _assert_serialize<T: cbor_event::se::Serialize>() {}
 #[allow(dead_code)]
 fn _assert_deserialize<T: crate::generated::serialization::Deserialize>() {}
-#[allow(unused_imports)]
-use crate::generated::Extensions as _;
 #[allow(dead_code)]
 fn _extern_interface_self_check() {
     _assert_serialize::<crate::generated::CancelRequest>();
@@ -39,12 +37,16 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::ErrorArgs>();
     _assert_serialize::<crate::generated::ErrorResponse>();
     _assert_deserialize::<crate::generated::ErrorResponse>();
+    _assert_serialize::<crate::generated::EventArm>();
+    _assert_deserialize::<crate::generated::EventArm>();
     _assert_serialize::<crate::generated::InboxReceivedArgs>();
     _assert_deserialize::<crate::generated::InboxReceivedArgs>();
     _assert_serialize::<crate::generated::InboxReceivedEvent>();
     _assert_deserialize::<crate::generated::InboxReceivedEvent>();
     _assert_serialize::<crate::generated::IpcEvent>();
     _assert_deserialize::<crate::generated::IpcEvent>();
+    _assert_serialize::<crate::generated::IpcFrame>();
+    _assert_deserialize::<crate::generated::IpcFrame>();
     _assert_serialize::<crate::generated::IpcMessage>();
     _assert_deserialize::<crate::generated::IpcMessage>();
     _assert_serialize::<crate::generated::IpcRequest>();
@@ -73,6 +75,10 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::PortArgs>();
     _assert_serialize::<crate::generated::PortResponse>();
     _assert_deserialize::<crate::generated::PortResponse>();
+    _assert_serialize::<crate::generated::RequestArm>();
+    _assert_deserialize::<crate::generated::RequestArm>();
+    _assert_serialize::<crate::generated::ResponseArm>();
+    _assert_deserialize::<crate::generated::ResponseArm>();
     _assert_serialize::<crate::generated::RetryRequest>();
     _assert_deserialize::<crate::generated::RetryRequest>();
     _assert_serialize::<crate::generated::SendArgs>();
@@ -99,10 +105,18 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::TransferFailedArgs>();
     _assert_serialize::<crate::generated::TransferFailedEvent>();
     _assert_deserialize::<crate::generated::TransferFailedEvent>();
+    _assert_serialize::<crate::generated::TransferItemArgs>();
+    _assert_deserialize::<crate::generated::TransferItemArgs>();
+    _assert_serialize::<crate::generated::TransferItemEvent>();
+    _assert_deserialize::<crate::generated::TransferItemEvent>();
     _assert_serialize::<crate::generated::TransferProgressArgs>();
     _assert_deserialize::<crate::generated::TransferProgressArgs>();
     _assert_serialize::<crate::generated::TransferProgressEvent>();
     _assert_deserialize::<crate::generated::TransferProgressEvent>();
     _assert_serialize::<crate::generated::TransferRef>();
     _assert_deserialize::<crate::generated::TransferRef>();
+    _assert_serialize::<crate::generated::UpdateRequiredArgs>();
+    _assert_deserialize::<crate::generated::UpdateRequiredArgs>();
+    _assert_serialize::<crate::generated::UpdateRequiredResponse>();
+    _assert_deserialize::<crate::generated::UpdateRequiredResponse>();
 }

@@ -1,23 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { encodeMessage, decodeMessage, IpcTransport, MAGIC, MAX_FRAME } from '../src/ipc/transport';
+import {
+  encodeMessage,
+  decodeFrame,
+  decodeMessage,
+  IpcTransport,
+  MAGIC,
+  MAX_FRAME,
+  IPC_MAJOR,
+  IPC_VERSION,
+} from '../src/ipc/transport';
+import { Encoder } from 'cbor-x';
 import { EventEmitter } from 'node:events';
 
-// Real frames, 'DAAK' || u32 BE length || CBOR body, with the CBOR bodies
-// produced by daak_ipc::write_message in a throwaway probe over the shipped
-// enums -- NOT the plan's lowercase `kind` sketch, which does not exist on the
-// wire. Only the magic and the length prefix are added here. Note serde encodes
-// a UNIT variant as a bare string, so Subscribe is {"Request":"Subscribe"}.
+// Real frames: 'DAAK' || u32 BE length || CBOR({"v":<version>,"msg":<IpcMessage>}).
+// The CBOR bodies are produced by daak_ipc::write_message in a throwaway probe
+// over the shipped enums -- NOT the plan's lowercase `kind` sketch, which does
+// not exist on the wire. Note serde encodes a UNIT variant as a bare string, so
+// Subscribe is {"Request":"Subscribe"}, and the version is a uint whose HIGH
+// byte is the major: 1.0 is 0x0100 = 256, so "01 00" on the wire.
+//
+// The two versioned frames below are pinned byte-for-byte in
+// crates/daak-ipc/src/lib.rs (version_tests), so Rust and TS cannot drift.
 const RUST_SUBSCRIBE =
-  '4441414b00000013a1675265717565737469537562736372696265';
-const RUST_OK = '4441414b0000000da168526573706f6e7365624f6b';
+  '4441414b0000001da26176190100636d7367a1675265717565737469537562736372696265';
+const RUST_OK = '4441414b00000017a26176190100636d7367a168526573706f6e7365624f6b';
 const RUST_ERROR =
-  '4441414b00000028a168526573706f6e7365a1654572726f72a1676d6573736167656d756e696d706c656d656e746564';
+  '4441414b00000032a26176190100636d7367a168526573706f6e7365a1654572726f72a1676d6573736167656d756e696d706c656d656e746564';
 const RUST_INBOX =
-  '4441414b0000002ca1654576656e74a16d496e626f785265636569766564a16c7061796c6f61645f6a736f6e677b2261223a317d';
+  '4441414b00000036a26176190100636d7367a1654576656e74a16d496e626f785265636569766564a16c7061796c6f61645f6a736f6e677b2261223a317d';
+
+// Pinned hex is the INPUT; a decode must survive the version header and hand
+// back just the message.
+function stripVersion(frame: Buffer): Record<string, unknown> {
+  const decoded = decodeFrame(frame);
+  expect(decoded.v).toBe(IPC_VERSION);
+  return decoded.msg as Record<string, unknown>;
+}
 
 describe('ipc transport', () => {
   it('decodes the exact bytes daak-ipc writes for Subscribe', () => {
-    expect(decodeMessage(Buffer.from(RUST_SUBSCRIBE, 'hex'))).toEqual({ Request: 'Subscribe' });
+    expect(stripVersion(Buffer.from(RUST_SUBSCRIBE, 'hex'))).toEqual({ Request: 'Subscribe' });
   });
 
   it('encodes a request the Rust side can decode', () => {
@@ -26,21 +48,46 @@ describe('ipc transport', () => {
 
   it('round-trips a request the daemon answers', () => {
     const req = { Request: { Start: { data_dir: '', display_name: 'daak', listen_port: 0 } } };
-    expect(decodeMessage(encodeMessage(req))).toEqual(req);
+    expect(stripVersion(encodeMessage(req))).toEqual(req);
   });
 
   it('decodes a Rust unit response (serde encodes IpcResponse::Ok as "Ok")', () => {
-    expect(decodeMessage(Buffer.from(RUST_OK, 'hex'))).toEqual({ Response: 'Ok' });
+    expect(stripVersion(Buffer.from(RUST_OK, 'hex'))).toEqual({ Response: 'Ok' });
   });
 
   it('decodes a Rust error response', () => {
-    expect(decodeMessage(Buffer.from(RUST_ERROR, 'hex'))).toEqual({ Response: { Error: { message: 'unimplemented' } } });
+    expect(stripVersion(Buffer.from(RUST_ERROR, 'hex'))).toEqual({ Response: { Error: { message: 'unimplemented' } } });
   });
 
   it('decodes InboxReceived with payload_json as a raw JSON string', () => {
-    expect(decodeMessage(Buffer.from(RUST_INBOX, 'hex'))).toEqual({
+    expect(stripVersion(Buffer.from(RUST_INBOX, 'hex'))).toEqual({
       Event: { InboxReceived: { payload_json: '{"a":1}' } },
     });
+  });
+
+  it('refuses a frame whose major it does not implement', () => {
+    // A 2.x peer: the reader must name the mismatch rather than hand the
+    // message on and fail somewhere less obvious.
+    expect(() => decodeMessage(encodeMessage({ Request: 'Subscribe' }, 2 << 8)))
+      .toThrow(/update required|version/i);
+  });
+
+  it('accepts a different minor on our major (forward compatible)', () => {
+    const newer = (IPC_MAJOR << 8) | 9;
+    expect(decodeFrame(encodeMessage({ Request: 'Subscribe' }, newer)).v).toBe(newer);
+  });
+
+  it('ignores unknown extra keys in a frame instead of rejecting it', () => {
+    // A future peer adds a key we have never heard of; the message must still
+    // decode. This is the property the version header exists to buy.
+    const enc = new Encoder({ mapsAsObjects: true, useRecords: false, variableMapSize: true });
+    const inner = Buffer.from(
+      enc.encode({ v: IPC_VERSION, msg: { Request: 'Subscribe' }, future_hint: 'later' }),
+    );
+    const head = Buffer.alloc(8);
+    MAGIC.copy(head, 0);
+    head.writeUInt32BE(inner.length, 4);
+    expect(stripVersion(Buffer.concat([head, inner]))).toEqual({ Request: 'Subscribe' });
   });
 
   it('rejects a frame above the 4 MiB cap instead of allocating it', () => {

@@ -1,5 +1,14 @@
 import type { DaakEngine, DaakEvent, DeviceInfo, InboxEntry, ItemState, SendRequest } from './types';
-import { IpcTransport, type IpcEvent } from '../ipc/transport';
+import {
+  IpcTransport,
+  IpcUpdateRequiredError,
+  type IpcEvent,
+} from '../ipc/transport';
+
+// Re-exported so the UI can catch a version mismatch without knowing which
+// transport produced it: `catch (e) { if (e instanceof IpcUpdateRequiredError)
+// showUpdatePrompt() }`.
+export { IpcUpdateRequiredError, IpcVersionError } from '../ipc/transport';
 
 // The DaakEngine over the daakd IPC socket. Every method maps onto one
 // IpcRequest variant; there is no lowercase `kind` envelope, the plan's sketch
@@ -92,6 +101,12 @@ export class DaemonClientEngine implements DaakEngine {
 
   private async json(req: unknown): Promise<string> {
     const r = await this.tx.request({ Request: req });
+    // A version mismatch is not a malformed reply, so it must NOT fall into
+    // the "expected a Json response" error below: the caller needs the name
+    // and the min_major to show an update prompt.
+    if (typeof r === 'object' && r !== null && 'UpdateRequired' in r) {
+      throw new IpcUpdateRequiredError(r.UpdateRequired.min_major);
+    }
     if (typeof r === 'object' && r !== null && 'Json' in r) return r.Json.value;
     // No Port branch on purpose: nothing asks for one today, and a default of
     // 'null' here turned a malformed reply into a null-deref or a silent null

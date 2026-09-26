@@ -1,44 +1,3 @@
-export type AnyCborJSON =
-  | {
-      uint: number;
-    }
-  | {
-      nint: number | string;
-    }
-  | {
-      bytes: string;
-    }
-  | {
-      text: string;
-    }
-  | {
-      array: AnyCborJSON[];
-    }
-  | {
-      map: [unknown, unknown][];
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      tag: [unknown, unknown];
-    }
-  | {
-      bool: boolean;
-    }
-  | {
-      null: null;
-    }
-  | {
-      undefined: null;
-    }
-  | {
-      unassigned: number;
-    }
-  | {
-      float: number | string;
-    };
 export type DevicesRequestJSON = "ValueText44657669636573";
 export type IpcEventJSON =
   | {
@@ -54,6 +13,9 @@ export type IpcEventJSON =
       TransferProgressEvent: TransferProgressEventJSON;
     }
   | {
+      TransferItemEvent: TransferItemEventJSON;
+    }
+  | {
       TransferDoneEvent: TransferDoneEventJSON;
     }
   | {
@@ -62,15 +24,15 @@ export type IpcEventJSON =
   | {
       InboxReceivedEvent: InboxReceivedEventJSON;
     };
-export type IpcRequestOrIpcResponseOrIpcEventJSON =
+export type IpcMessageJSON =
   | {
-      IpcRequest: IpcRequestJSON;
+      RequestArm: RequestArmJSON;
     }
   | {
-      IpcResponse: IpcResponseJSON;
+      ResponseArm: ResponseArmJSON;
     }
   | {
-      IpcEvent: IpcEventJSON;
+      EventArm: EventArmJSON;
     };
 export type IpcRequestJSON =
   | {
@@ -125,6 +87,9 @@ export type IpcResponseJSON =
     }
   | {
       PortResponse: PortResponseJSON;
+    }
+  | {
+      UpdateRequiredResponse: UpdateRequiredResponseJSON;
     };
 export type OkResponseJSON = "ValueText4F6B";
 
@@ -158,11 +123,8 @@ export interface ErrorArgsJSON {
 export interface ErrorResponseJSON {
   error: ErrorArgsJSON;
 }
-export interface InboxReceivedArgsJSON {
-  payload: string;
-}
-export interface InboxReceivedEventJSON {
-  inbox_received: InboxReceivedArgsJSON;
+export interface EventArmJSON {
+  event: IpcEventJSON;
 }
 export interface PairingSasEventJSON {
   pairing_sas: PairingSasArgsJSON;
@@ -179,6 +141,15 @@ export interface TransferProgressArgsJSON {
   bytes_total: number;
   transfer_id: string;
 }
+export interface TransferItemEventJSON {
+  transfer_item: TransferItemArgsJSON;
+}
+export interface TransferItemArgsJSON {
+  dest_path: string;
+  item_index: number;
+  state: string;
+  transfer_id: string;
+}
 export interface TransferDoneEventJSON {
   transfer_done: TransferRefJSON;
 }
@@ -189,12 +160,18 @@ export interface TransferFailedArgsJSON {
   error: string;
   transfer_id: string;
 }
-export interface IpcMessageJSON {
-  extensions?: {
-    [k: string]: unknown;
-  };
-  msg: IpcRequestOrIpcResponseOrIpcEventJSON;
+export interface InboxReceivedEventJSON {
+  inbox_received: InboxReceivedArgsJSON;
+}
+export interface InboxReceivedArgsJSON {
+  payload_json: string;
+}
+export interface IpcFrameJSON {
+  msg: IpcMessageJSON;
   v: number;
+}
+export interface RequestArmJSON {
+  request: IpcRequestJSON;
 }
 export interface StartRequestJSON {
   start: StartArgsJSON;
@@ -231,6 +208,9 @@ export interface SetPresenceRequestJSON {
 export interface SetPresenceArgsJSON {
   state: string;
 }
+export interface ResponseArmJSON {
+  response: IpcResponseJSON;
+}
 export interface JsonResponseJSON {
   json: JsonArgsJSON;
 }
@@ -242,4 +222,10 @@ export interface PortResponseJSON {
 }
 export interface PortArgsJSON {
   port: number;
+}
+export interface UpdateRequiredResponseJSON {
+  update_required: UpdateRequiredArgsJSON;
+}
+export interface UpdateRequiredArgsJSON {
+  min_major: number;
 }

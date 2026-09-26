@@ -53,6 +53,20 @@ pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std
             loop {
                 tokio::select! {
                     msg = &mut rd_fut => {
+                        // A major-version mismatch is answerable: tell the
+                        // peer the lowest major we speak, then drop it. Without
+                        // this the client only sees a closed socket and cannot
+                        // tell an old app from a dead daemon.
+                        if let Err(daak_ipc::IpcError::UpdateRequired { min_major }) = &msg {
+                            let _ = write_message(
+                                &mut wr,
+                                &IpcMessage::Response(IpcResponse::UpdateRequired {
+                                    min_major: *min_major,
+                                }),
+                            )
+                            .await;
+                            break;
+                        }
                         // A clean disconnect (Ok(None)) and a truncated body
                         // (Err) both end this connection.
                         let Some(IpcMessage::Request(req)) = msg.ok().flatten() else {

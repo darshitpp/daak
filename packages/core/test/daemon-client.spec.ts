@@ -2,7 +2,7 @@
 // This pins the request/response mapping to the real daak-ipc wire shapes; the
 // round trip against the real binary is daemon.contract.spec.ts.
 import { describe, expect, it } from 'vitest';
-import { DaemonClientEngine } from '../src/engine/DaemonClient';
+import { DaemonClientEngine, IpcUpdateRequiredError } from '../src/engine/DaemonClient';
 import type { IpcEvent, IpcMessage, IpcResponse } from '../src/ipc/transport';
 
 function makeEngine() {
@@ -75,6 +75,19 @@ describe('DaemonClientEngine', () => {
     const p = h.engine.devices();
     h.reply({ Json: { value: '{}' } });
     await expect(p).rejects.toThrow(/array/);
+  });
+
+  it('surfaces UpdateRequired as a NAMED error the UI can catch', async () => {
+    // A major-version mismatch is not a transport failure the UI should show
+    // as "something went wrong"; it means "update the app". Give it a class
+    // and a machine-readable minMajor so a shell can branch on it.
+    const h = makeEngine();
+    const p = h.engine.devices();
+    h.reply({ UpdateRequired: { min_major: 2 } });
+    const err = await p.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IpcUpdateRequiredError);
+    expect((err as IpcUpdateRequiredError).minMajor).toBe(2);
+    expect((err as Error).message).toMatch(/update/i);
   });
 
   it('refuses a qr or code pair instead of sending a request daakd cannot serve', async () => {

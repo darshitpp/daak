@@ -1,3 +1,8 @@
 hello = { "device_id": bstr .size 16 }
 ack   = { "transfer_id": bstr .size 16, "item_index": uint, "complete": bool, "hash_ok": bool }
-nack  = { "transfer_id": bstr .size 16, "item_index": uint, "ranges": [* [uint, uint]] }
+
+; Named, not inline: the pinned cddl-codegen rejects an array under a * marker
+; ("Anonymous groups not allowed"). Schema-only change; the encoding is
+; identical to [* [uint, uint]].
+range = [uint, uint]
+nack  = { "transfer_id": bstr .size 16, "item_index": uint, "ranges": [* range] }

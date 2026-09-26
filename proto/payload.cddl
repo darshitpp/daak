@@ -14,7 +14,9 @@ device-ref = { "device_id": bstr .size 16, "name": tstr }
 
 item = {
   "index":       uint,
-  "type":        tstr, ; "text" | "image" | "video" | "document" | "folder" | "custom" | future
+  ; @name item_type: "type" is a Rust keyword, so the generator renames the
+  ; struct field. The CBOR wire key stays the bareword text "type".
+  "type":        tstr, ; @name item_type
   ? "name":      tstr,
   ? "mime":      tstr,
   ? "size":      uint,

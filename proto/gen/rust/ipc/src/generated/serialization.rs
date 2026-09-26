@@ -4,7 +4,6 @@
 // same as cbor_event::de::Deserialize but with our DeserializeError
 extern crate alloc;
 use alloc::borrow::ToOwned;
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 pub trait Deserialize {
@@ -1033,26 +1032,26 @@ impl Deserialize for ErrorResponse {
     }
 }
 
-impl cbor_event::se::Serialize for InboxReceivedArgs {
+impl cbor_event::se::Serialize for EventArm {
     fn serialize<'se>(
         &self,
         serializer: &'se mut Serializer,
     ) -> cbor_event::Result<&'se mut Serializer> {
         serializer.write_map(cbor_event::Len::Len(1))?;
-        serializer.write_text("payload")?;
-        serializer.write_text(&self.payload)?;
+        serializer.write_text("Event")?;
+        self.event.serialize(serializer)?;
         Ok(serializer)
     }
 }
 
-impl Deserialize for InboxReceivedArgs {
+impl Deserialize for EventArm {
     fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
         (|| -> Result<_, DeserializeError> {
             let len = raw.map()?;
             let mut read_len = CBORReadLen::from(len);
             read_len.read_elems(1)?;
             read_len.finish()?;
-            let mut payload = None;
+            let mut event = None;
             let mut read = 0;
             while match len {
                 cbor_event::Len::Len(n) => read < n,
@@ -1066,16 +1065,16 @@ impl Deserialize for InboxReceivedArgs {
                         .into());
                     }
                     cbor_event::Type::Text => match raw.text()?.as_str() {
-                        "payload" => {
-                            if payload.is_some() {
+                        "Event" => {
+                            if event.is_some() {
                                 return Err(DeserializeFailure::DuplicateKey(Key::Str(
-                                    "payload".into(),
+                                    "Event".into(),
                                 ))
                                 .into());
                             }
-                            payload = Some(
-                                Ok(raw.text()?)
-                                    .map_err(|e: DeserializeError| e.annotate("payload"))?,
+                            event = Some(
+                                IpcEvent::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("event"))?,
                             );
                         }
                         unknown_key => {
@@ -1100,17 +1099,99 @@ impl Deserialize for InboxReceivedArgs {
                 }
                 read += 1;
             }
-            let payload =
-                match payload {
+            let event = match event {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("Event")))
+                            .into(),
+                    );
+                }
+            };
+            Ok(Self { event })
+        })()
+        .map_err(|e| e.annotate("EventArm"))
+    }
+}
+
+impl cbor_event::se::Serialize for InboxReceivedArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("payload_json")?;
+        serializer.write_text(&self.payload_json)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for InboxReceivedArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut payload_json = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "payload_json" => {
+                            if payload_json.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "payload_json".into(),
+                                ))
+                                .into());
+                            }
+                            payload_json = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("payload_json"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let payload_json =
+                match payload_json {
                     Some(x) => x,
                     None => {
                         return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
-                            String::from("payload"),
+                            String::from("payload_json"),
                         ))
                         .into());
                     }
                 };
-            Ok(Self { payload })
+            Ok(Self { payload_json })
         })()
         .map_err(|e| e.annotate("InboxReceivedArgs"))
     }
@@ -1215,6 +1296,9 @@ impl cbor_event::se::Serialize for IpcEvent {
             IpcEvent::TransferProgressEvent(transfer_progress_event) => {
                 transfer_progress_event.serialize(serializer)
             }
+            IpcEvent::TransferItemEvent(transfer_item_event) => {
+                transfer_item_event.serialize(serializer)
+            }
             IpcEvent::TransferDoneEvent(transfer_done_event) => {
                 transfer_done_event.serialize(serializer)
             }
@@ -1268,6 +1352,14 @@ impl Deserialize for IpcEvent {
                     raw.set_position(initial_position).unwrap();
                 }
             };
+            let deser_variant: Result<_, DeserializeError> = TransferItemEvent::deserialize(raw);
+            match deser_variant {
+                Ok(transfer_item_event) => return Ok(Self::TransferItemEvent(transfer_item_event)),
+                Err(e) => {
+                    errs.push(e.annotate("TransferItemEvent"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
             let deser_variant: Result<_, DeserializeError> = TransferDoneEvent::deserialize(raw);
             match deser_variant {
                 Ok(transfer_done_event) => return Ok(Self::TransferDoneEvent(transfer_done_event)),
@@ -1302,42 +1394,29 @@ impl Deserialize for IpcEvent {
     }
 }
 
-impl cbor_event::se::Serialize for IpcMessage {
+impl cbor_event::se::Serialize for IpcFrame {
     fn serialize<'se>(
         &self,
         serializer: &'se mut Serializer,
     ) -> cbor_event::Result<&'se mut Serializer> {
-        serializer.write_map(cbor_event::Len::Len(
-            2 + match &self.extensions {
-                Some(_) => 1,
-                None => 0,
-            },
-        ))?;
+        serializer.write_map(cbor_event::Len::Len(2))?;
         serializer.write_text("v")?;
         serializer.write_unsigned_integer(self.v)?;
         serializer.write_text("msg")?;
         self.msg.serialize(serializer)?;
-        if let Some(field) = &self.extensions {
-            serializer.write_text("extensions")?;
-            serializer.write_map(cbor_event::Len::Len(field.len() as u64))?;
-            for (key, value) in field.iter() {
-                serializer.write_text(key)?;
-                value.serialize(serializer)?;
-            }
-        }
         Ok(serializer)
     }
 }
 
-impl Deserialize for IpcMessage {
+impl Deserialize for IpcFrame {
     fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
         (|| -> Result<_, DeserializeError> {
             let len = raw.map()?;
             let mut read_len = CBORReadLen::from(len);
             read_len.read_elems(2)?;
+            read_len.finish()?;
             let mut v = None;
             let mut msg = None;
-            let mut extensions = None;
             let mut read = 0;
             while match len {
                 cbor_event::Len::Len(n) => read < n,
@@ -1370,50 +1449,8 @@ impl Deserialize for IpcMessage {
                                 .into());
                             }
                             msg = Some(
-                                IpcRequestOrIpcResponseOrIpcEvent::deserialize(raw)
+                                IpcMessage::deserialize(raw)
                                     .map_err(|e: DeserializeError| e.annotate("msg"))?,
-                            );
-                        }
-                        "extensions" => {
-                            if extensions.is_some() {
-                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
-                                    "extensions".into(),
-                                ))
-                                .into());
-                            }
-                            extensions = Some(
-                                (|| -> Result<_, DeserializeError> {
-                                    read_len.read_elems(1)?;
-                                    let mut extensions_table = BTreeMap::new();
-                                    let extensions_len = raw.map()?;
-                                    while match extensions_len {
-                                        cbor_event::Len::Len(n) => {
-                                            (extensions_table.len() as u64) < n
-                                        }
-                                        cbor_event::Len::Indefinite => true,
-                                    } {
-                                        if matches!(extensions_len, cbor_event::Len::Indefinite)
-                                            && raw.cbor_type()? == cbor_event::Type::Special
-                                            && raw.special_break()?
-                                        {
-                                            break;
-                                        }
-                                        let extensions_key = raw.text()?;
-                                        let extensions_value =
-                                            crate::generated::any_cbor::AnyCbor::deserialize(raw)?;
-                                        if extensions_table
-                                            .insert(extensions_key.clone(), extensions_value)
-                                            .is_some()
-                                        {
-                                            return Err(DeserializeFailure::DuplicateKey(
-                                                Key::Str(extensions_key),
-                                            )
-                                            .into());
-                                        }
-                                    }
-                                    Ok(extensions_table)
-                                })()
-                                .map_err(|e| e.annotate("extensions"))?,
                             );
                         }
                         unknown_key => {
@@ -1456,8 +1493,55 @@ impl Deserialize for IpcMessage {
                     );
                 }
             };
-            read_len.finish()?;
-            Ok(Self { v, msg, extensions })
+            Ok(Self { v, msg })
+        })()
+        .map_err(|e| e.annotate("IpcFrame"))
+    }
+}
+
+impl cbor_event::se::Serialize for IpcMessage {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        match self {
+            IpcMessage::RequestArm(request_arm) => request_arm.serialize(serializer),
+            IpcMessage::ResponseArm(response_arm) => response_arm.serialize(serializer),
+            IpcMessage::EventArm(event_arm) => event_arm.serialize(serializer),
+        }
+    }
+}
+
+impl Deserialize for IpcMessage {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let initial_position = raw.position();
+            let mut errs = Vec::new();
+            let deser_variant: Result<_, DeserializeError> = RequestArm::deserialize(raw);
+            match deser_variant {
+                Ok(request_arm) => return Ok(Self::RequestArm(request_arm)),
+                Err(e) => {
+                    errs.push(e.annotate("RequestArm"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = ResponseArm::deserialize(raw);
+            match deser_variant {
+                Ok(response_arm) => return Ok(Self::ResponseArm(response_arm)),
+                Err(e) => {
+                    errs.push(e.annotate("ResponseArm"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = EventArm::deserialize(raw);
+            match deser_variant {
+                Ok(event_arm) => return Ok(Self::EventArm(event_arm)),
+                Err(e) => {
+                    errs.push(e.annotate("EventArm"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            Err(DeserializeFailure::NoVariantMatchedWithCauses(errs).into())
         })()
         .map_err(|e| e.annotate("IpcMessage"))
     }
@@ -1609,60 +1693,6 @@ impl Deserialize for IpcRequest {
     }
 }
 
-impl cbor_event::se::Serialize for IpcRequestOrIpcResponseOrIpcEvent {
-    fn serialize<'se>(
-        &self,
-        serializer: &'se mut Serializer,
-    ) -> cbor_event::Result<&'se mut Serializer> {
-        match self {
-            IpcRequestOrIpcResponseOrIpcEvent::IpcRequest(ipc_request) => {
-                ipc_request.serialize(serializer)
-            }
-            IpcRequestOrIpcResponseOrIpcEvent::IpcResponse(ipc_response) => {
-                ipc_response.serialize(serializer)
-            }
-            IpcRequestOrIpcResponseOrIpcEvent::IpcEvent(ipc_event) => {
-                ipc_event.serialize(serializer)
-            }
-        }
-    }
-}
-
-impl Deserialize for IpcRequestOrIpcResponseOrIpcEvent {
-    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
-        (|| -> Result<_, DeserializeError> {
-            let initial_position = raw.position();
-            let mut errs = Vec::new();
-            let deser_variant: Result<_, DeserializeError> = IpcRequest::deserialize(raw);
-            match deser_variant {
-                Ok(ipc_request) => return Ok(Self::IpcRequest(ipc_request)),
-                Err(e) => {
-                    errs.push(e.annotate("IpcRequest"));
-                    raw.set_position(initial_position).unwrap();
-                }
-            };
-            let deser_variant: Result<_, DeserializeError> = IpcResponse::deserialize(raw);
-            match deser_variant {
-                Ok(ipc_response) => return Ok(Self::IpcResponse(ipc_response)),
-                Err(e) => {
-                    errs.push(e.annotate("IpcResponse"));
-                    raw.set_position(initial_position).unwrap();
-                }
-            };
-            let deser_variant: Result<_, DeserializeError> = IpcEvent::deserialize(raw);
-            match deser_variant {
-                Ok(ipc_event) => return Ok(Self::IpcEvent(ipc_event)),
-                Err(e) => {
-                    errs.push(e.annotate("IpcEvent"));
-                    raw.set_position(initial_position).unwrap();
-                }
-            };
-            Err(DeserializeFailure::NoVariantMatchedWithCauses(errs).into())
-        })()
-        .map_err(|e| e.annotate("IpcRequestOrIpcResponseOrIpcEvent"))
-    }
-}
-
 impl cbor_event::se::Serialize for IpcResponse {
     fn serialize<'se>(
         &self,
@@ -1673,6 +1703,9 @@ impl cbor_event::se::Serialize for IpcResponse {
             IpcResponse::ErrorResponse(error_response) => error_response.serialize(serializer),
             IpcResponse::JsonResponse(json_response) => json_response.serialize(serializer),
             IpcResponse::PortResponse(port_response) => port_response.serialize(serializer),
+            IpcResponse::UpdateRequiredResponse(update_required_response) => {
+                update_required_response.serialize(serializer)
+            }
         }
     }
 }
@@ -1711,6 +1744,17 @@ impl Deserialize for IpcResponse {
                 Ok(port_response) => return Ok(Self::PortResponse(port_response)),
                 Err(e) => {
                     errs.push(e.annotate("PortResponse"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> =
+                UpdateRequiredResponse::deserialize(raw);
+            match deser_variant {
+                Ok(update_required_response) => {
+                    return Ok(Self::UpdateRequiredResponse(update_required_response));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("UpdateRequiredResponse"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -2527,6 +2571,172 @@ impl Deserialize for PortResponse {
             Ok(Self { port })
         })()
         .map_err(|e| e.annotate("PortResponse"))
+    }
+}
+
+impl cbor_event::se::Serialize for RequestArm {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("Request")?;
+        self.request.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for RequestArm {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut request = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "Request" => {
+                            if request.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "Request".into(),
+                                ))
+                                .into());
+                            }
+                            request = Some(
+                                IpcRequest::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("request"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let request =
+                match request {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("Request"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { request })
+        })()
+        .map_err(|e| e.annotate("RequestArm"))
+    }
+}
+
+impl cbor_event::se::Serialize for ResponseArm {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("Response")?;
+        self.response.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for ResponseArm {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut response = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "Response" => {
+                            if response.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "Response".into(),
+                                ))
+                                .into());
+                            }
+                            response = Some(
+                                IpcResponse::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("response"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let response =
+                match response {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("Response"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { response })
+        })()
+        .map_err(|e| e.annotate("ResponseArm"))
     }
 }
 
@@ -3671,6 +3881,251 @@ impl Deserialize for TransferFailedEvent {
     }
 }
 
+impl cbor_event::se::Serialize for TransferItemArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(4))?;
+        serializer.write_text("state")?;
+        serializer.write_text(&self.state)?;
+        serializer.write_text("dest_path")?;
+        serializer.write_text(&self.dest_path)?;
+        serializer.write_text("item_index")?;
+        serializer.write_unsigned_integer(self.item_index)?;
+        serializer.write_text("transfer_id")?;
+        serializer.write_text(&self.transfer_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for TransferItemArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(4)?;
+            read_len.finish()?;
+            let mut state = None;
+            let mut dest_path = None;
+            let mut item_index = None;
+            let mut transfer_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "state" => {
+                            if state.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "state".into(),
+                                ))
+                                .into());
+                            }
+                            state = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("state"))?,
+                            );
+                        }
+                        "dest_path" => {
+                            if dest_path.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "dest_path".into(),
+                                ))
+                                .into());
+                            }
+                            dest_path = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("dest_path"))?,
+                            );
+                        }
+                        "item_index" => {
+                            if item_index.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "item_index".into(),
+                                ))
+                                .into());
+                            }
+                            item_index = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("item_index"))?,
+                            );
+                        }
+                        "transfer_id" => {
+                            if transfer_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "transfer_id".into(),
+                                ))
+                                .into());
+                            }
+                            transfer_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("transfer_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let transfer_id =
+                match transfer_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("transfer_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let item_index =
+                match item_index {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("item_index"),
+                        ))
+                        .into());
+                    }
+                };
+            let state = match state {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("state")))
+                            .into(),
+                    );
+                }
+            };
+            let dest_path =
+                match dest_path {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("dest_path"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self {
+                transfer_id,
+                item_index,
+                state,
+                dest_path,
+            })
+        })()
+        .map_err(|e| e.annotate("TransferItemArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for TransferItemEvent {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("TransferItem")?;
+        self.transfer_item.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for TransferItemEvent {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut transfer_item = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "TransferItem" => {
+                            if transfer_item.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "TransferItem".into(),
+                                ))
+                                .into());
+                            }
+                            transfer_item = Some(
+                                TransferItemArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("transfer_item"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let transfer_item =
+                match transfer_item {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("TransferItem"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { transfer_item })
+        })()
+        .map_err(|e| e.annotate("TransferItemEvent"))
+    }
+}
+
 impl cbor_event::se::Serialize for TransferProgressArgs {
     fn serialize<'se>(
         &self,
@@ -3971,5 +4426,171 @@ impl Deserialize for TransferRef {
             Ok(Self { transfer_id })
         })()
         .map_err(|e| e.annotate("TransferRef"))
+    }
+}
+
+impl cbor_event::se::Serialize for UpdateRequiredArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("min_major")?;
+        serializer.write_unsigned_integer(self.min_major)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for UpdateRequiredArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut min_major = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "min_major" => {
+                            if min_major.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "min_major".into(),
+                                ))
+                                .into());
+                            }
+                            min_major = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("min_major"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let min_major =
+                match min_major {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("min_major"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { min_major })
+        })()
+        .map_err(|e| e.annotate("UpdateRequiredArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for UpdateRequiredResponse {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("UpdateRequired")?;
+        self.update_required.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for UpdateRequiredResponse {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut update_required = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "UpdateRequired" => {
+                            if update_required.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "UpdateRequired".into(),
+                                ))
+                                .into());
+                            }
+                            update_required = Some(
+                                UpdateRequiredArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("update_required"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let update_required =
+                match update_required {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("UpdateRequired"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { update_required })
+        })()
+        .map_err(|e| e.annotate("UpdateRequiredResponse"))
     }
 }
