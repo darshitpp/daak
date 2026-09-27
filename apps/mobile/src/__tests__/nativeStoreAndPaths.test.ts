@@ -484,6 +484,19 @@ describe('the fspaths module reports the directories the engine writes to', () =
   );
   const iosStart = read(repo + 'apps/mobile/ios/Daak.swift');
 
+  // N1: androidStart/iosStart were READ but never asserted against, so this
+  // suite pinned the fspaths half of a TWO-SIDED agreement and stayed silent
+  // when the engine's real data dir drifted -- the exact bug I2 is about.
+  // Both natives resolve the dir in start(); the fspaths module re-derives it.
+  // Assert the ENGINE side here, so moving `daak` in either app native is red.
+  it('resolves the SAME data dir in the engine start() that fspaths re-derives', () => {
+    expect(androidStart).toMatch(/filesDir, "daak"/);
+    expect(iosStart).toMatch(/appendingPathComponent\("daak"/);
+    // And the roots the two sides agree on, so a change to either is visible.
+    expect(kt).toMatch(/filesDir, "daak"/);
+    expect(swift).toMatch(/appendingPathComponent\("daak"/);
+  });
+
   // One helper per platform, and BOTH public methods route through it. Two
   // copies of the path expression is exactly how they drifted in the first
   // place.
