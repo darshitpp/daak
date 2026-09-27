@@ -1,0 +1,14 @@
+{
+  "name": "@daak/rn-fspaths",
+  "version": "0.1.0",
+  "private": true,
+  "main": "js/index.ts",
+  "react-native": "js/index.ts",
+  "codegenConfig": {
+    "name": "DaakFsPathsSpec",
+    "type": "modules",
+    "jsSrcsDir": "js",
+    "android": { "javaPackageName": "dev.darshit.daak.fspaths" }
+  },
+  "peerDependencies": { "react-native": ">=0.76" }
+}

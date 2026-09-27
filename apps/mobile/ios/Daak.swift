@@ -30,8 +30,28 @@ final class Daak: RCTEventEmitter, EventSink {
     // promise settles and no call can observe a half-started engine.
     q.async {
       do {
-        let e = DaakEngine(sink: self)
-        try e.start(dataDir: dataDir, displayName: displayName, listenPort: UInt16(listenPort))
+        // R43: dataDir is IGNORED, not honoured-when-non-empty.
+        // InProcessEngine.start() takes no arguments and hardcodes '', so the
+        // "use the incoming dir when it is set" branch would be dead code today
+        // and a sandbox escape hatch the day the frozen TS path changes.
+        // Resolving it here is the only way the invariant "the engine data dir
+        // is inside the app sandbox" holds no matter what a caller sends.
+        let fm = FileManager.default
+        guard let docs = try? fm.url(for: .documentDirectory, in: .userDomainMask,
+                                    appropriateFor: nil, create: true) else {
+          reject("E_ENGINE", "no writable Documents directory", nil)
+          return
+        }
+        let dataRoot = docs.appendingPathComponent("daak", isDirectory: true)
+        // R40(c): a keychain failure REJECTS this start. There is no fallback
+        // to a plaintext file store: one that silently regenerates the Ed25519
+        // identity and re-pairs the device as a new one, with no error anywhere
+        // the user can see.
+        // uniffi 0.28.3 lowers the `[Name=new_with_store]` constructor to a
+        // STATIC FACTORY, not an init: `DaakEngine.newWithStore(store:sink:)`.
+        // A `DaakEngine(store:sink:)` call here is a compile error.
+        let e = DaakEngine.newWithStore(store: KeychainSecureStore(), sink: self)
+        try e.start(dataDir: dataRoot.path, displayName: displayName, listenPort: UInt16(listenPort))
         self.engine = e
         self.eventLock.lock()
         self.eventEngine = e

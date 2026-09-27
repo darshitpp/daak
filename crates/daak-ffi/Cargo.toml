@@ -10,6 +10,7 @@ crate-type = ["cdylib", "staticlib", "lib"]
 udl_files = ["src/daak.udl"]
 
 [dependencies]
+base64 = "0.22"
 daak-core = { path = "../daak-core" }
 tokio.workspace = true
 serde_json = "1"

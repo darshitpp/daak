@@ -8,6 +8,7 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import java.io.File
 import uniffi.daak_ffi.DaakEngine
 import uniffi.daak_ffi.EventSink
 import uniffi.daak_ffi.FfiEvent
@@ -46,8 +47,20 @@ class DaakModule(reactContext: ReactApplicationContext) :
     override fun start(dataDir: String, displayName: String, listenPort: Double, promise: Promise) {
         Thread {
             try {
-                val e = DaakEngine(this)
-                e.start(dataDir, displayName, listenPort.toInt().toUShort())
+                // R43: dataDir is IGNORED, not honoured-when-non-empty.
+                // InProcessEngine.start() takes no arguments and hardcodes '',
+                // so the "use the incoming dir when it is set" branch would be
+                // dead code today and a sandbox escape hatch the day the frozen
+                // TS path changes. Resolving it here is the only way the
+                // invariant "the engine data dir is inside the app sandbox"
+                // holds no matter what a caller sends.
+                val dir = File(reactApplicationContext.filesDir, "daak")
+                // R40(c): a keystore failure REJECTS this start. There is no
+                // fallback to a plaintext file store: one that silently
+                // regenerates the Ed25519 identity and re-pairs the device as
+                // a new one, with no error anywhere the user can see.
+                val e = DaakEngine.newWithStore(KeystoreSecureStore(reactApplicationContext), this)
+                e.start(dir.absolutePath, displayName, listenPort.toInt().toUShort())
                 synchronized(lock) { engine = e }
                 promise.resolve(null)
             } catch (t: Throwable) {

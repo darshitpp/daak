@@ -6,8 +6,35 @@ enum FfiError {
   "Protocol",
 };
 
+// A FIELDED error, declared as an `[Enum] interface` because UDL's `enum`
+// syntax only ever produces a FLAT error (converters/enum_.rs:14-19). uniffi
+// 0.28.3 emits `#[uniffi(with_try_read)]` for a flat error the moment one
+// CALLBACK method throws it, and that try_read rebuilds the variant as the
+// UNIT variant, so a flat error here makes the scaffolding fail to compile.
+// A separate type from FfiError so every ENGINE error still surfaces as
+// Engine or Protocol.
+[Error]
+interface FfiStoreError {
+  Store(string message);
+};
+
 callback interface EventSink {
   void on_event(FfiEvent event);
+};
+
+// The OS keystore, as a callback: the Rust engine never opens a keystore
+// itself, the platform binding does. Values cross as base64 STRINGS because the
+// UDL has no byte-string type; a `string?` of null is "no such key", which is
+// what a first launch looks like, and is not an error.
+//
+// Throwing FfiStoreError is the only honest failure here (R40(c)): a locked or
+// unavailable keystore must REJECT the engine start, never fall back to a
+// plaintext store, because a fresh identity silently re-pairs the device as a
+// new one.
+callback interface SecureStore {
+  [Throws=FfiStoreError] string? get(string key);
+  [Throws=FfiStoreError] void set(string key, string value);
+  [Throws=FfiStoreError] void delete(string key);
 };
 
 // A single tagged union so the generated Rust enum and the callback match exactly.
@@ -34,6 +61,12 @@ dictionary InboxReceivedEvent { string payload_json; };
 
 interface DaakEngine {
   constructor(EventSink sink);
+  // The mobile constructor: the Keychain/Keystore store the OS owns. Added as
+  // a NAMED constructor rather than by changing `new`, so every existing
+  // caller (and all 18 other methods) keeps its shape, and the desktop/CLI
+  // path keeps the plaintext file default (R38/R39/R40(a)).
+  [Name=new_with_store]
+  constructor(SecureStore store, EventSink sink);
   [Throws=FfiError] void start(string data_dir, string display_name, u16 listen_port);
   [Throws=FfiError] string pairing_bundle();
   [Throws=FfiError] string pair_with(string addr, sequence<u8> bundle_cbor);

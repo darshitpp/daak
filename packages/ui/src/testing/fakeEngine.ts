@@ -4,7 +4,7 @@ export function fakeEngine(devices: DeviceInfo[] = [
   { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true },
 ]): DaakEngine {
   const handlers = new Set<(e: DaakEvent) => void>();
-  return {
+  const engine = {
     start: async () => {},
     stop: async () => {},
     devices: async () => devices,
@@ -16,9 +16,15 @@ export function fakeEngine(devices: DeviceInfo[] = [
     listInbox: async () => [],
     setDisplayName: async () => {},
     setPresence: async () => {},
-    on: (cb) => {
+    on: (cb: (e: DaakEvent) => void) => {
       handlers.add(cb);
       return () => handlers.delete(cb);
     },
   };
+  // Exposed so a test can drive an event through the LIVE handlers. The
+  // subscription count is the invariant: a second engine.on in app code is
+  // exactly the defect that would double-post per event, and counting real
+  // registrations catches it where asserting on a mock would not.
+  (engine as unknown as { __handlers: typeof handlers }).__handlers = handlers;
+  return engine;
 }

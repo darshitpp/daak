@@ -13,7 +13,10 @@
   "dependencies": {
     "@daak/core": "workspace:*",
     "@daak/platform": "workspace:*",
+    "@daak/rn-clipboard": "workspace:*",
+    "@daak/rn-fspaths": "workspace:*",
     "@daak/rn-notify": "workspace:*",
+    "@daak/rn-securestore": "workspace:*",
     "@daak/rn-share": "workspace:*",
     "@daak/ui": "workspace:*",
     "react": "18.3.1",

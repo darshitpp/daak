@@ -19,6 +19,9 @@ use daak_core::pairing::PairingBundle;
 use daak_core::store::Db;
 use daak_core::CoreError;
 
+mod secure_store;
+pub use secure_store::FfiSecretStore;
+
 // ---- Types named by daak.udl. include_scaffolding! lowers these; the shapes
 // ---- here must stay in step with the UDL or the FFI symbols do not match.
 
@@ -28,6 +31,15 @@ pub enum FfiError {
     Engine(String),
     #[error("{0}")]
     Protocol(String),
+}
+
+/// The OS-keystore callback's error. A SEPARATE type from FfiError because UDL
+/// can only declare a fielded error through the `[Error] interface` syntax,
+/// and because every engine failure still has to surface as Engine/Protocol.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FfiStoreError {
+    #[error("{message}")]
+    Store { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +117,21 @@ pub enum FfiEvent {
 /// here; packages/core/src/engine/types.ts is the other end of that JSON.
 pub trait EventSink: Send + Sync {
     fn on_event(&self, event: FfiEvent);
+}
+
+/// The UDL-declared `SecureStore` callback: the OS keystore, as the platform
+/// implements it. Values are base64 STRINGS because the UDL has no byte-string
+/// type; `Ok(None)` from `get` is "no such key", which is what a first launch
+/// looks like, and is not an error. A keystore failure is FfiStoreError, never a
+/// fallback (R40(c)).
+///
+/// Declared here (and not `pub use`d from the scaffolding) because the two
+/// SecretStore traits collide by name: this one is base64 strings, daak-core's
+/// is raw bytes.
+pub trait SecureStore: Send + Sync {
+    fn get(&self, key: String) -> Result<Option<String>, FfiStoreError>;
+    fn set(&self, key: String, value: String) -> Result<(), FfiStoreError>;
+    fn delete(&self, key: String) -> Result<(), FfiStoreError>;
 }
 
 /// Device and transfer ids cross the FFI boundary as lowercase hex, which is
@@ -279,6 +306,11 @@ pub struct DaakEngine {
     // ever wait on it; it emits the event AND republishes here so
     // accept_pairing() can hand the same SAS back to a caller that asked.
     pairing_sas: Mutex<Option<tokio::sync::broadcast::Sender<String>>>,
+    // Set by the [Name=new_with_store] constructor only. `new` leaves it None
+    // and start() then falls back to the 0600 file store exactly as before
+    // (R40(a)): a MemorySecretStore default would mint a new Ed25519 identity on
+    // every launch and re-pair the device forever.
+    store: Option<Arc<dyn SecureStore + Send + Sync>>,
 }
 
 /// The name the plan and the JS layer use for the engine handle.
@@ -297,7 +329,35 @@ impl DaakEngine {
             engine: Mutex::new(None),
             sink: Arc::from(sink),
             pairing_sas: Mutex::new(None),
+            store: None,
         }
+    }
+
+    /// The mobile constructor: the identity lives in the OS keystore. Same
+    /// infallible shape as `new` for the same reason (UniFFI 0.28 cannot lift a
+    /// constructor error, R39); the keystore itself is only touched in
+    /// `start`, where a failure CAN reject the start (R40(c)).
+    pub fn with_store(store: Box<dyn SecureStore + Send + Sync>, sink: Box<dyn EventSink>) -> Self {
+        let sink: Box<dyn EventSink + Send + Sync> = sink;
+        DaakEngine {
+            rt: tokio::runtime::Runtime::new().expect("tokio runtime"),
+            engine: Mutex::new(None),
+            sink: Arc::from(sink),
+            pairing_sas: Mutex::new(None),
+            // UniFFI hands the callback over boxed; the engine is reached from
+            // several threads, so it is held shared from here on.
+            store: Some(Arc::from(store)),
+        }
+    }
+
+    /// The UDL declares this as `[Name=new_with_store]`, so uniffi codegen
+    /// looks for a Rust symbol spelled exactly that. One line of forwarding so
+    /// the Rust-side name can stay the plainer `with_store` (R39).
+    pub fn new_with_store(
+        store: Box<dyn SecureStore + Send + Sync>,
+        sink: Box<dyn EventSink>,
+    ) -> Self {
+        Self::with_store(store, sink)
     }
 
     pub fn start(
@@ -308,7 +368,16 @@ impl DaakEngine {
     ) -> Result<(), FfiError> {
         let dir = PathBuf::from(&data_dir);
         std::fs::create_dir_all(&dir).map_err(engine_err)?;
-        let store = FileKeyStore::new(dir.join("keys")).map_err(engine_err)?;
+        // A supplied keystore wins; otherwise the 0600 file store that has
+        // always been the default here (R40(a)). The adapter borrows the
+        // callback, so nothing is moved out of self and a second start() would
+        // still work.
+        let adapter = self.store.clone().map(FfiSecretStore::new);
+        let identity = match &adapter {
+            Some(store) => import_from_store(store).map_err(engine_err)?,
+            None => import_from_store(&FileKeyStore::new(dir.join("keys")).map_err(engine_err)?)
+                .map_err(engine_err)?,
+        };
         let db = Db::open(&dir.join("daak.db")).map_err(engine_err)?;
         db.migrate().map_err(engine_err)?;
         let cfg = EngineConfig {
@@ -317,7 +386,7 @@ impl DaakEngine {
                 .parse()
                 .map_err(protocol_err)?,
             out_dir: dir.join("downloads"),
-            identity: import_from_store(&store).map_err(engine_err)?,
+            identity,
             db: Arc::new(db),
         };
         let engine = Arc::new(self.rt.block_on(Engine::start(cfg)).map_err(engine_err)?);

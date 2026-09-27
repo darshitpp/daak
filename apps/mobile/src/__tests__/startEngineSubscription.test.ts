@@ -1,5 +1,5 @@
-import { createEngine, syncShortcutTargets } from '@daak/platform';
-import type { DaakEngine } from '@daak/core';
+import { createEngine, notifyReceived, routeInboxEntry, syncShortcutTargets } from '@daak/platform';
+import type { DaakEngine, DaakEvent, InboxEntry } from '@daak/core';
 import { startEngine } from '../bootstrap';
 
 jest.mock('@daak/platform', () => {
@@ -21,6 +21,8 @@ jest.mock('@daak/platform', () => {
     // answer it or the subscription tests die on an undefined function.
     initNotifications: jest.fn(async () => true),
     notifyReceived: jest.fn(async () => {}),
+    routeInboxEntry: jest.fn(async () => {}),
+    realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
   };
 });
 
@@ -66,5 +68,42 @@ describe('startEngine pairing.done subscription', () => {
     sync.mockClear();
     await startEngine();
     expect(sync).toHaveBeenCalled();
+  });
+
+  // R42: the inbox route is reached from the SAME subscription, next to
+  // notifyReceived. A second engine.on would double-post a banner per receive
+  // AND break the invariant the tests above pin, so this drives the ONE handler
+  // that survived teardown.
+  it('routes and notifies from the one subscription on one inbox event', async () => {
+    const engine = createEngine();
+    const handlers = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+    const routed = jest.mocked(routeInboxEntry);
+    const notified = jest.mocked(notifyReceived);
+    routed.mockClear();
+    notified.mockClear();
+
+    const entry: InboxEntry = {
+      payloadId: 'p1',
+      transferId: 't1',
+      peerDeviceId: 'd1',
+      kind: 'text',
+      itemCount: 1,
+      summary: 'hi',
+      receivedAt: 1,
+      savedPaths: null,
+    };
+    for (const handler of handlers) handler({ type: 'inbox.received', payload: entry });
+    // The handler fires two async routes without awaiting them, so let the
+    // microtask queue drain before asserting on either call.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handlers.size).toBe(1);
+    expect(routed).toHaveBeenCalledTimes(1);
+    // The deps are the second arg, so this also pins that the real clipboard
+    // is what the app hands it and not a bare import inside receive.ts.
+    expect(routed).toHaveBeenCalledWith(entry, expect.objectContaining({ clipboard: expect.anything() }));
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(notified).toHaveBeenCalledWith(entry);
   });
 });

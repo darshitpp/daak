@@ -27,6 +27,10 @@ jest.mock('@daak/platform', () => {
     presentShare: jest.fn(async () => {}),
     initNotifications: jest.fn(async () => true),
     notifyReceived: jest.fn(async () => {}),
+    // R42: the inbox route is reached from the SAME subscription as
+    // notifyReceived, so this mock has to answer it or the handler dies.
+    routeInboxEntry: jest.fn(async () => {}),
+    realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
     onNotificationAction: jest.fn(() => () => {}),
     handleNotificationAction: real.handleNotificationAction,
   };

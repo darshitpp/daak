@@ -1,0 +1,22 @@
+buildscript {
+  repositories { google(); mavenCentral() }
+}
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+// Library codegen is gated on the com.facebook.react plugin being applied, not
+// on com.android.library: ReactPlugin.apply() registers
+// project.pluginManager.withPlugin("com.android.library") { configureCodegen(..., isLibrary = true) }.
+// Without this, NativeDaakSecureStoreSpec is never generated and nothing compiles.
+apply plugin: 'com.facebook.react'
+
+repositories { google(); mavenCentral() }
+
+android {
+  namespace 'dev.darshit.daak.securestore'
+  compileSdkVersion 35
+  defaultConfig { minSdkVersion 24 }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+}

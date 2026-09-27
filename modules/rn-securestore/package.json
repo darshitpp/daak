@@ -1,0 +1,14 @@
+{
+  "name": "@daak/rn-securestore",
+  "version": "0.1.0",
+  "private": true,
+  "main": "js/index.ts",
+  "react-native": "js/index.ts",
+  "codegenConfig": {
+    "name": "DaakSecureStoreSpec",
+    "type": "modules",
+    "jsSrcsDir": "js",
+    "android": { "javaPackageName": "dev.darshit.daak.securestore" }
+  },
+  "peerDependencies": { "react-native": ">=0.76" }
+}

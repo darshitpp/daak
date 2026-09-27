@@ -7,6 +7,8 @@ import {
   notifyReceived,
   onNotificationAction,
   presentShare,
+  realReceiveDeps,
+  routeInboxEntry,
   syncShortcutTargets,
 } from '@daak/platform';
 import type { DaakEngine } from '@daak/core';
@@ -49,7 +51,14 @@ export async function startEngine(): Promise<void> {
   unsubscribeEngine?.();
   unsubscribeEngine = engine.on((e) => {
     if (e.type === 'pairing.done') void publish();
-    if (e.type === 'inbox.received') void notifyReceived(e.payload);
+    // R42: BOTH effects on the ONE subscription. routeInboxEntry copies a text
+    // payload to the clipboard; a file payload is deliberately inert until the
+    // UI owns reveal. Neither throws, and neither is a send: the engine's
+    // outbox owns every Daak-to-Daak transfer.
+    if (e.type === 'inbox.received') {
+      void routeInboxEntry(e.payload, realReceiveDeps);
+      void notifyReceived(e.payload);
+    }
   });
   // R25: the ONE real send call site. ShareTargetActivity and the Siri intent
   // both stage into share-inbox/intent-sends/ and launch/foreground the app,
