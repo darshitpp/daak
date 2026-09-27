@@ -45,6 +45,13 @@ final class DaakNotify: RCTEventEmitter {
   private static let actionChanged = "dev.darshit.daak.notify.action.changed"
   private var observer: UnsafeMutableRawPointer?
 
+  // The App Group stash is read from TWO threads: the RN module queue
+  // (consumePendingAction) and whatever thread posted the Darwin notification
+  // (deliverStashed). Two independent peek-then-clear blocks both peek before
+  // either clears, so one warm-app tap delivered daak.share twice and opened two
+  // share sheets. One lock, one drain, both call sites routed through it.
+  private static let stashLock = NSLock()
+
   override func supportedEvents() -> [String]! { [DaakNotify.event] }
 
   @objc static func requiresMainQueueSetup() -> Bool { false }
@@ -153,9 +160,7 @@ final class DaakNotify: RCTEventEmitter {
     // On disk in the App Group, not in a static: the whole point is surviving the
     // process being killed between the tap and JS booting. Cleared only here,
     // after the value has been handed to JS.
-    let json = DaakNotifyActionFile.peek()
-    if !json.isEmpty { DaakNotifyActionFile.clear() }
-    resolve(json)
+    resolve(drainStashed { _ in false })
   }
 
   // R33: NO transport, no crypto, no outbox. daak.share opens the OS share
@@ -166,19 +171,35 @@ final class DaakNotify: RCTEventEmitter {
     // path. Emitting here would drop it into nothing, which is the defect the
     // on-disk stash exists to prevent.
     guard hasListeners else { return }
-    let json = DaakNotifyActionFile.peek()
-    guard !json.isEmpty,
-          let data = json.data(using: .utf8),
-          let body = try? JSONSerialization.jsonObject(with: data) as? [String: String]
-    else { return }
-    DaakNotifyActionFile.clear()
-    sendEvent(withName: DaakNotify.event, body: body)
+    var body: [String: String]?
+    drainStashed { json in
+      body = DaakNotify.parse(json)
+      // Stays on disk when it cannot be parsed, i.e. cannot be delivered.
+      return body == nil
+    }
+    if let body { sendEvent(withName: DaakNotify.event, body: body) }
   }
 
-  /// willPresent is deliberately absent: without it a notification that arrives
-  /// while the app is open is not shown, and this app's inbox already renders
-  /// the transfer. Add a willPresent returning [[.banner]] if the design ever
-  /// wants the banner while foregrounded.
+  /// THE one reader of the App Group stash. Peeks, parses, and clears inside one
+  /// critical section so the two callers cannot both see the same value.
+  /// - Parameter keeping: return true to LEAVE the value on disk (the caller
+  ///   could not deliver it). consumePendingAction always takes; deliverStashed
+  ///   keeps anything it could not emit, which is the whole point of the stash.
+  /// - Returns: the stashed JSON, or "" when nothing is stashed.
+  private func drainStashed(keeping: (String) -> Bool) -> String {
+    DaakNotify.stashLock.lock()
+    defer { DaakNotify.stashLock.unlock() }
+    let json = DaakNotifyActionFile.peek()
+    if !json.isEmpty && !keeping(json) { DaakNotifyActionFile.clear() }
+    return json
+  }
+
+  private static func parse(_ json: String) -> [String: String]? {
+    guard let data = json.data(using: .utf8),
+          let body = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+    else { return nil }
+    return body
+  }
 
   deinit {
     if let observer {

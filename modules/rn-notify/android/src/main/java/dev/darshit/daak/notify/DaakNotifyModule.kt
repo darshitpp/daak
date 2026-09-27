@@ -127,7 +127,14 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
   override fun getName() = NAME
 
   override fun invalidate() {
-    if (reactContext === ctx) reactContext = null
+    // The counter is static too, so clearing only the context leaves it above
+    // zero after a dev-bridge reload: the new instance adds fresh listeners on
+    // top, and emitToJs claims delivery into the torn-down context it no longer
+    // has. The action is then neither emitted nor stashed.
+    if (reactContext === ctx) {
+      reactContext = null
+      listenerCount = 0
+    }
     super.invalidate()
   }
 
@@ -219,13 +226,14 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         .addAction(0, "Share", actionPending(id, ACTION_SHARE, payloadJson))
         .build()
     launchIntent(ctx)?.let { launch ->
-      // Tapping the BODY is the same daak.open the Open button does, so a
-      // cold-start body tap reaches JS through the one stashed-action path
-      // rather than a second, undiscoverable one.
+      // Tapping the BODY is the same user-visible thing as the Open button --
+      // both foreground the app to the inbox, and daak.open is already wired
+      // end to end. So the body intent carries no extras: nothing reads launch
+      // extras (MainActivity is a bare ReactActivity with no onNewIntent, and
+      // bootstrap.ts never reads them), and writing them asserted a path that
+      // does not exist. Add them back only alongside a real onNewIntent
+      // handler that feeds consumePendingAction.
       launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-      launch.putExtra(EXTRA_ACTION, ACTION_OPEN)
-      launch.putExtra(EXTRA_ID, id)
-      launch.putExtra(EXTRA_PAYLOAD, payloadJson)
       // A request code per id keeps two posts from sharing one PendingIntent,
       // which would make the second overwrite the first's payload.
       notification.setContentIntent(

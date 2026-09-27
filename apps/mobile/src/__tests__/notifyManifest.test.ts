@@ -217,9 +217,94 @@ describe('iOS cold-start action taps', () => {
   // the App Group, written atomically like every other stager here.
   it('persists the stashed action in the App Group instead of memory only', () => {
     expect(iosLaunchDelegate).toMatch(/group\.dev\.darshit\.daak/);
-    expect(iosLaunchDelegate).toMatch(/\.tmp/);
+    // Atomic write-then-rename on the FINAL path. The old tmp + fileExists +
+    // replaceItemAt dance could leave the destination empty on a container
+    // filesystem, which is the silent loss this file exists to prevent; the
+    // atomic write is the same guarantee without the swap.
+    expect(iosLaunchDelegate).toMatch(/\.write\(to: final, options: \.atomic\)/);
+    expect(iosLaunchDelegate).not.toMatch(/replaceItemAt/);
     expect(iosModule).toMatch(/group\.dev\.darshit\.daak/);
     expect(iosModule).not.toMatch(/private static var stashed: String\?/);
+  });
+
+  // The readers live in the pod, not the app target. A second copy in the app
+  // target is 19 duplicated lines that can drift without anything failing.
+  it('keeps the stash readers in the pod only', () => {
+    expect(iosLaunchDelegate).not.toMatch(/static func peek\(/);
+    expect(iosLaunchDelegate).not.toMatch(/static func clear\(/);
+  });
+
+  // Two unsynchronised peek()-then-clear() blocks read ONE file from two
+  // threads (module queue vs the Darwin posting thread), both peek before
+  // either clears, and one tap opens the share sheet twice. Exactly one drain,
+  // under exactly one lock, with both call sites routed through it.
+  it('drains the App Group stash through one locked drain', () => {
+    expect(iosModule).toMatch(/private static let stashLock = NSLock\(\)/);
+    expect(iosModule.match(/DaakNotifyActionFile\.peek\(\)/g) ?? []).toHaveLength(1);
+    expect(iosModule.match(/DaakNotifyActionFile\.clear\(\)/g) ?? []).toHaveLength(1);
+    for (const fn of ['func consumePendingAction(', 'private func deliverStashed(']) {
+      const start = iosModule.indexOf(fn);
+      expect(start).toBeGreaterThan(-1);
+      expect(iosModule.slice(start, iosModule.indexOf('\n  }', start))).toMatch(/drainStashed/);
+    }
+  });
+
+  // deliverStashed is the path the stash exists for, so it must not clear a
+  // value it could not deliver (no listener, or unparseable JSON).
+  it('keeps the stash on disk when the emit path cannot deliver it', () => {
+    expect(iosModule).toMatch(/if !json\.isEmpty && !keeping\(json\)/);
+  });
+
+  // UNUserNotificationCenterDelegate conformance lives in the app target, so a
+  // willPresent note parked on DaakNotify is advice about a method the class
+  // cannot implement.
+  it('documents willPresent on the class that can implement it', () => {
+    expect(iosModule).not.toMatch(/willPresent/);
+    expect(iosLaunchDelegate).toMatch(/willPresent/);
+  });
+
+  // The Darwin name is duplicated on purpose (same precedent as the 3-way
+  // dev.darshit.daak.share.inbox.changed), because the two targets cannot
+  // import each other. A rename on one side is silent: the file is written and
+  // nobody is woken, so the warm-app tap is delivered only by luck.
+  it('uses an identical Darwin notification name in both targets', () => {
+    const appSide = /static let changed = "([^"]+)"/.exec(iosLaunchDelegate)?.[1];
+    const podSide = /static let actionChanged = "([^"]+)"/.exec(iosModule)?.[1];
+    expect(appSide).toBeTruthy();
+    expect(podSide).toBeTruthy();
+    expect(appSide).toBe(podSide);
+  });
+});
+
+describe('Android notify module state', () => {
+  const module = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt',
+  );
+
+  // A dev-bridge reload leaves the static counter above zero while the new
+  // instance registers fresh listeners, so emitToJs can claim delivery into a
+  // torn-down context and the tapped action is neither emitted nor stashed.
+  it('clears the listener count in invalidate, not just the context', () => {
+    const invalidate = module.slice(
+      module.indexOf('override fun invalidate()'),
+      module.indexOf('super.invalidate()'),
+    );
+    expect(invalidate).toMatch(/reactContext = null/);
+    expect(invalidate).toMatch(/listenerCount = 0/);
+  });
+
+  // Nothing reads launch extras (MainActivity is a bare ReactActivity, no
+  // onNewIntent, and bootstrap.ts never reads them), so putting them on the
+  // content intent asserts a path that does not exist. A body tap and the Open
+  // button are the same thing -- both open the app to the inbox -- and daak.open
+  // is already wired end to end.
+  it('puts no unreadable extras on the notification body intent', () => {
+    const post = module.slice(
+      module.indexOf('override fun post('),
+      module.indexOf('override fun cancel('),
+    );
+    expect(post).not.toMatch(/putExtra\(EXTRA_/);
+    expect(post).not.toMatch(/cold-start body tap reaches JS/);
   });
 });
 

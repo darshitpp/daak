@@ -48,14 +48,21 @@ import UserNotifications
       CFNotificationName(DaakNotifyActionStash.changed as CFString), nil, nil, true)
     completionHandler()
   }
+
+  /// willPresent is deliberately absent: without it a notification that arrives
+  /// while the app is open is not shown, and this app's inbox already renders
+  /// the transfer. Add a willPresent returning [[.banner]] if the design ever
+  /// wants the banner while foregrounded.
 }
 
 /// The on-disk stash for a tapped action, in the App Group so it survives the
 /// process being killed between the tap and JS booting. In-memory cannot: iOS
-/// launches us precisely when the memory is gone. This is the write-then-rename
-/// shape every other stager in this repo uses (DaakIntentBridge.stageIntentSend)
-/// -- a process killed mid-write leaves a `.tmp` the reader ignores, never a
-/// truncated file that looks real. Last write wins, deliberately.
+/// launches us precisely when the memory is gone. Last write wins, deliberately.
+///
+/// This half is WRITE-ONLY. The reader is DaakNotifyActionFile in the pod
+/// (modules/rn-notify/ios/DaakNotify.swift), taken under one lock, because the
+/// file has two consumers on two threads; a second copy of the reader here would
+/// be unsynchronised by construction and would drift.
 enum DaakNotifyActionStash {
   private static let appGroup = "group.dev.darshit.daak"
   private static let relativePath = "notify/pending-action.json"
@@ -72,42 +79,11 @@ enum DaakNotifyActionStash {
                             withIntermediateDirectories: true)
     guard let data = try? JSONSerialization.data(
       withJSONObject: ["action": action, "payload": payload]) else { return }
-    let tmp = final.appendingPathComponent(final.lastPathComponent + ".tmp")
-    do {
-      try data.write(to: tmp, options: .atomic)
-      // replaceItemAt when one is already there, so a second tap overwrites
-      // rather than failing on an existing file.
-      if fm.fileExists(atPath: final.path) {
-        _ = try fm.replaceItemAt(final, withItemAt: tmp)
-      } else {
-        try fm.moveItem(at: tmp, to: final)
-      }
-    } catch {
-      try? fm.removeItem(at: tmp)
-    }
-  }
-
-  /// Reads WITHOUT deleting. The module holds the value in memory and deletes
-  /// the file only once JS has taken it, so a second process death before the
-  /// drain still finds the action on disk.
-  /// - Returns: JSON `{action, payload}`, or "" when nothing is stashed.
-  static func peek() -> String {
-    let fm = FileManager.default
-    guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
-    else { return "" }
-    let final = container.appendingPathComponent(relativePath)
-    guard let data = try? Data(contentsOf: final),
-          let json = String(data: data, encoding: .utf8), !json.isEmpty
-    else { return "" }
-    return json
-  }
-
-  /// Deletes the stash. Called by the module once consumePendingAction has
-  /// handed the value to JS.
-  static func clear() {
-    let fm = FileManager.default
-    guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
-    else { return }
-    try? fm.removeItem(at: container.appendingPathComponent(relativePath))
+    // .atomic IS write-then-rename onto this exact path, and it overwrites an
+    // existing file. The tmp + fileExists + file-swap dance it replaces was
+    // strictly worse: the swap can leave the destination empty on a container
+    // filesystem, which silently drops the stashed action -- the exact loss
+    // this file exists to prevent.
+    try? data.write(to: final, options: .atomic)
   }
 }
