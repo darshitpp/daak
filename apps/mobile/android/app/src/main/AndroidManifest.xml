@@ -29,13 +29,15 @@
         Inbound share target. Translucent and no UI of its own: it only stages
         the bytes into filesDir/share-inbox and wakes the host. It never sends,
         never contacts a peer and does no crypto; the engine outbox owns
-        delivery.
+        delivery. Deliberately no android:launchMode: a single-shot activity is
+        recreated per share instead of reused, because a reused one routes the
+        next share to an onNewIntent this class does not override, and the
+        share is then silently dropped.
       -->
       <activity
         android:name=".share.ShareTargetActivity"
         android:exported="true"
         android:excludeFromRecents="true"
-        android:launchMode="singleTop"
         android:theme="@style/Theme.Daak.ShareTarget">
         <intent-filter>
             <action android:name="android.intent.action.SEND" />

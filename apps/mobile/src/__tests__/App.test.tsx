@@ -22,7 +22,7 @@ describe('App', () => {
     expect(screen.getByText('dashboard')).toBeTruthy();
   });
 
-  it('drains the staged share inbox on mount', () => {
+  it('does NOT drain the staged share inbox on mount', () => {
     render(<App />);
     // R22 regression guard. App MUST NOT drain on mount. consumePendingShare is
     // all-or-nothing natively: draining here would delete the batch that names

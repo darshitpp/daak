@@ -26,47 +26,64 @@ class ShareTargetActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     val intent = intent
+    // Staged-vs-nothing, not just directSend: a share whose every content URI
+    // was revoked throws below, and telling the user it was queued would be the
+    // exact opposite of what happened.
+    var staged = false
     val directSend =
       try {
         when (intent?.action) {
-          Intent.ACTION_SEND -> handleSingle(intent)
-          Intent.ACTION_SEND_MULTIPLE -> handleMultiple(intent)
-          else -> false
+          Intent.ACTION_SEND -> handleSingle(intent) { staged = true }
+          Intent.ACTION_SEND_MULTIPLE -> handleMultiple(intent) { staged = true }
+          else -> null
         }
       } catch (t: Throwable) {
         // This activity has no UI of its own: an uncaught throw here is a lost
         // share with the user staring at the share sheet wondering why Daak did
         // nothing. Log it, say so, and still open the host.
         Log.w(TAG, "share staging failed", t)
-        false
+        null
       }
-    launchHost(directSend)
+    launchHost(directSend, staged)
   }
 
-  /** @return true when this share already names its destination. */
-  private fun handleSingle(intent: Intent): Boolean {
+  /** @return true when this share already names its destination, null on failure. */
+  private fun handleSingle(intent: Intent, onStaged: () -> Unit): Boolean? {
     val text = intent.getStringExtra(Intent.EXTRA_TEXT)
     val stream = streamOf(intent)
     val target = intent.getStringExtra(EXTRA_TARGET_DEVICE)
     if (target.isNullOrEmpty()) {
-      if (!text.isNullOrEmpty()) ShareInbox.stageText(this, text)
-      stream?.let { stageFile(it, intent.type) }
+      if (!text.isNullOrEmpty()) {
+        ShareInbox.stageText(this, text)
+        onStaged()
+      }
+      stream?.let {
+        stageFile(it, intent.type)
+        onStaged()
+      }
       return false
     }
     // Direct Share already names the peer, so the text belongs to the
     // intent-send arm and nowhere else. Staging it as a text item as well would
     // show the user the same message twice: once sent, once still queued.
-    stream?.let { stageFile(it, intent.type) }
+    stream?.let {
+      stageFile(it, intent.type)
+      onStaged()
+    }
     ShareInbox.stageIntentSend(this, target, text)
+    onStaged()
     return true
   }
 
-  private fun handleMultiple(intent: Intent): Boolean {
+  private fun handleMultiple(intent: Intent, onStaged: () -> Unit): Boolean? {
     val text = intent.getStringExtra(Intent.EXTRA_TEXT)
-    if (!text.isNullOrEmpty()) ShareInbox.stageText(this, text)
+    if (!text.isNullOrEmpty()) {
+      ShareInbox.stageText(this, text)
+      onStaged()
+    }
     // One unreadable item must not abandon the rest of the batch: this is a
     // background context with no user standing in front of a crash dialog.
-    streamsOf(intent).forEach { runCatching { stageFile(it, intent.type) } }
+    streamsOf(intent).forEach { runCatching { stageFile(it, intent.type) }.onSuccess { onStaged() } }
     return false
   }
 
@@ -90,10 +107,14 @@ class ShareTargetActivity : Activity() {
       intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: emptyList()
     }
 
-  private fun launchHost(directSend: Boolean) {
+  private fun launchHost(directSend: Boolean?, staged: Boolean) {
     Toast.makeText(
       this,
-      if (directSend) "Queued for send in Daak" else "Queued in Daak",
+      when {
+        !staged -> "Couldn't read the shared content"
+        directSend == true -> "Queued for send in Daak"
+        else -> "Queued in Daak"
+      },
       Toast.LENGTH_SHORT,
     ).show()
     // MainActivity is a real class in this app, so name it. Class.forName turns
