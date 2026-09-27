@@ -152,9 +152,10 @@ export async function drainIntentSends(engine: DaakEngine): Promise<void> {
  * DELIBERATELY NOT CALLED YET, same reason as drainInbound: `reveal` has no
  * implementation on either platform (iOS needs a QuickLook preview, Android a
  * ACTION_VIEW intent on a FileProvider URI), so every caller today would have to
- * pass a no-op and a tapped "Show in folder" would silently do nothing. The
- * sheet half -- daak.share -- has no such gap, and the Android trampoline builds
- * the same chooser natively on a cold start. Wire this when the UI owns reveal.
+ * pass a no-op and a tapped "Show in folder" would silently do nothing. That is
+ * also why R37 withholds daak.folder from the INSTALLED category on both native
+ * sides: the button is not shown, so the missing reveal is unreachable. Wire
+ * this when the UI owns reveal, and re-register the button in the same commit.
  */
 export function wireNotificationActions(
   reveal: (path: string) => void,

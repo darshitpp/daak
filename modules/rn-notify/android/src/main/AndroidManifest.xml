@@ -22,6 +22,19 @@
       android:excludeFromRecents="true"
       android:noHistory="true"
       android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+    <!--
+      The target of every actionPending() PendingIntent. Without this entry the
+      system cannot resolve the explicit intent, so all three action buttons are
+      dead broadcasts and NotifyStash/emitToJs/the trampoline are unreachable.
+
+      exported="false" is deliberate: every PendingIntent that reaches this
+      receiver is an EXPLICIT intent built by this library for this app, and
+      exported="true" would let any app on the device start it directly with a
+      forged payload. Nothing needs to reach it from outside.
+    -->
+    <receiver
+      android:name=".NotificationActionReceiver"
+      android:exported="false" />
   </application>
 </manifest>
-

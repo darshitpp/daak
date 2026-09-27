@@ -21,7 +21,11 @@ internal object NotifyStash {
         .getSharedPreferences(FILE, Context.MODE_PRIVATE)
         .edit()
         .putString(KEY, jsonOf(action, payload))
-        .apply()
+        // commit(), not apply(): apply() is fire-and-forget, so a process kill
+        // right after the tap loses the write -- and losing it is the exact case
+        // this stash exists for. The write is a few bytes, and we are already
+        // in a receiver the user is not watching, so the blocking is free.
+        .commit()
   }
 
   /** @return the JSON {@code {action,payload}}, or "" when nothing is stashed. */
@@ -38,4 +42,3 @@ internal object NotifyStash {
   fun jsonOf(action: String, payload: String): String =
       JSONObject().put("action", action).put("payload", payload).toString()
 }
-

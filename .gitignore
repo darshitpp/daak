@@ -18,3 +18,6 @@ proto/gen/rust/*/Cargo.lock
 
 # OS junk
 .DS_Store
+
+# pnpm store shadow: a local .pnpm-store/ shadows the real store on the next install
+.pnpm-store/

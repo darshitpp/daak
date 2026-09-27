@@ -20,6 +20,16 @@ import java.io.File
  *
  * Why an activity at all: a BroadcastReceiver cannot present a chooser, and
  * under the background-start restrictions it cannot bring one up either.
+ *
+ * ponytail: this chooser is a COPY of the one in DaakShareModule.present (via
+ * presentShare). It is duplicated because a BroadcastReceiver runs with no React
+ * context and cannot reach the TurboModule -- the only justification, and it
+ * is a real one. The cost is that it will DRIFT: FileProvider naming, MIME
+ * types, the ClipData/grant-flag handling below all have to be kept in step with
+ * DaakShareModule.kt by hand. Upgrade path: give the receiver a
+ * context-independent seam (a small static DaakShare.presentFiles(paths), or a
+ * pending-share file the module drains) and delete this file. Do not grow it
+ * further in the meantime.
  */
 class ShareTrampolineActivity : Activity() {
   companion object {
@@ -98,4 +108,3 @@ class ShareTrampolineActivity : Activity() {
         emptyList()
       }
 }
-

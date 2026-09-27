@@ -16,7 +16,7 @@ import UserNotifications
 /// case (the user tapped it while the app was dead). So the action is stashed
 /// and handed to JS by consumePendingAction once it is listening.
 @objc(DaakNotify)
-final class DaakNotify: RCTEventEmitter, UNUserNotificationCenterDelegate {
+final class DaakNotify: RCTEventEmitter {
   private static let event = "DaakNotifyEvent"
   private static let receivedCategory = "daak.received"
 
@@ -26,19 +26,37 @@ final class DaakNotify: RCTEventEmitter, UNUserNotificationCenterDelegate {
   private static let actionTitles: [(id: String, title: String)] = [
     ("daak.open", "Open"),
     ("daak.share", "Share"),
-    ("daak.folder", "Show in folder"),
+    // R37: daak.folder stays in the frozen vocabulary (DAK_RECEIVED_ACTIONS in
+    // notify.ts) but is deliberately NOT installed. reveal has no implementation
+    // on either platform, and a button that does nothing is worse than no
+    // button. The Kotlin post() withholds it the same way.
   ]
 
   private var hasListeners = false
 
-  private static let stashLock = NSLock()
-  private static var stashed: String?
+  // Darwin notification posted by the app-target launch delegate
+  // (DaakNotificationDelegate) when a tapped action is stashed on disk. The
+  // two targets cannot import each other -- the app target has no import path
+  // into this pod and the pod must not depend on the app -- and this repo
+  // already uses exactly this Darwin pair (DaakIntentBridge posts, DaakShare
+  // observes). So the two constants below are duplicated between the targets
+  // deliberately. Nothing else crosses the boundary; the payload rides in the
+  // file, not in the wakeup.
+  private static let actionChanged = "dev.darshit.daak.notify.action.changed"
+  private var observer: UnsafeMutableRawPointer?
 
   override func supportedEvents() -> [String]! { [DaakNotify.event] }
 
   @objc static func requiresMainQueueSetup() -> Bool { false }
 
-  override func startObserving() { hasListeners = true }
+  override func startObserving() {
+    hasListeners = true
+    // A tap that landed between app launch and this subscription is on disk
+    // and nobody has emitted it yet. Delivering here rather than waiting for
+    // the next tap is what stops the boot-gap event from needing consumePending
+    // Action's timing to be lucky.
+    deliverStashed()
+  }
 
   override func stopObserving() { hasListeners = false }
 
@@ -73,10 +91,22 @@ final class DaakNotify: RCTEventEmitter, UNUserNotificationCenterDelegate {
       intentIdentifiers: [], options: [])
     let center = UNUserNotificationCenter.current()
     center.setNotificationCategories([category])
-    // Set unconditionally, denied or not: a user who grants later must not need
-    // a reinstall to get working action buttons. Setting it here is the only way
-    // the didReceive handler below is ever called at all.
-    center.delegate = self
+    // The centre delegate is NOT installed here. It is installed at app launch
+    // by DaakNotificationDelegate.install(), because on a killed app iOS
+    // delivers the tapped response at launch, before this module exists at all:
+    // a delegate set from JS is nil in exactly the case the stash exists for.
+    // What JS CAN do is pick up the live path, so the observer goes here.
+    if observer == nil {
+      observer = CFNotificationCenterAddObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        Unmanaged.passUnretained(self).toOpaque(),
+        { _, observer, _, _, _ in
+          guard let observer else { return }
+          let emitter = Unmanaged<DaakNotify>.fromOpaque(observer).takeUnretainedValue()
+          emitter.deliverStashed()
+        },
+        actionChanged as CFString, nil, .deliverImmediately)
+    }
     resolve(nil)
   }
 
@@ -120,31 +150,29 @@ final class DaakNotify: RCTEventEmitter, UNUserNotificationCenterDelegate {
 
   @objc func consumePendingAction(_ resolve: @escaping RCTPromiseResolveBlock,
                                   reject: RCTPromiseRejectBlock) {
-    DaakNotify.stashLock.lock()
-    let json = DaakNotify.stashed ?? ""
-    DaakNotify.stashed = nil
-    DaakNotify.stashLock.unlock()
+    // On disk in the App Group, not in a static: the whole point is surviving the
+    // process being killed between the tap and JS booting. Cleared only here,
+    // after the value has been handed to JS.
+    let json = DaakNotifyActionFile.peek()
+    if !json.isEmpty { DaakNotifyActionFile.clear() }
     resolve(json)
   }
 
   // R33: NO transport, no crypto, no outbox. daak.share opens the OS share
   // sheet in JS (the app's presentShare); the engine outbox owns every actual
   // send. This only reports WHICH action was tapped.
-  func userNotificationCenter(_ center: UNUserNotificationCenter,
-                              didReceive response: UNNotificationResponse,
-                              withCompletionHandler completionHandler: @escaping () -> Void) {
-    let payload = response.notification.request.content.userInfo["payload"] as? String ?? "{}"
-    let action = response.actionIdentifier
-    if hasListeners {
-      sendEvent(withName: DaakNotify.event, body: ["action": action, "payload": payload])
-    } else {
-      DaakNotify.stashLock.lock()
-      // JSONSerialization, not a hand-rolled escaper: the payload is arbitrary
-      // JSON-in-a-string, so escaping it correctly is exactly the fiddly part.
-      DaakNotify.stashed = Self.json(action: action, payload: payload)
-      DaakNotify.stashLock.unlock()
-    }
-    completionHandler()
+  private func deliverStashed() {
+    // Un-listened means the drain in consumePendingAction is the only delivery
+    // path. Emitting here would drop it into nothing, which is the defect the
+    // on-disk stash exists to prevent.
+    guard hasListeners else { return }
+    let json = DaakNotifyActionFile.peek()
+    guard !json.isEmpty,
+          let data = json.data(using: .utf8),
+          let body = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+    else { return }
+    DaakNotifyActionFile.clear()
+    sendEvent(withName: DaakNotify.event, body: body)
   }
 
   /// willPresent is deliberately absent: without it a notification that arrives
@@ -152,9 +180,44 @@ final class DaakNotify: RCTEventEmitter, UNUserNotificationCenterDelegate {
   /// the transfer. Add a willPresent returning [[.banner]] if the design ever
   /// wants the banner while foregrounded.
 
-  private static func json(action: String, payload: String) -> String {
-    guard let data = try? JSONSerialization.data(withJSONObject: ["action": action, "payload": payload]),
-          let out = String(data: data, encoding: .utf8) else { return "" }
-    return out
+  deinit {
+    if let observer {
+      CFNotificationCenterRemoveObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        observer, CFNotificationName(actionChanged as CFString), nil)
+    }
+  }
+}
+
+/// The reader half of the cold-start stash. The WRITER is
+/// apps/mobile/ios/Daak/DaakNotificationDelegate.swift, in the app target:
+/// iOS delivers a tapped action to the app process at launch, long before this
+/// pod's code is reachable. Two halves rather than one shared type because the
+ /// two targets cannot import each other.
+///
+/// The App Group is what makes this survive process death at all -- the stash
+/// the launch delegate wrote is read back after the bridge boots. peek() does
+/// not delete: the module clears only once the value has been handed to JS, so
+/// a second kill before that still finds the action on disk.
+enum DaakNotifyActionFile {
+  private static let appGroup = "group.dev.darshit.daak"
+  private static let relativePath = "notify/pending-action.json"
+
+  static func peek() -> String {
+    let fm = FileManager.default
+    guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+    else { return "" }
+    let final = container.appendingPathComponent(relativePath)
+    guard let data = try? Data(contentsOf: final),
+          let json = String(data: data, encoding: .utf8), !json.isEmpty
+    else { return "" }
+    return json
+  }
+
+  static func clear() {
+    let fm = FileManager.default
+    guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+    else { return }
+    try? fm.removeItem(at: container.appendingPathComponent(relativePath))
   }
 }

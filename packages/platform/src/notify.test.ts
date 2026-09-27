@@ -15,6 +15,7 @@ vi.mock('@daak/rn-notify', () => ({
 import NativeDaakNotify from '@daak/rn-notify';
 import type { InboxEntry } from '@daak/core';
 import {
+  DAK_REGISTERED_ACTIONS,
   DAK_RECEIVED_ACTIONS,
   DAK_RECEIVED_CATEGORY,
   handleNotificationAction,
@@ -58,10 +59,10 @@ describe('notifyReceived', () => {
 });
 
 describe('initNotifications', () => {
-  it('registers the received category with its three action ids', async () => {
+  it('registers the received category with its registered action ids', async () => {
     await initNotifications();
     expect(native.registerCategories).toHaveBeenCalledWith(
-      JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_RECEIVED_ACTIONS }]),
+      JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
     );
   });
 
@@ -85,6 +86,26 @@ describe('initNotifications', () => {
   it('does not throw when the permission request itself rejects', async () => {
     native.requestPermission.mockRejectedValue(new Error('E_NO_ACTIVITY'));
     await expect(initNotifications()).resolves.toBe(false);
+  });
+
+  // R36 applies to registration, not just the permission: a category install
+  // that rejects must not reject startEngine, or app startup dies on a
+  // notification detail and takes the receive path with it.
+  it('does not throw when registerCategories rejects', async () => {
+    native.registerCategories.mockRejectedValue(new Error('E_NOTIFY'));
+    await expect(initNotifications()).resolves.toBe(true);
+    await expect(native.registerCategories.mock.results[0].value).rejects.toThrow('E_NOTIFY');
+  });
+
+  // R37: the INSTALLED category omits daak.folder (reveal is unimplemented on
+  // both platforms) while the frozen id vocabulary keeps it.
+  it('registers only the actions that have a working handler (R37)', async () => {
+    await initNotifications();
+    expect(native.registerCategories).toHaveBeenCalledWith(
+      JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+    );
+    expect(DAK_REGISTERED_ACTIONS).toEqual(['daak.open', 'daak.share']);
+    expect(DAK_RECEIVED_ACTIONS).toContain('daak.folder');
   });
 });
 
@@ -168,9 +189,22 @@ describe('onNotificationAction', () => {
     );
     const seen: { action: string; payload: string }[] = [];
     onNotificationAction((e) => seen.push(e));
-    await Promise.resolve();
-    await Promise.resolve();
+    // Deterministic: the stash arrives over a promise, so wait for the value
+    // rather than counting microtask ticks.
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
     expect(native.consumePendingAction).toHaveBeenCalled();
     expect(seen).toEqual([{ action: 'daak.share', payload: JSON.stringify(entry) }]);
+  });
+
+  // A daak.folder event can still arrive (a build that registered it, a cold
+  // stash from one). Withholding the button must not make the handler throw.
+  it('tolerates a withheld daak.folder event', () => {
+    const h = { present: vi.fn(async () => {}), reveal: vi.fn(), open: vi.fn() };
+    expect(() =>
+      handleNotificationAction(
+        { action: 'daak.folder', payload: JSON.stringify(entry) },
+        h,
+      ),
+    ).not.toThrow();
   });
 });

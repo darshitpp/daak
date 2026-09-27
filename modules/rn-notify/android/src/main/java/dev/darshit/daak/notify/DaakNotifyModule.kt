@@ -32,6 +32,10 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
 
     const val ACTION_OPEN = "daak.open"
     const val ACTION_SHARE = "daak.share"
+    // R37: part of the FROZEN vocabulary, deliberately NOT installed. reveal
+    // has no implementation on either platform, so a button that does nothing
+    // is worse than no button. DAK_REGISTERED_ACTIONS in notify.ts and the iOS
+    // actionTitles table withhold it the same way.
     const val ACTION_FOLDER = "daak.folder"
 
     const val EXTRA_ACTION = "dev.darshit.daak.notify.action"
@@ -44,6 +48,17 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
      * the bridge leaks the whole React instance and emits into nothing.
      */
     @Volatile private var reactContext: ReactApplicationContext? = null
+
+    /**
+     * How many JS listeners the Spec's addListener has registered.
+     *
+     * reactContext alone is NOT a delivery signal: it is non-null from the
+     * moment the module is constructed, which is before JS subscribes. Gating
+     * on it alone reports `true` for an emit that lands in nothing, so the
+     * tapped action is silently lost instead of stashed -- the same class of
+     * defect the stash exists for. The count is the gate.
+     */
+    @Volatile private var listenerCount = 0
 
     /**
      * The host app's launcher activity, found by intent rather than by class
@@ -60,19 +75,25 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
      * inside a BroadcastReceiver the user never sees, where a crash is a dead
      * end with no visible cause.
      */
-    fun emitToJs(context: Context, action: String, payload: String): Boolean {
-      val rc = reactContext ?: return false
-      return try {
-        rc.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-            .emit(EVENT, Arguments.createMap().apply {
-              putString("action", action)
-              putString("payload", payload)
-            })
-        true
-      } catch (t: Throwable) {
-        Log.w(TAG, "cannot emit action event", t)
-        false
+    fun emitToJs(action: String, payload: String): Boolean {
+      if (listenerCount > 0) {
+        val rc = reactContext
+        if (rc != null) {
+          return try {
+            rc.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit(EVENT, Arguments.createMap().apply {
+                  putString("action", action)
+                  putString("payload", payload)
+                })
+            true
+          } catch (t: Throwable) {
+            Log.w(TAG, "cannot emit action event", t)
+            false
+          }
+        }
       }
+      // No listener, or no live bridge: report false so the caller stashes.
+      return false
     }
 
     /**
@@ -196,7 +217,6 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         // of them sends anything; the engine outbox owns every send.
         .addAction(0, "Open", actionPending(id, ACTION_OPEN, payloadJson))
         .addAction(0, "Share", actionPending(id, ACTION_SHARE, payloadJson))
-        .addAction(0, "Show in folder", actionPending(id, ACTION_FOLDER, payloadJson))
         .build()
     launchIntent(ctx)?.let { launch ->
       // Tapping the BODY is the same daak.open the Open button does, so a
@@ -243,8 +263,11 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
     return PendingIntent.getBroadcast(ctx, (id + ":" + action).hashCode(), intent, IMMUTABLE)
   }
 
-  override fun addListener(eventName: String) = Unit
+  override fun addListener(eventName: String) {
+    listenerCount++
+  }
 
-  override fun removeListeners(count: Double) = Unit
+  override fun removeListeners(count: Double) {
+    listenerCount = (listenerCount - count.toInt()).coerceAtLeast(0)
+  }
 }
-

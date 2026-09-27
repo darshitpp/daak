@@ -6,6 +6,18 @@ export const DAK_RECEIVED_CATEGORY = 'daak.received';
 export const DAK_RECEIVED_ACTIONS = ['daak.open', 'daak.share', 'daak.folder'] as const;
 export type NotifyAction = (typeof DAK_RECEIVED_ACTIONS)[number];
 
+/**
+ * R37: the ids actually INSTALLED as buttons on the received category.
+ *
+ * "daak.folder" stays in DAK_RECEIVED_ACTIONS -- the vocabulary is frozen --
+ * but it is withheld here because "reveal" has no implementation on either
+ * platform, so a button that does nothing is worse than no button. Both native
+ * sides install from their own list and withhold it the same way; add it back
+ * here, to the Kotlin actionPending list, and to the Swift actionTitles table
+ * in the same commit, once reveal exists.
+ */
+export const DAK_REGISTERED_ACTIONS = ['daak.open', 'daak.share'] as const;
+
 export interface NotificationActionEvent {
   action: NotifyAction;
   /** The raw `InboxEntry` JSON the notification was posted with. */
@@ -27,9 +39,12 @@ export async function initNotifications(): Promise<boolean> {
   const granted = await NativeDaakNotify.requestPermission().catch(() => false);
   // Registered even when denied: the category is not the permission, and a
   // user who grants later must not need a reinstall to get working actions.
+  // Also caught, for the same reason: a category install that rejects would
+  // reject startEngine, and no notification detail may take down app startup
+  // (R36, which is not permission-specific).
   await NativeDaakNotify.registerCategories(
-    JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_RECEIVED_ACTIONS }]),
-  );
+    JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+  ).catch(() => false);
   return granted;
 }
 
@@ -49,10 +64,6 @@ export async function notifyReceived(entry: InboxEntry): Promise<void> {
   ).catch((err: unknown) => {
     console.warn(`daak: no notification for ${entry.payloadId}: ${String(err)}`);
   });
-}
-
-export function cancelNotification(id: string): Promise<void> {
-  return NativeDaakNotify.cancel(id);
 }
 
 /**

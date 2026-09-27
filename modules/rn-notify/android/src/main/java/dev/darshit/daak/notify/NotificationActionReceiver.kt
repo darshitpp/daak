@@ -33,7 +33,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
     // Emit first. When JS is alive and subscribed it acts on the event, which is
     // how the share sheet and the reveal both happen.
-    if (!DaakNotifyModule.emitToJs(context, action, payload)) {
+    if (!DaakNotifyModule.emitToJs(action, payload)) {
       // App killed, or JS has not booted: nothing is listening and the event is
       // gone. Stash it instead, and consumePendingAction hands it to JS on the
       // first subscription. A receiver must not block waiting for JS to boot.
