@@ -13,6 +13,12 @@ export interface Spec extends TurboModule {
   appGroupDir(): Promise<string>;
   /** Reveals a saved file in the OS file manager. `false` = not supported here. */
   reveal(path: string): Promise<boolean>;
+  /**
+   * Whether a path exists. Resolves false, never rejects, for a path that is
+   * not there: "no such file" is an answer here, and a reveal action must not
+   * die on an unhandled rejection.
+   */
+  exists(path: string): Promise<boolean>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('DaakFsPaths');

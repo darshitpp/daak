@@ -517,9 +517,30 @@ async fn every_engine_event_maps_to_an_encodable_ipc_event() {
             transfer_id: peer,
             error: "boom".into(),
         },
+        // C1: without this arm the desktop half of the same hole stayed open --
+        // DaemonClient's inbox.received was unreachable from the engine too.
+        EngineEvent::InboxReceived(daak_core::store::inbox::InboxRow {
+            id: peer,
+            transfer_id: peer,
+            peer_device_id: [3u8; 16],
+            kind: "text".into(),
+            item_count: 1,
+            summary: "meet at 6".into(),
+            received_at: 1_700_000_000,
+            saved_paths: "[]".into(),
+        }),
     ];
     for ev in cases {
         let mapped = daakd::to_ipc_event(ev);
+        if let IpcEvent::InboxReceived { payload_json } = &mapped {
+            // The wire value is a JSON STRING the client parses (see the
+            // variant's doc comment), and it must be the same InboxEntry shape
+            // the FFI bridge sends, not a daemon-local variant of it.
+            let json: serde_json::Value = serde_json::from_str(payload_json).unwrap();
+            assert_eq!(json["summary"], serde_json::json!("meet at 6"));
+            assert_eq!(json["savedPaths"], serde_json::json!([]));
+            assert_eq!(json["payloadId"], serde_json::json!(hex::encode(peer)));
+        }
         // Every IpcEvent must survive the real encoder, not just a Debug print.
         let mut buf = Vec::new();
         daak_ipc::write_message(&mut buf, &IpcMessage::Event(mapped.clone()))
@@ -527,6 +548,29 @@ async fn every_engine_event_maps_to_an_encodable_ipc_event() {
             .unwrap();
         assert!(!buf.is_empty(), "{mapped:?} did not encode");
     }
+}
+
+// CONTRACT (daakd's half): a corrupt saved_paths is `null`, not `[]`, exactly as
+// in daak-ffi. The two bridges must not disagree about what a corrupt row means.
+#[test]
+fn a_corrupt_saved_paths_reaches_the_ipc_client_as_null_not_an_empty_list() {
+    let row = daak_core::store::inbox::InboxRow {
+        id: [1u8; 16],
+        transfer_id: [1u8; 16],
+        peer_device_id: [2u8; 16],
+        kind: "file".into(),
+        item_count: 1,
+        summary: String::new(),
+        received_at: 0,
+        saved_paths: "{not json".into(),
+    };
+    let IpcEvent::InboxReceived { payload_json } =
+        daakd::to_ipc_event(EngineEvent::InboxReceived(row))
+    else {
+        panic!("expected an inbox event");
+    };
+    let json: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+    assert!(json["savedPaths"].is_null());
 }
 
 // SHOULD-FIX 5: the ONE link between an EngineEvent and a subscribed IPC client

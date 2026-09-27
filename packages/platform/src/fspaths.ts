@@ -34,3 +34,14 @@ export async function appGroupDir(): Promise<string> {
 export async function revealInFileManager(path: string): Promise<boolean> {
   return NativeDaakFsPaths.reveal(path);
 }
+
+/**
+ * Whether a path exists. Resolves false rather than rejecting for a path that
+ * is not there, on both platforms, so a reveal action never has to catch. Not
+ * called anywhere yet -- the UI that needs it is a later task -- but the plan
+ * names it, so it lives here next to the other four rather than being
+ * reinvented under a second name when that task lands.
+ */
+export async function exists(path: string): Promise<boolean> {
+  return NativeDaakFsPaths.exists(path);
+}

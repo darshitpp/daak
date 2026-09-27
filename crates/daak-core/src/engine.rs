@@ -66,6 +66,12 @@ pub enum EngineEvent {
         transfer_id: [u8; 16],
         error: String,
     },
+    /// An inbound payload was received AND its inbox_history row was written.
+    /// Carries the whole row, not the manifest: kind, summary, itemCount,
+    /// receivedAt and savedPaths are what the UI needs, and the two bridges
+    /// already have inbox_entry_json() for it. Emitted only when the row was
+    /// actually persisted -- an event for a row that does not exist is a lie.
+    InboxReceived(InboxRow),
 }
 
 type PendingPairing = (PairingBundle, PairMode, Option<String>);
@@ -699,7 +705,9 @@ impl Engine {
     }
 
     /// Called from the accept loop after a successful inbound transfer.
-    fn record_inbox(db: &Db, manifest: &Manifest) -> Result<()> {
+    /// Returns the row it wrote, so the caller can put THE PERSISTED row on the
+    /// event bus rather than rebuilding it from the manifest a second time.
+    fn record_inbox(db: &Db, manifest: &Manifest) -> Result<InboxRow> {
         let summary = match manifest.kind {
             PayloadKind::Text => manifest
                 .items
@@ -708,7 +716,7 @@ impl Engine {
                 .unwrap_or_default(),
             _ => format!("{} file(s)", manifest.binary_items().count()),
         };
-        db.add_inbox(&InboxRow {
+        let row = InboxRow {
             id: manifest.payload_id,
             transfer_id: manifest.payload_id,
             peer_device_id: manifest.sender.device_id,
@@ -719,7 +727,9 @@ impl Engine {
             // Placeholder: the real paths are filled in when the receive path
             // reports them (later task).
             saved_paths: "[]".into(),
-        })
+        };
+        db.add_inbox(&row)?;
+        Ok(row)
     }
 
     /// Called by the accept loop for every inbound connection.
@@ -817,12 +827,21 @@ impl Engine {
         .await
         {
             Ok(manifest) => {
+                // C1 order: the inbox event goes FIRST. A `transfer.done`
+                // handler that refetches the inbox must not be able to run
+                // before the row it is about to refetch exists, and a
+                // broadcast receiver sees these in send order. If the row
+                // cannot be written there is no entry to report, so only the
+                // warn! survives -- no event for a row that does not exist.
+                match Self::record_inbox(db, &manifest) {
+                    Ok(row) => {
+                        let _ = tx.send(EngineEvent::InboxReceived(row));
+                    }
+                    Err(e) => tracing::warn!("failed to record inbox row: {e}"),
+                }
                 let _ = tx.send(EngineEvent::TransferDone {
                     transfer_id: manifest.payload_id,
                 });
-                if let Err(e) = Self::record_inbox(db, &manifest) {
-                    tracing::warn!("failed to record inbox row: {e}");
-                }
                 Ok(())
             }
             Err(e) => {

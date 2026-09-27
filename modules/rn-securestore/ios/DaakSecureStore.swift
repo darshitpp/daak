@@ -38,14 +38,14 @@ class DaakSecureStore: NSObject {
       guard let data = item as? Data,
             let value = String(data: data, encoding: .utf8)
       else {
-        reject("E_KEYCHAIN", "keychain item for (key) is not UTF-8", nil)
+        reject("E_KEYCHAIN", "keychain item for \(key) is not UTF-8", nil)
         return
       }
       resolve(value)
     case errSecItemNotFound:
       resolve(nil)
     default:
-      reject("E_KEYCHAIN", "keychain read failed for (key): (status)", nil)
+      reject("E_KEYCHAIN", "keychain read failed for \(key): \(status)", nil)
     }
   }
 
@@ -53,7 +53,7 @@ class DaakSecureStore: NSObject {
                  resolve: @escaping RCTPromiseResolveBlock,
                  reject: @escaping RCTPromiseRejectBlock) {
     guard let data = value.data(using: .utf8) else {
-      reject("E_KEYCHAIN", "value for (key) is not encodable", nil)
+      reject("E_KEYCHAIN", "value for \(key) is not encodable", nil)
       return
     }
     // SecItemUpdate first, SecItemAdd only when there was nothing to update. The

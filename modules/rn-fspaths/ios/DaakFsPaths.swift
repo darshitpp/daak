@@ -10,15 +10,21 @@ class DaakFsPaths: NSObject {
 
   @objc func documentsDir(_ resolve: @escaping RCTPromiseResolveBlock,
                           reject: @escaping RCTPromiseRejectBlock) {
-    resolve(Self.documents().path)
+    // The engine's data dir, not the OS Documents dir: the database, the keys
+    // and every received file live under it, and a caller that resolves
+    // documentsDir() and writes a sibling of the received files is writing
+    // somewhere the app never looks.
+    resolve(Self.dataDir().path)
   }
 
-  /// iOS has no separate downloads dir an app may write without a UIFileSharing
-  /// entitlement, so the honest answer is the app's own Documents. It is inside
-  /// the sandbox, which is the invariant callers actually depend on.
+  /// The engine's RECEIVE ROOT: `<data_dir>/downloads`, which is exactly the
+  /// `dir.join("downloads")` out_dir that daak-ffi's start() hands the engine.
+  /// Returning bare Documents here -- which is what this did -- meant the UI
+  /// listed a directory one level ABOVE where files land, so a received file
+  /// existed and was invisible at the same time.
   @objc func downloadsDir(_ resolve: @escaping RCTPromiseResolveBlock,
                           reject: @escaping RCTPromiseRejectBlock) {
-    resolve(Self.documents().path)
+    resolve(Self.dataDir().appendingPathComponent("downloads", isDirectory: true).path)
   }
 
   @objc func appGroupDir(_ resolve: @escaping RCTPromiseResolveBlock,
@@ -45,6 +51,16 @@ class DaakFsPaths: NSObject {
     resolve(false)
   }
 
+  /// `FileManager.fileExists(atPath:)` rather than a stat: it is the same
+  /// answer the OS gives a document picker, and it returns false instead of
+  /// throwing for a path that is not there. "No such file" is an ANSWER -- a
+  /// reveal action must not die on a rejected promise.
+  @objc func exists(_ path: String,
+                    resolve: @escaping RCTPromiseResolveBlock,
+                    reject: @escaping RCTPromiseRejectBlock) {
+    resolve(FileManager.default.fileExists(atPath: path))
+  }
+
   private static func documents() -> URL {
     // create: true, so a first launch has a directory and not a promise of one.
     let fm = FileManager.default
@@ -56,5 +72,13 @@ class DaakFsPaths: NSObject {
     // the cache dir is at least inside the same sandbox.
     return fm.urls(for: .cachesDirectory, in: .userDomainMask).first
       ?? URL(fileURLWithPath: NSTemporaryDirectory())
+  }
+
+  /// ONE resolution of the engine's data dir, shared with
+  /// apps/mobile/ios/Daak.swift's start() by CONSTRUCTION rather than by
+  /// convention: both append the same "daak" to the same Documents root. Keep
+  /// them in step -- a second copy of this expression is how the two drifted.
+  private static func dataDir() -> URL {
+    documents().appendingPathComponent("daak", isDirectory: true)
   }
 }

@@ -189,6 +189,16 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
             transfer_id: hex::encode(transfer_id),
             error,
         },
+        // C1: same missing arm as in daak-ffi. The payload is the daemon's own
+        // inbox_entry_json -- identical InboxEntry shape, identical
+        // corrupt-saved_paths-means-null contract.
+        EngineEvent::InboxReceived(row) => IpcEvent::InboxReceived {
+            // Cannot fail, same reasoning as the daak-ffi arm: an InboxEntry
+            // is hex strings, a u32, an i64 and array-or-null, and
+            // `to_ipc_event` returns IpcEvent with no Result to fail into.
+            payload_json: serde_json::to_string(&inbox_entry_json(&row))
+                .expect("an InboxEntry is strings, numbers and array-or-null"),
+        },
     }
 }
 

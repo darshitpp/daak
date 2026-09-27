@@ -733,6 +733,19 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 error,
             },
         },
+        // C1: the arm that was missing, so the engine's inbox event could
+        // never reach JS. inbox_entry_json is the EXISTING helper -- a second
+        // hand-rolled copy of the saved_paths parse is how the two bridges
+        // would drift on what a corrupt row means.
+        EngineEvent::InboxReceived(row) => FfiEvent::InboxReceived {
+            data: InboxReceivedEvent {
+                // Cannot fail: an InboxEntry is hex strings, a u32, an i64 and
+                // an array-or-null. `to_ffi_event` has no Result to fail into,
+                // and inventing one would change a signature four callers use.
+                payload_json: serde_json::to_string(&inbox_entry_json(&row))
+                    .expect("an InboxEntry is strings, numbers and array-or-null"),
+            },
+        },
     }
 }
 

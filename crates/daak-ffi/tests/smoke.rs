@@ -211,6 +211,77 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
         FfiEvent::TransferFailed { data }
             if data.transfer_id == hex && data.error == "peer went away"
     ));
+
+    // C1: the ARM that was missing. to_ffi_event had no InboxReceived arm at
+    // all, so the engine's event (once it existed) could never reach JS. The
+    // payload must be the SAME InboxEntry JSON list_inbox returns -- built by
+    // the existing inbox_entry_json, not a second hand-rolled copy of the
+    // saved_paths parse.
+    let row = daak_core::store::inbox::InboxRow {
+        id,
+        transfer_id: id,
+        peer_device_id: [3u8; 16],
+        kind: "text".into(),
+        item_count: 1,
+        summary: "meet at 6".into(),
+        received_at: 1_700_000_000,
+        saved_paths: "[]".into(),
+    };
+    let mapped = to_ffi_event(EngineEvent::InboxReceived(row));
+    let FfiEvent::InboxReceived { data } = mapped else {
+        panic!("InboxReceived must map to the inbox.received wire event");
+    };
+    let json: serde_json::Value = serde_json::from_str(&data.payload_json).unwrap();
+    assert_eq!(
+        json,
+        daak_ffi::inbox_entry_json(&daak_core::store::inbox::InboxRow {
+            id,
+            transfer_id: id,
+            peer_device_id: [3u8; 16],
+            kind: "text".into(),
+            item_count: 1,
+            summary: "meet at 6".into(),
+            received_at: 1_700_000_000,
+            saved_paths: "[]".into(),
+        }),
+        "the event payload must be the SAME InboxEntry the list endpoint returns"
+    );
+    assert_eq!(json["summary"], serde_json::json!("meet at 6"));
+    assert_eq!(json["savedPaths"], serde_json::json!([]));
+}
+
+// CONTRACT: a saved_paths that will not parse is `null`, NEVER `[]`. `[]` is
+// the real answer "this payload saved no files", so a corrupt row must not be
+// indistinguishable from one. This is the same value the event carries.
+#[test]
+fn an_unparsable_saved_paths_is_null_in_the_event_payload_never_an_empty_list() {
+    let mut row = daak_core::store::inbox::InboxRow {
+        id: [1u8; 16],
+        transfer_id: [1u8; 16],
+        peer_device_id: [2u8; 16],
+        kind: "file".into(),
+        item_count: 1,
+        summary: String::new(),
+        received_at: 0,
+        saved_paths: "{not json".into(),
+    };
+    let FfiEvent::InboxReceived { data } = to_ffi_event(EngineEvent::InboxReceived(row.clone()))
+    else {
+        panic!("expected an inbox event");
+    };
+    let json: serde_json::Value = serde_json::from_str(&data.payload_json).unwrap();
+    assert!(
+        json["savedPaths"].is_null(),
+        "a corrupt row must read as null"
+    );
+
+    // And the genuine empty answer stays an empty LIST.
+    row.saved_paths = "[]".into();
+    let FfiEvent::InboxReceived { data } = to_ffi_event(EngineEvent::InboxReceived(row)) else {
+        panic!("expected an inbox event");
+    };
+    let json: serde_json::Value = serde_json::from_str(&data.payload_json).unwrap();
+    assert_eq!(json["savedPaths"], serde_json::json!([]));
 }
 
 #[test]

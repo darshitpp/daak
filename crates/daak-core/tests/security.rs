@@ -324,3 +324,83 @@ async fn engine_reports_transfer_done_for_inbound_file() {
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
+
+// C1: `inbox.received` had NO PRODUCER anywhere -- EngineEvent had no such
+// variant, so the mobile clipboard copy and the receive notification were dead
+// code that only looked alive because the JS tests injected the event by hand.
+// This drives the REAL inbound receive path (two real Engines, a real pairing,
+// a real send) and asserts the event the receiver's own engine emitted carries
+// the row that was persisted -- not a hand-built FfiEvent, which only proves
+// the serializer.
+#[tokio::test]
+async fn a_real_inbound_receive_emits_inbox_received_carrying_the_persisted_row() {
+    let d1 = tempfile::tempdir().unwrap();
+    let d2 = tempfile::tempdir().unwrap();
+    let a = Arc::new(engine(1, "a", d1.path().to_path_buf()).await);
+    let b = Arc::new(engine(2, "b", d2.path().to_path_buf()).await);
+
+    let b_addr = b.local_addr();
+    let b_bundle = b.pairing_bundle().await;
+    let a_id = a.identity().device_id();
+
+    b.offer_pairing(a.pairing_bundle().await, PairMode::Qr, None)
+        .await
+        .unwrap();
+    let b_for_server = b.clone();
+    let server = tokio::spawn(async move { b_for_server.accept_pairing_once().await.unwrap() });
+    let (client_sas, _) = a.pair_with(b_addr, b_bundle.clone()).await.unwrap();
+    assert_eq!(client_sas, server.await.unwrap());
+
+    // Text, because the summary the clipboard copies IS the first item's text.
+    // Built explicitly, NOT with Manifest::text(): that convenience stamps a
+    // ZEROED sender device id, and the assertion below checks the real sender
+    // id reaches the row.
+    let manifest = Manifest::new(
+        PayloadKind::Text,
+        DeviceRef {
+            device_id: a_id,
+            name: "a".into(),
+        },
+        vec![daak_core::manifest::Item::text(0, "meet at 6")],
+    );
+    let payload_id = manifest.payload_id;
+
+    // Subscribe BEFORE the send: a broadcast with no receiver drops the event.
+    let mut events = b.events();
+
+    a.note_peer(b_bundle.identity.device_id, "b", b_addr).await;
+    a.send_secure(b_bundle.identity.device_id, manifest, vec![])
+        .await
+        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Ok(EngineEvent::InboxReceived(row))) => {
+                assert_eq!(row.id, payload_id);
+                assert_eq!(row.transfer_id, payload_id);
+                assert_eq!(row.peer_device_id, a_id, "the SENDER's device id");
+                assert_eq!(row.kind, "text");
+                assert_eq!(row.item_count, 1);
+                assert_eq!(row.summary, "meet at 6");
+                assert!(row.received_at > 0);
+                // Still the "[]" placeholder (Part B B3 owns the real paths),
+                // and the event does not pretend otherwise.
+                assert_eq!(row.saved_paths, "[]");
+
+                // The event must carry the row that was PERSISTED, not one the
+                // event arm built on its own.
+                let stored = b.list_inbox().unwrap();
+                assert_eq!(stored.len(), 1);
+                assert_eq!(stored[0], row);
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) => panic!("receiver event stream closed before InboxReceived"),
+            Err(_) => panic!("timed out waiting for InboxReceived"),
+        }
+    }
+
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}

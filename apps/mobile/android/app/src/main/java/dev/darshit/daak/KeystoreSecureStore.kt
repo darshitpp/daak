@@ -99,7 +99,13 @@ class KeystoreSecureStore(private val context: Context) : SecureStore {
   // is not a failure: the Rust side treats delete as best-effort.
   override fun delete(key: String) {
     try {
-      prefs.edit().remove(key).commit()
+      // check() the boolean like set() does two methods above. Throwing it away
+      // reports a successful delete to Rust while the old secret is still on
+      // disk -- and a rotate-then-relaunch would then read a key the app
+      // believes it destroyed.
+      check(prefs.edit().remove(key).commit()) {
+        "keystore commit returned false deleting $key"
+      }
     } catch (t: Throwable) {
       Log.e(TAG, "keystore delete failed for $key", t)
       if (t is FfiStoreException) throw t

@@ -29,26 +29,26 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
   override fun getName() = NAME
 
   /**
-   * filesDir, and deliberately NOT getExternalFilesDir(DIRECTORY_DOCUMENTS):
-   * both are inside the sandbox, and filesDir is what the engine's data dir
-   * already uses, so one root holds the database, the keys and every saved
-   * file. Android's own Downloads dir is not app-writable without
-   * MANAGE_EXTERNAL_STORAGE, which a LAN file app has no business asking for.
+   * The engine's DATA DIR, resolved the same way DaakModule.kt's start()
+   * resolves it: `filesDir/daak`. Not bare filesDir, and deliberately NOT
+   * getExternalFilesDir(DIRECTORY_DOCUMENTS) -- one root holds the database, the
+   * keys and every saved file.
    */
   @ReactMethod
-  override fun documentsDir(promise: Promise) = resolve(promise) { reactApplicationContext.filesDir.absolutePath }
+  override fun documentsDir(promise: Promise) = resolve(promise) { dataDir().absolutePath }
 
   /**
-   * Android HAS a per-app external downloads dir, and it is still inside the
-   * sandbox (app-specific external storage needs no permission), so this is a
- * real directory rather than a lie. It is null only while external storage is
-   * unmounted, and then filesDir is the honest fallback.
+   * The engine's RECEIVE ROOT: `<data_dir>/downloads`, which is exactly the
+   * `dir.join("downloads")` out_dir that daak-ffi's start() hands the engine.
+   *
+   * This returned the EXTERNAL app-specific Download/ before, which is inside
+   * the sandbox but is NOT where the engine writes -- so on Android the user saw
+   * "no files received" for files that had been received. Two directories under
+   * one name is how files end up in two places.
    */
   @ReactMethod
-  override fun downloadsDir(promise: Promise) = resolve(promise) {
-    (reactApplicationContext.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
-        ?: reactApplicationContext.filesDir).absolutePath
-  }
+  override fun downloadsDir(promise: Promise) =
+      resolve(promise) { File(dataDir(), "downloads").absolutePath }
 
   /**
    * There is no iOS-style App Group on Android. Returning filesDir here would
@@ -90,7 +90,24 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     launched
   }
 
+  /**
+   * The same `File(path).exists()` reveal already inlined above, exposed --
+   * so a caller can ask without launching an intent. Resolves false for a path
+   * that is not there: "no such file" is an ANSWER, not a failure, and a
+   * reveal action must not die on an unhandled rejection.
+   */
+  @ReactMethod
+  override fun exists(path: String, promise: Promise) = resolve(promise) { File(path).exists() }
+
   private inline fun resolve(promise: Promise, block: () -> Any?) {
     try { promise.resolve(block()) } catch (t: Throwable) { promise.reject("E_FSPATHS", t) }
   }
+
+  /**
+   * ONE resolution of the engine's data dir, matched by CONSTRUCTION to
+   * `File(reactApplicationContext.filesDir, "daak")` in DaakModule.kt's
+   * start(). Keep them in step: a second copy of this expression is exactly how
+   * this module came to disagree with the engine about where files are.
+   */
+  private fun dataDir() = File(reactApplicationContext.filesDir, "daak")
 }

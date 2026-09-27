@@ -184,6 +184,21 @@ describe('the iOS Keychain store', () => {
     expect(get).toMatch(/case errSecItemNotFound:\s*resolve\(nil\)/);
     expect(get).toMatch(/reject\("E_KEYCHAIN"/);
   });
+
+  // M3. A missing backslash is invisible at the call site and produces a
+  // console line that reads `read failed for (key): (status)` -- which tells a
+  // debugging reader nothing at the exact moment they need it. Pinned because
+  // it is a one-character regression with no compiler signal in Swift.
+  it('interpolates key and status in every reject message', () => {
+    const messages = [...store.matchAll(/reject\("E_KEYCHAIN", "([^"]*)"/g)].map((m) => m[1]);
+    expect(messages.length).toBeGreaterThan(0);
+    for (const m of messages) {
+      // A parenthesised token that is not preceded by a backslash is the bug.
+      expect(m).not.toMatch(/(?<!\\)\((?:key|status|value|addStatus)\)/);
+    }
+    // And the ones that interpolate really do, at least once.
+    expect(messages.some((m) => m.includes('\\(key)'))).toBe(true);
+  });
 });
 
 describe('the engine start path owns the data dir and the keystore', () => {
@@ -276,6 +291,19 @@ describe('the app-target uniffi SecureStore implementations', () => {
       .join('\n');
     expect(ktCode).not.toMatch(/setUserAuthenticationRequired/);
   });
+
+  // M4. `set()` two methods above already checks the commit() boolean; delete()
+  // threw the result away, so a storage failure was reported to Rust as a
+  // successful delete while the old secret was still on disk. Nothing calls
+  // delete today (the engine only reads and writes), so this is consistency
+  // with a one-line hazard, not a live bug -- but the day key rotation uses it,
+  // "deleted" would be a claim the disk disagrees with.
+  it('checks the commit result in set AND delete', () => {
+    const set = kt.slice(kt.indexOf('override fun set('), kt.indexOf('override fun delete('));
+    const del = kt.slice(kt.indexOf('override fun delete('), kt.indexOf('private fun seal('));
+    expect(set).toMatch(/check\(prefs\.edit\(\).*\.commit\(\)\)/);
+    expect(del).toMatch(/check\(prefs\.edit\(\).*\.commit\(\)\)/);
+  });
 });
 
 describe('fspaths reveal on Android', () => {
@@ -352,6 +380,180 @@ describe('fspaths reveal on Android', () => {
     );
     expect(group).toMatch(/resolve\(promise\) \{ "" \}/);
     expect(group).not.toMatch(/filesDir/);
+  });
+});
+
+// C2. The Xcode project is objectVersion 54 with NO synchronized groups, so a
+// .swift file on disk is compiled only if the pbxproj lists it. Adding a Swift
+// file without the four pbxproj entries compiles fine everywhere else and then
+// fails the app target with `cannot find 'X' in scope` -- and nothing in this
+// repo, CI included, can see that without Xcode. So the file list on disk IS the
+// contract, and it is checked here.
+describe('every iOS app-target Swift file is in the Xcode project', () => {
+  const iosDir = join(__dirname, repo, 'apps/mobile/ios/');
+  const pbxproj = readFileSync(join(iosDir, 'Daak.xcodeproj/project.pbxproj'), 'utf8');
+
+  // The Daak PBXGroup: the one whose children list is the app target's sources.
+  const daakGroup = pbxproj.slice(
+    pbxproj.indexOf('/* Daak */ = {'),
+    pbxproj.indexOf('};', pbxproj.indexOf('/* Daak */ = {')),
+  );
+
+  // The app target's Sources phase. There are three in this project (app,
+  // share extension, tests) and the FIRST one in the file is the test target's,
+  // so the phase is located by the Daak.swift build-file id it must contain.
+  // and NOT in target order, so it is found by the build-file id Daak.swift is
+  // known to have, then walked BACK to the phase header that owns it. Taking
+  // the first phase in the file picks the test target, which is how this check
+  // would have gone vacuous.
+  const daakSwiftBuildFile = /([0-9A-F]{24}) \/\* Daak\.swift in Sources \*\//.exec(pbxproj)![1];
+  const phaseStart = pbxproj.lastIndexOf(
+    'isa = PBXSourcesBuildPhase;',
+    pbxproj.indexOf(daakSwiftBuildFile + ' /* Daak.swift in Sources */,'),
+  );
+  const sourcesPhase = pbxproj.slice(
+    phaseStart,
+    pbxproj.indexOf('runOnlyForDeploymentPostprocessing', phaseStart),
+  );
+
+  // If the project ever grows synchronized groups, a per-file listing stops
+  // being necessary -- and this whole check would silently go vacuous. The
+  // objectVersion in the header is the thing that decides that.
+  it('still requires a per-file listing', () => {
+    expect(pbxproj).toMatch(/objectVersion = 54;/);
+    expect(pbxproj).not.toMatch(/fileSystemSynchronizedGroups/);
+    // Both halves must be non-empty, or every assertion below passes vacuously.
+    // DaakIntentBridge is a group child AND a Sources entry; Daak.swift is the
+    // reverse (a Sources entry but not a group child), so the two sentinels
+    // between them prove both slices really are the app target's.
+    expect(daakGroup).toContain('DaakIntentBridge.swift');
+    expect(sourcesPhase).toContain('Daak.swift in Sources');
+    expect(sourcesPhase).not.toContain('DaakTests.m in Sources');
+  });
+
+  it('lists every Daak/*.swift file as a file reference, group child, build file and Sources entry', () => {
+    const files = readdirSync(join(iosDir, 'Daak')).filter((n) => n.endsWith('.swift'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      const quoted = f.replace('.', '\\.');
+      // 1 of 4: the PBXFileReference, with the path the project actually uses.
+      expect(pbxproj).toMatch(
+        new RegExp(`isa = PBXFileReference;[^\\n]*name = ${quoted}; path = Daak/${quoted};`),
+      );
+      // 2 of 4: the PBXBuildFile that puts it in a build phase.
+      expect(pbxproj).toMatch(
+        new RegExp(`isa = PBXBuildFile; fileRef = [0-9A-F]{24} /\\* ${quoted} \\*/;`),
+      );
+      // 3 of 4: a child of the Daak group, or it is invisible in the IDE.
+      expect(daakGroup).toMatch(new RegExp(`/\\* ${quoted} \\*/`));
+      // 4 of 4: a SOURCES entry. This is the one that actually compiles it --
+      // a build file for a resource or a framework would not link the symbol.
+      expect(sourcesPhase).toMatch(new RegExp(`/\\* ${quoted} in Sources \\*/`));
+    }
+  });
+
+  // A 24-hex id DEFINED twice is a dangling reference: Xcode keeps one
+  // definition, and the other use can attach the WRONG file to the Sources
+  // phase. Only definition lines count -- a PBXBuildFile legitimately appears in
+  // both the PBXBuildFile section and a phase's file list.
+  it('defines every object id exactly once', () => {
+    const ids = [...pbxproj.matchAll(/^\t\t([0-9A-F]{24}) [^\n]*= \{/gm)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(0);
+    const seen = new Set<string>();
+    const dupes = ids.filter((i) => (seen.has(i) ? true : (seen.add(i), false)));
+    expect(dupes).toEqual([]);
+  });
+});
+
+// I2. The engine's receive root is `<data_dir>/downloads`, and the data dir is
+// resolved NATIVELY in the two start() implementations. fspaths is a SEPARATE
+// TurboModule that never sees that dir, so it re-derives it -- and it used to
+// derive the WRONG one: iOS returned bare Documents and Android returned the
+// external app-specific Download/, neither of which is where anything is ever
+// written. The result on Android is a file list that is empty for files that
+// WERE received. These pins hold the three expressions to one answer per
+// platform, so the surface cannot claim a directory the engine does not use.
+describe('the fspaths module reports the directories the engine writes to', () => {
+  const kt = read(
+    repo +
+      'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const swift = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const androidStart = read(
+    repo + 'apps/mobile/android/app/src/main/java/dev/darshit/daak/DaakModule.kt',
+  );
+  const iosStart = read(repo + 'apps/mobile/ios/Daak.swift');
+
+  // One helper per platform, and BOTH public methods route through it. Two
+  // copies of the path expression is exactly how they drifted in the first
+  // place.
+  it('resolves the engine data dir once per platform, from the same root start() uses', () => {
+    expect(kt).toMatch(/filesDir, "daak"/);
+    expect(kt).toMatch(/private fun dataDir()/);
+    expect(swift).toMatch(/appendingPathComponent\("daak"/);
+    expect(swift).toMatch(/private static func dataDir\(\)/);
+  });
+
+  it('points downloadsDir at the engine receive root, not the platform Downloads dir', () => {
+    // Android's whole failure mode: an external Download/ that is always empty.
+    // Comments are stripped: the method's own doc comment NAMES the API it
+    // rejects to explain the rejection, and that must not read as a violation.
+    const ktCode = kt
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('*') && !l.trimStart().startsWith('//'))
+      .join('\n');
+    expect(ktCode).not.toMatch(/getExternalFilesDir/);
+    expect(kt).toMatch(/dataDir\(\), "downloads"/);
+    // iOS: Documents/daak/downloads, the same subdirectory the engine makes.
+    expect(swift).toMatch(/appendingPathComponent\("downloads"/);
+    expect(swift).not.toMatch(/\.downloadsDirectory/);
+  });
+
+  it('points documentsDir at the data dir itself, one level above downloads', () => {
+    expect(kt).toMatch(/override fun documentsDir\(promise: Promise\)[^\n]*dataDir\(\)/);
+    expect(swift).toMatch(/resolve\(Self\.dataDir\(\)\.path\)/);
+  });
+
+  // The Rust side, quoted here so all three layers are checked in one place.
+  it('still matches the engine out_dir the ffi start() builds', () => {
+    const lib = read(repo + 'crates/daak-ffi/src/lib.rs');
+    expect(lib).toMatch(/out_dir: dir\.join\("downloads"\)/);
+  });
+});
+
+// I3. The plan's Produces list names FsPaths.exists and BOTH of its own native
+// snippets define it; the implementation dropped it. The one caller the plan
+// has in mind is the reveal UI (Task 10), which is not written yet -- so this
+// is dead surface today, not a live bug. It is delivered because the plan asked
+// for it and a later task would otherwise add a SECOND, differently-named
+// exists() next to this module. The Spec, both natives and the platform wrapper
+// must all carry it or the codegen contract breaks: a method on the Spec that a
+// native class does not implement is an abstract-method compile error.
+describe('fspaths exposes exists on the Spec and on both natives', () => {
+  const spec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const swift = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const kt = read(
+    repo +
+      'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const platform = read(repo + 'packages/platform/src/fspaths.ts');
+
+  it('declares it on the TurboModule Spec', () => {
+    expect(spec).toMatch(/exists\(path: string\): Promise<boolean>;/);
+  });
+
+  it('implements it on both platforms', () => {
+    expect(swift).toMatch(/@objc func exists\(_ path: String/);
+    expect(swift).toMatch(/fileExists\(atPath: path\)/);
+    // The Android reveal already inlined File(path).exists(); exists() is that
+    // same call exposed, which is why this must be a Spec method and not only a
+    // private helper.
+    expect(kt).toMatch(/override fun exists\(path: String, promise: Promise\)/);
+  });
+
+  it('is re-exported by the platform wrapper', () => {
+    expect(platform).toMatch(/export async function exists\(path: string\): Promise<boolean>/);
+    expect(platform).toMatch(/NativeDaakFsPaths\.exists\(path\)/);
   });
 });
 
