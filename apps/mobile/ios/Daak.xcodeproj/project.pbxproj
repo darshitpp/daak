@@ -10,8 +10,8 @@
 		00E356F31AD99517003FC87E /* DaakTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 00E356F21AD99517003FC87E /* DaakTests.m */; };
 		0C80B921A6F3F58F76C31292 /* libPods-Daak.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-Daak.a */; };
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
-		DA0AK0011A68108700A75B9A /* DaakModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0AK0031A68108700A75B9A /* DaakModule.mm */; };
-		DA0AK0021A68108700A75B9A /* Daak.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AK0041A68108700A75B9A /* Daak.swift */; };
+		DA0AB0011A68108700A75B9A /* DaakModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0031A68108700A75B9A /* DaakModule.mm */; };
+		DA0AB0021A68108700A75B9A /* Daak.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0041A68108700A75B9A /* Daak.swift */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
 		7699B88040F8A987B510C191 /* libPods-Daak-DaakTests.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 19F6CBCC0A4E27FBF8BF4A61 /* libPods-Daak-DaakTests.a */; };
@@ -34,13 +34,14 @@
 		00E356F21AD99517003FC87E /* DaakTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DaakTests.m; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* Daak.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Daak.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FAF1A68108700A75B9A /* AppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AppDelegate.h; path = Daak/AppDelegate.h; sourceTree = "<group>"; };
+		DA0AB0051A68108700A75B9A /* Daak-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "Daak-Bridging-Header.h"; path = "Daak/Daak-Bridging-Header.h"; sourceTree = "<group>"; };
 		13B07FB01A68108700A75B9A /* AppDelegate.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = AppDelegate.mm; path = Daak/AppDelegate.mm; sourceTree = "<group>"; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Daak/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Daak/Info.plist; sourceTree = "<group>"; };
 		13B07FB71A68108700A75B9A /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = main.m; path = Daak/main.m; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = Daak/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		DA0AK0041A68108700A75B9A /* Daak.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Daak.swift; path = Daak.swift; sourceTree = "<group>"; };
-		DA0AK0031A68108700A75B9A /* DaakModule.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = DaakModule.mm; path = DaakModule.mm; sourceTree = "<group>"; };
+		DA0AB0041A68108700A75B9A /* Daak.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Daak.swift; path = Daak.swift; sourceTree = "<group>"; };
+		DA0AB0031A68108700A75B9A /* DaakModule.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = DaakModule.mm; path = DaakModule.mm; sourceTree = "<group>"; };
 		19F6CBCC0A4E27FBF8BF4A61 /* libPods-Daak-DaakTests.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Daak-DaakTests.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B4392A12AC88292D35C810B /* Pods-Daak.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak.debug.xcconfig"; path = "Target Support Files/Pods-Daak/Pods-Daak.debug.xcconfig"; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-Daak.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak.release.xcconfig"; path = "Target Support Files/Pods-Daak/Pods-Daak.release.xcconfig"; sourceTree = "<group>"; };
@@ -92,6 +93,7 @@
 			isa = PBXGroup;
 			children = (
 				13B07FAF1A68108700A75B9A /* AppDelegate.h */,
+				DA0AB0051A68108700A75B9A /* Daak-Bridging-Header.h */,
 				13B07FB01A68108700A75B9A /* AppDelegate.mm */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
@@ -123,8 +125,8 @@
 			isa = PBXGroup;
 			children = (
 				13B07FAE1A68108700A75B9A /* Daak */,
-				DA0AK0041A68108700A75B9A /* Daak.swift */,
-				DA0AK0031A68108700A75B9A /* DaakModule.mm */,
+				DA0AB0041A68108700A75B9A /* Daak.swift */,
+				DA0AB0031A68108700A75B9A /* DaakModule.mm */,
 				832341AE1AAA6A7D00B99B32 /* Libraries */,
 				00E356EF1AD99517003FC87E /* DaakTests */,
 				83CBBA001A601CBA00E9B192 /* Products */,
@@ -401,8 +403,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
-				DA0AK0021A68108700A75B9A /* Daak.swift in Sources */,
-				DA0AK0011A68108700A75B9A /* DaakModule.mm in Sources */,
+				DA0AB0021A68108700A75B9A /* Daak.swift in Sources */,
+				DA0AB0011A68108700A75B9A /* DaakModule.mm in Sources */,
 				13B07FC11A68108700A75B9A /* main.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -492,6 +494,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak";
 				PRODUCT_NAME = Daak;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_OBJC_BRIDGING_HEADER = "Daak/Daak-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
@@ -518,6 +521,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak";
 				PRODUCT_NAME = Daak;
+				SWIFT_OBJC_BRIDGING_HEADER = "Daak/Daak-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};

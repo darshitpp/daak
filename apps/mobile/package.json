@@ -36,5 +36,5 @@
       "javaPackageName": "dev.darshit.daak"
     }
   },
-  "engines": { "node": ">=18" }
+  "engines": { "node": ">=20" }
 }
