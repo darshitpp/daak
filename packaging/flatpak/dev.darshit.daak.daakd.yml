@@ -1,0 +1,18 @@
+app-id: dev.darshit.daak.daakd
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+command: daakd
+finish-args:
+  - --share=network
+  # No --socket=system-bus: daakd speaks its own Unix socket and mDNS, and a
+  # D-Bus grant it never uses is a permission the user cannot justify.
+  - --filesystem=xdg-run/daak:create
+modules:
+  - name: daakd
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 daakd /app/bin/daakd
+    sources:
+      - type: file
+        path: ../../target/release/daakd

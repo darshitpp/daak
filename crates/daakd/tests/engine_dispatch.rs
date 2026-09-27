@@ -105,6 +105,54 @@ impl Drop for Daemon {
     }
 }
 
+/// The dispatch decision, not just `export()`: a bundle lands at
+/// `<data_dir>/debug-bundles/<name>`, never at a client-named location. The
+/// unit tests cover the writer and the name check in isolation, so without
+/// this a regression that joined `data_dir` directly would stay green.
+#[tokio::test]
+async fn the_debug_bundle_lands_under_the_daemons_own_directory() {
+    let d = Daemon::spawn().await;
+    let mut s = connect(&d.sock).await;
+    let started = d.start_engine(&mut s).await;
+    assert!(
+        matches!(started, IpcResponse::Port { .. }),
+        "Start must answer Port, got {started:?}"
+    );
+
+    // An absolute path is refused, so it cannot be used to prove where the
+    // file went; the accepted name is what pins the location.
+    let refused = d
+        .call(
+            &mut s,
+            IpcRequest::ExportDebugBundle {
+                path: "/tmp/escape.txt".into(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(refused, IpcResponse::Error { .. }),
+        "an absolute bundle path must be refused, got {refused:?}"
+    );
+    assert!(!std::path::Path::new("/tmp/escape.txt").exists());
+
+    assert_eq!(
+        d.call(
+            &mut s,
+            IpcRequest::ExportDebugBundle {
+                path: "bundle.txt".into(),
+            },
+        )
+        .await,
+        IpcResponse::Ok
+    );
+    let out = std::path::Path::new(&d.data_dir())
+        .join("debug-bundles")
+        .join("bundle.txt");
+    let body = std::fs::read_to_string(&out)
+        .unwrap_or_else(|e| panic!("bundle must be at {}: {e}", out.display()));
+    assert!(body.contains("=== daak debug bundle ==="));
+}
+
 // F5: this lives HERE, not in daemon.contract.spec.ts. That file shares ONE
 // daemon process across its tests, so an earlier test has already sent Start by
 // the time a "before Start" case runs -- it observed a started engine and
@@ -121,6 +169,9 @@ async fn an_engine_backed_request_before_start_is_refused() {
         IpcRequest::Devices,
         IpcRequest::SetDisplayName {
             name: "nope".into(),
+        },
+        IpcRequest::ExportDebugBundle {
+            path: "b.txt".into(),
         },
     ] {
         let r = d.call(&mut s, req.clone()).await;
@@ -363,10 +414,11 @@ async fn devices_answers_from_the_engine_and_start_is_idempotent() {
         other => panic!("expected an error before Start, got {other:?}"),
     }
 
-    assert!(matches!(
-        d.start_engine(&mut s).await,
-        IpcResponse::Port { .. }
-    ));
+    let started = d.start_engine(&mut s).await;
+    assert!(
+        matches!(started, IpcResponse::Port { .. }),
+        "Start must answer Port, got {started:?}"
+    );
     // The same arguments again is a no-op, not a second engine.
     assert!(matches!(
         d.start_engine(&mut s).await,

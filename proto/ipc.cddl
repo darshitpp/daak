@@ -64,6 +64,7 @@ ipc-request =
   / list-inbox-request
   / set-display-name-request
   / set-presence-request
+  / export-debug-bundle-request
   / shutdown-request
 
 start-request            = { "Start": start-args }
@@ -103,6 +104,8 @@ send-args = {
 
 display-name-args = { "name": tstr }
 set-presence-args = { "state": tstr }
+export-debug-bundle-request = { "ExportDebugBundle": export-debug-bundle-args }
+export-debug-bundle-args = { "path": tstr }
 
 list-transfers-args = {
   ? "filter": transfer-filter,

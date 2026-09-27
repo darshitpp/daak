@@ -207,6 +207,11 @@ fn every_request_validates_against_the_cddl() {
         IpcMessage::Request(IpcRequest::SetPresence {
             state: "away".into(),
         }),
+        IpcMessage::Request(IpcRequest::ExportDebugBundle {
+            // A file NAME: the daemon owns the directory and refuses an
+            // absolute path, so this is the shape a real client sends.
+            path: "bundle.txt".into(),
+        }),
         IpcMessage::Request(IpcRequest::Shutdown),
     ];
     for m in &msgs {

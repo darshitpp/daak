@@ -1114,6 +1114,173 @@ impl Deserialize for EventArm {
     }
 }
 
+impl cbor_event::se::Serialize for ExportDebugBundleArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("path")?;
+        serializer.write_text(&self.path)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for ExportDebugBundleArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut path = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "path" => {
+                            if path.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "path".into(),
+                                ))
+                                .into());
+                            }
+                            path = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("path"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let path = match path {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("path")))
+                            .into(),
+                    );
+                }
+            };
+            Ok(Self { path })
+        })()
+        .map_err(|e| e.annotate("ExportDebugBundleArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for ExportDebugBundleRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("ExportDebugBundle")?;
+        self.export_debug_bundle.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for ExportDebugBundleRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut export_debug_bundle = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "ExportDebugBundle" => {
+                            if export_debug_bundle.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "ExportDebugBundle".into(),
+                                ))
+                                .into());
+                            }
+                            export_debug_bundle =
+                                Some(ExportDebugBundleArgs::deserialize(raw).map_err(
+                                    |e: DeserializeError| e.annotate("export_debug_bundle"),
+                                )?);
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let export_debug_bundle =
+                match export_debug_bundle {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("ExportDebugBundle"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self {
+                export_debug_bundle,
+            })
+        })()
+        .map_err(|e| e.annotate("ExportDebugBundleRequest"))
+    }
+}
+
 impl cbor_event::se::Serialize for InboxReceivedArgs {
     fn serialize<'se>(
         &self,
@@ -1574,6 +1741,9 @@ impl cbor_event::se::Serialize for IpcRequest {
             IpcRequest::SetPresenceRequest(set_presence_request) => {
                 set_presence_request.serialize(serializer)
             }
+            IpcRequest::ExportDebugBundleRequest(export_debug_bundle_request) => {
+                export_debug_bundle_request.serialize(serializer)
+            }
             IpcRequest::ShutdownRequest(shutdown_request) => shutdown_request.serialize(serializer),
         }
     }
@@ -1676,6 +1846,17 @@ impl Deserialize for IpcRequest {
                 }
                 Err(e) => {
                     errs.push(e.annotate("SetPresenceRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> =
+                ExportDebugBundleRequest::deserialize(raw);
+            match deser_variant {
+                Ok(export_debug_bundle_request) => {
+                    return Ok(Self::ExportDebugBundleRequest(export_debug_bundle_request));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("ExportDebugBundleRequest"));
                     raw.set_position(initial_position).unwrap();
                 }
             };

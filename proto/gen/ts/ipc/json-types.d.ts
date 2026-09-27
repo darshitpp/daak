@@ -69,6 +69,9 @@ export type IpcRequestJSON =
       SetPresenceRequest: SetPresenceRequestJSON;
     }
   | {
+      ExportDebugBundleRequest: ExportDebugBundleRequestJSON;
+    }
+  | {
       ShutdownRequest: ShutdownRequestJSON;
     };
 export type SubscribeRequestJSON = "ValueText537562736372696265";
@@ -164,6 +167,12 @@ export interface InboxReceivedEventJSON {
 }
 export interface InboxReceivedArgsJSON {
   payload_json: string;
+}
+export interface ExportDebugBundleArgsJSON {
+  path: string;
+}
+export interface ExportDebugBundleRequestJSON {
+  export_debug_bundle: ExportDebugBundleArgsJSON;
 }
 export interface IpcFrameJSON {
   msg: IpcMessageJSON;

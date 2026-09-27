@@ -134,6 +134,30 @@ impl EventArm {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ExportDebugBundleArgs {
+    pub path: String,
+}
+
+impl ExportDebugBundleArgs {
+    pub fn new(path: String) -> Self {
+        Self { path }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ExportDebugBundleRequest {
+    pub export_debug_bundle: ExportDebugBundleArgs,
+}
+
+impl ExportDebugBundleRequest {
+    pub fn new(export_debug_bundle: ExportDebugBundleArgs) -> Self {
+        Self {
+            export_debug_bundle,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct InboxReceivedArgs {
     pub payload_json: String,
 }
@@ -247,6 +271,7 @@ pub enum IpcRequest {
     ListInboxRequest(ListInboxRequest),
     SetDisplayNameRequest(SetDisplayNameRequest),
     SetPresenceRequest(SetPresenceRequest),
+    ExportDebugBundleRequest(ExportDebugBundleRequest),
     ShutdownRequest(ShutdownRequest),
 }
 
@@ -293,6 +318,12 @@ impl IpcRequest {
 
     pub fn new_set_presence_request(set_presence_request: SetPresenceRequest) -> Self {
         Self::SetPresenceRequest(set_presence_request)
+    }
+
+    pub fn new_export_debug_bundle_request(
+        export_debug_bundle_request: ExportDebugBundleRequest,
+    ) -> Self {
+        Self::ExportDebugBundleRequest(export_debug_bundle_request)
     }
 
     pub fn new_shutdown_request(shutdown_request: ShutdownRequest) -> Self {

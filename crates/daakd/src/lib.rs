@@ -25,6 +25,8 @@ use daak_ipc::{IpcMessage, IpcRequest, IpcResponse};
 use tokio::sync::broadcast;
 use tokio::sync::RwLock as AsyncRwLock;
 
+pub mod debug_bundle;
+
 const EVENT_BUFFER: usize = 1024;
 const NOT_STARTED: &str = "engine not started; send Start first";
 
@@ -65,6 +67,16 @@ impl DaemonState {
                 message: NOT_STARTED.into(),
             }),
         }
+    }
+
+    /// The data dir the live engine was started with, which is also where the
+    /// daemon owns writable space. `None` before `Start`.
+    async fn data_dir(&self) -> Option<String> {
+        self.slot
+            .read()
+            .await
+            .as_ref()
+            .map(|s| s.args.data_dir.clone())
     }
 }
 
@@ -127,9 +139,8 @@ fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> serd
 fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Value {
     let saved_paths: serde_json::Value = match serde_json::from_str(&row.saved_paths) {
         Ok(v) => v,
-        // No log line: daakd has no tracing subscriber (and no tracing
-        // dependency to add one). ponytail: the null IS the signal; add a
-        // subscriber when the daemon gains one.
+        // No log line: null IS the signal. The daemon does have a
+        // subscriber, but logging is not this function's job.
         Err(_) => serde_json::Value::Null,
     };
     serde_json::json!({
@@ -184,6 +195,11 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
 /// Bind daak_ipc::socket_path() and serve forever.
 #[cfg(unix)]
 pub async fn serve(path: &Path) -> std::io::Result<()> {
+    // The bundle's `recent log` section IS this ring buffer, and it is a
+    // global default, so it must be installed before the engine starts
+    // logging -- which happens inside serve_with, right after this.
+    debug_bundle::init_tracing()
+        .map_err(|e| std::io::Error::other(format!("cannot capture daemon logs: {e}")))?;
     // The receiver is dropped on purpose; each subscriber gets its own.
     let (events, _rx) = broadcast::channel::<IpcEvent>(EVENT_BUFFER);
     serve_with(path, events).await
@@ -191,6 +207,9 @@ pub async fn serve(path: &Path) -> std::io::Result<()> {
 
 /// Same as serve, but the event source is injected. Task 9 bridges the
 /// engine's event stream into this sender; the test needs it to publish.
+/// Deliberately does NOT install the log ring: the subscriber is process-wide
+/// and one test binary starts MANY daakd, so the second try_init would fail.
+/// Only the production entry point in serve() pays for it.
 #[cfg(unix)]
 pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std::io::Result<()> {
     let listener = bind(path)?;
@@ -434,6 +453,38 @@ async fn dispatch(
                 },
             }
         }
+        IpcRequest::ExportDebugBundle { path } => {
+            // A bundle names this device, its listen address and its log, so
+            // the destination is daemon-owned. An arbitrary wire path would
+            // let any same-user client overwrite the DB, the key store or a
+            // service file through a diagnostics request.
+            let Some(data_dir) = state.data_dir().await else {
+                return IpcResponse::Error {
+                    message: NOT_STARTED.into(),
+                };
+            };
+            let name = match debug_bundle::sanitize_bundle_name(&path) {
+                Ok(n) => n,
+                Err(m) => return err(m),
+            };
+            let (device_id, listen_addr) = match state.engine().await {
+                Ok(engine) => (
+                    hex::encode(engine.identity().device_id()),
+                    engine.local_addr().to_string(),
+                ),
+                // Unreachable while data_dir() is Some, but do not answer
+                // `Ok` with a bundle missing the section that matters.
+                Err(e) => return e,
+            };
+            let s = debug_bundle::snapshot_state(device_id, listen_addr);
+            let out = std::path::Path::new(&data_dir)
+                .join("debug-bundles")
+                .join(name);
+            match debug_bundle::export(&out, &s) {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => err(e),
+            }
+        }
         // Handled by the caller before dispatch ever runs: they close or do
         // not answer. Listed here so a new variant is a compile error rather
         // than a silent Ok.
@@ -509,6 +560,8 @@ fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
 // rather than pretending to serve. Task 10's packaging spike owns it.
 #[cfg(windows)]
 pub async fn serve(path: &Path) -> std::io::Result<()> {
+    debug_bundle::init_tracing()
+        .map_err(|e| std::io::Error::other(format!("cannot capture daemon logs: {e}")))?;
     let (events, _rx) = broadcast::channel::<IpcEvent>(EVENT_BUFFER);
     serve_with(path, events).await
 }

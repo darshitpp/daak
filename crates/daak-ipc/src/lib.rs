@@ -125,6 +125,16 @@ pub enum IpcRequest {
     SetPresence {
         state: String,
     },
+    /// Write a plain-text debug bundle (version, identity, recent log) on the
+    /// DAEMON's machine. `path` is a FILE NAME, not a location: the daemon
+    /// owns the directory (a bundle holds the device id and log lines, so it
+    /// is not a client-chosen destination) and refuses anything that is not a
+    /// single component. Where it actually landed is NOT in this response --
+    /// the daemon picks the directory -- so the UI surfaces the daemon's data
+    /// dir to the user rather than being handed a path it cannot know.
+    ExportDebugBundle {
+        path: String,
+    },
     Shutdown,
 }
 
