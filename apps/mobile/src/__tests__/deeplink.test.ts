@@ -1,4 +1,5 @@
-import { parseDeepLink } from '../deeplink';
+import { Linking } from 'react-native';
+import { onDeepLink, parseDeepLink, type DeepLink } from '../deeplink';
 
 describe('parseDeepLink', () => {
   it('parses send/pair links and ignores everything else', () => {
@@ -25,9 +26,18 @@ describe('parseDeepLink', () => {
   });
 
   it('never throws on a malformed URL', () => {
-    for (const bad of ['', 'daak:', 'daak:/', 'daak://', 'daak://send?deviceId=%%', '://x', 'daak://send?deviceId=a#frag']) {
+    for (const bad of ['', 'daak:', 'daak:/', 'daak://', 'daak://send?deviceId=%%', '://x']) {
       expect(() => parseDeepLink(bad)).not.toThrow();
     }
+  });
+
+  // A fragment is legal and must not swallow the query.
+  it('ignores a trailing fragment', () => {
+    expect(parseDeepLink('daak://send?deviceId=a#frag')).toEqual({ kind: 'send', deviceId: 'a' });
+  });
+
+  it('omits an empty text param rather than sending an empty string', () => {
+    expect(parseDeepLink('daak://send?deviceId=AA&text=')).toEqual({ kind: 'send', deviceId: 'AA' });
   });
 
   // Hermes has no URL. React Native polyfills the global with
@@ -52,5 +62,59 @@ describe('parseDeepLink', () => {
       if (real) Object.defineProperty(globalThis, 'URL', real);
       else Reflect.deleteProperty(globalThis, 'URL');
     }
+  });
+});
+
+describe('onDeepLink', () => {
+  const listeners: ((e: { url: string }) => void)[] = [];
+  let initial: Promise<string | null>;
+
+  beforeEach(() => {
+    listeners.length = 0;
+    initial = Promise.resolve(null);
+    jest.spyOn(Linking, 'getInitialURL').mockImplementation(() => initial);
+    jest.spyOn(Linking, 'addEventListener').mockImplementation(((_t: string, cb: (e: { url: string }) => void) => {
+      listeners.push(cb);
+      return { remove: () => { const i = listeners.indexOf(cb); if (i !== -1) listeners.splice(i, 1); } };
+    }) as never);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('reports the launch URL on the happy path', async () => {
+    initial = Promise.resolve('daak://pair?bundle=beef');
+    const seen: DeepLink[] = [];
+    onDeepLink((l) => seen.push(l));
+    await initial;
+    await Promise.resolve();
+    expect(seen).toEqual([{ kind: 'pair', bundle: 'beef' }]);
+  });
+
+  it('reports none and does not throw an unhandled rejection when getInitialURL rejects', async () => {
+    initial = Promise.reject(new Error('no handler'));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (r: unknown) => unhandled.push(r);
+    process.on('unhandledRejection', onUnhandled);
+    const seen: DeepLink[] = [];
+    try {
+      onDeepLink((l) => seen.push(l));
+      // Two microtask turns: the rejection must be handled inside onDeepLink's
+      // own .then, and a turn for any resulting job to be reported.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(seen).toEqual([{ kind: 'none' }]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('delivers later url events and stops after the disposer', () => {
+    const seen: DeepLink[] = [];
+    const off = onDeepLink((l) => seen.push(l));
+    for (const emit of listeners) emit({ url: 'daak://send?deviceId=x' });
+    off();
+    for (const emit of listeners) emit({ url: 'daak://send?deviceId=y' });
+    expect(seen).toEqual([{ kind: 'send', deviceId: 'x' }]);
+    expect(listeners).toHaveLength(0);
   });
 });

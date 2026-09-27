@@ -47,7 +47,10 @@ export function parseDeepLink(url: string | null): DeepLink {
   if (host === 'send') {
     const deviceId = queryParam(query, 'deviceId');
     if (!deviceId) return none;
-    return { kind: 'send', deviceId, text: queryParam(query, 'text') };
+    // Omit text entirely when it is absent or empty: `text: ''` is a send of
+    // the empty string, and the engine refuses empty sends anyway.
+    const text = queryParam(query, 'text');
+    return { kind: 'send', deviceId, ...(text ? { text } : {}) };
   }
   if (host === 'pair') {
     const bundle = queryParam(query, 'bundle');
@@ -67,8 +70,9 @@ function firstIndexOfAny(s: string, chars: string, from: number): number {
 }
 
 export function onDeepLink(cb: (link: DeepLink) => void): () => void {
-  // .catch: getInitialURL() rejects on a device with no handler, and an
-  // unhandled rejection here takes the app down for a link that was optional.
+  // The second .then argument (not .catch) handles the rejection inline:
+  // getInitialURL() rejects on a device with no handler, and an unhandled
+  // rejection here would take the app down for a link that was optional.
   void Linking.getInitialURL().then((u) => cb(parseDeepLink(u)), () => cb({ kind: 'none' }));
   const sub = Linking.addEventListener('url', ({ url }) => cb(parseDeepLink(url)));
   return () => sub.remove();
