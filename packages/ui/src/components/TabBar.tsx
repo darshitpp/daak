@@ -1,9 +1,9 @@
 import React from 'react';
 import { Pressable, Text, View } from 'react-native';
 
-export type Tab = 'dashboard' | 'devices' | 'history' | 'settings';
+export type Tab = 'dashboard' | 'devices' | 'history' | 'settings' | 'pair';
 
-const TABS: Tab[] = ['dashboard', 'devices', 'history', 'settings'];
+const TABS: Tab[] = ['dashboard', 'devices', 'history', 'settings', 'pair'];
 
 export function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   return (

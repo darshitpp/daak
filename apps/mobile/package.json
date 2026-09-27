@@ -17,6 +17,7 @@
     "@daak/rn-clipboard": "workspace:*",
     "@daak/rn-fspaths": "workspace:*",
     "@daak/rn-notify": "workspace:*",
+    "@daak/rn-qrscanner": "workspace:*",
     "@daak/rn-securestore": "workspace:*",
     "@daak/rn-share": "workspace:*",
     "@daak/ui": "workspace:*",

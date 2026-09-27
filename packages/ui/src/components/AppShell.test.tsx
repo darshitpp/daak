@@ -21,6 +21,19 @@ it('threads a background slot through to the Settings tab', () => {
   expect(screen.getByText('allow-bg')).toBeTruthy();
 });
 
+// The pair flow is APP-side (R100), so the shell test proves the slot is
+// threaded with a stub; apps/mobile/src/__tests__/pairingFlow.test.tsx proves
+// the real wrapper behind it. Same split as the background slot.
+it('threads a pair slot through to the Pair tab', () => {
+  render(
+    <EngineProvider engine={fakeEngine()}>
+      <AppShell pair={<Text>pair-ui</Text>} />
+    </EngineProvider>,
+  );
+  fireEvent.press(screen.getByText('pair'));
+  expect(screen.getByText('pair-ui')).toBeTruthy();
+});
+
 it('renders with no slot supplied', () => {
   render(
     <EngineProvider engine={fakeEngine()}>

@@ -4,6 +4,8 @@ export * from './clipboard';
 export * from './fspaths';
 export * from './inbound';
 export * from './notify';
+export * from './pairing';
+export * from './qr';
 export * from './receive';
 export * from './securestore';
 export * from './share';

@@ -1,0 +1,14 @@
+{
+  "name": "@daak/rn-qrscanner",
+  "version": "0.1.0",
+  "private": true,
+  "main": "js/index.ts",
+  "react-native": "js/index.ts",
+  "codegenConfig": {
+    "name": "DaakQrScannerSpec",
+    "type": "modules",
+    "jsSrcsDir": "js",
+    "android": { "javaPackageName": "dev.darshit.daak.qrscanner" }
+  },
+  "peerDependencies": { "react-native": ">=0.76" }
+}

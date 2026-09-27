@@ -32,6 +32,9 @@ importers:
       '@daak/rn-notify':
         specifier: workspace:*
         version: link:../../modules/rn-notify
+      '@daak/rn-qrscanner':
+        specifier: workspace:*
+        version: link:../../modules/rn-qrscanner
       '@daak/rn-securestore':
         specifier: workspace:*
         version: link:../../modules/rn-securestore
@@ -106,6 +109,12 @@ importers:
         specifier: '>=0.76'
         version: 0.76.5(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7))(@types/react@18.3.31)(react@18.3.1)
 
+  modules/rn-qrscanner:
+    dependencies:
+      react-native:
+        specifier: '>=0.76'
+        version: 0.76.5(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7))(@types/react@18.3.31)(react@18.3.1)
+
   modules/rn-securestore:
     dependencies:
       react-native:
@@ -154,6 +163,9 @@ importers:
       '@daak/rn-notify':
         specifier: workspace:*
         version: link:../../modules/rn-notify
+      '@daak/rn-qrscanner':
+        specifier: workspace:*
+        version: link:../../modules/rn-qrscanner
       '@daak/rn-securestore':
         specifier: workspace:*
         version: link:../../modules/rn-securestore

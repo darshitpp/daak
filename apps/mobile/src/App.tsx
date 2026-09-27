@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { SafeAreaView } from 'react-native';
 import { AppShell, EngineProvider } from '@daak/ui';
 import { engine, startEngineOnce } from './bootstrap';
+import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
 
 export default function App() {
@@ -42,7 +43,9 @@ export default function App() {
   return (
     <SafeAreaView style={{ flex: 1 }}>
       <EngineProvider engine={engine}>
-        <AppShell background={<BackgroundSyncNotice />} />
+        {/* R98: the pair tab is the reachable entry to QR pairing. PairingFlow is
+            app-side (R100): the shell stays presentational. */}
+        <AppShell background={<BackgroundSyncNotice />} pair={<PairingFlow />} />
       </EngineProvider>
     </SafeAreaView>
   );

@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    CAMERA is a RUNTIME permission on modern Android: the declaration alone
+    does not grant it, and ScannerActivity asks at scan time (see
+    ScannerActivity.kt). The READ-check is: apps/mobile's app manifest has NO
+    CAMERA line (the plan claimed Task 6 added one; it did not), so this
+    library manifest is what merges the permission into the APK.
+    required=false keeps the app installable on camera-less devices.
+  -->
+  <uses-permission android:name="android.permission.CAMERA" />
+  <uses-feature android:name="android.hardware.camera" android:required="false" />
+  <application>
+    <activity
+      android:name=".ScannerActivity"
+      android:exported="false"
+      android:screenOrientation="portrait" />
+  </application>
+</manifest>

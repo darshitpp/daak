@@ -19,6 +19,19 @@ import type { InboundShareItem } from '@daak/platform';
 
 export const engine: DaakEngine = createEngine();
 
+// R91/R42: host-side SAS fan-out. PairingFlow (apps/mobile/src/PairingFlow.tsx)
+// subscribes while the Pair tab is open; the ONE engine.on inside startEngine
+// delivers pairing.sas events into this set. This is NOT a second subscription
+// -- it is a fan-out from the single handler R42 pins.
+const pairingSasListeners = new Set<(sas: string) => void>();
+
+export function onPairingSas(cb: (sas: string) => void): () => void {
+  pairingSasListeners.add(cb);
+  return () => {
+    pairingSasListeners.delete(cb);
+  };
+}
+
 // Re-entry handle for the pairing.done subscription. startEngine is *meant* to
 // be called once, but a comment is not an invariant -- a remount or a hot
 // reload would otherwise leave every earlier subscription live and republish
@@ -83,6 +96,13 @@ export async function startEngine(): Promise<void> {
   // notification and not a lost send (the outbox retries).
   const inFlight = new Set<string>();
   unsubscribeEngine = engine.on((e) => {
+    // R91 (host half of QR pairing): the SAS for an INBOUND pairing arrives
+    // here, on the ONE subscription, and is fanned out to PairingFlow. The
+    // joiner's SAS comes back from engine.pair, so only the host reads this.
+    if (e.type === 'pairing.sas') {
+      for (const cb of [...pairingSasListeners]) cb(e.sas);
+      return;
+    }
     if (e.type === 'pairing.done') void publish();
     // R42: BOTH effects on the ONE subscription. routeInboxEntry copies a text
     // payload to the clipboard; a file payload is deliberately inert until the

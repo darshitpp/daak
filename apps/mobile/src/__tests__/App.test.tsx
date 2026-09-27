@@ -10,6 +10,12 @@ import App from '../App';
 jest.mock('../BackgroundSyncNotice', () => ({
   BackgroundSyncNotice: () => null,
 }));
+// PairingFlow reaches @daak/platform (scanQr/generateQr) through the real
+// barrel, which jest cannot parse; the flow itself is covered by
+// pairingFlow.test.tsx, so this file mocks it away like BackgroundSyncNotice.
+jest.mock('../PairingFlow', () => ({
+  PairingFlow: () => null,
+}));
 
 // The real bootstrap reaches for the `Daak` TurboModule, which does not exist
 // under Jest. Swap in the in-memory engine; that is the whole point of a smoke
