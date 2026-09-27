@@ -6,4 +6,14 @@
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
     </style>
 
+    <!--
+      The share target is a bare android.app.Activity, so it uses a PLATFORM
+      theme. It draws nothing, but it shows a Toast, which a windowless theme
+      (windowNoDisplay) can swallow.
+    -->
+    <style name="Theme.Daak.ShareTarget" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+
 </resources>

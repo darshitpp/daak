@@ -5,6 +5,7 @@ import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.util.UUID
 
 /** Filesystem handshake dir `filesDir/share-inbox`. Staging only, never crypto. */
@@ -19,7 +20,19 @@ object ShareInbox {
   fun copyToCache(ctx: Context, uri: Uri): File {
     val name = uri.lastPathSegment?.substringAfterLast('/') ?: "payload"
     val out = File(dir(ctx), UUID.randomUUID().toString() + "-" + name)
-    ctx.contentResolver.openInputStream(uri)!!.use { input -> out.outputStream().use { input.copyTo(it) } }
+    // A content:// read can fail: the granting app revoked the URI, the
+    // provider is dead, or openInputStream returns null. The old non-null
+    // assertion turned every one of those into a NullPointerException that
+    // killed the caller, and a mid-copy failure left a truncated file that
+    // drainToJson would happily stage as a payload. Fail loudly, clean up.
+    val input = ctx.contentResolver.openInputStream(uri)
+      ?: throw IOException("cannot open $uri")
+    try {
+      input.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
+    } catch (t: Throwable) {
+      out.delete()
+      throw t
+    }
     return out
   }
 
@@ -41,8 +54,8 @@ object ShareInbox {
     // directory cannot collide, and the drain lists this dir NON-recursively,
     // so a shared file is never mistaken for metadata.
     val final = File(batchesDir(ctx), UUID.randomUUID().toString() + ".json")
-    // Write-then-rename: a process killed mid-write leaves a .tmp that drainToJson
-    // ignores, never a truncated .json that looks valid.
+    // Write-then-rename: a process killed mid-write leaves a .tmp that
+    // drainToJson ignores, never a truncated .json that looks valid.
     val tmp = File(final.path + ".tmp")
     tmp.writeText(JSONArray().put(item).toString())
     check(tmp.renameTo(final)) { "staging rename failed: ${final.name}" }
@@ -50,7 +63,12 @@ object ShareInbox {
 
   fun drainToJson(ctx: Context): String {
     val merged = JSONArray()
-    batchesDir(ctx).listFiles()?.forEach { batch ->
+    // The extension filter is load-bearing, not tidiness. A process killed
+    // mid-write leaves "<uuid>.json.tmp" in this dir; a bare listFiles() would
+    // read it as a batch, and a complete one would be merged AND deleted (the
+    // same item delivered twice), while a truncated one would be re-read and
+    // re-fail on every drain forever. Only the rename target is a batch.
+    batchesDir(ctx).listFiles { f -> f.extension == "json" }?.forEach { batch ->
       val parsed = runCatching {
         val arr = JSONArray(batch.readText())
         arr

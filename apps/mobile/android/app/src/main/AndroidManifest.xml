@@ -25,5 +25,31 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+      <!--
+        Inbound share target. Translucent and no UI of its own: it only stages
+        the bytes into filesDir/share-inbox and wakes the host. It never sends,
+        never contacts a peer and does no crypto; the engine outbox owns
+        delivery.
+      -->
+      <activity
+        android:name=".share.ShareTargetActivity"
+        android:exported="true"
+        android:excludeFromRecents="true"
+        android:launchMode="singleTop"
+        android:theme="@style/Theme.Daak.ShareTarget">
+        <intent-filter>
+            <action android:name="android.intent.action.SEND" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="text/plain" />
+            <data android:mimeType="image/*" />
+            <data android:mimeType="video/*" />
+            <data android:mimeType="application/*" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.SEND_MULTIPLE" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="*/*" />
+        </intent-filter>
+      </activity>
     </application>
 </manifest>
