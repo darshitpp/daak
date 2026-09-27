@@ -44,7 +44,12 @@ function sourcesUnder(dir: string): string[] {
     if (name === 'node_modules' || name === 'Pods' || name === 'build') continue;
     const p = join(dir, name);
     if (statSync(join(__dirname, p)).isDirectory()) out.push(...sourcesUnder(p));
-    else if (/\.(kt|swift|mm|ts|gradle|xml|json)$/.test(name)) out.push(read(p));
+    // Comments are stripped here too, for the reason the `handle` slice used to
+    // be prose-matchable: a NEGATIVE pin over unstripped text forbids the file
+    // from DOCUMENTING the thing it must not do, which is the opposite of what
+    // these pins are for. All of them read "does this CODE ...?", so none of
+    // them may ever look at a comment.
+    else if (/\.(kt|swift|mm|ts|gradle|xml|json)$/.test(name)) out.push(stripComments(read(p)));
   }
   return out;
 }
@@ -75,7 +80,7 @@ describe('rn-bgsched has the full rn-share shape', () => {
   });
 
   it('applies com.facebook.react so codegen registers the library', () => {
-    const gradle = read(bg + 'android/build.gradle');
+    const gradle = stripComments(read(bg + 'android/build.gradle'));
     expect(gradle).toMatch(/apply plugin: 'com\.facebook\.react'/);
     expect(gradle).toMatch(/minSdkVersion 24/);
     expect(gradle).toContain("namespace 'dev.darshit.daak.bgsched'");
@@ -83,16 +88,26 @@ describe('rn-bgsched has the full rn-share shape', () => {
 
   // R44: a getEnforcing<any> loses every type error the Spec exists to catch.
   it('types the TurboModule by its Spec, never getEnforcing<any>', () => {
-    const spec = read(bg + 'js/NativeDaakBgSched.ts');
+    const spec = stripComments(read(bg + 'js/NativeDaakBgSched.ts'));
     expect(spec).toMatch("TurboModuleRegistry.getEnforcing<Spec>('DaakBgSched')");
     expect(spec).not.toMatch(/getEnforcing<any>/);
     expect(spec).toMatch(/export interface Spec extends TurboModule/);
   });
 
   it('declares a BaseReactPackage that returns the module by name', () => {
-    const pkg = read(ktDir + 'DaakBgSchedPackage.kt');
+    const pkg = stripComments(read(ktDir + 'DaakBgSchedPackage.kt'));
     expect(pkg).toMatch(/class \w+Package : BaseReactPackage\(\)/);
-    expect(pkg).toMatch(/isTurboModule = \*\/ true/);
+    // REWRITTEN, not loosened. The old regex literally required the text
+    // `isTurboModule = */ true` -- i.e. it required the KDoc comment saying so,
+    // and passed whether or not the module said it in CODE. ReactModuleInfo's
+    // signature is positional, so isTurboModule is the last of its six flags
+    // and is what this pins: a trailing `true` as the sixth argument.
+    // The five boolean flags in order, so the LAST one -- isTurboModule -- is
+    // the one asserted. Written out positionally because that is how the
+    // constructor takes them; there is no named argument to grep for.
+    expect(pkg).toMatch(
+      /false,\s*\n\s*false,\s*\n\s*false,\s*\n\s*true,/,
+    );
   });
 });
 
@@ -104,9 +119,9 @@ describe('the two BG identifiers', () => {
   // duplicated three times and pinned equal here. A rename on one side is
   // otherwise invisible until a background slot never fires.
   it('are the exact required ids in TS, Info.plist and the launch registrar', () => {
-    const ts = read(repo + 'packages/platform/src/bgsched.ts');
-    const plist = read(repo + 'apps/mobile/ios/Daak/Info.plist');
-    const launch = read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift');
+    const ts = stripComments(read(repo + 'packages/platform/src/bgsched.ts'));
+    const plist = stripComments(read(repo + 'apps/mobile/ios/Daak/Info.plist'));
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
     expect(ts).toContain("'" + REFRESH + "'");
     expect(ts).toContain("'" + PROCESSING + "'");
     expect(plist).toContain('<string>' + REFRESH + '</string>');
@@ -116,7 +131,7 @@ describe('the two BG identifiers', () => {
   });
 
   it('permits exactly those two in Info.plist, with the background modes', () => {
-    const plist = read(repo + 'apps/mobile/ios/Daak/Info.plist');
+    const plist = stripComments(read(repo + 'apps/mobile/ios/Daak/Info.plist'));
     const idsKey = plist.indexOf('<key>BGTaskSchedulerPermittedIdentifiers</key>');
     const ids = plist.slice(idsKey, plist.indexOf('</array>', idsKey));
     expect([...ids.matchAll(/<string>([^<]+)<\/string>/g)].map((m) => m[1])).toEqual([
@@ -142,7 +157,7 @@ describe('exactly ONE owner registers the iOS launch handlers', () => {
   // registration misses exactly the cold launch it exists for. Same shape as
   // DaakNotificationDelegate, for the same reason.
   it('registers in the app-target launch file and nowhere else', () => {
-    const launch = read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift');
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
     // `refreshId` bare, not `Self.refreshId`: both are valid Swift for a static
     // member inside the same type, and pinning one spelling rejects the other
     // for no reason. The invariant is that BOTH identifiers are registered, and
@@ -153,9 +168,9 @@ describe('exactly ONE owner registers the iOS launch handlers', () => {
     expect(launch).toMatch(
       /BGTaskScheduler\.shared\.register\(\s*forTaskWithIdentifier:\s*(Self\.)?processingId/,
     );
-    const pod = read(bg + 'ios/DaakBgSched.swift');
+    const pod = stripComments(read(bg + 'ios/DaakBgSched.swift'));
     expect(pod).not.toMatch(/BGTaskScheduler\.shared\.register/);
-    const delegate = read(repo + 'apps/mobile/ios/Daak/AppDelegate.mm');
+    const delegate = stripComments(read(repo + 'apps/mobile/ios/Daak/AppDelegate.mm'));
     expect(delegate).toMatch(/DaakBgLaunch/);
   });
 
@@ -163,12 +178,60 @@ describe('exactly ONE owner registers the iOS launch handlers', () => {
   // refresh chain dies after one run unless the handler resubmits. Both halves
   // are silent.
   it('resubmits the next refresh from inside the handler', () => {
-    const launch = read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift');
-    const start = launch.indexOf('private static func handle(');
-    const handler = launch.slice(start, launch.indexOf('private static func scheduleRefresh('));
+    // stripComments is the whole point of this slice. The handler's own
+    // rationale has to SAY that it resubmits, so an unstripped grep over this
+    // body is satisfied by that sentence: commenting out the reschedule left
+    // 147/147 green with the iOS refresh chain severed (review Critical 3).
+    // Every slice in this file strips for the same reason.
+    // The slice is bounded by the DOC-COMPLETED text, and both bounds are
+    // asserted. A bound that resolves to -1 makes slice() run to EOF, which
+    // satisfies every later toMatch from the REST OF THE FILE -- the mode the
+    // reviewer's first mutation attempt hit, and the mode my own KDoc edit
+    // reintroduced while writing this test. Asserting end > start is what makes
+    // that unpassable rather than silently green.
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
+    const start = launch.indexOf('private static func handle(_ task: BGTask) {');
+    const end = launch.indexOf('@objc static func scheduleRefresh() {');
     expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const handler = launch.slice(start, end);
     expect(handler).toMatch(/setTaskCompleted\(success: true\)/);
     expect(handler).toMatch(/scheduleRefresh\(\)/);
+  });
+
+  // A submitted request is what buys a launch, and the launch is what buys the
+  // next submission. A submit that lives ONLY inside the granted handler has
+  // no producer for the first request, so the schedule never starts at all:
+  // no submit -> no grant -> no handler -> no submit (review Critical 1). The
+  // first submit therefore has to happen OUTSIDE handle(), at install time.
+  it('books the first request from install, not from inside the handler', () => {
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
+    const start = launch.indexOf('@objc static func install() {');
+    const end = launch.indexOf('private static var registeredRefresh');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const install = launch.slice(
+      start,
+      end,
+    );
+    expect(install).toMatch(/scheduleRefresh\(\)/);
+    // C2: dev.darshit.daak.processing is registered and permitted, so iOS
+    // would accept a request for it -- and nothing ever submitted one, so the
+    // plan's scheduleProcessing(15 * 60) computed a number and dropped it.
+    expect(install).toMatch(/scheduleProcessing\(\)/);
+  });
+
+  // Both request KINDS must exist. A handler that only ever submits a refresh
+  // is a working chain, so a green reschedule pin alone cannot prove this.
+  it('submits a request of each kind, with no OS precondition set', () => {
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
+    expect(launch).toMatch(/BGAppRefreshTaskRequest\(identifier: refreshId\)/);
+    expect(launch).toMatch(/BGProcessingTaskRequest\(identifier: processingId\)/);
+    // Daak is LAN-only, so requiresNetworkConnectivity would mean "has a LAN
+    // peer", which is a peer question and not an OS one; the OS can only
+    // answer about the internet. Both preconditions stay false (the plan's
+    // values) and are pinned off so a later reader cannot "fix" them to true.
+    expect(launch).not.toMatch(/requiresNetworkConnectivity = true|requiresExternalPower = true/);
   });
 
   // The launch handler runs in a process whose JS may not be up, so it must not
@@ -184,8 +247,8 @@ describe('exactly ONE owner registers the iOS launch handlers', () => {
 });
 
 describe('the Android foreground service', () => {
-  const libManifest = read(bg + 'android/src/main/AndroidManifest.xml');
-  const service = read(ktDir + 'DaakSyncService.kt');
+  const libManifest = stripComments(read(bg + 'android/src/main/AndroidManifest.xml'));
+  const service = stripComments(read(ktDir + 'DaakSyncService.kt'));
 
   // Without this entry the system cannot resolve the explicit
   // ContextCompat.startForegroundService intent, so every transfer runs
@@ -227,7 +290,7 @@ describe('the Android foreground service', () => {
 });
 
 describe('the WorkManager drain wake', () => {
-  const worker = read(ktDir + 'DaakDrainWorker.kt');
+  const worker = stripComments(read(ktDir + 'DaakDrainWorker.kt'));
 
   // A periodic worker that starts a foreground service unconditionally puts a
   // notification in the tray every 15 minutes forever. It may only re-raise
@@ -252,8 +315,8 @@ describe('GAP 1: nothing invented a drain entry point', () => {
   it('names no DaakEngineHolder and no drain() in any source', () => {
     for (const source of [
       ...sourcesUnder(repo + 'modules/rn-bgsched'),
-      read(repo + 'apps/mobile/src/bootstrap.ts'),
-      read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'),
+      stripComments(read(repo + 'apps/mobile/src/bootstrap.ts')),
+      stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift')),
     ]) {
       expect(source).not.toMatch(/DaakEngineHolder|\.drain\(/);
     }
@@ -268,8 +331,8 @@ describe('GAP 2: no backgroundWake engine method was invented', () => {
   it('appears in no source and not on the engine interface', () => {
     for (const source of [
       ...sourcesUnder(repo + 'modules/rn-bgsched'),
-      read(repo + 'apps/mobile/src/bootstrap.ts'),
-      read(repo + 'packages/platform/src/bgsched.ts'),
+      stripComments(read(repo + 'apps/mobile/src/bootstrap.ts')),
+      stripComments(read(repo + 'packages/platform/src/bgsched.ts')),
     ]) {
       expect(source).not.toMatch(/backgroundWake/);
     }
@@ -293,8 +356,13 @@ describe('the battery-optimisation prompt is reachable, and only on a tap', () =
   // a screen, and it has to be reachable only from a press handler -- never
   // from an effect. These three pins hold all three facts at once.
   it('is rendered by the Settings screen', () => {
-    const screen = read(repo + 'packages/ui/src/screens/SettingsScreen.tsx');
-    expect(screen).toMatch(/BackgroundSyncNotice/);
+    const screen = stripComments(read(repo + 'packages/ui/src/screens/SettingsScreen.tsx'));
+    // REWRITTEN, not loosened: `BackgroundSyncNotice` appeared in this file
+    // ONLY in a comment explaining the injection. The code renders the
+    // `background` slot, so that is what is pinned. Slot injection, not an
+    // import, is what keeps @daak/ui from depending on @daak/platform.
+    expect(screen).toMatch(/\{background\}/);
+    expect(screen).not.toMatch(/BackgroundSyncNotice/);
   });
 
   it('only ever calls it from a press handler', () => {

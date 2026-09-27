@@ -92,6 +92,31 @@ describe('startEngine: the foreground service and the one subscription', () => {
     await waitFor(() => expect(stopTransferForeground).toHaveBeenCalled());
   });
 
+  // A single boolean shared by every transfer stops the service the moment
+  // ANY transfer ends. The outbox drains rows in a loop and several peers can
+  // be online, so A and B genuinely overlap: A-done must not unprotect B, which
+  // is still sending. The gap between A's done and B's next chunk -- which is
+  // the whole stall on a slow peer -- is exactly when B is killed.
+  it('keeps the service up until the LAST concurrent transfer ends', async () => {
+    await startEngine();
+    emit({ type: 'transfer.progress', transferId: 'a', bytesDone: 1, bytesTotal: 9 });
+    emit({ type: 'transfer.progress', transferId: 'b', bytesDone: 1, bytesTotal: 9 });
+    await waitFor(() => expect(startTransferForeground).toHaveBeenCalledTimes(1));
+
+    // A finishes while B is still going.
+    emit({ type: 'transfer.done', transferId: 'a' });
+    await Promise.resolve();
+    expect(stopTransferForeground).not.toHaveBeenCalled();
+
+    // Another A-shaped chunk, to prove the latch did not quietly re-arm.
+    emit({ type: 'transfer.progress', transferId: 'b', bytesDone: 2, bytesTotal: 9 });
+    expect(startTransferForeground).toHaveBeenCalledTimes(1);
+
+    // Only B finishing releases it.
+    emit({ type: 'transfer.failed', transferId: 'b', error: 'peer went away' });
+    await waitFor(() => expect(stopTransferForeground).toHaveBeenCalledTimes(1));
+  });
+
   // R22: the lifecycle owner calls startEngine, but must NOT drain the
   // text/file share inbox. consumePendingShare is all-or-nothing natively and
   // deletes the batch metadata that names a shared item, so a mount-time drain

@@ -73,7 +73,15 @@ export async function startEngine(): Promise<void> {
   // stale notification, not a lost send, and a stop() would race the next
   // transfer's start(). ponytail: latch; upgrade to a per-transfer refcount if
   // concurrent transfers ever arrive.
-  let transferForegroundUp = false;
+  // A SET, not a boolean, because concurrent transfers already arrive: the
+  // outbox drains rows in a loop and several peers can be online at once. One
+  // shared boolean let A's done stop the service while B was still sending,
+  // leaving B unprotected until its next chunk -- the whole stall, on a peer
+  // that has gone quiet. Start on 0 -> 1, stop on 1 -> 0; the OS sees one start
+  // per overlap window rather than one per chunk. A transfer that ends
+  // without done/failed leaves its id in the set, which is a stale
+  // notification and not a lost send (the outbox retries).
+  const inFlight = new Set<string>();
   unsubscribeEngine = engine.on((e) => {
     if (e.type === 'pairing.done') void publish();
     // R42: BOTH effects on the ONE subscription. routeInboxEntry copies a text
@@ -87,13 +95,13 @@ export async function startEngine(): Promise<void> {
     // R42/GAP 3: the plan's wireBackground opens a SECOND engine.on to do this.
     // It lives here, on the ONE subscription, for the reason every other branch
     // is here. Android only; iOS resolves both as no-ops natively.
-    if (e.type === 'transfer.progress' && !transferForegroundUp) {
-      transferForegroundUp = true;
+    if (e.type === 'transfer.progress' && !inFlight.has(e.transferId)) {
+      inFlight.add(e.transferId);
+      if (inFlight.size > 1) return;
       void startTransferForeground('Sending with Daak');
     }
     if (e.type === 'transfer.done' || e.type === 'transfer.failed') {
-      if (transferForegroundUp) {
-        transferForegroundUp = false;
+      if (inFlight.delete(e.transferId) && inFlight.size === 0) {
         void stopTransferForeground();
       }
     }

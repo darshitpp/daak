@@ -20,13 +20,23 @@ export default function App() {
   // owns the composer route). bootstrap.ts keeps drainInbound unwired and
   // App.test.tsx pins that this effect did not grow one.
   //
-  // A start failure is swallowed deliberately. startEngine never rejects on a
+  // A start failure must NOT crash the app: startEngine never rejects on a
   // permission or a scheduling problem (R36, initBackgroundSync), so a throw
-  // here is a genuine engine fault -- and crashing the whole app over a fault
-  // that the notification path already reports as recoverable is the worse
-  // answer. The banner for it, if any, comes from the engine itself.
+  // here is a genuine engine fault -- a rejected keystore identity, an
+  // unwritable data directory, a corrupt database. The UI is still worth
+  // showing; the ENGINE is dead, and every peer list, every outbox row and
+  // every inbound banner is silently absent with nothing on screen to say so.
+  //
+  // One warn line, because the previous claim that this was reported
+  // elsewhere was circular: the banner comes from inbox.received, which can
+  // never fire if start() threw. Rendering a real fault banner is Task 11's
+  // job and needs a state channel this app does not have; a log line costs
+  // nothing and is the difference between a diagnosable field report and a
+  // mystery.
   useEffect(() => {
-    void startEngineOnce().catch(() => {});
+    void startEngineOnce().catch((e: unknown) => {
+      console.warn('daak: engine start failed; the app is running with no engine', e);
+    });
   }, []);
 
   return (

@@ -44,6 +44,18 @@ import Foundation
   /// Idempotent; call from application:didFinishLaunchingWithOptions: before
   /// iOS can deliver either task. Registering the same identifier twice is an
   /// error the second time, so the guard matters if launch runs again.
+  ///
+  /// The FIRST SUBMIT LIVES HERE, not in handle(). iOS never delivers a task
+  /// that was not submitted, and a submit made only from inside the granted
+  /// handler is circular: no submit -> no grant -> no handler -> no submit, so
+  /// the schedule runs at most once and usually never. install() runs from
+  /// didFinishLaunchingWithOptions, the only place guaranteed to run before
+  /// anything can be delivered, so it is the only correct producer.
+  ///
+  /// No applicationDidEnterBackground resubmit on top of this: a launch that
+  /// did not consume the pending request would submit a duplicate, and iOS
+  /// rejects a second pending request for the same identifier. The next launch
+  /// is the honest retry, and it is what the try? below already relies on.
   @objc static func install() {
     if registeredRefresh || registeredProcessing { return }
     // register returns whether THIS identifier was accepted, so each is
@@ -57,6 +69,11 @@ import Foundation
     registeredProcessing = BGTaskScheduler.shared.register(
       forTaskWithIdentifier: processingId, using: nil
     ) { task in handle(task as! BGProcessingTask) }
+    // Book both chains, unconditionally. A successful registration does not
+    // mean a request exists, and the handler is the only other submitter, so
+    // skipping these leaves the whole feature inert behind a plist entry.
+    scheduleRefresh()
+    scheduleProcessing()
   }
 
   /// iOS delivers each launch independently, so a second one (fast app switch,
@@ -77,10 +94,26 @@ import Foundation
   }
 
   /// Best-effort by design: submit() throws when the OS is out of budget, and
-  /// there is nothing to recover with. initBackgroundSync re-books a slot on
-  /// every app start, so a missed submit is self-healing at next launch.
+  /// there is nothing to recover with. install() re-books on every app start,
+  /// so a missed submit is self-healing at next launch -- and that is TRUE now
+  /// rather than aspirational, because install() is the first submitter.
   @objc static func scheduleRefresh() {
     let request = BGAppRefreshTaskRequest(identifier: refreshId)
+    request.earliestBeginDate = Date(timeIntervalSinceNow: interval)
+    try? BGTaskScheduler.shared.submit(request)
+  }
+
+  /// The processing chain. It was registered and permitted from Task 10 and
+  /// submitted by NOTHING, so the plan's scheduleProcessing(15 * 60) crossed
+  /// the bridge, computed a number and dropped it.
+  ///
+  /// Both OS preconditions stay FALSE, per the plan.
+  /// requiresNetworkConnectivity would be meaningless for Daak: the OS can
+  /// only answer "is there internet", while a reachable peer is a LAN fact
+  /// this app already knows better than the OS does. Pinned off by
+  /// backgroundExec.test.ts.
+  @objc static func scheduleProcessing() {
+    let request = BGProcessingTaskRequest(identifier: processingId)
     request.earliestBeginDate = Date(timeIntervalSinceNow: interval)
     try? BGTaskScheduler.shared.submit(request)
   }

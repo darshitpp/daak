@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react-native';
+import { render, screen, waitFor } from '@testing-library/react-native';
 import App from '../App';
 
 // App now imports BackgroundSyncNotice, which reaches @daak/platform for the
@@ -25,7 +25,14 @@ jest.mock('../bootstrap', () => ({
 
 const { drainInbound, sendIntentItems, startEngineOnce, engine } = jest.requireMock('../bootstrap');
 
-beforeEach(() => jest.clearAllMocks());
+let warn: jest.SpyInstance;
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => warn.mockRestore());
 
 describe('App', () => {
   it('boots and renders the tab shell', () => {
@@ -60,5 +67,20 @@ describe('App', () => {
   it('starts the engine once through the idempotent owner', () => {
     render(<App />);
     expect(startEngineOnce).toHaveBeenCalledTimes(1);
+  });
+
+  // An engine that never started shows a Dashboard with no devices, no banner
+  // and no log -- and the banner the old comment relied on can never arrive,
+  // because inbox.received requires a running engine. A corrupt database or a
+  // taken data directory is exactly this. One warn line is the whole cost of
+  // making it diagnosable in the field.
+  it('says so out loud when the engine refuses to start', async () => {
+    startEngineOnce.mockRejectedValueOnce(new Error('keystore rejected the key'));
+    render(<App />);
+    await waitFor(() => expect(warn).toHaveBeenCalled());
+    expect(String(warn.mock.calls[0][0])).toContain('start');
+    // And the app still renders, rather than taking the whole UI down over a
+    // fault the user may be able to fix.
+    expect(screen.getByText('dashboard')).toBeTruthy();
   });
 });
