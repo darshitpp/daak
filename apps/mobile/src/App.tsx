@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { SafeAreaView } from 'react-native';
-import { AppShell, EngineProvider } from '@daak/ui';
+import { AppShell, BackgroundHint, EngineProvider } from '@daak/ui';
 import { engine, startEngineOnce } from './bootstrap';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
@@ -45,7 +45,25 @@ export default function App() {
       <EngineProvider engine={engine}>
         {/* R98: the pair tab is the reachable entry to QR pairing. PairingFlow is
             app-side (R100): the shell stays presentational. */}
-        <AppShell background={<BackgroundSyncNotice />} pair={<PairingFlow />} />
+        {/* BackgroundHint JOINS BackgroundSyncNotice rather than replacing it.
+            Same slot, same truth told twice by two audiences: the notice is the
+            Android-shaped action (allow background sync), the hint is the
+            iOS-shaped admission (iOS decides when it runs). One of the two is
+            always a no-op on the other platform, and both are honest about it.
+            No onOpen is passed: engine.backgroundWake() does not exist until
+            Phase 7 Task 3 (R61), and a Pressable wired to nothing is a dead
+            button (R128). No AppState listener for the same reason -- the
+            outbox ticker already drains on reconnect, so there is nothing a
+            foreground wake would add (GAP 1). */}
+        <AppShell
+          background={
+            <>
+              <BackgroundHint />
+              <BackgroundSyncNotice />
+            </>
+          }
+          pair={<PairingFlow />}
+        />
       </EngineProvider>
     </SafeAreaView>
   );

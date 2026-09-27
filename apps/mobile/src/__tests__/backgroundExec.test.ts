@@ -323,6 +323,38 @@ describe('GAP 1: nothing invented a drain entry point', () => {
   });
 });
 
+describe('the iOS grant record is real and is the only field set', () => {
+  // The spike records what iOS actually hands the handler. Every measurement
+  // run writes one line per delivery, and a run that measured nothing is
+  // indistinguishable from a chain that never fired unless the append is
+  // pinned to the handler body.
+  it('appends one jsonl line per delivery from inside the handler', () => {
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
+    const start = launch.indexOf('private static func handle(_ task: BGTask) {');
+    const end = launch.indexOf('@objc static func scheduleRefresh() {');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    // A CALL, not a bare name: `appendSpikeLine(taskId: task.identifier` is
+    // the only form with arguments, so the declaration of the function below
+    // cannot satisfy it. The bare-name form this replaced survived deleting the
+    // only call in handle, because the `end` bound sits AFTER the declaration
+    // and the slice therefore contained the function's own signature.
+    expect(launch.slice(start, end)).toMatch(/appendSpikeLine\(taskId: task\.identifier/);
+    expect(launch).toContain('"grantedMs"');
+    expect(launch).toContain('group.dev.darshit.daak');
+  });
+
+  // R127: the plan's wakeEngine stub posted a Notification nobody observed and
+  // returned a hard-coded 0 for `drained`, so a 24 h run would have reported a
+  // passing background-drain measurement that never happened. The two drain
+  // fields are therefore NOT written by the producer, and the pass criterion
+  // that reads them is structurally unreachable until Phase 7 Task 3.
+  it('writes no dueAtStart or drained field, and fakes no drain', () => {
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
+    expect(launch).not.toMatch(/dueAtStart|"drained"|wakeEngine|NotificationCenter/);
+  });
+});
+
 describe('GAP 2: no backgroundWake engine method was invented', () => {
   // R4 already ruled that backgroundWake arrives in Phase 7 Task 3. Adding it
   // here would be a UDL + wire change nobody specced for this phase, on a

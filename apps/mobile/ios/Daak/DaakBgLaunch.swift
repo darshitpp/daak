@@ -82,15 +82,51 @@ import Foundation
   private static var registeredProcessing = false
 
   private static func handle(_ task: BGTask) {
+    // The granted window, measured for real: entry to completion, in ms. This
+    // is the only number iOS hands us that nobody has to fake, and it is the
+    // half of the spike that is honestly measurable today.
+    let startedAt = Date()
     // Nothing to cancel: the body below never blocks. The handler is set
     // anyway, because a BGTask left without one is killed at its deadline with
     // no completion, which iOS counts as a failure for every future request.
     task.expirationHandler = { }
     task.setTaskCompleted(success: true)
+    appendSpikeLine(taskId: task.identifier, startedAt: startedAt)
     // A one-shot BGAppRefreshTask is consumed. The chain only continues if the
     // handler books the next one, so this line is what makes the schedule a
     // schedule rather than a single run.
     scheduleRefresh()
+  }
+
+  /// One JSON line per delivery, appended to the App Group container so a
+  /// measurement run can read it. Append, creating the file if missing; no
+  /// locking ceremony, because the OS serializes deliveries and this is a
+  /// measurement, not a log Daak depends on.
+  ///
+  /// WHY ONLY THREE FIELDS: the analyzer also reads `dueAtStart` and `drained`,
+  /// and nothing observable produces them. A BGTask is delivered into a process
+  /// whose JS bridge may not exist, and the engine has no wake, drain or row
+  /// count entry point on this side until Phase 7 Task 3 (GAP 1/GAP 2, R61).
+  /// The plan's `wakeEngine` stub posted a Notification nobody observed and
+  /// returned a hard-coded 0, which would have made a README 24 h run look
+  /// like it validated background drain. The absent fields ARE the finding.
+  private static func appendSpikeLine(taskId: String, startedAt: Date) {
+    let line: [String: Any] = [
+      "taskId": taskId,
+      "startedAt": Int(startedAt.timeIntervalSince1970 * 1000),
+      "grantedMs": Int(Date().timeIntervalSince(startedAt) * 1000),
+    ]
+    guard let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.darshit.daak"),
+          let data = try? JSONSerialization.data(withJSONObject: line),
+          let text = String(data: data, encoding: .utf8) else { return }
+    let url = dir.appendingPathComponent("bg-spike.jsonl")
+    if FileManager.default.fileExists(atPath: url.path), let handle = try? FileHandle(forWritingTo: url) {
+      handle.seekToEndOfFile()
+      handle.write(Data((text + "\n").utf8))
+      try? handle.close()
+    } else {
+      try? (text + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
   }
 
   /// Best-effort by design: submit() throws when the OS is out of budget, and
