@@ -20,6 +20,9 @@ importers:
       '@daak/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      '@daak/rn-notify':
+        specifier: workspace:*
+        version: link:../../modules/rn-notify
       '@daak/rn-share':
         specifier: workspace:*
         version: link:../../modules/rn-share
@@ -67,6 +70,12 @@ importers:
         specifier: ^5.6.0
         version: 5.6.3
 
+  modules/rn-notify:
+    dependencies:
+      react-native:
+        specifier: '>=0.76'
+        version: 0.76.5(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7))(@types/react@18.3.31)(react@18.3.1)
+
   modules/rn-share:
     dependencies:
       react-native:
@@ -97,6 +106,9 @@ importers:
       '@daak/core':
         specifier: workspace:*
         version: link:../core
+      '@daak/rn-notify':
+        specifier: workspace:*
+        version: link:../../modules/rn-notify
       '@daak/rn-share':
         specifier: workspace:*
         version: link:../../modules/rn-share

@@ -1,4 +1,14 @@
-import { consumeIntentSends, consumePendingShare, createEngine, syncShortcutTargets } from '@daak/platform';
+import {
+  consumeIntentSends,
+  consumePendingShare,
+  createEngine,
+  handleNotificationAction,
+  initNotifications,
+  notifyReceived,
+  onNotificationAction,
+  presentShare,
+  syncShortcutTargets,
+} from '@daak/platform';
 import type { DaakEngine } from '@daak/core';
 import type { InboundShareItem } from '@daak/platform';
 
@@ -7,8 +17,10 @@ export const engine: DaakEngine = createEngine();
 // Re-entry handle for the pairing.done subscription. startEngine is *meant* to
 // be called once, but a comment is not an invariant -- a remount or a hot
 // reload would otherwise leave every earlier subscription live and republish
-// the peer list N times per pairing.done.
-let unsubscribePairing: (() => void) | undefined;
+// the peer list N times per pairing.done, and post a banner N times per
+// receive. ONE subscription, for both reasons: two live subscriptions for two
+// unrelated reasons is the shape that turns into N per remount.
+let unsubscribeEngine: (() => void) | undefined;
 
 // Still nothing calls this: `engine` is constructed eagerly at import so the
 // TurboModule resolves, but it is never started until the app owns a
@@ -16,6 +28,9 @@ let unsubscribePairing: (() => void) | undefined;
 // App.tsx renders and nothing else. When an owner appears it must call this once.
 export async function startEngine(): Promise<void> {
   await engine.start();
+  // R36: a denied permission is an ordinary answer, not a startup failure. The
+  // banner is lost; the transfer is not.
+  await initNotifications();
   // R26: the peer list has to reach the App Group pairedDevices key, because
   // DaakIntentBridge.devices() is what answers Siri's entity query and it has no
   // other way to learn it. syncShortcutTargets is the only writer on both
@@ -26,9 +41,15 @@ export async function startEngine(): Promise<void> {
       /* the engine is not up yet; startEngine's own publish will follow */
     });
   await publish();
-  unsubscribePairing?.();
-  unsubscribePairing = engine.on((e) => {
+  // ONE engine subscription for the app's whole lifetime, handling every event
+  // the app reacts to. A second one for inbox.received would double-post a
+  // banner per receive AND break startEngineSubscription's invariant, which is
+  // right: two live subscriptions for two unrelated reasons is the shape that
+  // turns into N per remount.
+  unsubscribeEngine?.();
+  unsubscribeEngine = engine.on((e) => {
     if (e.type === 'pairing.done') void publish();
+    if (e.type === 'inbox.received') void notifyReceived(e.payload);
   });
   // R25: the ONE real send call site. ShareTargetActivity and the Siri intent
   // both stage into share-inbox/intent-sends/ and launch/foreground the app,
@@ -119,4 +140,27 @@ export async function sendIntentItems(
  */
 export async function drainIntentSends(engine: DaakEngine): Promise<void> {
   await sendIntentItems(engine, await consumeIntentSends());
+}
+
+/**
+ * Routes a tapped action. R33: `daak.share` is wired to `presentShare`, the
+ * app's EXISTING binding for the OS share sheet. This calls no transport and
+ * imports no crypto -- the engine's outbox owns every Daak-to-Daak send, and a
+ * notification action is not one. `present` is the ONLY outbound capability
+ * the handler can reach.
+ *
+ * DELIBERATELY NOT CALLED YET, same reason as drainInbound: `reveal` has no
+ * implementation on either platform (iOS needs a QuickLook preview, Android a
+ * ACTION_VIEW intent on a FileProvider URI), so every caller today would have to
+ * pass a no-op and a tapped "Show in folder" would silently do nothing. The
+ * sheet half -- daak.share -- has no such gap, and the Android trampoline builds
+ * the same chooser natively on a cold start. Wire this when the UI owns reveal.
+ */
+export function wireNotificationActions(
+  reveal: (path: string) => void,
+  open: (payload: string) => void,
+): () => void {
+  return onNotificationAction((event) =>
+    handleNotificationAction(event, { present: presentShare, reveal, open }),
+  );
 }

@@ -1,0 +1,27 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    POST_NOTIFICATIONS is a RUNTIME permission on API 33+. Without this entry
+    requestPermissions can never grant, and on API 33+ a post with no grant is
+    SILENTLY dropped: the user would never see a transfer banner and nothing
+    would say why. Declared in the library manifest so it merges into the app.
+  -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application>
+    <!--
+      Hosts the foreground host-app launch for a tapped action. It exists
+      because a BroadcastReceiver cannot bring an activity up under the
+      background-start restrictions, and because a library cannot name the
+      app's activity at compile time. Private, no UI, finishes immediately.
+      It is NOT the inbound share target: ShareTargetActivity in the app is
+      that, and it is android:exported=true.
+    -->
+    <activity
+      android:name=".ShareTrampolineActivity"
+      android:exported="false"
+      android:excludeFromRecents="true"
+      android:noHistory="true"
+      android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+  </application>
+</manifest>
+

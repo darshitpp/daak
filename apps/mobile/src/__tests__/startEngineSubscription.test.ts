@@ -17,6 +17,10 @@ jest.mock('@daak/platform', () => {
     consumePendingShare: jest.fn(),
     consumeIntentSends: jest.fn(async () => []),
     syncShortcutTargets: jest.fn(async () => {}),
+    // startEngine now calls initNotifications (Task 8), so this mock has to
+    // answer it or the subscription tests die on an undefined function.
+    initNotifications: jest.fn(async () => true),
+    notifyReceived: jest.fn(async () => {}),
   };
 });
 

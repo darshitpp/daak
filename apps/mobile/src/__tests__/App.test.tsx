@@ -10,6 +10,7 @@ jest.mock('../bootstrap', () => ({
   startEngine: async () => {},
   drainInbound: jest.fn(async () => {}),
   sendIntentItems: jest.fn(async () => {}),
+  postReceiveNotifications: jest.fn(async () => true),
 }));
 
 const { drainInbound, sendIntentItems, engine } = jest.requireMock('../bootstrap');

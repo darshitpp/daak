@@ -1,0 +1,14 @@
+{
+  "name": "@daak/rn-notify",
+  "version": "0.1.0",
+  "private": true,
+  "main": "js/index.ts",
+  "react-native": "js/index.ts",
+  "codegenConfig": {
+    "name": "DaakNotifySpec",
+    "type": "modules",
+    "jsSrcsDir": "js",
+    "android": { "javaPackageName": "dev.darshit.daak.notify" }
+  },
+  "peerDependencies": { "react-native": ">=0.76" }
+}

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@daak/core": "workspace:*",
+    "@daak/rn-notify": "workspace:*",
     "@daak/rn-share": "workspace:*"
   },
   "peerDependencies": {
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@daak/core": "workspace:*",
+    "@daak/rn-notify": "workspace:*",
     "react-native": "0.76.5",
     "typescript": "^5.6.0",
     "vitest": "^2"

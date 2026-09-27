@@ -1,0 +1,250 @@
+package dev.darshit.daak.notify
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.module.annotations.ReactModule
+import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.modules.core.PermissionAwareActivity
+import com.facebook.react.modules.core.PermissionListener
+import org.json.JSONArray
+
+private const val EVENT = "DaakNotifyEvent"
+private const val PERM_REQUEST_CODE = 0x0DA6
+private const val POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
+private const val TAG = "DaakNotify"
+
+@ReactModule(name = DaakNotifyModule.NAME)
+class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNotifySpec(ctx) {
+  companion object {
+    const val NAME = "DaakNotify"
+    const val CHANNEL = "daak.received"
+
+    const val ACTION_OPEN = "daak.open"
+    const val ACTION_SHARE = "daak.share"
+    const val ACTION_FOLDER = "daak.folder"
+
+    const val EXTRA_ACTION = "dev.darshit.daak.notify.action"
+    const val EXTRA_ID = "dev.darshit.daak.notify.id"
+    const val EXTRA_PAYLOAD = "dev.darshit.daak.notify.payload"
+
+    /**
+     * The live React context, or null when the app is not running. Set in the
+     * constructor and CLEARED in invalidate(): a stale static context outliving
+     * the bridge leaks the whole React instance and emits into nothing.
+     */
+    @Volatile private var reactContext: ReactApplicationContext? = null
+
+    /**
+     * The host app's launcher activity, found by intent rather than by class
+     * name: this library cannot see the app's MainActivity at compile time, and
+     * a hardcoded class string is a ClassNotFoundException the moment either is
+     * renamed.
+     */
+    fun launchIntent(context: Context): Intent? =
+        context.packageManager.getLaunchIntentForPackage(context.packageName)
+
+    /**
+     * Emits the tapped action to JS, or returns false when no bridge is
+     * listening so the caller can stash it instead. Never throws: this runs
+     * inside a BroadcastReceiver the user never sees, where a crash is a dead
+     * end with no visible cause.
+     */
+    fun emitToJs(context: Context, action: String, payload: String): Boolean {
+      val rc = reactContext ?: return false
+      return try {
+        rc.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(EVENT, Arguments.createMap().apply {
+              putString("action", action)
+              putString("payload", payload)
+            })
+        true
+      } catch (t: Throwable) {
+        Log.w(TAG, "cannot emit action event", t)
+        false
+      }
+    }
+
+    /**
+     * R34: on API 31+ an IMMUTABLE-or-MUTABLE PendingIntent is MANDATORY -- an
+     * implicit one throws IllegalArgumentException. minSdk is 24, so this needs
+     * the version guard. IMMUTABLE is the correct value: nothing fills any of
+     * these intents in after creation, and a mutable one would let a holder
+     * rewrite the payload of a notification the user was shown.
+     *
+     * Pre-S the flag does not exist and 0 IS the pre-M default, so one call site
+     * covers every supported API level.
+     */
+    val IMMUTABLE: Int
+      get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_IMMUTABLE else 0
+  }
+
+  private var pendingPermission: Promise? = null
+
+  private val permissionListener = PermissionListener { _, _, grantResults ->
+    val promise = pendingPermission
+    pendingPermission = null
+    promise?.resolve(
+        grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+    true
+  }
+
+  init {
+    reactContext = ctx
+  }
+
+  override fun getName() = NAME
+
+  override fun invalidate() {
+    if (reactContext === ctx) reactContext = null
+    super.invalidate()
+  }
+
+  /**
+   * R34: on API 33+ POST_NOTIFICATIONS is a RUNTIME permission, so
+   * areNotificationsEnabled() alone is a status QUERY, never a request -- the
+   * brief's version would report false forever and the user would never be
+   * asked. This asks for real, from a foreground activity (the only context that
+   * can prompt), and hands the ANSWER back to JS.
+   *
+   * Below API 33 there is no runtime gate at all: notifications are on unless
+   * the user turned them off in settings, which areNotificationsEnabled() does
+   * report, so there is nothing to request.
+   */
+  override fun requestPermission(promise: Promise) {
+    if (notificationsEnabled()) {
+      promise.resolve(true)
+      return
+    }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+      promise.resolve(false)
+      return
+    }
+    val activity = currentActivity
+    if (activity !is PermissionAwareActivity) {
+      // No foreground activity, so there is nothing to prompt from. false is the
+      // honest answer (R36), not a rejection that would break app startup.
+      promise.resolve(false)
+      return
+    }
+    pendingPermission = promise
+    try {
+      activity.requestPermissions(arrayOf(POST_NOTIFICATIONS), PERM_REQUEST_CODE, permissionListener)
+    } catch (t: Throwable) {
+      pendingPermission = null
+      Log.w(TAG, "requestPermissions failed", t)
+      promise.resolve(false)
+    }
+  }
+
+  private fun notificationsEnabled(): Boolean =
+      NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+
+  /**
+   * R34: the channel must EXIST before posting on API 26+, or the post is
+   * silently dropped. Idempotent: createNotificationChannel on an existing id
+   * updates it and leaves the user's own importance choice alone.
+   */
+  private fun ensureChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val nm = ctx.getSystemService(NotificationManager::class.java)
+    if (nm.getNotificationChannel(CHANNEL) == null) {
+      nm.createNotificationChannel(
+          NotificationChannel(CHANNEL, "Received files", NotificationManager.IMPORTANCE_DEFAULT))
+    }
+  }
+
+  override fun registerCategories(categoriesJson: String, promise: Promise) {
+    // Android action buttons are per-notification, not per-category, so the
+    // channel is the only thing to install here. The JSON is still parsed so a
+    // malformed caller is loud at registration rather than at every post.
+    ensureChannel()
+    try {
+      JSONArray(categoriesJson)
+    } catch (t: Throwable) {
+      promise.reject("E_NOTIFY", "categoriesJson is not a JSON array", t)
+      return
+    }
+    promise.resolve(null)
+  }
+
+  override fun post(id: String, title: String, body: String, category: String, payloadJson: String, promise: Promise) {
+    // R36: no permission means no banner, not a broken receive. Resolving rather
+    // than rejecting is what keeps a denied permission off the inbox path.
+    if (!notificationsEnabled()) {
+      promise.resolve(null)
+      return
+    }
+    ensureChannel()
+    val notification = NotificationCompat.Builder(ctx, category.ifEmpty { CHANNEL })
+        .setSmallIcon(android.R.drawable.stat_sys_download_done)
+        .setContentTitle(title)
+        .setContentText(body)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+        .setAutoCancel(true)
+        // R33: every action below leads to the OS share sheet or the app. None
+        // of them sends anything; the engine outbox owns every send.
+        .addAction(0, "Open", actionPending(id, ACTION_OPEN, payloadJson))
+        .addAction(0, "Share", actionPending(id, ACTION_SHARE, payloadJson))
+        .addAction(0, "Show in folder", actionPending(id, ACTION_FOLDER, payloadJson))
+        .build()
+    launchIntent(ctx)?.let { launch ->
+      // Tapping the BODY is the same daak.open the Open button does, so a
+      // cold-start body tap reaches JS through the one stashed-action path
+      // rather than a second, undiscoverable one.
+      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+      launch.putExtra(EXTRA_ACTION, ACTION_OPEN)
+      launch.putExtra(EXTRA_ID, id)
+      launch.putExtra(EXTRA_PAYLOAD, payloadJson)
+      // A request code per id keeps two posts from sharing one PendingIntent,
+      // which would make the second overwrite the first's payload.
+      notification.setContentIntent(
+          PendingIntent.getActivity(ctx, (id + ":open").hashCode(), launch, IMMUTABLE))
+    }
+    try {
+      NotificationManagerCompat.from(ctx).notify(id.hashCode(), notification)
+    } catch (t: Throwable) {
+      // A SecurityException when an OEM lies about the grant, and a dead
+      // NotificationManager: neither may take down a receive.
+      Log.w(TAG, "notify failed", t)
+    }
+    promise.resolve(null)
+  }
+
+  override fun cancel(id: String, promise: Promise) {
+    NotificationManagerCompat.from(ctx).cancel(id.hashCode())
+    promise.resolve(null)
+  }
+
+  /**
+   * The stash is drained once, by whoever subscribes first. A notification is
+   * the one event that can fire with no listener, so without this a user who
+   * taps an action with the app killed sees nothing happen at all.
+   */
+  override fun consumePendingAction(promise: Promise) = promise.resolve(NotifyStash.take(ctx))
+
+  private fun actionPending(id: String, action: String, payload: String): PendingIntent {
+    val intent = Intent(ctx, NotificationActionReceiver::class.java).apply {
+      this.action = action
+      putExtra(EXTRA_ACTION, action)
+      putExtra(EXTRA_ID, id)
+      putExtra(EXTRA_PAYLOAD, payload)
+    }
+    return PendingIntent.getBroadcast(ctx, (id + ":" + action).hashCode(), intent, IMMUTABLE)
+  }
+
+  override fun addListener(eventName: String) = Unit
+
+  override fun removeListeners(count: Double) = Unit
+}
+
