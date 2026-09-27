@@ -1,0 +1,15 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  // "node" is not in the RN preset's `types` (it is exactly
+  // ["react-native","jest"]), and the include below pulls in
+  // ../../packages/core/src, whose DaemonClient half is a Node daemon client
+  // using Buffer and node:child_process. Mobile never imports that half, but
+  // tsc checks the whole include list, so the types have to be resolvable.
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "types": ["react-native", "jest", "node"]
+  },
+  "include": ["src", "../../packages/*/src", "../../modules/*/js"]
+}

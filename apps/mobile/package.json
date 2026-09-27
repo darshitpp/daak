@@ -2,6 +2,32 @@
   "name": "@daak/mobile",
   "version": "0.1.0",
   "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "start": "react-native start",
+    "test": "jest",
+    "typecheck": "tsc --noEmit",
+    "codegen": "react-native codegen"
+  },
+  "dependencies": {
+    "@daak/core": "workspace:*",
+    "react": "18.3.1",
+    "react-native": "0.76.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@react-native/babel-preset": "0.76.5",
+    "@react-native/metro-config": "0.76.5",
+    "@react-native/typescript-config": "0.76.5",
+    "@testing-library/react-native": "^12.7.0",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^26.6.3",
+    "@types/react": "^18.2.6",
+    "jest": "^29.7.0",
+    "react-test-renderer": "18.3.1",
+    "typescript": "^5.6.0"
+  },
   "codegenConfig": {
     "name": "DaakSpec",
     "type": "modules",
@@ -9,5 +35,6 @@
     "android": {
       "javaPackageName": "dev.darshit.daak"
     }
-  }
+  },
+  "engines": { "node": ">=18" }
 }
