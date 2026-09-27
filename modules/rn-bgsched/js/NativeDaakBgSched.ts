@@ -10,9 +10,19 @@ export interface Spec extends TurboModule {
    * the periodic WorkManager job.
    */
   configure(): Promise<void>;
-  /** iOS BGAppRefreshTaskRequest. No-op on Android, which uses WorkManager. */
+  /**
+   * iOS BGAppRefreshTaskRequest. No-op on Android, which uses WorkManager.
+   * ALSO A NO-OP ON iOS, on purpose: the request is submitted by the APP TARGET
+   * (`apps/mobile/ios/Daak/DaakBgLaunch.swift`) at launch and at the end of
+   * every launch handler. A submit from JS is a duplicate request and iOS
+   * rejects the second one, so calling this does NOT schedule a refresh (R80).
+   */
   scheduleAppRefresh(): Promise<void>;
-  /** iOS BGProcessingTaskRequest. No-op on Android, which uses WorkManager. */
+  /**
+   * iOS BGProcessingTaskRequest. No-op on Android, which uses WorkManager, and
+   * a no-op on iOS for the same reason as scheduleAppRefresh: the app target
+   * owns the submit.
+   */
   scheduleProcessing(earliestSeconds: number): Promise<void>;
   /**
    * Android only: raise a low-importance dataSync foreground service so a long

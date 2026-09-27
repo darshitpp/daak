@@ -4,8 +4,16 @@ import { AppShell, BackgroundHint, EngineProvider } from '@daak/ui';
 import { engine, startEngineOnce } from './bootstrap';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
+import { TransfersFlow } from './TransfersFlow';
+import { SendFlow, useSendPeer } from './SendFlow';
 
 export default function App() {
+  // DeviceCard's Send used to be `onSend={() => {}}`: a real Pressable wired to
+  // nothing, in the shipped UI, on two screens. It now routes to the composer
+  // for that peer. This state is the whole route -- R22 stands, so nothing here
+  // drains the staged share inbox, and R37 stands, so daak.folder stays out.
+  const [sendPeer, openComposer, closeComposer] = useSendPeer();
+
   // THE engine lifecycle owner, and the first production caller startEngine
   // has ever had (before Task 10 it had none, deliberately: R22 ruled against
   // the plan's version of this effect, which also drained the share inbox).
@@ -63,6 +71,9 @@ export default function App() {
             </>
           }
           pair={<PairingFlow />}
+          transfers={<TransfersFlow />}
+          onSend={openComposer}
+          composer={<SendFlow peer={sendPeer} onCancel={closeComposer} />}
         />
       </EngineProvider>
     </SafeAreaView>

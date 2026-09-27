@@ -4,7 +4,7 @@ import type { DeviceInfo } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { DeviceCard } from '../components/DeviceCard';
 
-export function DevicesScreen() {
+export function DevicesScreen({ onSend }: { onSend?: (d: DeviceInfo) => void } = {}) {
   const engine = useEngine();
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
 
@@ -18,7 +18,7 @@ export function DevicesScreen() {
 
   return (
     <View>
-      {devices.map((d) => <DeviceCard key={d.deviceId} device={d} onSend={() => {}} />)}
+      {devices.map((d) => <DeviceCard key={d.deviceId} device={d} onSend={onSend} />)}
     </View>
   );
 }

@@ -12,4 +12,12 @@ describe('DeviceCard', () => {
     fireEvent.press(screen.getByText('Send'));
     expect(onSend).toHaveBeenCalledWith(device);
   });
+
+  // M1: a Pressable that calls an empty function is a dead button in the
+  // shipped UI. No callback, no button.
+  it('renders no Send button when no callback is supplied', () => {
+    render(<DeviceCard device={device} />);
+    expect(screen.getByText('Pixel 9')).toBeTruthy();
+    expect(screen.queryByText('Send')).toBeNull();
+  });
 });

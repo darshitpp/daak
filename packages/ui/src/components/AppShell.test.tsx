@@ -42,3 +42,44 @@ it('renders with no slot supplied', () => {
   );
   expect(screen.getByText('dashboard')).toBeTruthy();
 });
+
+// I1: TransferProgressScreen had ZERO render sites, so every transfer.item row
+// the engine really emits was invisible. This is a REACHABILITY pin, not a
+// renderability one: it drives the real tab bar, so deleting either the
+// 'transfers' entry in TabBar or the slot line in AppShell fails here. Same
+// discipline as the pair slot above.
+it('threads a transfers slot through to the Transfers tab', () => {
+  render(
+    <EngineProvider engine={fakeEngine()}>
+      <AppShell transfers={<Text>transfers-ui</Text>} />
+    </EngineProvider>,
+  );
+  fireEvent.press(screen.getByText('transfers'));
+  expect(screen.getByText('transfers-ui')).toBeTruthy();
+});
+
+// M1: onSend used to be `() => {}` on Dashboard and Devices, so DeviceCard
+// rendered a real Pressable wired to nothing. The shell now THREADS onSend to
+// both device lists, and DeviceCard renders Send only when one is supplied.
+it('threads onSend to the device lists, and no Send renders without one', async () => {
+  const onSend = jest.fn();
+  render(
+    <EngineProvider engine={fakeEngine()}>
+      <AppShell onSend={onSend} />
+    </EngineProvider>,
+  );
+  const send = await screen.findByText('Send');
+  fireEvent.press(send);
+  expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ name: 'Pixel 9' }));
+});
+
+it('renders no Send button at all when the app supplies no onSend', async () => {
+  render(
+    <EngineProvider engine={fakeEngine()}>
+      <AppShell />
+    </EngineProvider>,
+  );
+  // A device card still lists the peer; only the dead affordance is gone.
+  expect(await screen.findByText('Pixel 9')).toBeTruthy();
+  expect(screen.queryByText('Send')).toBeNull();
+});

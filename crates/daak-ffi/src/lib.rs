@@ -74,6 +74,15 @@ pub struct TransferItemEvent {
     pub transfer_id: String,
     pub item_index: u32,
     pub state: String,
+    /// The engine's `Option<String>` (`daak-core/src/engine.rs:80`) is `String`
+    /// here because UDL has no optional field on a dictionary, and the UDL
+    /// dictionary cannot express it either (`daak.udl:57`). DELIBERATE, not an
+    /// oversight: `None` -- a non-binary item that is never materialised --
+    /// arrives here as the EMPTY STRING, and an empty string is NOT a real
+    /// destination. Do not "fix" this by making a real path empty instead, and
+    /// do not add a sentinel: the JS side already reads it as `destPath?: string`
+    /// and ReceivedItemRow treats a missing value as "no file". Changing the
+    /// value on the wire is a wire change, not a cleanup.
     pub dest_path: String,
 }
 

@@ -46,11 +46,20 @@ class DaakBgSched: RCTEventEmitter {
     resolve(nil)
   }
 
+  /// NO SUBMIT HERE, on purpose. The real BGAppRefreshTaskRequest is submitted
+  /// by the APP TARGET (`apps/mobile/ios/Daak/DaakBgLaunch.swift`), from
+  /// `install()` at launch and again at the end of every launch handler. A JS
+  /// submit is a DUPLICATE request and iOS rejects the second one, so giving
+  /// this a body does not refresh more often -- it breaks the real request.
+  /// See the class comment for why the app target owns this (R80).
   @objc func scheduleAppRefresh(_ resolve: RCTPromiseResolveBlock,
                                reject: RCTPromiseRejectBlock) {
     resolve(nil)
   }
 
+  /// NO SUBMIT HERE either, same reason as scheduleAppRefresh: the
+  /// BGProcessingTaskRequest is submitted by the app target, not this module,
+  /// so `earliestSeconds` is accepted and ignored on iOS.
   @objc func scheduleProcessing(_ earliestSeconds: NSNumber,
                                 resolve: RCTPromiseResolveBlock,
                                 reject: RCTPromiseRejectBlock) {

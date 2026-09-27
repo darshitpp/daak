@@ -80,12 +80,14 @@ export async function startEngine(): Promise<void> {
   // turns into N per remount.
   unsubscribeEngine?.();
   // A foreground-service start per progress event would be one OS start per
-  // chunk, so the flag is latched here rather than in the handler. Cleared on
+  // chunk, so membership is tracked here rather than in the handler. Cleared on
   // any terminal transfer event, which is the only place it can be wrong: a
   // transfer that ends without done/failed leaves the service up. That is a
   // stale notification, not a lost send, and a stop() would race the next
-  // transfer's start(). ponytail: latch; upgrade to a per-transfer refcount if
-  // concurrent transfers ever arrive.
+  // transfer's start(). R87: this note used to call the tracking a boolean
+  // latch and a per-transfer refcount future work, which is what the next
+  // paragraph says is already done; a reader taking it at face value restores
+  // the boolean.
   // A SET, not a boolean, because concurrent transfers already arrive: the
   // outbox drains rows in a loop and several peers can be online at once. One
   // shared boolean let A's done stop the service while B was still sending,

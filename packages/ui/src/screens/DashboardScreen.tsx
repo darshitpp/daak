@@ -4,7 +4,7 @@ import type { DeviceInfo, InboxEntry } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { DeviceCard } from '../components/DeviceCard';
 
-export function DashboardScreen() {
+export function DashboardScreen({ onSend }: { onSend?: (d: DeviceInfo) => void } = {}) {
   const engine = useEngine();
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [inbox, setInbox] = useState<InboxEntry[]>([]);
@@ -20,7 +20,7 @@ export function DashboardScreen() {
 
   return (
     <View>
-      {devices.map((d) => <DeviceCard key={d.deviceId} device={d} onSend={() => {}} />)}
+      {devices.map((d) => <DeviceCard key={d.deviceId} device={d} onSend={onSend} />)}
       {inbox.map((i) => <Text key={i.payloadId}>{i.summary}</Text>)}
     </View>
   );
