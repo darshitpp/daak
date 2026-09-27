@@ -1,0 +1,14 @@
+{
+  "name": "@daak/rn-share",
+  "version": "0.1.0",
+  "private": true,
+  "main": "js/index.ts",
+  "react-native": "js/index.ts",
+  "codegenConfig": {
+    "name": "DaakShareSpec",
+    "type": "modules",
+    "jsSrcsDir": "js",
+    "android": { "javaPackageName": "dev.darshit.daak.share" }
+  },
+  "peerDependencies": { "react-native": ">=0.76" }
+}

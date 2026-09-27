@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@daak/core": "workspace:*"
+    "@daak/core": "workspace:*",
+    "@daak/rn-share": "workspace:*"
   },
   "peerDependencies": {
     "react-native": "^0.76"

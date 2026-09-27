@@ -13,6 +13,7 @@
   "dependencies": {
     "@daak/core": "workspace:*",
     "@daak/platform": "workspace:*",
+    "@daak/rn-share": "workspace:*",
     "@daak/ui": "workspace:*",
     "react": "18.3.1",
     "react-native": "0.76.5"

@@ -1,0 +1,77 @@
+package dev.darshit.daak.share
+
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.FileProvider
+import com.facebook.react.bridge.*
+import com.facebook.react.module.annotations.ReactModule
+import java.io.File
+
+@ReactModule(name = DaakShareModule.NAME)
+class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShareSpec(ctx), ActivityEventListener {
+  companion object { const val NAME = "DaakShare"; private const val PICK = 4711 }
+
+  private var pickPromise: Promise? = null
+
+  init { ctx.addActivityEventListener(this) }
+
+  override fun getName() = NAME
+
+  override fun present(text: String?, urls: ReadableArray?, mime: String?, promise: Promise) {
+    val activity = currentActivity ?: return promise.reject("E_NO_ACTIVITY", "no foreground activity")
+    val fileUris = (urls?.toArrayList() ?: emptyList<Any>()).map { uriFor(activity, it as String) }
+    val intent = if (fileUris.size > 1) {
+      Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = mime?.takeIf { it.isNotEmpty() } ?: "*/*"
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(fileUris))
+      }
+    } else {
+      Intent(Intent.ACTION_SEND).apply {
+        type = mime?.takeIf { it.isNotEmpty() } ?: "*/*"
+        if (fileUris.size == 1) putExtra(Intent.EXTRA_STREAM, fileUris[0])
+        if (!text.isNullOrEmpty()) putExtra(Intent.EXTRA_TEXT, text)
+      }
+    }
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    activity.startActivity(Intent.createChooser(intent, "Share via"))
+    // Resolves when the OS chooser is up, not when a peer accepted anything.
+    promise.resolve(null)
+  }
+
+  override fun pickDocuments(multiple: Boolean, promise: Promise) {
+    val activity = currentActivity ?: return promise.reject("E_NO_ACTIVITY", "no foreground activity")
+    pickPromise = promise
+    activity.startActivityForResult(
+      Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
+        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple)
+      }, PICK)
+  }
+
+  override fun consumePendingInbox(promise: Promise) = promise.resolve(ShareInbox.drainToJson(ctx))
+
+  override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+    if (requestCode != PICK) return
+    val promise = pickPromise ?: return
+    pickPromise = null
+    val out = Arguments.createArray()
+    if (resultCode == Activity.RESULT_OK && data != null) {
+      val clip = data.clipData
+      if (clip != null) {
+        for (i in 0 until clip.itemCount) out.pushString(ShareInbox.copyToCache(ctx, clip.getItemAt(i).uri).absolutePath)
+      } else {
+        data.data?.let { out.pushString(ShareInbox.copyToCache(ctx, it).absolutePath) }
+      }
+    }
+    promise.resolve(out)
+  }
+
+  override fun onNewIntent(intent: Intent) = Unit
+
+  private fun uriFor(activity: Activity, path: String): Uri =
+    FileProvider.getUriForFile(activity, activity.packageName + ".fileprovider", File(path))
+
+  override fun addListener(eventName: String) = Unit
+  override fun removeListeners(count: Double) = Unit
+}

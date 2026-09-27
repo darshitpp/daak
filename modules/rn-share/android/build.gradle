@@ -1,0 +1,16 @@
+buildscript {
+  repositories { google(); mavenCentral() }
+}
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+  namespace 'dev.darshit.daak.share'
+  compileSdkVersion 35
+  defaultConfig { minSdkVersion 26 }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  implementation 'androidx.core:core-ktx:1.13.1'
+}
