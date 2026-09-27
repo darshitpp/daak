@@ -59,8 +59,13 @@ describe('consumePendingShare', () => {
     ]);
   });
 
-  // R7 compile-time pin: one typed literal per arm, so adding/renaming/dropping
-  // an arm of the frozen union fails `tsc --noEmit` rather than a runtime test.
+  // R7 compile-time pin. Two halves, and BOTH are load-bearing:
+  //  - the typed literal list, so a renamed or dropped union arm is a
+  //    TS2322/TS2345 at the literal rather than a silent runtime shape change;
+  //  - the `(a): string =>` annotation on the map callback, which is what makes
+  //    the switch exhaustive. Without it the callback infers `string |
+  //    undefined`, so a DROPPED case and a 4th ADDED arm both still compile.
+  //    With it, either one is a type error.
   it('type-checks every arm of the frozen union', () => {
     const arms: InboundShareItem[] = [
       { kind: 'text', text: 'hello' },
@@ -69,9 +74,7 @@ describe('consumePendingShare', () => {
       { kind: 'intent-send', deviceId: 'aa11' },
       { kind: 'intent-send', deviceId: 'aa11', text: 'yo' },
     ];
-    // Exhaustive over `kind`: adding a 4th arm without updating this switch is
-    // a type error, which is the point.
-    const kinds = arms.map((a) => {
+    const kinds = arms.map((a): string => {
       switch (a.kind) {
         case 'text':
           return a.text;

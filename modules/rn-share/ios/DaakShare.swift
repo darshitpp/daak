@@ -9,29 +9,27 @@ class DaakShare: NSObject {
   @objc static func requiresMainQueueSetup() -> Bool { true }
 
   /// The share extension posts this Darwin notification when it has staged
-  /// something. All this observer does is record that the inbox moved, so a
-  /// later drain knows to look; handing the drained items to the engine is
-  /// Tasks 7/9/11's job, not this task's.
-  private var inboxDirty = false
-
-  /// True once the extension has signalled a staging. Read by the drain; the
-  /// consumer that turns drained items into engine work lands in Tasks 7/9/11.
-  @objc var hasPendingInbox: Bool {
-    get { inboxDirty }
-    set { inboxDirty = newValue }
-  }
-
+  /// something. Registered so the cross-process wakeup is wired end to end, but
+  /// it has NO consumer until Tasks 7/9/11 give it one: the callback
+  /// deliberately does nothing, and consumePendingInbox does not consult any
+  /// flag. A dead flag that nothing reads is worse than no flag, so there is
+  /// none. Until a consumer lands, nothing drains the inbox automatically (R22:
+  /// draining with no consumer would delete the batch that names the files).
   override init() {
     super.init()
     CFNotificationCenterAddObserver(
       CFNotificationCenterGetDarwinNotifyCenter(),
       Unmanaged.passUnretained(self).toOpaque(),
-      { _, observer, _, _, _ in
-        guard observer != nil else { return }
-        let me = Unmanaged<DaakShare>.fromOpaque(observer!).takeUnretainedValue()
-        me.inboxDirty = true
-      },
+      { _, _, _, _, _ in },
       kDarwinShareInboxChanged as CFString, nil, .deliverImmediately)
+  }
+
+  // The observer is registered with an unretained self, so it MUST be removed
+  // on dealloc or a later post hits freed memory.
+  deinit {
+    CFNotificationCenterRemoveObserver(
+      CFNotificationCenterGetDarwinNotifyCenter(),
+      Unmanaged.passUnretained(self).toOpaque(), nil, nil)
   }
 
   @objc func present(_ text: String, urls: [String], mime: String,
@@ -118,6 +116,13 @@ class DaakShare: NSObject {
         }
         merged.append(item)
       }
+      // ponytail: a file that can never move (disk full, bad Documents path)
+      // pins this batch forever and its already-moved items are re-handed to JS
+      // on every drain, which becomes duplicate outbox entries once a consumer
+      // with no dedupe lands. No byte loss is the deliberate priority here.
+      // Upgrade in Tasks 7/9/11: rewrite item["path"] to the absolute dest.path
+      // back into the batch so a retry is idempotent, or retire a batch whose
+      // only residue is permanently-failed items.
       if allFilesMoved { try? fm.removeItem(at: batch) }
     }
     let json = (try? JSONSerialization.data(withJSONObject: merged)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
