@@ -77,8 +77,32 @@ describe('the transfer.item wire contract this row depends on', () => {
 
   it('daak-core now HAS the EngineEvent::TransferItem variant', () => {
     const src = read('crates/daak-core/src/engine.rs');
-    const ev = src.slice(src.indexOf('pub enum EngineEvent'), src.indexOf('type PendingPairing'));
-    expect(ev).toContain('TransferItem {');
+    // The variant must be declared INSIDE the enum body, and the body is found
+    // by brace-matching from the enum's own header -- NOT by slicing to some
+    // unrelated later declaration.
+    //
+    // A slice(start, end).toContain(x) is monotone in the region: widening the
+    // region can only ever make containment MORE likely to pass, so `slice(0,)`
+    // stays green and the start bound is decoration. Brace-matching is not: if
+    // the header is not found the search for `{` latches onto some earlier brace
+    // in the file and the region closes before the variant, so a wrong start
+    // bound fails loudly instead of silently succeeding (the R86/R95 lesson).
+    const header = src.indexOf('pub enum EngineEvent');
+    expect(header).toBeGreaterThan(-1);
+    const open = src.indexOf('{', header);
+    expect(open).toBeGreaterThan(header);
+    let depth = 0;
+    let close = -1;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) { close = i; break; }
+    }
+    // A body that never closes means the region ran to EOF and would satisfy
+    // any containment assertion from unrelated code.
+    expect(close).toBeGreaterThan(open);
+    const decl = src.indexOf('TransferItem {');
+    expect(decl).toBeGreaterThan(open);
+    expect(decl).toBeLessThan(close);
   });
 
   it('the FFI JSON and the TS union agree on the same four keys', () => {

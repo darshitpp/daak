@@ -34,7 +34,7 @@ export function TransferProgressScreen({ transferId }: { transferId: string }) {
           state={summary.state} />
       ) : null}
       {/*
-        NO onRetry: `Engine::retry_item` is real in Rust (engine.rs:700) but is
+        NO onRetry: `Engine::retry_item` is real in Rust (engine.rs:720) but is
         bound in neither the UDL nor the IpcRequest enum, so there is no call to
         make. ReceivedItemRow hides Retry when no callback is supplied, which is
         the honest rendering of "retry is not reachable yet" (R115(b)).

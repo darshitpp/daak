@@ -9,8 +9,8 @@ const item = { transferId: 't1', itemIndex: 2, state: 'quarantined' as ItemState
 
 describe('ReceivedItemRow', () => {
   // The engine only ever writes 'done' and 'quarantined' for an inbound item
-  // (crates/daak-core/src/transfer/receiver.rs:334-345) and retry_item re-arms
-  // it to 'pending' (engine.rs:1030), so every one of the six frozen states is
+  // (crates/daak-core/src/transfer/receiver.rs:326-347) and retry_item re-arms
+  // it to 'pending' (engine.rs:1034), so every one of the six frozen states is
   // renderable and none of them may be silently dropped.
   it('renders every frozen item state', () => {
     const states: ItemState[] = ['pending', 'receiving', 'verifying', 'done', 'failed', 'quarantined'];

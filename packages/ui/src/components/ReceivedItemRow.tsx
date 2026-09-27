@@ -18,7 +18,7 @@ export interface ReceivedItemView {
 
 /**
  * `onRetry` is OPTIONAL, and that is the honest part: `Engine::retry_item`
- * (engine.rs:700) is real in Rust but is bound in neither the UDL nor the
+ * (engine.rs:720) is real in Rust but is bound in neither the UDL nor the
  * IpcRequest enum (R115(b)), so no caller today can pass one. A required
  * callback would force every call site to hand a function wired to nothing.
  * Retry is rendered only when retry is real.
