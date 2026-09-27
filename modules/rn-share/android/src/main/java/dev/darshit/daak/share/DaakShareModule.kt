@@ -37,8 +37,15 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     }
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     // Without a ClipData the grant above reaches nobody: many receivers read the
-    // URI permission off the clip, not off the intent extras.
-    fileUris.firstOrNull()?.let { intent.clipData = ClipData.newRawUri(null, it) }
+    // URI permission off the clip, not off the intent extras. And it must carry
+    // EVERY uri -- AOSP's migrateExtraStreamToClipData does not migrate a
+    // ParcelableArrayList EXTRA_STREAM, so on ACTION_SEND_MULTIPLE items 2..N
+    // would advertise no grantable URI if only the first were attached.
+    fileUris.firstOrNull()?.let { first ->
+      val clip = ClipData.newRawUri(null, first)
+      fileUris.drop(1).forEach { clip.addItem(ClipData.Item(it)) }
+      intent.clipData = clip
+    }
     activity.startActivity(Intent.createChooser(intent, "Share via"))
     // Resolves when the OS chooser is up, not when a peer accepted anything.
     promise.resolve(null)

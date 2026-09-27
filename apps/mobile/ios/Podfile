@@ -5,7 +5,10 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
-platform :ios, min_ios_version_supported
+# Pinned, not min_ios_version_supported: RN 0.76.5's helpers.rb returns 15.1, but
+# the app's IPHONEOS_DEPLOYMENT_TARGET is 16.0 (App Intents need 16+), and
+# DaakShare.podspec declares 16.0. A Podfile below the podspec floor fails lint.
+platform :ios, '16.0'
 prepare_react_native_project!
 
 linkage = ENV['USE_FRAMEWORKS']

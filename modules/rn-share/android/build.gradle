@@ -3,6 +3,11 @@ buildscript {
 }
 apply plugin: 'com.android.library'
 apply plugin: 'org.jetbrains.kotlin.android'
+// Library codegen is gated on the com.facebook.react plugin being applied, not
+// on com.android.library: ReactPlugin.apply() registers
+// project.pluginManager.withPlugin("com.android.library") { configureCodegen(..., isLibrary = true) }.
+// Without this, NativeDaakShareSpec is never generated and this module cannot compile.
+apply plugin: 'com.facebook.react'
 
 repositories { google(); mavenCentral() }
 
