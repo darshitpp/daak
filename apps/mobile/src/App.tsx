@@ -1,10 +1,7 @@
 import React from 'react';
 import { SafeAreaView } from 'react-native';
-import { AppShell, EngineProvider, fakeEngine } from '@daak/ui';
-
-// Placeholder until Task 3 builds the real InProcessEngine over the `Daak`
-// TurboModule (apps/mobile/src/bootstrap.ts); Task 3 swaps this line out.
-const engine = fakeEngine();
+import { AppShell, EngineProvider } from '@daak/ui';
+import { engine } from './bootstrap';
 
 export default function App() {
   return (

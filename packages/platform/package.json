@@ -1,0 +1,23 @@
+{
+  "name": "@daak/platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@daak/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "react-native": "^0.76"
+  },
+  "devDependencies": {
+    "@daak/core": "workspace:*",
+    "react-native": "0.76.5",
+    "typescript": "^5.6.0",
+    "vitest": "^2"
+  }
+}
