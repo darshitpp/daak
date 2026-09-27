@@ -4,10 +4,12 @@ buildscript {
 apply plugin: 'com.android.library'
 apply plugin: 'org.jetbrains.kotlin.android'
 
+repositories { google(); mavenCentral() }
+
 android {
   namespace 'dev.darshit.daak.share'
   compileSdkVersion 35
-  defaultConfig { minSdkVersion 26 }
+  defaultConfig { minSdkVersion 24 }
 }
 
 dependencies {

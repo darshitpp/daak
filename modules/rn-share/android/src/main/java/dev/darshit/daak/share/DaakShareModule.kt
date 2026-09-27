@@ -1,6 +1,7 @@
 package dev.darshit.daak.share
 
 import android.app.Activity
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
@@ -25,6 +26,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       Intent(Intent.ACTION_SEND_MULTIPLE).apply {
         type = mime?.takeIf { it.isNotEmpty() } ?: "*/*"
         putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(fileUris))
+        if (!text.isNullOrEmpty()) putExtra(Intent.EXTRA_TEXT, text)
       }
     } else {
       Intent(Intent.ACTION_SEND).apply {
@@ -34,6 +36,9 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       }
     }
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    // Without a ClipData the grant above reaches nobody: many receivers read the
+    // URI permission off the clip, not off the intent extras.
+    fileUris.firstOrNull()?.let { intent.clipData = ClipData.newRawUri(null, it) }
     activity.startActivity(Intent.createChooser(intent, "Share via"))
     // Resolves when the OS chooser is up, not when a peer accepted anything.
     promise.resolve(null)

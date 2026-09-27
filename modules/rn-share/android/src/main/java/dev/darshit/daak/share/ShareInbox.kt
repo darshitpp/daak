@@ -32,17 +32,28 @@ object ShareInbox {
       .apply { if (!text.isNullOrEmpty()) put("text", text) })
 
   private fun appendItem(ctx: Context, item: JSONObject) {
-    File(dir(ctx), UUID.randomUUID().toString() + ".json").writeText(JSONArray().put(item).toString())
+    val final = File(dir(ctx), UUID.randomUUID().toString() + ".json")
+    // Write-then-rename: a process killed mid-write leaves a .tmp that drainToJson
+    // ignores, never a truncated .json that looks valid.
+    val tmp = File(final.path + ".tmp")
+    tmp.writeText(JSONArray().put(item).toString())
+    check(tmp.renameTo(final)) { "staging rename failed: ${final.name}" }
   }
 
   fun drainToJson(ctx: Context): String {
     val merged = JSONArray()
     dir(ctx).listFiles { f -> f.extension == "json" }?.forEach { batch ->
-      runCatching {
+      val parsed = runCatching {
         val arr = JSONArray(batch.readText())
-        for (i in 0 until arr.length()) merged.put(arr.getJSONObject(i))
+        arr
       }
-      batch.delete()
+      // Delete only after a successful parse, so a corrupt file is retried
+      // rather than dropped on the floor. Draining is idempotent: a re-read
+      // only happens if the drain itself dies before the next copy loop.
+      parsed.getOrNull()?.let { arr ->
+        for (i in 0 until arr.length()) merged.put(arr.getJSONObject(i))
+        batch.delete()
+      }
     }
     return merged.toString()
   }

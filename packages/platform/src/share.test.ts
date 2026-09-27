@@ -11,7 +11,7 @@ vi.mock('@daak/rn-share', () => ({
 }));
 
 import DaakShare from '@daak/rn-share';
-import { pickFiles, presentShare } from './share';
+import { consumePendingInbox, pickFiles, presentShare } from './share';
 
 const native = vi.mocked(DaakShare);
 
@@ -28,5 +28,13 @@ describe('share facade', () => {
 
   it('exposes the document picker', async () => {
     await expect(pickFiles(true)).resolves.toEqual(['/tmp/a.pdf']);
+  });
+
+  it('forwards the staged inbox to the caller', async () => {
+    // The native contract is a JSON string (Task 5's inbound.ts parses it); this
+    // pins the pass-through and the empty-inbox shape, not a re-parse here.
+    const raw = await consumePendingInbox();
+    expect(native.consumePendingInbox).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(raw)).toEqual([]);
   });
 });
