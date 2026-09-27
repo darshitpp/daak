@@ -1,40 +1,89 @@
-import { describe, expect, it } from 'vitest';
-import { createEngine } from './engine';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { bindDaakEvents, createEngine } from './engine';
 import type { DaakEvent } from '@daak/core';
 import type { Spec as NativeDaakSpec } from '@daak/core/src/NativeDaak';
+import type { EventSubscribe } from './engine';
+// react-native is aliased to the typed stub for tests (see vitest.config.ts);
+// its test-only emitters are not part of the real package's public types.
+import { __emit as emit, __reset as resetStub } from '../test/react-native-stub';
+
+// The shape BOTH native emitters actually put on the wire:
+//   Daak.swift:147  sendEvent(withName: "DaakEvent", body: ["event": json])
+//   DaakModule.kt  map.putString("event", json)
+// i.e. an OBJECT, never a bare DaakEvent.
+const PROGRESS = { type: 'transfer.progress', transferId: 't', bytesDone: 1, bytesTotal: 2 } as const;
+const nativePayload = { event: JSON.stringify(PROGRESS) };
+
+function fakeNative(calls: unknown[][]): NativeDaakSpec {
+  return {
+    start: async (...a) => { calls.push(['start', ...a]); },
+    shutdown: async () => { calls.push(['shutdown']); },
+    listDevices: async () => JSON.stringify([]),
+    pairingBundle: async () => '{}',
+    pairWith: async (addr, bytes) => { calls.push(['pairWith', addr, bytes.length]); return '123456'; },
+    acceptPairing: async () => '123456',
+    sendText: async (peer, text) => { calls.push(['sendText', peer, text]); return 'aa'.repeat(16); },
+    sendFiles: async (peer, paths) => { calls.push(['sendFiles', peer, paths]); return 'bb'.repeat(16); },
+    listInbox: async () => '[]',
+    listTransfers: async () => '[]',
+    cancel: async () => {},
+    retry: async () => {},
+    setDisplayName: async () => {},
+    setPresence: async () => {},
+    localPort: async () => 40001,
+    addListener: () => {},
+    removeListeners: () => {},
+  };
+}
 
 describe('createEngine', () => {
-  it('binds the native module and forwards events as the typed union', async () => {
-    const calls: unknown[][] = [];
-    const fakeNative: NativeDaakSpec = {
-      start: async (...a) => { calls.push(['start', ...a]); },
-      shutdown: async () => { calls.push(['shutdown']); },
-      listDevices: async () => JSON.stringify([]),
-      pairingBundle: async () => '{}',
-      pairWith: async (addr, bytes) => { calls.push(['pairWith', addr, bytes.length]); return '123456'; },
-      acceptPairing: async () => '123456',
-      sendText: async (peer, text) => { calls.push(['sendText', peer, text]); return 'aa'.repeat(16); },
-      sendFiles: async (peer, paths) => { calls.push(['sendFiles', peer, paths]); return 'bb'.repeat(16); },
-      listInbox: async () => '[]',
-      listTransfers: async () => '[]',
-      cancel: async () => {},
-      retry: async () => {},
-      setDisplayName: async () => {},
-      setPresence: async () => {},
-      localPort: async () => 40001,
-      addListener: () => {},
-      removeListeners: () => {},
-    };
-    let handler: ((e: DaakEvent) => void) | null = null;
-    const subscribe = (cb: (e: DaakEvent) => void) => { handler = cb; return () => { handler = null; }; };
+  beforeEach(() => resetStub());
 
-    const engine = createEngine(fakeNative, subscribe);
+  it('binds the native module and decodes the { event: json } payload', async () => {
+    const calls: unknown[][] = [];
+    const native = fakeNative(calls);
+    // A list, not a `let handler`: the only assignment happens inside a closure
+    // TS cannot see, so a narrowed `let` collapses to `never` and fails to
+    // compile. Indexing the list keeps the type honest and the check real.
+    const subscribed: Parameters<EventSubscribe>[0][] = [];
+    const subscribe: EventSubscribe = (cb) => {
+      subscribed.push(cb);
+      return () => { subscribed.length = 0; };
+    };
+
+    const engine = createEngine(native, subscribe);
     const seen: DaakEvent[] = [];
     engine.on((e) => seen.push(e));
     await engine.start();
-    (handler as unknown as (e: DaakEvent) => void)({ type: 'transfer.progress', transferId: 't', bytesDone: 1, bytesTotal: 2 });
+    expect(subscribed).toHaveLength(1);
+    subscribed[0](nativePayload);
 
     expect(calls[0][0]).toBe('start');
-    expect(seen).toEqual([{ type: 'transfer.progress', transferId: 't', bytesDone: 1, bytesTotal: 2 }]);
+    expect(seen).toEqual([PROGRESS]);
+  });
+
+  // The regression this guards: an adapter that re-wraps the payload before
+  // InProcessEngine unwraps it drops EVERY event in production, while an
+  // injected double that hands over a bare DaakEvent still passes.
+  it('delivers events end to end through bindDaakEvents and the RN emitter', async () => {
+    const calls: unknown[][] = [];
+    const native = fakeNative(calls);
+    const engine = createEngine(native, bindDaakEvents(native));
+    const seen: DaakEvent[] = [];
+    engine.on((e) => seen.push(e));
+
+    emit('DaakEvent', nativePayload);
+
+    expect(seen).toEqual([PROGRESS]);
+  });
+
+  it('stops delivering after the disposer runs', () => {
+    const native = fakeNative([]);
+    const engine = createEngine(native, bindDaakEvents(native));
+    const seen: DaakEvent[] = [];
+    const off = engine.on((e) => seen.push(e));
+    off();
+    emit('DaakEvent', nativePayload);
+    expect(seen).toEqual([]);
   });
 });

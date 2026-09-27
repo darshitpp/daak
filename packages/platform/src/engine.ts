@@ -1,27 +1,25 @@
 import { NativeEventEmitter } from 'react-native';
 import { InProcessEngine, NativeDaak } from '@daak/core';
-import type { DaakEngine, DaakEvent } from '@daak/core';
+import type { DaakEngine } from '@daak/core';
+// InProcessEngine's subscribe contract. Deliberately NOT re-declared: it takes
+// the raw native payload -- an object { event: <json> } from Daak.swift:147 /
+// DaakModule.kt -- and InProcessEngine itself unwraps and validates it. A
+// re-declared type here is how the previous adapter hid that and killed every
+// event in production.
+export type { EventSubscribe } from '@daak/core/src/engine/InProcess';
+import type { EventSubscribe } from '@daak/core/src/engine/InProcess';
 
-/** Typed event bridge: callbacks see a decoded DaakEvent, never a raw string. */
-export type EventSubscribe = (cb: (e: DaakEvent) => void) => () => void;
-
-export function bindDaakEvents(
-  native: { addListener(name: string): void; removeListeners(count: number): void },
-): EventSubscribe {
-  const emitter = new NativeEventEmitter(native as never);
+export function bindDaakEvents(native: { addListener(name: string): void; removeListeners(count: number): void }): EventSubscribe {
+  const emitter = new NativeEventEmitter(native);
   return (cb) => {
     const sub = emitter.addListener('DaakEvent', cb);
     return () => sub.remove();
   };
 }
 
-// InProcessEngine's own subscribe is the raw-string one (it JSON.parses the
-// native payload and validates `type`). createEngine is the single adapter
-// between that contract and the DaakEvent-typed one above, so nothing else in
-// the app has to know the wire is JSON.
 export function createEngine(
   native: typeof NativeDaak = NativeDaak,
   subscribe: EventSubscribe = bindDaakEvents(native),
 ): DaakEngine {
-  return new InProcessEngine(native, (cb) => subscribe((e) => cb(JSON.stringify(e))));
+  return new InProcessEngine(native, subscribe);
 }
