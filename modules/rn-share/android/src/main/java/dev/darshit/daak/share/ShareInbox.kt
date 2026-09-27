@@ -13,6 +13,9 @@ object ShareInbox {
 
   fun dir(ctx: Context): File = File(ctx.filesDir, DIR).apply { mkdirs() }
 
+  /** Batch metadata only, scanned non-recursively. See [appendItem]. */
+  private fun batchesDir(ctx: Context): File = File(dir(ctx), "batches").apply { mkdirs() }
+
   fun copyToCache(ctx: Context, uri: Uri): File {
     val name = uri.lastPathSegment?.substringAfterLast('/') ?: "payload"
     val out = File(dir(ctx), UUID.randomUUID().toString() + "-" + name)
@@ -32,7 +35,12 @@ object ShareInbox {
       .apply { if (!text.isNullOrEmpty()) put("text", text) })
 
   private fun appendItem(ctx: Context, item: JSONObject) {
-    val final = File(dir(ctx), UUID.randomUUID().toString() + ".json")
+    // Batches live in their own subdir, never beside the staged payload files.
+    // A suffix filter is not enough: a shared file called "report.batch" is
+    // staged as "<uuid>-report.batch" and would still be read as a batch. A
+    // directory cannot collide, and the drain lists this dir NON-recursively,
+    // so a shared file is never mistaken for metadata.
+    val final = File(batchesDir(ctx), UUID.randomUUID().toString() + ".json")
     // Write-then-rename: a process killed mid-write leaves a .tmp that drainToJson
     // ignores, never a truncated .json that looks valid.
     val tmp = File(final.path + ".tmp")
@@ -42,7 +50,7 @@ object ShareInbox {
 
   fun drainToJson(ctx: Context): String {
     val merged = JSONArray()
-    dir(ctx).listFiles { f -> f.extension == "json" }?.forEach { batch ->
+    batchesDir(ctx).listFiles()?.forEach { batch ->
       val parsed = runCatching {
         val arr = JSONArray(batch.readText())
         arr

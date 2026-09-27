@@ -17,12 +17,6 @@ if linkage != nil
   use_frameworks! :linkage => linkage.to_sym
 end
 
-# The share extension is pure UIKit + the App Group inbox. No RN, no pods: it
-# stages bytes/text and never talks to the engine. Declared so CocoaPods does
-# not complain about a project target it has never been told about.
-target 'DaakShareExtension' do
-end
-
 target 'Daak' do
   config = use_native_modules!
 

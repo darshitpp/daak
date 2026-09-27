@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 private let kDarwinShareInboxChanged = "dev.darshit.daak.share.inbox.changed"
 private let kAppGroup = "group.dev.darshit.daak"
 private let kInboxDir = "share-inbox"
+private let kBatchDir = "batches"
 
 final class ShareViewController: UIViewController {
   override func viewDidAppear(_ animated: Bool) {
@@ -20,7 +21,13 @@ final class ShareViewController: UIViewController {
             .containerURL(forSecurityApplicationGroupIdentifier: kAppGroup)
     else { return finish() }
     let inbox = container.appendingPathComponent(kInboxDir, isDirectory: true)
-    try? FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+    // No inbox, no share. Falling through would write an empty batch and tell
+    // the user a file was shared when nothing was staged anywhere.
+    do {
+      try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+    } catch {
+      return finish()
+    }
 
     var items: [[String: String]] = []
     for input in ext.inputItems {
@@ -35,10 +42,19 @@ final class ShareViewController: UIViewController {
       }
     }
 
-    let batch = inbox.appendingPathComponent(UUID().uuidString + ".json")
-    if let data = try? JSONSerialization.data(withJSONObject: items) {
-      try? data.write(to: batch, options: .atomic)
-    }
+    // Batches live in their own subdir, never beside the staged payload files. A
+    // suffix filter is not enough: a shared file called "report.batch" would be
+    // staged as "<uuid>-report.batch" and still be read as a batch. A directory
+    // cannot collide, and the drain scans it NON-recursively.
+    let batchDir = inbox.appendingPathComponent(kBatchDir, isDirectory: true)
+    do { try FileManager.default.createDirectory(at: batchDir, withIntermediateDirectories: true) }
+    catch { return finish() }
+    let batch = batchDir.appendingPathComponent(UUID().uuidString + ".json")
+    // Staging failed: the copied bytes would be orphans nobody can find, so do
+    // NOT notify and do not claim success. Just close the sheet.
+    guard let data = try? JSONSerialization.data(withJSONObject: items),
+          (try? data.write(to: batch, options: .atomic)) != nil
+    else { return finish() }
     notifyHost()
     finish()
   }

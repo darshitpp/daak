@@ -2,9 +2,37 @@ import Foundation
 import React
 import UIKit
 
+private let kDarwinShareInboxChanged = "dev.darshit.daak.share.inbox.changed"
+
 @objc(DaakShare)
 class DaakShare: NSObject {
   @objc static func requiresMainQueueSetup() -> Bool { true }
+
+  /// The share extension posts this Darwin notification when it has staged
+  /// something. All this observer does is record that the inbox moved, so a
+  /// later drain knows to look; handing the drained items to the engine is
+  /// Tasks 7/9/11's job, not this task's.
+  private var inboxDirty = false
+
+  /// True once the extension has signalled a staging. Read by the drain; the
+  /// consumer that turns drained items into engine work lands in Tasks 7/9/11.
+  @objc var hasPendingInbox: Bool {
+    get { inboxDirty }
+    set { inboxDirty = newValue }
+  }
+
+  override init() {
+    super.init()
+    CFNotificationCenterAddObserver(
+      CFNotificationCenterGetDarwinNotifyCenter(),
+      Unmanaged.passUnretained(self).toOpaque(),
+      { _, observer, _, _, _ in
+        guard observer != nil else { return }
+        let me = Unmanaged<DaakShare>.fromOpaque(observer!).takeUnretainedValue()
+        me.inboxDirty = true
+      },
+      kDarwinShareInboxChanged as CFString, nil, .deliverImmediately)
+  }
 
   @objc func present(_ text: String, urls: [String], mime: String,
                      resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
@@ -47,8 +75,11 @@ class DaakShare: NSObject {
       return
     }
     let inbox = container.appendingPathComponent("share-inbox", isDirectory: true)
-    let batches = ((try? fm.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? [])
-      .filter { $0.pathExtension == "json" }
+    // Batches have their own subdir so a staged payload file can never be read
+    // as metadata. A suffix filter cannot do this: a shared "report.batch" is
+    // staged as "<uuid>-report.batch". Scanned non-recursively.
+    let batchDir = inbox.appendingPathComponent("batches", isDirectory: true)
+    let batches = ((try? fm.contentsOfDirectory(at: batchDir, includingPropertiesForKeys: nil)) ?? [])
     var merged: [[String: String]] = []
     for batch in batches {
       // Delete ONLY after a successful parse: a batch we cannot read holds the
@@ -56,23 +87,38 @@ class DaakShare: NSObject {
       guard let data = try? Data(contentsOf: batch),
             let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: String]]
       else { continue }
+      // A file item whose move FAILED is still described only by this batch:
+      // the relative staged path is meaningless to JS (it has no App Group
+      // container URL). Deleting the batch would therefore destroy the last
+      // pointer to bytes nothing else can find. So the batch is kept until
+      // every file in it has landed in Documents, and its already-moved items
+      // are still reported (moveItem is skipped next time for a missing src).
+      var allFilesMoved = true
       for var item in arr {
         if item["kind"] == "file", let rel = item["path"],
            let docs = try? fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
           let src = inbox.appendingPathComponent(rel)
           let dest = docs.appendingPathComponent(rel)
-          // moveItem fails when dest already exists, so replace in that case
-          // rather than stranding the staged bytes.
-          let moved = fm.fileExists(atPath: dest.path)
-            ? ((try? fm.replaceItemAt(dest, withItemAt: src)) != nil)
-            : ((try? fm.moveItem(at: src, to: dest)) != nil)
-          if moved { item["path"] = dest.path }
-          // A failed move leaves item["path"] at the staged file, which still
-          // exists in the App Group and is still readable by the host.
+          let moved: Bool
+          if !fm.fileExists(atPath: src.path) && fm.fileExists(atPath: dest.path) {
+            // Already moved by an earlier drain that could not retire the batch.
+            // The absolute path is the whole reason this can be recognised.
+            moved = true
+          } else if fm.fileExists(atPath: dest.path) {
+            // moveItem fails when dest already exists, so replace instead.
+            moved = (try? fm.replaceItemAt(dest, withItemAt: src)) != nil
+          } else {
+            moved = (try? fm.moveItem(at: src, to: dest)) != nil
+          }
+          if moved {
+            item["path"] = dest.path
+          } else {
+            allFilesMoved = false
+          }
         }
         merged.append(item)
       }
-      try? fm.removeItem(at: batch)
+      if allFilesMoved { try? fm.removeItem(at: batch) }
     }
     let json = (try? JSONSerialization.data(withJSONObject: merged)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
     resolve(json)

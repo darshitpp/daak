@@ -9,9 +9,9 @@ export type InboundShareItem =
 
 /**
  * Drain everything the platform share sheet staged in the App Group inbox.
- * This is NOT a send: the engine's outbox picks the items up from here. A
- * batch the native side could not parse is dropped there, not here, so a
- * corrupt payload must never throw into the app.
+ * This is NOT a send. Once Tasks 7/9/11 land, the engine's outbox is what will
+ * pick these items up. A batch the native side could not parse is dropped
+ * there, not here, so a corrupt payload must never throw into the app.
  */
 export async function consumePendingShare(): Promise<InboundShareItem[]> {
   const raw = await NativeDaakShare.consumePendingInbox();
