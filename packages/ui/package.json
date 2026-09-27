@@ -1,0 +1,31 @@
+{
+  "name": "@daak/ui",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@daak/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18",
+    "react-native": "^0.76"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@react-native/babel-preset": "0.76.5",
+    "@react-native/typescript-config": "0.76.5",
+    "@testing-library/react-native": "^12.7.0",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^26.6.3",
+    "@types/react": "^18.2.6",
+    "jest": "^29.7.0",
+    "react": "18.3.1",
+    "react-native": "0.76.5",
+    "react-test-renderer": "18.3.1",
+    "typescript": "^5.6.0"
+  }
+}
