@@ -212,6 +212,25 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
             if data.transfer_id == hex && data.error == "peer went away"
     ));
 
+    // R116: the ARM that was missing. FfiEvent::TransferItem and its
+    // ffi_event_json mapping both existed, but to_ffi_event had no arm, so the
+    // engine could emit nothing that reached them and the union member was
+    // unreachable from JS.
+    let item = to_ffi_event(EngineEvent::TransferItem {
+        transfer_id: id,
+        item_index: 2,
+        state: "quarantined".into(),
+        dest_path: Some("/data/daak/downloads/quarantine/ab/bad.bin".into()),
+    });
+    assert!(matches!(
+        item,
+        FfiEvent::TransferItem { data }
+            if data.transfer_id == hex
+                && data.item_index == 2
+                && data.state == "quarantined"
+                && data.dest_path == "/data/daak/downloads/quarantine/ab/bad.bin"
+    ));
+
     // C1: the ARM that was missing. to_ffi_event had no InboxReceived arm at
     // all, so the engine's event (once it existed) could never reach JS. The
     // payload must be the SAME InboxEntry JSON list_inbox returns -- built by

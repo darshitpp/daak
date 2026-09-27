@@ -573,6 +573,67 @@ fn a_corrupt_saved_paths_reaches_the_ipc_client_as_null_not_an_empty_list() {
     assert!(json["savedPaths"].is_null());
 }
 
+/// CONTRACT (daakd's half, and the mirror of the daak-ffi test): the item event
+/// must land on IpcEvent::TransferItem carrying the SAME FOUR fields the FFI arm
+/// sends, so the desktop and mobile views of one logical event cannot drift.
+///
+/// The None -> "" case is the one that would otherwise diverge silently: a
+/// non-binary item is never materialised, and both bridges must spell that
+/// absence the same way rather than one sending null and the other "".
+#[tokio::test]
+async fn a_transfer_item_event_reaches_the_ipc_client_with_the_same_four_fields_as_ffi() {
+    let id = [0x11u8; 16];
+    let hex = hex::encode(id);
+    let IpcEvent::TransferItem {
+        transfer_id,
+        item_index,
+        state,
+        dest_path,
+    } = daakd::to_ipc_event(EngineEvent::TransferItem {
+        transfer_id: id,
+        item_index: 2,
+        state: "quarantined".into(),
+        dest_path: Some("/data/daak/downloads/quarantine/ab/bad.bin".into()),
+    })
+    else {
+        panic!("expected a transfer item event");
+    };
+    assert_eq!(transfer_id, hex);
+    assert_eq!(item_index, 2);
+    assert_eq!(state, "quarantined");
+    assert_eq!(dest_path, "/data/daak/downloads/quarantine/ab/bad.bin");
+
+    // A text item: never materialised, so no path. Both bridges use "" here --
+    // NOT null, because DaemonClient reads dest_path with str() and would throw.
+    let IpcEvent::TransferItem { dest_path, .. } = daakd::to_ipc_event(EngineEvent::TransferItem {
+        transfer_id: id,
+        item_index: 0,
+        state: "done".into(),
+        dest_path: None,
+    }) else {
+        panic!("expected a transfer item event");
+    };
+    assert_eq!(
+        dest_path, "",
+        "a text item must encode an absent path as empty"
+    );
+
+    // It must survive the real encoder, like every other IpcEvent.
+    let mut buf = Vec::new();
+    daak_ipc::write_message(
+        &mut buf,
+        &IpcMessage::Event(IpcEvent::TransferItem {
+            transfer_id: hex,
+            item_index: 2,
+            state: "done".into(),
+            dest_path: String::new(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(!buf.is_empty());
+}
+
 // SHOULD-FIX 5: the ONE link between an EngineEvent and a subscribed IPC client
 // was untested, because bridge_events took an &Engine and a real Engine cannot
 // emit a single event without a second peer on the LAN. It now takes the

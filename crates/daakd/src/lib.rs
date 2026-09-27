@@ -182,6 +182,25 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
             bytes_done,
             bytes_total,
         },
+        // The ARM that the exhaustive match demands, and DELIBERATELY identical
+        // to the daak-ffi to_ffi_event arm: the same four fields, the same
+        // None -> String::new() for a never-materialised item. This is ONE
+        // logical event on TWO transports, not a coincidence -- if the two
+        // bridges ever disagree, mobile and desktop show different facts about
+        // the same received file. IpcEvent::TransferItem already existed
+        // (daak-ipc/src/lib.rs:181-186) and is unchanged, so no IpcRequest
+        // variant and no new wire field, and no IPC_MINOR bump.
+        EngineEvent::TransferItem {
+            transfer_id,
+            item_index,
+            state,
+            dest_path,
+        } => IpcEvent::TransferItem {
+            transfer_id: hex::encode(transfer_id),
+            item_index,
+            state,
+            dest_path: dest_path.unwrap_or_default(),
+        },
         EngineEvent::TransferDone { transfer_id } => IpcEvent::TransferDone {
             transfer_id: hex::encode(transfer_id),
         },

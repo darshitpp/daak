@@ -7,6 +7,7 @@ use crate::control::{ControlMsg, Hello};
 use crate::crypto::noise::session_prologue;
 use crate::crypto::noise::HandshakeDriver;
 use crate::crypto::session::SecureSession;
+use crate::engine::EngineEvent;
 use crate::error::Result;
 use crate::framing::{Frame, RecordType};
 use crate::manifest::Manifest;
@@ -182,12 +183,13 @@ pub async fn recv_secure_transfer<T: FrameTransport + Send>(
     initiator_static: &[u8; 32],
     out_dir: &Path,
     db: Option<&Db>,
+    on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
     let prologue = session_prologue(&x25519_public(static_secret), initiator_static);
     let driver = HandshakeDriver::responder(static_secret, &prologue)?;
     let (tx, rx, _hash) = complete_handshake(conn, driver, false).await?;
     let mut secure = SecureConnection::new(conn, tx, rx);
-    receive_transfer(&mut secure, out_dir, |_| {}, db).await
+    receive_transfer(&mut secure, out_dir, |_| {}, db, on_item).await
 }
 
 fn x25519_public(secret: &[u8; 32]) -> [u8; 32] {
@@ -385,7 +387,7 @@ mod tests {
                 .unwrap();
         });
 
-        let got = recv_secure_transfer(&mut mine, &b_secret, &a_pub, dst.path(), Some(&db))
+        let got = recv_secure_transfer(&mut mine, &b_secret, &a_pub, dst.path(), Some(&db), |_| {})
             .await
             .unwrap();
         sender.await.unwrap();

@@ -722,6 +722,27 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 bytes_total,
             },
         },
+        // The ARM that was missing: FfiEvent::TransferItem and the
+        // ffi_event_json mapping for it both existed, but nothing could produce
+        // the event, so the union member was unreachable from JS.
+        EngineEvent::TransferItem {
+            transfer_id,
+            item_index,
+            state,
+            dest_path,
+        } => FfiEvent::TransferItem {
+            data: TransferItemEvent {
+                transfer_id: to_hex(&transfer_id),
+                item_index,
+                state,
+                // TransferItemEvent.dest_path is a plain string, and the
+                // daemon's IpcEvent::TransferItem is too, so None becomes the
+                // empty string -- the same convention to_pairing_sas_event uses
+                // for an unknown peer id. NOT null: DaemonClient reads this
+                // with str(), which throws on a null.
+                dest_path: dest_path.unwrap_or_default(),
+            },
+        },
         EngineEvent::TransferDone { transfer_id } => FfiEvent::TransferDone {
             data: DoneEvent {
                 transfer_id: to_hex(&transfer_id),

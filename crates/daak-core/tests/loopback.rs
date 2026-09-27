@@ -40,7 +40,7 @@ async fn transfers_four_gibibytes_with_bounded_memory() {
     });
 
     let mut conn = tcp::dial(addr).await.unwrap();
-    receive_transfer(&mut conn, dst.path(), |_| {}, None)
+    receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
         .await
         .unwrap();
     sender.await.unwrap();
@@ -97,7 +97,7 @@ async fn a_hundred_file_batch_roundtrips_over_tcp() {
     });
 
     let mut conn = tcp::dial(addr).await.unwrap();
-    let got = receive_transfer(&mut conn, dst.path(), |_| {}, None)
+    let got = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
         .await
         .unwrap();
     sender.await.unwrap();

@@ -59,6 +59,26 @@ pub enum EngineEvent {
         bytes_done: u64,
         bytes_total: u64,
     },
+    /// One inbound ITEM settled. Emitted from receive_transfer's per-item loop
+    /// right after that item's row is persisted, so an event never names a row
+    /// that does not exist.
+    ///
+    /// Exactly the four fields BOTH bridges already carry: IpcEvent::TransferItem
+    /// (crates/daak-ipc/src/lib.rs:181-186) and FfiEvent's TransferItemEvent
+    /// (crates/daak-ffi/src/lib.rs:73-78) use the same four. A name field
+    /// exists on ItemRow and would be free here, but adding it to only one
+    /// bridge is exactly the per-bridge drift the Phase 4 rulings forbid -- the
+    /// desktop and mobile views of one logical event must not differ. Whoever
+    /// wires the name adds it to BOTH sides in one change.
+    ///
+    /// dest_path is None for a non-binary item, which is never materialised: a
+    /// path there would name a file that can never exist.
+    TransferItem {
+        transfer_id: [u8; 16],
+        item_index: u32,
+        state: String,
+        dest_path: Option<String>,
+    },
     TransferDone {
         transfer_id: [u8; 16],
     },
@@ -823,6 +843,9 @@ impl Engine {
             &pairing.static_dh_pub,
             out_dir,
             Some(db),
+            |ev| {
+                let _ = tx.send(ev);
+            },
         )
         .await
         {

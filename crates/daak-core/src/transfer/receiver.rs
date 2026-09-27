@@ -4,6 +4,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use crate::chunk::ChunkBitmap;
 use crate::control::AckMsg;
+use crate::engine::EngineEvent;
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
 use crate::hash::blake2b256_reader;
@@ -65,6 +66,7 @@ pub async fn receive_transfer<T: FrameTransport>(
     out_dir: &Path,
     mut on_progress: impl FnMut(u64),
     db: Option<&Db>,
+    mut on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
     let manifest = loop {
         match conn.recv().await? {
@@ -303,6 +305,25 @@ pub async fn receive_transfer<T: FrameTransport>(
         let mut bytes_done = 0u64;
         for item in &manifest.items {
             let quarantined = failed.contains(&item.index);
+            // Computed ONCE and used for BOTH the row and the event below, so
+            // the two can never name two different files.
+            //
+            // Non-binary items are never materialised, so a dest_path for them
+            // would point at a file that can never exist.
+            let dest_path: Option<String> = if !item.is_binary() {
+                None
+            } else {
+                let dest = match held_paths.iter().find(|(i, _)| *i == item.index) {
+                    Some((_, p)) => p.clone(),
+                    None => item_output_path(out_dir, item)?,
+                };
+                dest.to_str().map(|s| s.to_string())
+            };
+            // W-FW-1: "done", not "received" - spec 4.2 enumerates the only
+            // legal transfer_items.state values and "received" is not one of
+            // them. The DB is the source of truth, so an undocumented value
+            // here is a breaking contract for Phase 4.
+            let state = if quarantined { "quarantined" } else { "done" };
             db.upsert_item(&ItemRow {
                 transfer_id: manifest.payload_id,
                 item_index: item.index,
@@ -311,27 +332,18 @@ pub async fn receive_transfer<T: FrameTransport>(
                 mime: item.mime.clone(),
                 size: item.size,
                 hash: item.hash,
-                // Non-binary items are never materialised, so a dest_path for
-                // them would point at a file that can never exist.
-                dest_path: if !item.is_binary() {
-                    None
-                } else {
-                    let dest = match held_paths.iter().find(|(i, _)| *i == item.index) {
-                        Some((_, p)) => p.clone(),
-                        None => item_output_path(out_dir, item)?,
-                    };
-                    dest.to_str().map(|s| s.to_string())
-                },
-                // W-FW-1: "done", not "received" - spec 4.2 enumerates the
-                // only legal transfer_items.state values and "received" is
-                // not one of them. The DB is the source of truth, so an
-                // undocumented value here is a breaking contract for Phase 4.
-                state: if quarantined {
-                    "quarantined".into()
-                } else {
-                    "done".into()
-                },
+                dest_path: dest_path.clone(),
+                state: state.into(),
             })?;
+            // AFTER the write, not before: an event for a row that does not
+            // exist is a lie, and this whole block is inside `if let Some(db)`
+            // so with no db there is no row and no event.
+            on_item(EngineEvent::TransferItem {
+                transfer_id: manifest.payload_id,
+                item_index: item.index,
+                state: state.into(),
+                dest_path,
+            });
             if !quarantined {
                 bytes_done += item.size.unwrap_or(0);
             }
@@ -392,6 +404,7 @@ pub async fn receive_transfer<T: FrameTransport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::EngineEvent;
     use crate::framing::RecordType;
     use crate::manifest::{DeviceRef, Item, ItemType, PayloadKind};
     use crate::net::secure::{MemConn, SecureConnection};
@@ -421,9 +434,186 @@ mod tests {
             .unwrap();
         });
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, out, |_| {}, None).await;
+        let res = receive_transfer(&mut conn, out, |_| {}, None, |_| {}).await;
         sender.await.unwrap();
         res
+    }
+
+    // ---- R116: the per-item EngineEvent the UI's ReceivedItemRow renders ----
+
+    /// Drive receive_transfer and collect the EngineEvents it emits, so the
+    /// emit site itself is under test rather than a hand-built event.
+    async fn receive_collecting_events<T: FrameTransport>(
+        conn: &mut T,
+        out_dir: &std::path::Path,
+        db: Option<&Db>,
+    ) -> (Result<Manifest>, Vec<EngineEvent>) {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(64);
+        let res = receive_transfer(
+            conn,
+            out_dir,
+            |_| {},
+            db,
+            |ev| {
+                let _ = tx.send(ev);
+            },
+        )
+        .await;
+        let mut evs = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            evs.push(ev);
+        }
+        (res, evs)
+    }
+
+    fn item_events(evs: &[EngineEvent], id: [u8; 16]) -> Vec<(u32, String, Option<String>)> {
+        evs.iter()
+            .filter_map(|e| match e {
+                EngineEvent::TransferItem {
+                    transfer_id,
+                    item_index,
+                    state,
+                    dest_path,
+                } if *transfer_id == id => Some((*item_index, state.clone(), dest_path.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A GOOD item emits 'done' with the path it actually wrote to -- the same
+    /// expression the ItemRow literal uses, so the event and the row cannot
+    /// drift into naming two different files.
+    #[tokio::test]
+    async fn emits_a_transfer_item_event_per_good_item_with_its_real_path() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("ok.bin");
+        std::fs::write(&path, vec![5u8; 40_000]).unwrap();
+
+        let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            crate::transfer::send_transfer(&mut theirs, &m, &[Some(path)], &[], |_| {})
+                .await
+                .unwrap();
+        });
+
+        let (_, evs) = receive_collecting_events(&mut mine, dst.path(), Some(&db)).await;
+        sender.await.unwrap();
+
+        let got = item_events(&evs, manifest.payload_id);
+        assert_eq!(got.len(), 1, "exactly one event per item, got {got:?}");
+        assert_eq!(got[0].0, 0);
+        assert_eq!(got[0].1, "done");
+        // The REAL dest_path, identical to the persisted row's, not a guess.
+        assert_eq!(
+            got[0].2.as_deref(),
+            db.list_items(&manifest.payload_id).unwrap()[0]
+                .dest_path
+                .as_deref()
+        );
+        assert!(got[0].2.as_deref().unwrap().ends_with("ok.bin"));
+    }
+
+    /// A hash-mismatched item emits 'quarantined' and the HELD path, not the
+    /// final path it no longer occupies.
+    #[tokio::test]
+    async fn emits_quarantined_with_the_held_path_for_a_hash_failed_item() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let bad = src.path().join("bad.bin");
+        std::fs::write(&bad, vec![1u8; 40_000]).unwrap();
+
+        let mut bad_item = Item::from_file(0, &bad, 64 * 1024).unwrap();
+        bad_item.hash = Some([0u8; 32]);
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![bad_item]);
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let _ =
+                crate::transfer::send_transfer(&mut theirs, &m, &[Some(bad)], &[], |_| {}).await;
+        });
+
+        let (res, evs) = receive_collecting_events(&mut mine, dst.path(), Some(&db)).await;
+        sender.await.unwrap();
+        res.unwrap();
+
+        let got = item_events(&evs, manifest.payload_id);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, "quarantined");
+        let dest = got[0].2.as_deref().expect("a held path is a real path");
+        assert!(dest.contains("quarantine"), "got {dest}");
+        assert!(Path::new(dest).exists(), "the held file must exist: {dest}");
+    }
+
+    /// A TEXT item is never materialised, so its event must carry dest_path
+    /// None. Copying the binary branch here is the silent break: the event
+    /// would name a file that can never exist, which is exactly what the
+    /// ItemRow comment at receiver.rs:314-317 refuses to do.
+    #[tokio::test]
+    async fn emits_a_text_item_with_no_dest_path() {
+        let dst = tempfile::tempdir().unwrap();
+        let manifest = Manifest::new(
+            PayloadKind::Text,
+            dev(),
+            vec![Item::text(0, "hello from the other device")],
+        );
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            crate::transfer::send_transfer(&mut theirs, &m, &[None], &[], |_| {})
+                .await
+                .unwrap();
+        });
+
+        let (_, evs) = receive_collecting_events(&mut mine, dst.path(), Some(&db)).await;
+        sender.await.unwrap();
+
+        let got = item_events(&evs, manifest.payload_id);
+        assert_eq!(got.len(), 1, "got {got:?}");
+        assert_eq!(got[0].1, "done");
+        assert_eq!(
+            got[0].2, None,
+            "a text item is never materialised, so it has no dest_path"
+        );
+    }
+
+    /// With db:None there is no row, so an event claiming one would be a lie.
+    #[tokio::test]
+    async fn emits_no_item_event_without_a_db() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("ok.bin");
+        std::fs::write(&path, vec![5u8; 40_000]).unwrap();
+        let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            crate::transfer::send_transfer(&mut theirs, &m, &[Some(path)], &[], |_| {})
+                .await
+                .unwrap();
+        });
+
+        let (_, evs) = receive_collecting_events(&mut mine, dst.path(), None).await;
+        sender.await.unwrap();
+
+        assert!(
+            item_events(&evs, manifest.payload_id).is_empty(),
+            "no db means no persisted row, so no row-claiming event: {evs:?}"
+        );
     }
 
     #[tokio::test]
@@ -453,7 +643,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let got = receive_transfer(&mut conn, dst.path(), |_| {}, None)
+        let got = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
             .await
             .unwrap();
         sender.await.unwrap();
@@ -483,7 +673,7 @@ mod tests {
                     .await;
         });
 
-        let res = receive_transfer(&mut mine, dst.path(), |_| {}, None).await;
+        let res = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Transfer(_))));
         assert!(
@@ -538,7 +728,7 @@ mod tests {
             .await;
         });
 
-        let got = receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db))
+        let got = receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db), |_| {})
             .await
             .unwrap();
         sender.await.unwrap();
@@ -610,7 +800,7 @@ mod tests {
                 .unwrap();
         });
 
-        receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db))
+        receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db), |_| {})
             .await
             .unwrap();
         sender.await.unwrap();
@@ -671,7 +861,7 @@ mod tests {
             .await;
         });
 
-        let res = receive_transfer(&mut mine, dst.path(), |_| {}, None).await;
+        let res = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
         sender.await.unwrap();
 
         match res {
@@ -720,7 +910,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        receive_transfer(&mut mine, dst.path(), |_| {}, None)
+        receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {})
             .await
             .unwrap();
         sender.await.unwrap();
@@ -751,7 +941,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        receive_transfer(&mut mine2, dst.path(), |_| {}, None)
+        receive_transfer(&mut mine2, dst.path(), |_| {}, None, |_| {})
             .await
             .unwrap();
         sender2.await.unwrap();
@@ -786,7 +976,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None).await;
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {}).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
     }
@@ -819,7 +1009,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None).await;
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {}).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
         let written = dst.path().join("o.bin");
@@ -858,7 +1048,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        receive_transfer(&mut conn, dst.path(), |_| {}, None)
+        receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
             .await
             .unwrap();
         sender.await.unwrap();
@@ -897,7 +1087,7 @@ mod tests {
         });
 
         let mut conn = tcp::dial(addr).await.unwrap();
-        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None).await;
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {}).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
     }

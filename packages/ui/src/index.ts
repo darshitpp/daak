@@ -3,6 +3,7 @@ export { AppShell } from './components/AppShell';
 export { TabBar, type Tab } from './components/TabBar';
 export { DeviceCard } from './components/DeviceCard';
 export { ProgressRow } from './components/ProgressRow';
+export { ReceivedItemRow, type ReceivedItemView } from './components/ReceivedItemRow';
 export { AttachmentPicker } from './components/AttachmentPicker';
 export { QrView } from './components/QrView';
 export { ComposerBar } from './components/ComposerBar';

@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import type { ItemState, TransferSummary } from '@daak/core';
+import type { TransferSummary } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { ProgressRow } from '../components/ProgressRow';
+import { ReceivedItemRow, type ReceivedItemView } from '../components/ReceivedItemRow';
 
 export function TransferProgressScreen({ transferId }: { transferId: string }) {
   const engine = useEngine();
   const [summary, setSummary] = useState<TransferSummary | null>(null);
-  const [itemStates, setItemStates] = useState<ItemState[]>([]);
+  const [items, setItems] = useState<ReceivedItemView[]>([]);
 
   useEffect(() => {
     void engine.listTransfers().then((all) => {
@@ -18,10 +19,9 @@ export function TransferProgressScreen({ transferId }: { transferId: string }) {
         setSummary((prev) => prev && { ...prev, bytesDone: e.bytesDone, bytesTotal: e.bytesTotal });
       }
       if (e.type === 'transfer.item' && e.transferId === transferId) {
-        setItemStates((prev) => {
-          const next = [...prev];
-          next[e.itemIndex] = e.state;
-          return next;
+        setItems((prev) => {
+          const rest = prev.filter((i) => i.itemIndex !== e.itemIndex);
+          return [...rest, { transferId: e.transferId, itemIndex: e.itemIndex, state: e.state }];
         });
       }
     });
@@ -33,7 +33,18 @@ export function TransferProgressScreen({ transferId }: { transferId: string }) {
         <ProgressRow name={summary.kind} bytesDone={summary.bytesDone} bytesTotal={summary.bytesTotal}
           state={summary.state} />
       ) : null}
-      {itemStates.map((s, i) => s ? <ProgressRow key={i} name={`item ${i}`} bytesDone={0} bytesTotal={0} state={s} /> : null)}
+      {/*
+        NO onRetry: `Engine::retry_item` is real in Rust (engine.rs:700) but is
+        bound in neither the UDL nor the IpcRequest enum, so there is no call to
+        make. ReceivedItemRow hides Retry when no callback is supplied, which is
+        the honest rendering of "retry is not reachable yet" (R115(b)).
+
+        NO ProgressRow either: it takes byte counts, and `transfer.item` carries
+        none, so it would render a permanent "0%" on every moving file (R16).
+      */}
+      {items.map((i) => (
+        <ReceivedItemRow key={i.itemIndex} item={i} />
+      ))}
     </View>
   );
 }
