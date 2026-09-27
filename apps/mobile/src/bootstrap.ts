@@ -1,15 +1,38 @@
-import { consumePendingShare, createEngine } from '@daak/platform';
+import { consumeIntentSends, consumePendingShare, createEngine, syncShortcutTargets } from '@daak/platform';
 import type { DaakEngine } from '@daak/core';
 import type { InboundShareItem } from '@daak/platform';
 
 export const engine: DaakEngine = createEngine();
 
-// Nothing calls this yet either: `engine` is constructed eagerly at import, so
-// the TurboModule resolves, but it is never started until the app owns a
-// lifecycle. See the R22 note on drainInbound below for why the mount-time
-// drain that used to live here was removed.
+// Still nothing calls this: `engine` is constructed eagerly at import so the
+// TurboModule resolves, but it is never started until the app owns a
+// lifecycle. That is what R22's "App must not drain on mount" test pins --
+// App.tsx renders and nothing else. When an owner appears it must call this once.
 export async function startEngine(): Promise<void> {
   await engine.start();
+  // R26: the peer list has to reach the App Group pairedDevices key, because
+  // DaakIntentBridge.devices() is what answers Siri's entity query and it has no
+  // other way to learn it. syncShortcutTargets is the only writer on both
+  // platforms (Android dynamic shortcuts, iOS App Group defaults). Re-run on
+  // pairing.done so a fresh peer shows up in Siri without an app relaunch.
+  const publish = () =>
+    engine.devices().then(syncShortcutTargets, () => {
+      /* the engine is not up yet; startEngine's own publish will follow */
+    });
+  await publish();
+  engine.on((e) => {
+    if (e.type === 'pairing.done') void publish();
+  });
+  // R25: the ONE real send call site. ShareTargetActivity and the Siri intent
+  // both stage into share-inbox/intent-sends/ and launch/foreground the app,
+  // so draining here picks them up. consumePendingShare is NOT called: see
+  // drainInbound, which stays unwired for the same reason.
+  // ponytail: this runs once, right after start(). A share that lands while the
+  // engine is still coming up is not drained until the next start(), so the
+  // item stays on disk rather than being lost. Upgrade if that window is real
+  // in use: subscribe to the Darwin-notification wakeup DaakShare already
+  // observes instead of polling once per launch.
+  await drainIntentSends(engine);
 }
 
 /**
@@ -41,14 +64,41 @@ export async function drainInbound(
  * Direct Share (Task 7) names a target device in the share intent, so this arm
  * is the only one with a destination already chosen. Text/file items have no
  * destination and no peer picker exists yet, so they are skipped rather than
- * guessed at. Also unwired -- see drainInbound above.
+ * guessed at. This IS the send call site (R25): it is reached only through
+ * drainIntentSends below, which uses a drain that cannot delete a text/file
+ * batch.
  */
 export async function sendIntentItems(
   engine: DaakEngine,
   items: InboundShareItem[],
 ): Promise<void> {
+  const known = new Set((await engine.devices()).map((d) => d.deviceId));
   for (const item of items) {
     if (item.kind !== 'intent-send') continue;
-    await engine.send({ peerDeviceId: item.deviceId, text: item.text });
+    // ShareTargetActivity is exported, so any app on the device can hand us an
+    // arbitrary deviceId. An unknown peer can never resolve; enqueueing it
+    // anyway fills the outbox with rows that can only fail.
+    if (!known.has(item.deviceId)) continue;
+    // A drain already DELETED the staged file, so one rejected send must not
+    // abandon the rest of the batch: the items are gone from disk either way,
+    // and the honest response is to try them all.
+    try {
+      await engine.send({ peerDeviceId: item.deviceId, text: item.text });
+    } catch {
+      /* dropped: the outbox never saw it and the batch is already retired */
+    }
   }
+}
+
+/**
+ * The R25 send call site: drain ONLY the intent-send subdir and enqueue each
+ * item through the outbox. This is not a blocking transport send --
+ * `engine.send` returns `queued: true` and the outbox owns delivery.
+ *
+ * consumePendingInbox is deliberately NOT used: it is all-or-nothing and would
+ * delete the text/file batches Task 6 staged, orphaning bytes that nothing
+ * routes until Task 11. drainInbound above stays unwired for that reason.
+ */
+export async function drainIntentSends(engine: DaakEngine): Promise<void> {
+  await sendIntentItems(engine, await consumeIntentSends());
 }

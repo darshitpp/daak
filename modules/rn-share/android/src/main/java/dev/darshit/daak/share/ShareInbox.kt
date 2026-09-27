@@ -17,6 +17,17 @@ object ShareInbox {
   /** Batch metadata only, scanned non-recursively. See [appendItem]. */
   private fun batchesDir(ctx: Context): File = File(dir(ctx), "batches").apply { mkdirs() }
 
+  /**
+   * Intent-send items get their OWN subdir, a sibling of [batchesDir] (R25).
+   * Direct Share / Siri name a destination up front, so these are the only
+   * staged items that can be acted on today. Sharing `batches/` would make the
+   * send path reachable only through drainToJson, which is all-or-nothing:
+   * draining it to send one Direct Share would delete the metadata naming every
+   * unrelated text/file batch, and nothing routes those until Task 11. That is
+   * silent data loss on the inbound path.
+   */
+  private fun intentSendsDir(ctx: Context): File = File(dir(ctx), "intent-sends").apply { mkdirs() }
+
   fun copyToCache(ctx: Context, uri: Uri): File {
     val name = uri.lastPathSegment?.substringAfterLast('/') ?: "payload"
     val out = File(dir(ctx), UUID.randomUUID().toString() + "-" + name)
@@ -44,16 +55,18 @@ object ShareInbox {
       .put("name", file.name).put("mime", mime ?: "*/*"))
 
   fun stageIntentSend(ctx: Context, deviceId: String, text: String?) =
-    appendItem(ctx, JSONObject().put("kind", "intent-send").put("deviceId", deviceId)
-      .apply { if (!text.isNullOrEmpty()) put("text", text) })
+    append(JSONObject().put("kind", "intent-send").put("deviceId", deviceId)
+      .apply { if (!text.isNullOrEmpty()) put("text", text) }, intentSendsDir(ctx))
 
-  private fun appendItem(ctx: Context, item: JSONObject) {
+  private fun appendItem(ctx: Context, item: JSONObject) = append(item, batchesDir(ctx))
+
+  private fun append(item: JSONObject, dir: File) {
     // Batches live in their own subdir, never beside the staged payload files.
     // A suffix filter is not enough: a shared file called "report.batch" is
     // staged as "<uuid>-report.batch" and would still be read as a batch. A
     // directory cannot collide, and the drain lists this dir NON-recursively,
     // so a shared file is never mistaken for metadata.
-    val final = File(batchesDir(ctx), UUID.randomUUID().toString() + ".json")
+    val final = File(dir, UUID.randomUUID().toString() + ".json")
     // Write-then-rename: a process killed mid-write leaves a .tmp that
     // drainToJson ignores, never a truncated .json that looks valid.
     val tmp = File(final.path + ".tmp")
@@ -62,13 +75,24 @@ object ShareInbox {
   }
 
   fun drainToJson(ctx: Context): String {
+    return drainDir(batchesDir(ctx)).toString()
+  }
+
+  /**
+   * Drains ONLY the intent-send subdir. It cannot touch a text/file batch: the
+   * directory is a sibling, and the listing is non-recursive, so nothing under
+   * `batches/` is even visible here, let alone deleted.
+   */
+  fun drainIntentSendsToJson(ctx: Context): String = drainDir(intentSendsDir(ctx)).toString()
+
+  private fun drainDir(dir: File): JSONArray {
     val merged = JSONArray()
     // The extension filter is load-bearing, not tidiness. A process killed
     // mid-write leaves "<uuid>.json.tmp" in this dir; a bare listFiles() would
     // read it as a batch, and a complete one would be merged AND deleted (the
     // same item delivered twice), while a truncated one would be re-read and
     // re-fail on every drain forever. Only the rename target is a batch.
-    batchesDir(ctx).listFiles { f -> f.extension == "json" }?.forEach { batch ->
+    dir.listFiles { f -> f.extension == "json" }?.forEach { batch ->
       val parsed = runCatching {
         val arr = JSONArray(batch.readText())
         arr
@@ -81,6 +105,6 @@ object ShareInbox {
         batch.delete()
       }
     }
-    return merged.toString()
+    return merged
   }
 }

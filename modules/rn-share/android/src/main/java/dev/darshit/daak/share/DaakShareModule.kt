@@ -63,6 +63,43 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
 
   override fun consumePendingInbox(promise: Promise) = promise.resolve(ShareInbox.drainToJson(ctx))
 
+  override fun consumeIntentSends(promise: Promise) =
+    promise.resolve(ShareInbox.drainIntentSendsToJson(ctx))
+
+  /**
+   * Publishes the peer list. On Android that means the Direct Share dynamic
+   * shortcuts. The parser lives in the app module (it owns the drawable), so a
+   * bare TurboModule host without that class resolves without syncing instead
+   * of crashing the JS call.
+   */
+  override fun updateShortcutTargets(devicesJson: String, promise: Promise) {
+    try {
+      val sync = Class.forName("dev.darshit.daak.shortcuts.DirectShareShortcuts")
+        .getMethod("sync", android.content.Context::class.java, java.util.List::class.java)
+      sync.invoke(null, ctx, parseDevices(devicesJson))
+      promise.resolve(null)
+    } catch (cnf: ClassNotFoundException) {
+      promise.resolve(null)
+    } catch (t: Throwable) {
+      promise.reject("E_SHORTCUTS", t)
+    }
+  }
+
+  // Returns a raw List, not List<Pair<..>>: reflection has no compile-time view
+  // of the app module's Kotlin generics, so `List<Pair<String,String>>` erases
+  // to List either way. Kotlin sees no unchecked cast here because the built-in
+  // map already produces the exact List<Pair<String,String>> type it wants.
+  private fun parseDevices(json: String): List<Pair<String, String>> {
+    val arr = org.json.JSONArray(json)
+    return (0 until arr.length()).map {
+      val o = arr.getJSONObject(it)
+      // Reflection cannot construct DirectShareShortcuts.PairedDevice without
+      // compile-time knowledge of the class, so the app-side sync takes a plain
+      // List<Pair<String,String>> instead. One shape, one parser, one place.
+      o.getString("deviceId") to o.getString("name")
+    }
+  }
+
   override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
     if (requestCode != PICK) return
     val promise = pickPromise ?: return

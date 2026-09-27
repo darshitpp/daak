@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@daak/rn-share', () => ({
   default: {
@@ -9,6 +9,9 @@ vi.mock('@daak/rn-share', () => ({
           { kind: 'file', path: 'a/b.png', name: 'b.png' },
         ]),
     ),
+    consumeIntentSends: vi.fn(
+      async () => JSON.stringify([{ kind: 'intent-send', deviceId: 'aa11', text: 'yo' }]),
+    ),
     present: vi.fn(),
     pickDocuments: vi.fn(),
     addListener: vi.fn(),
@@ -17,7 +20,12 @@ vi.mock('@daak/rn-share', () => ({
 }));
 
 import DaakShare from '@daak/rn-share';
-import { consumePendingShare, type InboundShareItem } from './inbound';
+import {
+  consumeIntentSends,
+  consumePendingShare,
+  isIntentSend,
+  type InboundShareItem,
+} from './inbound';
 
 const native = vi.mocked(DaakShare);
 
@@ -85,5 +93,58 @@ describe('consumePendingShare', () => {
       }
     });
     expect(kinds).toHaveLength(5);
+  });
+});
+
+describe('consumeIntentSends', () => {
+  // mockClear, not clearAllMocks: the earlier describe blocks share this file's
+  // mocks, and only the call log is irrelevant here -- the queued `...Once`
+  // payloads and the default implementation must survive.
+  beforeEach(() => {
+    native.consumePendingInbox.mockClear();
+    native.consumeIntentSends.mockClear();
+  });
+
+  it('reads the intent-send drain, NOT the all-or-nothing inbox drain', async () => {
+    const items = await consumeIntentSends();
+    expect(items).toEqual([{ kind: 'intent-send', deviceId: 'aa11', text: 'yo' }]);
+    // R25, the load-bearing half. consumePendingInbox is all-or-nothing
+    // natively: it deletes the metadata naming every text/file batch. Calling
+    // it from the intent path would delete those batches while nothing routes
+    // them yet, orphaning the bytes. So the two drains are two distinct native
+    // methods and this one must not reach the other.
+    expect(native.consumeIntentSends).toHaveBeenCalledTimes(1);
+    expect(native.consumePendingInbox).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty array for malformed JSON, exactly like the text/file drain', async () => {
+    native.consumeIntentSends.mockResolvedValueOnce('[{"kind":"intent');
+    await expect(consumeIntentSends()).resolves.toEqual([]);
+  });
+
+  it('returns an empty array when the native payload is not an array', async () => {
+    native.consumeIntentSends.mockResolvedValueOnce('{"kind":"intent-send"}');
+    await expect(consumeIntentSends()).resolves.toEqual([]);
+  });
+
+  it('drops an item that is not an intent-send arm', async () => {
+    // A text/file item must never reach the send path even if a hand-edited or
+    // mis-staged file lands in intent-sends/.
+    native.consumeIntentSends.mockResolvedValueOnce(
+      JSON.stringify([
+        { kind: 'text', text: 'not a send' },
+        { kind: 'file', path: 'a/b.png', name: 'b.png' },
+        { kind: 'intent-send', deviceId: 'aa11' },
+      ]),
+    );
+    await expect(consumeIntentSends()).resolves.toEqual([{ kind: 'intent-send', deviceId: 'aa11' }]);
+  });
+});
+
+describe('isIntentSend', () => {
+  it('is true for the intent-send arm and false for the other two', () => {
+    expect(isIntentSend({ kind: 'intent-send', deviceId: 'aa' })).toBe(true);
+    expect(isIntentSend({ kind: 'text', text: 'x' })).toBe(false);
+    expect(isIntentSend({ kind: 'file', path: '/a', name: 'a' })).toBe(false);
   });
 });

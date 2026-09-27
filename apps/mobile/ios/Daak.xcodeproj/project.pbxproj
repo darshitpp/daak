@@ -13,6 +13,9 @@
 		DA0AB0011A68108700A75B9A /* DaakModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0031A68108700A75B9A /* DaakModule.mm */; };
 		DA0AB0021A68108700A75B9A /* Daak.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0041A68108700A75B9A /* Daak.swift */; };
 		DA0AB00A1A68108700A75B9A /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB00C1A68108700A75B9A /* ShareViewController.swift */; };
+		DA0AB0201A68108700A75B9A /* DaakIntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */; };
+		DA0AB0211A68108700A75B9A /* SendToDeviceIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */; };
+		DA0AB0241A68108700A75B9A /* AppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0251A68108700A75B9A /* AppShortcuts.swift */; };
 		DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = DA0AB00E1A68108700A75B9A /* DaakShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
@@ -60,6 +63,9 @@
 		89C6BE57DB24E9ADA2F236DE /* Pods-Daak-DaakTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak-DaakTests.release.xcconfig"; path = "Target Support Files/Pods-Daak-DaakTests/Pods-Daak-DaakTests.release.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		DA0AB00C1A68108700A75B9A /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaakIntentBridge.swift; path = Daak/DaakIntentBridge.swift; sourceTree = "<group>"; };
+		DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SendToDeviceIntent.swift; path = Daak/SendToDeviceIntent.swift; sourceTree = "<group>"; };
+		DA0AB0251A68108700A75B9A /* AppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppShortcuts.swift; path = Daak/AppShortcuts.swift; sourceTree = "<group>"; };
 		DA0AB00D1A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		DA0AB00F1A68108700A75B9A /* DaakShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DaakShareExtension.entitlements; sourceTree = "<group>"; };
 		DA0AB0111A68108700A75B9A /* Daak.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Daak.entitlements; sourceTree = "<group>"; };
@@ -122,6 +128,9 @@
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB71A68108700A75B9A /* main.m */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
+				DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */,
+				DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */,
+				DA0AB0251A68108700A75B9A /* AppShortcuts.swift */,
 			);
 			name = Daak;
 			sourceTree = "<group>";
@@ -484,6 +493,9 @@
 				DA0AB0021A68108700A75B9A /* Daak.swift in Sources */,
 				DA0AB0011A68108700A75B9A /* DaakModule.mm in Sources */,
 				13B07FC11A68108700A75B9A /* main.m in Sources */,
+				DA0AB0201A68108700A75B9A /* DaakIntentBridge.swift in Sources */,
+				DA0AB0211A68108700A75B9A /* SendToDeviceIntent.swift in Sources */,
+				DA0AB0241A68108700A75B9A /* AppShortcuts.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

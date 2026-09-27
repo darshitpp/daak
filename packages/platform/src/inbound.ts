@@ -15,6 +15,29 @@ export type InboundShareItem =
  */
 export async function consumePendingShare(): Promise<InboundShareItem[]> {
   const raw = await NativeDaakShare.consumePendingInbox();
+  return parseItems(raw);
+}
+
+/** Narrowing guard for the one arm that has a destination already chosen. */
+export function isIntentSend(item: InboundShareItem): item is Extract<InboundShareItem, { kind: 'intent-send' }> {
+  return item.kind === 'intent-send';
+}
+
+/**
+ * Drain ONLY the intent-send subdir (R25). This is a SEPARATE native method
+ * from consumePendingInbox on purpose: that one is all-or-nothing and deletes
+ * every text/file batch it hands back. Nothing routes a text/file item until
+ * Task 11, so calling it from the intent path would delete those batches and
+ * orphan the bytes they name -- silent data loss. `batches/` is left alone.
+ */
+export async function consumeIntentSends(): Promise<InboundShareItem[]> {
+  const raw = await NativeDaakShare.consumeIntentSends();
+  // Belt and braces: the dir is supposed to hold intent-send items only, but a
+  // hand-edited file must not be able to turn into a send on this path.
+  return parseItems(raw).filter(isIntentSend);
+}
+
+function parseItems(raw: string): InboundShareItem[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);

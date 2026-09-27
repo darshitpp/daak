@@ -1,0 +1,12 @@
+<!-- Vector so there is no density-bucket ladder to maintain. Tint follows the
+     launcher icon's own colour so the shortcut reads as Daak in any theme. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="24"
+  android:viewportHeight="24"
+  android:tint="#3DDC84">
+  <path
+    android:fillColor="#FFFFFF"
+    android:pathData="M4,4h16a1,1 0 0,1 1,1v11a1,1 0 0,1 -1,1H4a1,1 0 0,1 -1,-1V5a1,1 0 0,1 1,-1zM6,6v9h12V6H6zM9,19h6v1.5H9V19z" />
+</vector>

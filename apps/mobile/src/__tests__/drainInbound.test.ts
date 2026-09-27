@@ -1,13 +1,17 @@
 import type { InboundShareItem } from '@daak/platform';
-import { consumePendingShare } from '@daak/platform';
+import { consumeIntentSends, consumePendingShare } from '@daak/platform';
 import { fakeEngine } from '@daak/ui';
-import { drainInbound, sendIntentItems } from '../bootstrap';
+import { drainIntentSends, drainInbound, sendIntentItems } from '../bootstrap';
 
 jest.mock('@daak/platform', () => {
   // bootstrap builds the engine at import time, so the mock has to answer
   // createEngine too, not just consumePendingShare.
   const { fakeEngine: real } = require('@daak/ui');
-  return { createEngine: () => real(), consumePendingShare: jest.fn() };
+  return {
+    createEngine: () => real(),
+    consumePendingShare: jest.fn(),
+    consumeIntentSends: jest.fn(async () => []),
+  };
 });
 
 const consume = jest.mocked(consumePendingShare);
@@ -61,13 +65,71 @@ describe('drainInbound', () => {
 describe('sendIntentItems', () => {
   it('sends only intent-send items and leaves text/file for the outbox', async () => {
     const engine = fakeEngine();
+    const id = engine.devices().then((d) => d[0].deviceId);
     const send = jest.spyOn(engine, 'send');
     await sendIntentItems(engine, [
       { kind: 'text', text: 'hello daak' },
       { kind: 'file', path: '/data/share-inbox/1-a.png', name: '1-a.png' },
-      { kind: 'intent-send', deviceId: 'abc', text: 'hi' },
+      { kind: 'intent-send', deviceId: await id, text: 'hi' },
     ]);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledWith({ peerDeviceId: 'abc', text: 'hi' });
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: await id, text: 'hi' });
+  });
+
+  // R25. ShareTargetActivity is android:exported=true, so ANY app on the device
+  // can start it with daak.target_device set to an arbitrary id. Before this
+  // task that only staged a row nothing read; now something sends it. An
+  // unknown id is refused rather than handed to the outbox: it could never
+  // resolve to a peer, and enqueueing it forever is a queue-full DoS.
+  it('refuses an intent-send naming a device that is not paired', async () => {
+    const engine = fakeEngine([{ deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001' }]);
+    const send = jest.spyOn(engine, 'send');
+    await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: 'attacker-chosen-id', text: 'hi' }]);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('sends when the target IS a known peer', async () => {
+    const id = 'aa'.repeat(16);
+    const engine = fakeEngine([{ deviceId: id, name: 'Pixel 9', addr: '192.168.1.9:40001' }]);
+    const send = jest.spyOn(engine, 'send');
+    await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: id, text: 'hi' }]);
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: id, text: 'hi' });
+  });
+
+  // One refusal or one rejected send must not abandon the rest of the batch:
+  // these are already-deleted-on-drain items, so dropping them loses the share.
+  it('keeps going after a failed send', async () => {
+    const id = 'aa'.repeat(16);
+    const engine = fakeEngine([{ deviceId: id, name: 'Pixel 9', addr: '192.168.1.9:40001' }]);
+    const send = jest.spyOn(engine, 'send').mockRejectedValueOnce(new Error('outbox full'));
+    await sendIntentItems(engine, [
+      { kind: 'intent-send', deviceId: id, text: 'first' },
+      { kind: 'intent-send', deviceId: id, text: 'second' },
+    ]);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('drainIntentSends', () => {
+  const consume = jest.mocked(consumeIntentSends);
+
+  it('never touches the all-or-nothing text/file drain (R25)', async () => {
+    consume.mockResolvedValueOnce([{ kind: 'intent-send', deviceId: 'aa', text: 'hi' }]);
+    const engine = fakeEngine([{ deviceId: 'aa', name: 'Pixel 9', addr: '1.2.3.4:1' }]);
+    const send = jest.spyOn(engine, 'send');
+    await drainIntentSends(engine);
+    // A text/file batch staged by Task 6 must still be on disk after this. The
+    // only proof available here is that the other native drain is never called;
+    // the dir partition itself is pinned in packages/platform (inbound.test.ts).
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: 'aa', text: 'hi' });
+  });
+
+  it('stays quiet when nothing was staged', async () => {
+    consume.mockResolvedValueOnce([]);
+    const engine = fakeEngine();
+    const send = jest.spyOn(engine, 'send');
+    await drainIntentSends(engine);
+    expect(send).not.toHaveBeenCalled();
   });
 });

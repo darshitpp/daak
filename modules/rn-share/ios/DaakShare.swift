@@ -129,6 +129,54 @@ class DaakShare: NSObject {
     resolve(json)
   }
 
+  /// Drains ONLY `share-inbox/intent-sends/` (R25). A sibling directory of
+  /// `batches/`, listed non-recursively, so it physically cannot see or delete
+  /// the metadata naming a staged text/file share. consumePendingInbox above is
+  /// all-or-nothing by design and stays that way: nothing routes a text/file
+  /// item until Task 11, so a drain from the send path would orphan the bytes.
+  @objc func consumeIntentSends(_ resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    let fm = FileManager.default
+    guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.darshit.daak") else {
+      resolve("[]")
+      return
+    }
+    let dir = container.appendingPathComponent("share-inbox/intent-sends", isDirectory: true)
+    var merged: [[String: String]] = []
+    // Non-recursive, and only the `.json` rename target: a process killed
+    // mid-write leaves a `.tmp` that must never be read as a real item.
+    let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+    for f in files where f.pathExtension == "json" {
+      // Delete only after a successful parse, so a corrupt file is retried
+      // rather than dropped on the floor.
+      guard let data = try? Data(contentsOf: f),
+            let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: String]]
+      else { continue }
+      merged.append(contentsOf: arr)
+      try? fm.removeItem(at: f)
+    }
+    let json = (try? JSONSerialization.data(withJSONObject: merged)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+    resolve(json)
+  }
+
+  /// The ONLY writer of the App Group `pairedDevices` key (R26). iOS has no
+  /// dynamic shortcuts, so the shortcut half of this method is a no-op here;
+  /// publishing the peer list here is what makes DaakIntentBridge answer Siri's
+  /// entity query without booting Rust. Kept as a conforming implementation
+  /// because the Spec is a shared contract -- leaving it out is a compile error.
+  @objc func updateShortcutTargets(_ devicesJson: String,
+                                   resolve: @escaping RCTPromiseResolveBlock,
+                                   reject: @escaping RCTPromiseRejectBlock) {
+    guard let data = devicesJson.data(using: .utf8),
+          let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: String]]
+    else {
+      reject("E_SHORTCUTS", "devicesJson is not a JSON array of {deviceId,name}", nil)
+      return
+    }
+    // `[]` is a real answer: an unpaired peer must stop being offered to Siri.
+    UserDefaults(suiteName: "group.dev.darshit.daak")?.set(arr, forKey: "pairedDevices")
+    resolve(nil)
+  }
+
   private static func rootViewController() -> UIViewController? {
     UIApplication.shared.connectedScenes
       .compactMap { ($0 as? UIWindowScene)?.keyWindow }
