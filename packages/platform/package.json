@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@daak/core": "workspace:*",
+    "@daak/rn-bgsched": "workspace:*",
     "@daak/rn-clipboard": "workspace:*",
     "@daak/rn-fspaths": "workspace:*",
     "@daak/rn-notify": "workspace:*",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@daak/core": "workspace:*",
+    "@daak/rn-bgsched": "workspace:*",
     "@daak/rn-clipboard": "workspace:*",
     "@daak/rn-fspaths": "workspace:*",
     "@daak/rn-notify": "workspace:*",

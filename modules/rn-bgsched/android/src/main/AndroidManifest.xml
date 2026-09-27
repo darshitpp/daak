@@ -1,0 +1,32 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    FOREGROUND_SERVICE is required on API 28+ for any startForeground call.
+    FOREGROUND_SERVICE_DATA_SYNC is a SEPARATE, typed permission that API 34+
+    ENFORCES: starting a service declared with foregroundServiceType="dataSync"
+    without it throws ForegroundServiceStartException. minSdk is 24, so both are
+    declared unconditionally and the platform ignores the typed one below 34.
+  -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+  <!--
+    REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is what the Settings button uses to open
+    the system allowlist. It is a NORMAL permission, so it needs no runtime
+    prompt; without the declaration startActivity throws ActivityNotFoundException
+    and the button silently does nothing on every device.
+  -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+  <application>
+    <!--
+      Holds the process alive while an outbox transfer is running. exported=false:
+      only ContextCompat.startForegroundService from inside this app reaches it,
+      and nothing outside the app has any reason to. NOT a share target and NOT
+      the drain: it never touches the engine (see DaakSyncService.kt).
+    -->
+    <service
+      android:name=".DaakSyncService"
+      android:foregroundServiceType="dataSync"
+      android:exported="false" />
+  </application>
+</manifest>

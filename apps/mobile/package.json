@@ -13,6 +13,7 @@
   "dependencies": {
     "@daak/core": "workspace:*",
     "@daak/platform": "workspace:*",
+    "@daak/rn-bgsched": "workspace:*",
     "@daak/rn-clipboard": "workspace:*",
     "@daak/rn-fspaths": "workspace:*",
     "@daak/rn-notify": "workspace:*",

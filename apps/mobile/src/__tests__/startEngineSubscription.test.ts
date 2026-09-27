@@ -20,6 +20,8 @@ jest.mock('@daak/platform', () => {
     // startEngine now calls initNotifications (Task 8), so this mock has to
     // answer it or the subscription tests die on an undefined function.
     initNotifications: jest.fn(async () => true),
+    // Task 10: startEngine also books the first background slot.
+    initBackgroundSync: jest.fn(async () => {}),
     notifyReceived: jest.fn(async () => {}),
     routeInboxEntry: jest.fn(async () => {}),
     realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },

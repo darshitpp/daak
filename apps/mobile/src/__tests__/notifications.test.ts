@@ -26,6 +26,9 @@ jest.mock('@daak/platform', () => {
     syncShortcutTargets: jest.fn(async () => {}),
     presentShare: jest.fn(async () => {}),
     initNotifications: jest.fn(async () => true),
+    // Task 10: startEngine also books the first background slot. Absent from
+    // this mock the suite dies on an undefined function, not on a behaviour.
+    initBackgroundSync: jest.fn(async () => {}),
     notifyReceived: jest.fn(async () => {}),
     // R42: the inbox route is reached from the SAME subscription as
     // notifyReceived, so this mock has to answer it or the handler dies.

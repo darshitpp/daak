@@ -6,7 +6,8 @@ import { HistoryScreen } from '../screens/HistoryScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { TabBar, type Tab } from './TabBar';
 
-export function AppShell() {
+/** `background` is threaded to the Settings tab; see SettingsScreen for why. */
+export function AppShell({ background }: { background?: React.ReactNode }) {
   const [tab, setTab] = useState<Tab>('dashboard');
   return (
     <View style={{ flex: 1 }}>
@@ -14,7 +15,7 @@ export function AppShell() {
         {tab === 'dashboard' && <DashboardScreen />}
         {tab === 'devices' && <DevicesScreen />}
         {tab === 'history' && <HistoryScreen />}
-        {tab === 'settings' && <SettingsScreen />}
+        {tab === 'settings' && <SettingsScreen background={background} />}
       </View>
       <TabBar tab={tab} onChange={setTab} />
     </View>

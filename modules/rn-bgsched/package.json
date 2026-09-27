@@ -1,0 +1,14 @@
+{
+  "name": "@daak/rn-bgsched",
+  "version": "0.1.0",
+  "private": true,
+  "main": "js/index.ts",
+  "react-native": "js/index.ts",
+  "codegenConfig": {
+    "name": "DaakBgSchedSpec",
+    "type": "modules",
+    "jsSrcsDir": "js",
+    "android": { "javaPackageName": "dev.darshit.daak.bgsched" }
+  },
+  "peerDependencies": { "react-native": ">=0.76" }
+}

@@ -1,4 +1,5 @@
 export * from './engine';
+export * from './bgsched';
 export * from './clipboard';
 export * from './fspaths';
 export * from './inbound';

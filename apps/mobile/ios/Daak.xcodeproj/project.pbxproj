@@ -18,6 +18,7 @@
 		DA0AB0211A68108700A75B9A /* SendToDeviceIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */; };
 		DA0AB0241A68108700A75B9A /* AppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0251A68108700A75B9A /* AppShortcuts.swift */; };
 		DA0AB0281A68108700A75B9A /* KeychainSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0291A68108700A75B9A /* KeychainSecureStore.swift */; };
+		DA0AB02A1A68108700A75B9A /* DaakBgLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB02B1A68108700A75B9A /* DaakBgLaunch.swift */; };
 		DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = DA0AB00E1A68108700A75B9A /* DaakShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
@@ -68,6 +69,7 @@
 		DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaakIntentBridge.swift; path = Daak/DaakIntentBridge.swift; sourceTree = "<group>"; };
 		DA0AB0271A68108700A75B9A /* DaakNotificationDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaakNotificationDelegate.swift; path = Daak/DaakNotificationDelegate.swift; sourceTree = "<group>"; };
 		DA0AB0291A68108700A75B9A /* KeychainSecureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeychainSecureStore.swift; path = Daak/KeychainSecureStore.swift; sourceTree = "<group>"; };
+		DA0AB02B1A68108700A75B9A /* DaakBgLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaakBgLaunch.swift; path = Daak/DaakBgLaunch.swift; sourceTree = "<group>"; };
 		DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SendToDeviceIntent.swift; path = Daak/SendToDeviceIntent.swift; sourceTree = "<group>"; };
 		DA0AB0251A68108700A75B9A /* AppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppShortcuts.swift; path = Daak/AppShortcuts.swift; sourceTree = "<group>"; };
 		DA0AB00D1A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -137,6 +139,7 @@
 				DA0AB0251A68108700A75B9A /* AppShortcuts.swift */,
 				DA0AB0271A68108700A75B9A /* DaakNotificationDelegate.swift */,
 				DA0AB0291A68108700A75B9A /* KeychainSecureStore.swift */,
+				DA0AB02B1A68108700A75B9A /* DaakBgLaunch.swift */,
 			);
 			name = Daak;
 			sourceTree = "<group>";
@@ -504,6 +507,7 @@
 				DA0AB0241A68108700A75B9A /* AppShortcuts.swift in Sources */,
 				DA0AB0261A68108700A75B9A /* DaakNotificationDelegate.swift in Sources */,
 				DA0AB0281A68108700A75B9A /* KeychainSecureStore.swift in Sources */,
+				DA0AB02A1A68108700A75B9A /* DaakBgLaunch.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

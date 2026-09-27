@@ -21,6 +21,14 @@
   // DaakNotify.consumePendingAction hands it to JS once it is up.
   [DaakNotificationDelegate install];
 
+  // Installed here for the same reason, and BEFORE anything can be delivered:
+  // iOS launches the process to run a BGTask, and the rn-bgsched TurboModule
+  // does not exist until the bridge has booted. Registered from JS it would
+  // miss exactly the cold launch it exists for. DaakBgLaunch is the ONLY
+  // registrant -- registering the same identifier twice makes the FIRST
+  // registration the real one, so a second, no-op owner silently wins.
+  [DaakBgLaunch install];
+
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
 }
 

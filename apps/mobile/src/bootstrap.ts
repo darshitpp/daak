@@ -2,6 +2,7 @@ import {
   consumeIntentSends,
   consumePendingShare,
   createEngine,
+  initBackgroundSync,
   handleNotificationAction,
   initNotifications,
   notifyReceived,
@@ -9,6 +10,8 @@ import {
   presentShare,
   realReceiveDeps,
   routeInboxEntry,
+  startTransferForeground,
+  stopTransferForeground,
   syncShortcutTargets,
 } from '@daak/platform';
 import type { DaakEngine } from '@daak/core';
@@ -24,10 +27,20 @@ export const engine: DaakEngine = createEngine();
 // unrelated reasons is the shape that turns into N per remount.
 let unsubscribeEngine: (() => void) | undefined;
 
-// Still nothing calls this: `engine` is constructed eagerly at import so the
-// TurboModule resolves, but it is never started until the app owns a
-// lifecycle. That is what R22's "App must not drain on mount" test pins --
-// App.tsx renders and nothing else. When an owner appears it must call this once.
+// The app lifecycle owner. Task 10 lands it: App.tsx calls this once from a
+// mount effect. It stays OUT of the module body so a Fast Refresh or a remount
+// cannot start a second engine, and it still does NOT drain the text/file share
+// inbox (R22) -- see drainInbound below, which stays unwired for the same
+// reason it has since Task 6.
+let started: Promise<void> | undefined;
+
+export function startEngineOnce(): Promise<void> {
+  // Idempotent for the process lifetime, not merely per call: two engines in
+  // one process means two identities and two discovery stacks on the LAN.
+  started ??= startEngine();
+  return started;
+}
+
 export async function startEngine(): Promise<void> {
   await engine.start();
   // R36: a denied permission is an ordinary answer, not a startup failure. The
@@ -43,12 +56,24 @@ export async function startEngine(): Promise<void> {
       /* the engine is not up yet; startEngine's own publish will follow */
     });
   await publish();
+  // Books the first iOS background slot and installs the Android periodic job.
+  // Never throws (see initBackgroundSync), so a WorkManager that will not
+  // initialise cannot take the engine down with it.
+  await initBackgroundSync();
   // ONE engine subscription for the app's whole lifetime, handling every event
   // the app reacts to. A second one for inbox.received would double-post a
   // banner per receive AND break startEngineSubscription's invariant, which is
   // right: two live subscriptions for two unrelated reasons is the shape that
   // turns into N per remount.
   unsubscribeEngine?.();
+  // A foreground-service start per progress event would be one OS start per
+  // chunk, so the flag is latched here rather than in the handler. Cleared on
+  // any terminal transfer event, which is the only place it can be wrong: a
+  // transfer that ends without done/failed leaves the service up. That is a
+  // stale notification, not a lost send, and a stop() would race the next
+  // transfer's start(). ponytail: latch; upgrade to a per-transfer refcount if
+  // concurrent transfers ever arrive.
+  let transferForegroundUp = false;
   unsubscribeEngine = engine.on((e) => {
     if (e.type === 'pairing.done') void publish();
     // R42: BOTH effects on the ONE subscription. routeInboxEntry copies a text
@@ -58,6 +83,19 @@ export async function startEngine(): Promise<void> {
     if (e.type === 'inbox.received') {
       void routeInboxEntry(e.payload, realReceiveDeps);
       void notifyReceived(e.payload);
+    }
+    // R42/GAP 3: the plan's wireBackground opens a SECOND engine.on to do this.
+    // It lives here, on the ONE subscription, for the reason every other branch
+    // is here. Android only; iOS resolves both as no-ops natively.
+    if (e.type === 'transfer.progress' && !transferForegroundUp) {
+      transferForegroundUp = true;
+      void startTransferForeground('Sending with Daak');
+    }
+    if (e.type === 'transfer.done' || e.type === 'transfer.failed') {
+      if (transferForegroundUp) {
+        transferForegroundUp = false;
+        void stopTransferForeground();
+      }
     }
   });
   // R25: the ONE real send call site. ShareTargetActivity and the Siri intent

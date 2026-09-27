@@ -1,0 +1,25 @@
+buildscript {
+  repositories { google(); mavenCentral() }
+}
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+// Library codegen is gated on the com.facebook.react plugin being applied, not
+// on com.android.library: ReactPlugin.apply() registers
+// project.pluginManager.withPlugin("com.android.library") { configureCodegen(..., isLibrary = true) }.
+// Without this, NativeDaakBgSchedSpec is never generated and this module cannot
+// compile. Task 4 shipped this omission as a Critical and Task 8 re-shipped it.
+apply plugin: 'com.facebook.react'
+
+repositories { google(); mavenCentral() }
+
+android {
+  namespace 'dev.darshit.daak.bgsched'
+  compileSdkVersion 35
+  defaultConfig { minSdkVersion 24 }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  implementation 'androidx.core:core-ktx:1.13.1'
+  implementation 'androidx.work:work-runtime-ktx:2.9.1'
+}
