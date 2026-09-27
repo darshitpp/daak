@@ -172,8 +172,18 @@ class DaakShare: NSObject {
       reject("E_SHORTCUTS", "devicesJson is not a JSON array of {deviceId,name}", nil)
       return
     }
+    // Store JSON DATA, never the array itself. UserDefaults stores a Swift
+    // [[String:String]] as a plist ARRAY, and DaakIntentBridge reads it back
+    // with data(forKey:) -- which is nil for a plist array, because that is not
+    // a Data value. The pair was compiled and run: the plist-array writer makes
+    // devices() return [] unconditionally, i.e. Siri sees zero devices. This
+    // exact data(forKey:) + JSONSerialization round-trip is what fixes it.
     // `[]` is a real answer: an unpaired peer must stop being offered to Siri.
-    UserDefaults(suiteName: "group.dev.darshit.daak")?.set(arr, forKey: "pairedDevices")
+    guard let data = try? JSONSerialization.data(withJSONObject: arr) else {
+      reject("E_SHORTCUTS", "devicesJson is not JSON-serializable", nil)
+      return
+    }
+    UserDefaults(suiteName: "group.dev.darshit.daak")?.set(data, forKey: "pairedDevices")
     resolve(nil)
   }
 

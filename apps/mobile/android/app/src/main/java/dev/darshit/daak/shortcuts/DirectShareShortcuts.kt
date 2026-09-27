@@ -57,7 +57,13 @@ object DirectShareShortcuts {
         .setIntent(
           Intent(context, ShareTargetActivity::class.java).apply {
             action = Intent.ACTION_SEND
-            type = "*/*"
+            // R30: TEXT ONLY. The frozen R7 InboundShareItem union has no
+            // file arm for a send, and ShareTargetActivity stages a stream
+            // into batches/ (undeleted, awaiting the composer route Task 11
+            // owns) while putting only EXTRA_TEXT into intent-sends. A
+            // "*/*" shortcut therefore advertises an image that goes
+            // nowhere. Do not widen this until intent-send can carry a file.
+            type = "text/plain"
             putExtra("daak.target_device", id)
           })
         .build()

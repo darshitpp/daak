@@ -4,6 +4,12 @@ import type { InboundShareItem } from '@daak/platform';
 
 export const engine: DaakEngine = createEngine();
 
+// Re-entry handle for the pairing.done subscription. startEngine is *meant* to
+// be called once, but a comment is not an invariant -- a remount or a hot
+// reload would otherwise leave every earlier subscription live and republish
+// the peer list N times per pairing.done.
+let unsubscribePairing: (() => void) | undefined;
+
 // Still nothing calls this: `engine` is constructed eagerly at import so the
 // TurboModule resolves, but it is never started until the app owns a
 // lifecycle. That is what R22's "App must not drain on mount" test pins --
@@ -20,7 +26,8 @@ export async function startEngine(): Promise<void> {
       /* the engine is not up yet; startEngine's own publish will follow */
     });
   await publish();
-  engine.on((e) => {
+  unsubscribePairing?.();
+  unsubscribePairing = engine.on((e) => {
     if (e.type === 'pairing.done') void publish();
   });
   // R25: the ONE real send call site. ShareTargetActivity and the Siri intent
@@ -78,7 +85,18 @@ export async function sendIntentItems(
     // ShareTargetActivity is exported, so any app on the device can hand us an
     // arbitrary deviceId. An unknown peer can never resolve; enqueueing it
     // anyway fills the outbox with rows that can only fail.
-    if (!known.has(item.deviceId)) continue;
+    if (!known.has(item.deviceId)) {
+      // R31: refusing is the R28 security property and stays. The drain has
+      // ALREADY deleted the staged bytes, though, so a share aimed at a peer
+      // paired seconds earlier -- or one racing engine.start() -- would vanish
+      // with no trace. Re-staging needs a new native write path back into the
+      // App Group / cache dir; a warning makes the same loss observable for
+      // one line, which is the cheaper honest half.
+      console.warn(
+        `daak: refused intent-send to unpaired device ${item.deviceId}; the staged share was already deleted by the drain`,
+      );
+      continue;
+    }
     // A drain already DELETED the staged file, so one rejected send must not
     // abandon the rest of the batch: the items are gone from disk either way,
     // and the honest response is to try them all.

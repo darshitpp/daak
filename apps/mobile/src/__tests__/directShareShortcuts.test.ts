@@ -101,4 +101,19 @@ describe('DirectShareShortcuts API-level guard (R29)', () => {
     expect(fn).not.toContain('SDK_INT');
     expect(fn).toContain('promise.resolve(null)');
   });
+
+  // R30. The shortcut's intent is built with `type = "*/*"`, so the share
+  // sheet offers an image and an obvious tap goes NOWHERE: ShareTargetActivity
+  // stages the file into batches/ and puts only the TEXT into the intent-send
+  // arm, and the frozen R7 union has no file arm for a send. The fix is to make
+  // the shortcut honest about what it can deliver: text only. A file shared
+  // this way is still staged by Task 6 and still undeleted -- nothing is lost,
+  // the shortcut just stops advertising a path that has no sender yet.
+  it('advertises text only, so the share sheet cannot offer a file it drops', () => {
+    const body = lines.slice(guardReturnIndex()).join('\n');
+    const typeLine = body.split('\n').filter((l) => /^\s*type\s*=/.test(l));
+    expect(typeLine).toHaveLength(1);
+    expect(typeLine[0]).toContain('"text/plain"');
+    expect(typeLine[0]).not.toContain('*/*');
+  });
 });

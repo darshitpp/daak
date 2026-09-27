@@ -84,8 +84,49 @@ describe('sendIntentItems', () => {
   it('refuses an intent-send naming a device that is not paired', async () => {
     const engine = fakeEngine([{ deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001' }]);
     const send = jest.spyOn(engine, 'send');
-    await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: 'attacker-chosen-id', text: 'hi' }]);
-    expect(send).not.toHaveBeenCalled();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: 'attacker-chosen-id', text: 'hi' }]);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // R31. The refusal above is the R28 security property and stays. But the
+  // drain already DELETED the staged bytes by the time we decide, so a share
+  // aimed at a peer paired seconds earlier -- or one racing engine.start() --
+  // vanishes with no trace. Re-staging is not worth a new native write path;
+  // the smallest honest mitigation is to make the drop OBSERVABLE, so the
+  // owner can see a refusal happened rather than a silent loss.
+  it('warns observably when it refuses an unknown target (R31)', async () => {
+    const engine = fakeEngine([{ deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '1.2.3.4:1' }]);
+    const send = jest.spyOn(engine, 'send');
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await sendIntentItems(engine, [
+        { kind: 'intent-send', deviceId: 'paired-a-second-ago', text: 'lost share' },
+      ]);
+      expect(send).not.toHaveBeenCalled();
+      // The id must be in the message, otherwise the owner cannot act on it.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('paired-a-second-ago'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // A known peer must NOT be noisy -- the warning is the drop signal, and a
+  // warning on every good send would train the owner to ignore it.
+  it('stays silent for a known target', async () => {
+    const id = 'aa'.repeat(16);
+    const engine = fakeEngine([{ deviceId: id, name: 'Pixel 9', addr: '1.2.3.4:1' }]);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: id, text: 'hi' }]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('sends when the target IS a known peer', async () => {
