@@ -173,6 +173,12 @@ pub enum IpcEvent {
         peer_device_id: String,
         sas: String,
     },
+    /// C2. A pairing row was persisted, so the peer list the UI renders is
+    /// stale until this arrives. Same field name and same hex id as the FFI
+    /// arm, so both bridges deliver one shape to TS.
+    PairingDone {
+        device_id: String,
+    },
     TransferProgress {
         transfer_id: String,
         bytes_done: u64,

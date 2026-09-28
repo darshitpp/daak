@@ -20,6 +20,10 @@
     },
     "type": "inbox.received"
   },
+  "PairingDone": {
+    "deviceId": "abababababababababababababababab",
+    "type": "pairing.done"
+  },
   "PairingSas": {
     "peerDeviceId": "abababababababababababababababab",
     "sas": "123456",

@@ -795,3 +795,32 @@ async fn update_required_is_answered_before_dispatch_even_for_a_valid_1x_body() 
         }))
     );
 }
+
+// C2, desktop bridge. `pairing.done` was live in the TS union (spec 6.1) with a
+// handler and had NO IpcEvent variant, so DaemonClient dropped the name as
+// unknown and the desktop could not see a completed pairing either. daakd's
+// to_ipc_event is an EXHAUSTIVE match by design, so a new EngineEvent variant
+// forces this arm -- it is not optional, and a wildcard would hide the drift.
+#[tokio::test]
+async fn a_completed_pairing_reaches_the_ipc_client_with_the_same_shape_as_ffi() {
+    let IpcEvent::PairingDone { device_id } = daakd::to_ipc_event(EngineEvent::PairingDone {
+        device_id: [0x11u8; 16],
+    }) else {
+        panic!("expected a pairing done event");
+    };
+    // The SAME field name and the SAME hex encoding as the FFI arm, so
+    // toDaakEvent's `case 'PairingDone'` cannot read one shape on the wire and
+    // the other in the JSON.
+    assert_eq!(device_id, "11".repeat(16));
+
+    let mut buf = Vec::new();
+    daak_ipc::write_message(
+        &mut buf,
+        &IpcMessage::Event(IpcEvent::PairingDone {
+            device_id: "11".repeat(16),
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(!buf.is_empty());
+}

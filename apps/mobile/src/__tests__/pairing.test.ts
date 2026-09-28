@@ -1,6 +1,6 @@
 import { generateQr, PAIRING_QR_SIZE, pairingBundle, scanQr } from '@daak/platform';
 import { fakeEngine } from '@daak/ui';
-import { hostPairingQr, joinWithScan, parsePairingPayload } from '../pairing';
+import { armHostPairing, hostPairingQr, joinWithScan, parsePairingPayload } from '../pairing';
 
 jest.mock('@daak/platform', () => ({
   scanQr: jest.fn(),
@@ -72,6 +72,29 @@ describe('hostPairingQr', () => {
     });
     expect(mockedBundle).toHaveBeenCalledTimes(1);
     expect(mockedGenerate).toHaveBeenCalledWith(bundle, PAIRING_QR_SIZE);
+  });
+});
+
+describe('armHostPairing (C2)', () => {
+  // Second review: the host does NOT hold the joiner's bundle, because in the
+  // QR flow only the JOINER scans. So this arms with no argument and NO camera.
+  // The previous version scanned for a bundle no real device can display, which
+  // is why host-side pairing was unreachable however green the tests were.
+  it('arms the engine with no bundle and never opens the camera', async () => {
+    const engine = fakeEngine();
+    const armHostPairingSpy = jest.spyOn(engine, 'armHostPairing');
+
+    await armHostPairing(engine);
+    expect(armHostPairingSpy).toHaveBeenCalledWith();
+    expect(mockedScan).not.toHaveBeenCalled();
+  });
+
+  it('propagates an engine failure so the flow can show it', async () => {
+    const engine = fakeEngine();
+    jest.spyOn(engine, 'armHostPairing').mockRejectedValue(new Error('engine down'));
+
+    await expect(armHostPairing(engine)).rejects.toThrow('engine down');
+    expect(mockedScan).not.toHaveBeenCalled();
   });
 });
 

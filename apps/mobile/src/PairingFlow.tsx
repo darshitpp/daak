@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { PairingScreen, useEngine } from '@daak/ui';
-import { hostPairingQr, joinWithScan } from './pairing';
+import { armHostPairing, hostPairingQr, joinWithScan } from './pairing';
 import { onPairingSas } from './bootstrap';
 
 type Phase = { kind: 'choose' } | { kind: 'host'; qrUri: string } | { kind: 'join' };
@@ -34,9 +34,28 @@ export function PairingFlow() {
     setError('');
     // Lazy (R98): the bundle is fetched and rendered only when the user enters
     // the host flow, never at app start.
+    //
+    // C2, second review: spec 3.3 Mode A is ONE QR and ONE scan. The host
+    // shows its QR; the JOINER scans it. The host then arms its accept slot
+    // from that same display -- no camera, and no scanned bundle, because only
+    // the joiner ever holds a bundle and the sanctioned flow never gives the
+    // host the joiner's. The two previous passes each got this wrong in a
+    // different direction (arm-then-QR, then QR-then-mutual-scan); this is the
+    // shape the spec describes.
+    //
+    // Arming here rather than on a second tap is deliberate: the host has
+    // nothing else to do, and an arm that needs a button is an arm a user can
+    // leave unarmed while a joiner waits. A joiner that connects before the QR
+    // is fetched is refused as unpaired and retries, which is the same window
+    // every engine-side arm has.
     void hostPairingQr().then(
-      ({ uri }) => setPhase({ kind: 'host', qrUri: uri }),
+      ({ uri }) => {
+        setPhase({ kind: 'host', qrUri: uri });
+        return armHostPairing(engine);
+      },
       () => setError('hosting failed'),
+    ).catch((e: unknown) =>
+      setError(e instanceof Error ? e.message : 'arming failed'),
     );
   };
 
@@ -50,7 +69,12 @@ export function PairingFlow() {
     );
   };
 
-  const confirm = () => {
+  // Not a gate. The engine persists the pairing row BEFORE either SAS is
+  // shown (Engine::commit_pairing), so there is nothing here to approve -- the
+  // button only acknowledges that the two SAS matched and returns to the
+  // start. A confirm API that actually gated the commit is a Phase 7 change
+  // with a crypto consequence; see the blocker report.
+  const acknowledge = () => {
     setSas('');
     setError('');
     setPhase({ kind: 'choose' });
@@ -78,8 +102,19 @@ export function PairingFlow() {
         onScan={startJoin}
         sas={sas}
       />
-      <Pressable accessibilityLabel="confirm" onPress={confirm}>
-        <Text>Confirm</Text>
+      {/* The arm is ONE-SHOT: the engine takes it for the first joiner, and a
+          stray LAN connection can fail a pairing without consuming the user
+          back to this screen. `startHost` already re-arms (the engine arm slot
+          is REPLACEABLE), so recovery is this one button and no new plumbing.
+          Rendered in the host phase unconditionally -- including before any
+          SAS has arrived, which is the state a burnt arm leaves behind. */}
+      {phase.kind === 'host' ? (
+        <Pressable accessibilityLabel="host-retry" onPress={startHost}>
+          <Text>Show a new QR</Text>
+        </Pressable>
+      ) : null}
+      <Pressable accessibilityLabel="confirm" onPress={acknowledge}>
+        <Text>SAS matched - Done</Text>
       </Pressable>
       {error ? <Text accessibilityLabel="pairing-error">{error}</Text> : null}
     </View>

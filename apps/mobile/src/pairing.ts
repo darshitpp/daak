@@ -21,6 +21,25 @@ export async function hostPairingQr(): Promise<{ uri: string; bundle: string }> 
 }
 
 /**
+ * Host half, step two (C2, second review): arm the accept slot from the QR the
+ * host is already showing. NO camera and NO scanned bundle.
+ *
+ * The QR flow is asymmetric -- only the JOINER scans, so only the joiner ever
+ * holds the host's bundle, and the sanctioned flow never gives the host the
+ * joiner's. The previous version of this function scanned for a joiner bundle
+ * that no real device can display, which is why host-side pairing was
+ * unreachable no matter what the tests said. The engine now learns the peer's
+ * identity in-band and verifies it in the Noise XX handshake; the user
+ * comparing the two SAS values is what binds it to a human.
+ *
+ * One-shot and re-armable: the accept slot is consumed by the connection it
+ * accepts, and arming again simply replaces whatever is pending.
+ */
+export async function armHostPairing(engine: DaakEngine): Promise<void> {
+  await engine.armHostPairing();
+}
+
+/**
  * Join half: scan a host QR, validate the bundle, and hand the CBOR hex to
  * engine.pair. R88: the secret is parsed.cbor (hex), never the whole scanned
  * payload; InProcessEngine.pair resolves the device id to an ip:port itself

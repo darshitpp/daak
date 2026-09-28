@@ -11,11 +11,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use daak_core::crypto::identity::import_from_store;
+use daak_core::crypto::identity::{import_from_store, verify_static_binding};
 use daak_core::discovery::PresenceState;
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
 use daak_core::manifest::{DeviceRef, Item, Manifest, CHUNK_SIZE_DEFAULT};
-use daak_core::pairing::PairingBundle;
+use daak_core::pairing::{PairMode, PairingBundle};
 use daak_core::store::Db;
 use daak_core::CoreError;
 
@@ -60,6 +60,11 @@ pub struct DeviceStateEvent {
 pub struct PairingSasEvent {
     pub peer_device_id: String,
     pub sas: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingDoneEvent {
+    pub device_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +114,7 @@ pub enum FfiEvent {
     DeviceFound { data: DeviceFoundEvent },
     DeviceState { data: DeviceStateEvent },
     PairingSas { data: PairingSasEvent },
+    PairingDone { data: PairingDoneEvent },
     TransferProgress { data: ProgressEvent },
     TransferItem { data: TransferItemEvent },
     TransferDone { data: DoneEvent },
@@ -443,6 +449,61 @@ impl DaakEngine {
         pairing_bundle_json(&bundle)
     }
 
+    /// C2: arm the HOST half of QR pairing. The host has already scanned the
+    /// joiner's bundle, so this takes the same bundle bytes `pair_with` takes
+    /// and hands them to Engine::offer_pairing, which sets pending_pairing for
+    /// the accept loop. Re-armable by design: offer_pairing REPLACES the slot,
+    /// so a user whose first attempt failed (or who wants to pair a different
+    /// device) re-offers without restarting the engine. One peer at a time --
+    /// that is the engine's existing shape, not a limit this method adds.
+    pub fn offer_pairing(&self, bundle_cbor: Vec<u8>) -> Result<(), FfiError> {
+        let bundle = PairingBundle::from_cbor(&bundle_cbor).map_err(protocol_err)?;
+        // PairingBundle::from_cbor does NOT check the identity binding; the
+        // engine re-verifies it inside pairing::pair, but a bundle that cannot
+        // possibly be valid should not silently replace a good pending slot.
+        if !verify_static_binding(
+            &bundle.identity.ed25519,
+            &bundle.identity.x25519,
+            &bundle.identity.static_sig,
+        ) {
+            return Err(protocol_err("pairing bundle identity binding failed"));
+        }
+        self.rt
+            .block_on(self.engine()?.offer_pairing(bundle, PairMode::Qr, None))
+            .map_err(engine_err)
+    }
+
+    /// Second review: the host arm spec 3.3 Mode A actually needs, and it takes
+    /// NO bundle.
+    ///
+    /// The QR flow is asymmetric. Only the JOINER scans, so only the joiner
+    /// ever holds the host's bundle, and the sanctioned flow never gives the
+    /// host the joiner's bundle -- which made `offer_pairing` above
+    /// unreachable by a real user, and a real user still could not pair. This
+    /// arms the accept slot for the FIRST inbound pairing with no peer named.
+    ///
+    /// TRUST SURFACE, stated plainly: `offer_pairing` verifies a bundle's
+    /// identity binding HERE, at the trust boundary, before anything is armed.
+    /// With no bundle there is nothing to verify at this boundary, and the host
+    /// cannot pre-empt an identity substitution. What still holds is in the
+    /// engine: the in-band identity is checked against the hello's device id
+    /// and `verify_static_binding`-ed, the Noise XX handshake authenticates the
+    /// peer to that identity, spec 3.5 key confirmation proves it holds the
+    /// session, and the SAS is derived from a handshake hash bound to both
+    /// static keys. What is GIVEN UP is the host's ability to know in advance
+    /// which device it is accepting; the user comparing the two SAS values is
+    /// now the only thing binding that identity to a human. `offer_pairing`
+    /// remains available and remains the stronger path wherever a bundle is in
+    /// hand.
+    ///
+    /// One-shot: the accept loop takes the slot, so arm again for another
+    /// device. Replaces any pending arm, like `offer_pairing`.
+    pub fn arm_host_pairing(&self) -> Result<(), FfiError> {
+        self.rt
+            .block_on(self.engine()?.offer_inbound_pairing(PairMode::Qr))
+            .map_err(engine_err)
+    }
+
     pub fn pair_with(&self, addr: String, bundle_cbor: Vec<u8>) -> Result<String, FfiError> {
         let bundle = PairingBundle::from_cbor(&bundle_cbor).map_err(protocol_err)?;
         let addr: std::net::SocketAddr = addr.parse().map_err(protocol_err)?;
@@ -639,6 +700,10 @@ pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
             "peerDeviceId": data.peer_device_id,
             "sas": data.sas,
         }),
+        FfiEvent::PairingDone { data } => serde_json::json!({
+            "type": "pairing.done",
+            "deviceId": data.device_id,
+        }),
         FfiEvent::TransferProgress { data } => serde_json::json!({
             "type": "transfer.progress",
             "transferId": data.transfer_id,
@@ -750,6 +815,12 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 // for an unknown peer id. NOT null: DaemonClient reads this
                 // with str(), which throws on a null.
                 dest_path: dest_path.unwrap_or_default(),
+            },
+        },
+        // C2: the arm that was missing, so pairing.done could never reach JS.
+        EngineEvent::PairingDone { device_id } => FfiEvent::PairingDone {
+            data: PairingDoneEvent {
+                device_id: to_hex(&device_id),
             },
         },
         EngineEvent::TransferDone { transfer_id } => FfiEvent::TransferDone {

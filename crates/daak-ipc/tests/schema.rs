@@ -358,6 +358,11 @@ fn every_event_validates_against_the_cddl() {
         IpcMessage::Event(IpcEvent::InboxReceived {
             payload_json: "{\"a\":1}".into(),
         }),
+        // C2: the pairing.done event is a WIRE struct addition (a new IpcEvent
+        // variant), so unlike the in-process EngineEvent it is pinned here too.
+        IpcMessage::Event(IpcEvent::PairingDone {
+            device_id: "d1".into(),
+        }),
     ] {
         assert_valid(&m);
     }

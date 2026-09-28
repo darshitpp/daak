@@ -184,6 +184,7 @@ pub enum IpcEvent {
     DeviceFoundEvent(DeviceFoundEvent),
     DeviceStateEvent(DeviceStateEvent),
     PairingSasEvent(PairingSasEvent),
+    PairingDoneEvent(PairingDoneEvent),
     TransferProgressEvent(TransferProgressEvent),
     TransferItemEvent(TransferItemEvent),
     TransferDoneEvent(TransferDoneEvent),
@@ -202,6 +203,10 @@ impl IpcEvent {
 
     pub fn new_pairing_sas_event(pairing_sas_event: PairingSasEvent) -> Self {
         Self::PairingSasEvent(pairing_sas_event)
+    }
+
+    pub fn new_pairing_done_event(pairing_done_event: PairingDoneEvent) -> Self {
+        Self::PairingDoneEvent(pairing_done_event)
     }
 
     pub fn new_transfer_progress_event(transfer_progress_event: TransferProgressEvent) -> Self {
@@ -445,6 +450,28 @@ pub struct PairRequest {
 impl PairRequest {
     pub fn new(pair: PairArgs) -> Self {
         Self { pair }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct PairingDoneArgs {
+    pub device_id: String,
+}
+
+impl PairingDoneArgs {
+    pub fn new(device_id: String) -> Self {
+        Self { device_id }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct PairingDoneEvent {
+    pub pairing_done: PairingDoneArgs,
+}
+
+impl PairingDoneEvent {
+    pub fn new(pairing_done: PairingDoneArgs) -> Self {
+        Self { pairing_done }
     }
 }
 

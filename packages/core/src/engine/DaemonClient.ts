@@ -112,6 +112,24 @@ export class DaemonClientEngine implements DaakEngine {
     return { sas: r.sas };
   }
 
+  // C2: the host arm is IN-PROCESS ONLY and that is deliberate, not a gap I
+  // papered over. Adding it to the daemon would mean a new IpcRequest variant,
+  // which the C2 brief forbids (a new method on the FFI interface is not a new
+  // request, so IPC_MINOR stays 0). Until the desktop ships that request, a
+  // desktop UI calling this must fail loudly -- a silent no-op would leave the
+  // host showing a QR that accepts nothing, which is the bug C2 is about.
+  async offerPairing(_bundleCborHex: string): Promise<void> {
+    throw new Error('host QR arming is mobile-only: no IpcRequest offers a pairing');
+  }
+
+  // Same ruling as offerPairing above, and for the same reason: the arm is
+  // in-process engine state. There is no IpcRequest that arms a pairing, the
+  // C2 brief forbids adding one, and IPC_MINOR stays 0. Loud, not silent -- a
+  // desktop host that no-oped here would show a QR that accepts nothing.
+  async armHostPairing(): Promise<void> {
+    throw new Error('host QR arming is mobile-only: no IpcRequest arms a pairing');
+  }
+
   async send(req: SendRequest): Promise<{ transferId: string; queued: boolean }> {
     const hasText = typeof req.text === 'string' && req.text.length > 0;
     const hasFiles = (req.files?.length ?? 0) > 0;
@@ -234,6 +252,11 @@ export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent
       return { type: 'device.state', deviceId: str(d.device_id), state: d.online ? 'online' : 'offline' };
     case 'PairingSas':
       return { type: 'pairing.sas', peerDeviceId: str(d.peer_device_id), sas: str(d.sas) };
+    // C2: IpcEvent::PairingDone exists on the wire (proto/ipc.cddl
+    // pairing-done-event, daemon-side to_ipc_event arm). Same field name and
+    // same hex id as the FFI arm, so both bridges hand the UI one shape.
+    case 'PairingDone':
+      return { type: 'pairing.done', deviceId: str(d.device_id) };
     case 'TransferProgress':
       // ponytail: u64 -> number is lossy above 2^53, which the 4 MiB frame cap
       // and a 1 MiB chunk size make unreachable. Use bigint if that changes.
@@ -259,8 +282,8 @@ export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent
         return undefined;
       }
     default:
-      // pairing.done has no IpcEvent variant at all, and an unknown variant is
-      // dropped rather than handed to the UI as a malformed event (R20).
+      // An unknown variant is dropped rather than handed to the UI as a
+      // malformed event (R20).
       return undefined;
   }
 }

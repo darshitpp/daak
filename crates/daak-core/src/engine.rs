@@ -23,6 +23,7 @@ use crate::session::{BoxConnect, BoxFutureConn, SessionRegistry, SharedSessions}
 use crate::staging::Staging;
 use crate::store::inbox::InboxRow;
 use crate::store::outbox::OutboxRow;
+use crate::store::pairings::Pairing;
 use crate::store::transfers::TransferRow;
 use crate::store::Db;
 
@@ -92,9 +93,61 @@ pub enum EngineEvent {
     /// already have inbox_entry_json() for it. Emitted only when the row was
     /// actually persisted -- an event for a row that does not exist is a lie.
     InboxReceived(InboxRow),
+    /// An inbound pairing's row was persisted by `db.upsert_pairing`. Emitted
+    /// ONLY after that call returns Ok: an event for a pairing that is not in
+    /// the database is a lie, exactly as for InboxReceived. Carries the peer's
+    /// device id and nothing else -- the UI's whole use of it is refreshing the
+    /// peer list, which the joiner needs on the same signal.
+    PairingDone {
+        device_id: [u8; 16],
+    },
 }
 
-type PendingPairing = (PairingBundle, PairMode, Option<String>);
+/// What the accept slot is armed WITH.
+///
+/// `Expected` is the QR re-arm path: the host (or any surface) already holds
+/// the peer's bundle, so the inbound hello's device id is checked against it
+/// and the Noise prologue is built from it. Unchanged, and still the default.
+///
+/// `Open` is spec 3.3 Mode A. The QR flow is ASYMMETRIC -- only the JOINER
+/// scans, so only the joiner ever holds the HOST's bundle, and the sanctioned
+/// flow never gives the host the joiner's bundle. Requiring one made host-side
+/// pairing unreachable by a real user, which is the C2 blocker. `Open` accepts
+/// the first inbound pairing with no pre-known peer: the peer sends its
+/// identity in-band, the same as the manual-code path, and it is authenticated
+/// by the Noise XX handshake plus the key confirmation (spec 3.5).
+///
+/// TRUST SURFACE: on the open arm the host can no longer pre-empt an identity
+/// substitution -- there is nothing to compare the in-band identity against.
+/// What still holds: `pair()` runs `verify_static_binding` on the received
+/// identity (so a forged `device_id` cannot claim a key it cannot sign for), the
+/// Noise XX handshake authenticates the peer to THAT identity, spec 3.5 key
+/// confirmation proves the peer holds the same session, and the SAS is derived
+/// from a handshake hash bound to both static keys. What the user gains is the
+/// SAS comparison; a user who does not compare it has accepted the peer's
+/// self-declared identity. The bundle-matched path is the stronger one and is
+/// preserved exactly.
+///
+/// Note the engine ALSO calls `verify_static_binding` on the in-band identity
+/// before handing it to `pair`. That copy is DELIBERATELY REDUNDANT -- `pair`
+/// performs the identical check as its first action -- and is kept only as
+/// defence in depth at a trust boundary. It is not what makes the open arm
+/// safe; removing it changes nothing, which is exactly why it is not mistaken
+/// for the load-bearing check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingArm {
+    Expected(PairingBundle),
+    Open,
+}
+
+/// `PendingArm` is `Clone` (the bundle is owned data) precisely so the accept
+/// path can INSPECT the arm without consuming it. See `handle_inbound`.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPairing {
+    arm: PendingArm,
+    mode: PairMode,
+    code: Option<String>,
+}
 
 pub struct Engine {
     local_addr: SocketAddr,
@@ -136,6 +189,25 @@ pub(crate) struct Profile {
 }
 
 impl Engine {
+    /// The ONE place a pairing becomes real, on all four paths (the joiner's
+    /// `pair_with` / `pair_with_code` and the host's QR / code branches in
+    /// `handle_inbound`). The row is committed and THEN the event goes out, so
+    /// no subscriber can read a pairing the database does not have -- the same
+    /// ordering `record_inbox` + `InboxReceived` follows. A single function is
+    /// the point: four call sites each emitting after their own upsert is four
+    /// chances to forget one.
+    fn commit_pairing(
+        db: &Db,
+        pairing: &Pairing,
+        tx: &broadcast::Sender<EngineEvent>,
+    ) -> Result<()> {
+        db.upsert_pairing(pairing)?;
+        let _ = tx.send(EngineEvent::PairingDone {
+            device_id: pairing.peer_device_id,
+        });
+        Ok(())
+    }
+
     pub async fn start(cfg: EngineConfig) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(256);
         let devices = Arc::new(Mutex::new(HashMap::<[u8; 16], DeviceInfo>::new()));
@@ -571,7 +643,28 @@ impl Engine {
         mode: PairMode,
         code: Option<String>,
     ) -> Result<()> {
-        *self.pending_pairing.lock().await = Some((peer, mode, code));
+        *self.pending_pairing.lock().await = Some(PendingPairing {
+            arm: PendingArm::Expected(peer),
+            mode,
+            code,
+        });
+        Ok(())
+    }
+
+    /// Arm the accept slot for the FIRST inbound pairing without naming the
+    /// peer. This is the host half of spec 3.3 Mode A: the host shows its QR
+    /// and taps Arm, and needs no bundle of its own.
+    ///
+    /// One-shot by construction -- the accept loop TAKES the slot -- so a host
+    /// that wants to pair a second device arms again. REPLACES any pending arm,
+    /// exactly as `offer_pairing` does. See `PendingArm::Open` for what this
+    /// stops constraining.
+    pub async fn offer_inbound_pairing(&self, mode: PairMode) -> Result<()> {
+        *self.pending_pairing.lock().await = Some(PendingPairing {
+            arm: PendingArm::Open,
+            mode,
+            code: None,
+        });
         Ok(())
     }
 
@@ -609,6 +702,21 @@ impl Engine {
             ),
         )
         .await?;
+        // The host may have armed the OPEN slot (spec 3.3 Mode A: the joiner is
+        // the only side that scanned, so the host has no bundle of ours), which
+        // needs our static keys before it can build the Noise XX prologue. So
+        // the joiner offers its identity in-band, exactly as pair_with_code
+        // already does. This is ADDITIVE on the wire: a bundle-matched host
+        // never reads it, because `recv_handshake` skips non-Handshake frames
+        // and `pair` reads nothing between the Hello and the first handshake
+        // message. A host that IS open-armed reads it here and refuses if the
+        // advertised device id disagrees with the Hello.
+        conn.send(
+            0,
+            RecordType::Control,
+            Bytes::from(self.identity.public().to_cbor()?),
+        )
+        .await?;
         let local = self.pairing_bundle().await;
         let (pairing, sas) = crate::pairing::pair(
             &mut conn,
@@ -620,7 +728,7 @@ impl Engine {
             None,
         )
         .await?;
-        self.db.upsert_pairing(&pairing)?;
+        Self::commit_pairing(&self.db, &pairing, &self.tx)?;
         Ok((sas, pairing.peer_device_id))
     }
 
@@ -660,7 +768,7 @@ impl Engine {
             Some(code),
         )
         .await?;
-        self.db.upsert_pairing(&pairing)?;
+        Self::commit_pairing(&self.db, &pairing, &self.tx)?;
         Ok((sas, pairing.peer_device_id))
     }
 
@@ -809,13 +917,103 @@ impl Engine {
                 Some(&code),
             )
             .await?;
-            db.upsert_pairing(&pairing)?;
+            Self::commit_pairing(db, &pairing, tx)?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
         }
-        if let Some((expected, mode, code)) = pending_pairing.lock().await.take() {
-            if hello.device_id != expected.identity.device_id {
-                return Err(CoreError::Protocol("pairing hello device mismatch".into()));
+        // The arm is a SINGLE slot, so it must not be consumed by a connection
+        // that turns out not to be a pairing dial. Every inbound connection
+        // reaches here -- an ordinary TRANSFER from an already-paired peer
+        // looks exactly like a pairing dial up to the first frame after the
+        // Hello -- so this INSPECTS a clone and only `take()`s the real slot
+        // once the peer has actually been identified. Before this, `take()`
+        // came first: any stray LAN connection burned the arm, the host's QR
+        // kept rendering, and the genuine joiner was refused with no visible
+        // cause.
+        //
+        // An EXPLICIT arm outranks "already paired": the arm names a bundle, so
+        // the hello is compared against it (`expect_hello_matches_arm`) and a
+        // match is a pairing even when a row already exists -- a host re-arming
+        // for a device it has paired before must not have that re-pair routed
+        // into the transfer handshake. Only the OPEN arm is ambiguous, and it
+        // is the one that reads an in-band identity a transfer never sends: for
+        // it alone does a pairing row mean "this is a transfer", which is what
+        // makes the reviewer's probe pass rather than merely survive. An arm
+        // clone is cheap and nothing is consumed until the peer is identified.
+        let pending = match pending_pairing.lock().await.clone() {
+            // The store is consulted ONLY for the open arm, and a failure to
+            // read it is NOT fatal: this runs before the handshake, and the
+            // joiner is waiting on the far end of a socket that would simply
+            // close. `pairing_done_is_not_emitted_when_the_pairing_row_fails_to
+            // persist` makes the store unusable on purpose to prove the commit
+            // ordering, and a routing decision must not be what breaks it. An
+            // unreadable store answers `false`, so the open arm is offered the
+            // connection and the failure lands where it belongs -- in the
+            // commit, after the handshake.
+            Some(p) if p.arm == PendingArm::Open => {
+                if db.get_pairing(&hello.device_id).ok().flatten().is_some() {
+                    None
+                } else {
+                    Some(p)
+                }
+            }
+            other => other,
+        };
+        if let Some(pending) = pending {
+            let mode = pending.mode;
+            let code = pending.code;
+            // The peer bundle the Noise prologue is built from. On the open arm
+            // it arrives IN-BAND, exactly as on the manual-code path above,
+            // because the host has none and XX needs the peer's static before
+            // the first handshake message.
+            //
+            // VERSION SKEW (accepted, fails CLOSED): an open-armed host
+            // requires a joiner new enough to send that in-band identity. An
+            // OLDER joiner sends no such frame, so `read_identity_public`
+            // either waits for it or misparses the SPAKE2 bytes that arrive
+            // instead, and the pairing is REFUSED. It is never trusted on a
+            // guess: `Pairing::state` only ever becomes "trusted" after
+            // `pair` returns Ok, so the failure mode is a refused pairing, not
+            // a wrong one. The mirror image is safe and needs no handling --
+            // an OLD host's Expected path never reads the extra frame,
+            // `recv_handshake` loops past non-Handshake records, and the
+            // in-band identity is simply buffered and ignored. No capability
+            // flag is added for this; a refused pairing IS the behaviour.
+            let expected = match pending.arm {
+                PendingArm::Expected(bundle) => {
+                    expect_hello_matches_arm(bundle.identity.device_id, hello.device_id)?;
+                    bundle
+                }
+                PendingArm::Open => {
+                    let peer_public = read_identity_public(conn).await?;
+                    expect_open_hello_matches_identity(hello.device_id, peer_public.device_id)?;
+                    // DELIBERATELY REDUNDANT with the identical check
+                    // `pairing::pair` performs on this same IdentityPublic as
+                    // its very first action. It is kept because this is a
+                    // trust boundary and defence in depth here costs one call;
+                    // it is NOT what protects the user. `pair` is.
+                    if !verify_static_binding(
+                        &peer_public.ed25519,
+                        &peer_public.x25519,
+                        &peer_public.static_sig,
+                    ) {
+                        return Err(CoreError::Protocol(
+                            "open-arm peer identity binding failed".into(),
+                        ));
+                    }
+                    let name = hex::encode(peer_public.device_id);
+                    PairingBundle::new(peer_public, name)
+                }
+            };
+            // The peer is identified and consistent with the arm, so THIS is
+            // the pairing connection: consume the one-shot slot now. Finding it
+            // already gone means a second joiner raced the first through the
+            // clone-inspect above -- that loser is refused with a clear error
+            // rather than silently falling through to the transfer path.
+            if pending_pairing.lock().await.take().is_none() {
+                return Err(CoreError::Protocol(
+                    "pairing arm already consumed by another joiner".into(),
+                ));
             }
             let (pairing, sas) = crate::pairing::pair(
                 conn,
@@ -827,7 +1025,7 @@ impl Engine {
                 code.as_deref(),
             )
             .await?;
-            db.upsert_pairing(&pairing)?;
+            Self::commit_pairing(db, &pairing, tx)?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
         }
@@ -903,6 +1101,33 @@ async fn read_hello(conn: &mut Connection<tokio::net::TcpStream>) -> Result<Hell
             None => return Err(CoreError::Protocol("closed before hello".into())),
         }
     }
+}
+
+/// The Expected-arm guard: the Hello the peer opened with must name the very
+/// device the arm was matched to. Split out of `handle_inbound` so it can be
+/// pinned by a test -- the integration probe could not reach it, because a
+/// mismatched dialer also builds its Noise prologue from the WRONG bundle and
+/// so fails the handshake first, for a different reason, with the guard never
+/// reached. This is the only implementation of the check.
+fn expect_hello_matches_arm(arm_device_id: [u8; 16], hello_device_id: [u8; 16]) -> Result<()> {
+    if hello_device_id != arm_device_id {
+        return Err(CoreError::Protocol("pairing hello device mismatch".into()));
+    }
+    Ok(())
+}
+
+/// The Open-arm guard: the peer claims an identity IN-BAND, and the Hello it
+/// opened with must name that same device -- otherwise one frame is signed for
+/// a device id the other is not. Split out for the same reason as above; this
+/// is the only implementation of the check.
+fn expect_open_hello_matches_identity(
+    hello_device_id: [u8; 16],
+    peer_device_id: [u8; 16],
+) -> Result<()> {
+    if hello_device_id != peer_device_id {
+        return Err(CoreError::Protocol("open-arm hello device mismatch".into()));
+    }
+    Ok(())
 }
 
 /// A long-lived per-peer session is not free: it holds a TCP socket, a Noise
@@ -1191,6 +1416,45 @@ async fn read_identity_public(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 3. Both device-id guards are pinned here, as UNIT tests on the
+    /// guard itself, because neither can be reached through the public API:
+    ///
+    /// * the Expected-arm case -- a mismatched dialer ALSO builds its Noise
+    ///   prologue from the wrong bundle, so the handshake fails first and for a
+    ///   different reason, with the guard never reached. The pre-existing
+    ///   integration test `a_bundle_matched_arm_still_refuses_an_inbound_from_a
+    ///   _different_device` passes on that earlier failure, which is exactly
+    ///   why a mutation of the guard left all seven tests green;
+    /// * the Open-arm case -- reaching it needs a Hello that names one device
+    ///   and an in-band identity that names another, and no Engine-initiated
+    ///   dial produces that (the joiner derives both from the same Identity).
+    ///
+    /// What these prove: the guard REJECTS a mismatch with its own specific
+    /// error, and ACCEPTS a match. They do not prove the guard is wired into
+    /// the accept path -- the call sites above are the wiring, and the two are
+    /// one-liners with no branch of their own.
+    #[test]
+    fn the_expected_arm_rejects_a_hello_naming_a_different_device() {
+        let arm = [1u8; 16];
+        assert!(expect_hello_matches_arm(arm, arm).is_ok());
+        let err = expect_hello_matches_arm(arm, [2u8; 16]).unwrap_err();
+        assert!(
+            err.to_string().contains("pairing hello device mismatch"),
+            "a specific rejection, not a generic one: {err}"
+        );
+    }
+
+    #[test]
+    fn the_open_arm_rejects_a_hello_disagreeing_with_the_in_band_identity() {
+        let id = [3u8; 16];
+        assert!(expect_open_hello_matches_identity(id, id).is_ok());
+        let err = expect_open_hello_matches_identity(id, [4u8; 16]).unwrap_err();
+        assert!(
+            err.to_string().contains("open-arm hello device mismatch"),
+            "a specific rejection, not a generic one: {err}"
+        );
+    }
 
     #[test]
     fn accept_error_classifies_protocol_rejection_as_non_fatal() {

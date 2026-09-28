@@ -43,6 +43,7 @@ interface FfiEvent {
   DeviceFound(DeviceFoundEvent data);
   DeviceState(DeviceStateEvent data);
   PairingSas(PairingSasEvent data);
+  PairingDone(PairingDoneEvent data);
   TransferProgress(ProgressEvent data);
   TransferItem(TransferItemEvent data);
   TransferDone(DoneEvent data);
@@ -53,6 +54,7 @@ interface FfiEvent {
 dictionary DeviceFoundEvent { string device_id; string name; string addr; boolean online; };
 dictionary DeviceStateEvent { string device_id; boolean online; };
 dictionary PairingSasEvent { string peer_device_id; string sas; };
+dictionary PairingDoneEvent { string device_id; };
 dictionary ProgressEvent { string transfer_id; u64 bytes_done; u64 bytes_total; };
 dictionary TransferItemEvent { string transfer_id; u32 item_index; string state; string dest_path; };
 dictionary DoneEvent { string transfer_id; };
@@ -69,6 +71,25 @@ interface DaakEngine {
   constructor(SecureStore store, EventSink sink);
   [Throws=FfiError] void start(string data_dir, string display_name, u16 listen_port);
   [Throws=FfiError] string pairing_bundle();
+  // C2: the HOST half of QR pairing. The host scanned the joiner's bundle, so
+  // this takes the SAME bytes pair_with takes -- the bundle CBOR -- and arms
+  // the accept slot for that peer. This is the RE-ARM path (a bundle is in
+  // hand, e.g. a code-mode or re-arm caller). Re-armable: it replaces the
+  // pending slot, so a host can re-offer after a failed or mismatched attempt
+  // without restarting the engine.
+  [Throws=FfiError] void offer_pairing(sequence<u8> bundle_cbor);
+  // The host arm spec 3.3 Mode A actually needs, and it takes NO bundle. The QR
+  // flow is asymmetric: only the JOINER scans, so only the joiner ever holds
+  // the HOST's bundle, and the sanctioned flow never gives the host the
+  // joiner's. An arm that requires one is unreachable by a real user, so this
+  // arms the accept slot for the FIRST inbound pairing, learns the peer's
+  // identity in-band, and verifies it in the Noise XX handshake (spec 3.5) plus
+  // the SAS the user compares. One-shot: it is consumed by the connection it
+  // accepts, so arm again to pair another device. TRUST SURFACE: the host has
+  // no pre-known bundle, so it cannot pre-empt an identity substitution the way
+  // offer_pairing does -- the SAS comparison is what binds the peer to the
+  // human. See PendingArm::Open in crates/daak-core/src/engine.rs.
+  [Throws=FfiError] void arm_host_pairing();
   [Throws=FfiError] string pair_with(string addr, sequence<u8> bundle_cbor);
   [Throws=FfiError] string accept_pairing();
   [Throws=FfiError] string send_text(string peer_id, string text);

@@ -78,6 +78,24 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().pairWith(addr, bytes) }
     }
 
+    // C2 RE-ARM path: the caller holds the peer's bundle, so this takes the
+    // same bytes as pairWith and arms the accept slot for that peer.
+    @ReactMethod
+    override fun offerPairing(bundleCbor: ReadableArray, promise: Promise) {
+        val bytes = List(bundleCbor.size()) { bundleCbor.getInt(it).toUByte() }
+        resolve(promise) { handle().offerPairing(bytes) }
+    }
+
+    // C2, second review: the host arm spec 3.3 Mode A actually needs. The QR
+    // flow is asymmetric -- only the JOINER scans, so the host never holds the
+    // joiner's bundle and an arm requiring one is unreachable. No argument: the
+    // engine learns the peer's identity in-band and verifies it in the Noise XX
+    // handshake, and the user comparing the two SAS values is what binds it to a
+    // human. See PendingArm::Open in crates/daak-core.
+    @ReactMethod
+    override fun armHostPairing(promise: Promise) =
+        resolve(promise) { handle().armHostPairing() }
+
     @ReactMethod
     override fun acceptPairing(promise: Promise) = resolve(promise) { handle().acceptPairing() }
 

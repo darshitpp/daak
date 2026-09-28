@@ -21,6 +21,8 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     listDevices: async () => JSON.stringify([]),
     pairingBundle: async () => '{}',
     pairWith: async (addr, bytes) => { calls.push(['pairWith', addr, bytes.length]); return '123456'; },
+    offerPairing: async (bytes) => { calls.push(['offerPairing', bytes.length]); },
+    armHostPairing: async () => { calls.push(['armHostPairing']); },
     acceptPairing: async () => '123456',
     sendText: async (peer, text) => { calls.push(['sendText', peer, text]); return 'aa'.repeat(16); },
     sendFiles: async (peer, paths) => { calls.push(['sendFiles', peer, paths]); return 'bb'.repeat(16); },
@@ -85,5 +87,31 @@ describe('createEngine', () => {
     off();
     emit('DaakEvent', nativePayload);
     expect(seen).toEqual([]);
+  });
+
+  // Minor 3: the fake recorded offerPairing into `calls` and NOTHING read it,
+  // so a host-arm that silently stopped reaching the native module would have
+  // stayed green. The hex string must reach the module as BYTES.
+  it('hands the host arm to the native module as decoded bytes', async () => {
+    const calls: unknown[][] = [];
+    const engine = createEngine(fakeNative(calls), bindDaakEvents(fakeNative(calls)));
+
+    await engine.offerPairing('aabbcc');
+
+    expect(calls).toContainEqual(['offerPairing', 3]);
+  });
+
+  // The arm a real user reaches (spec 3.3 Mode A). It carries NO payload, so
+  // unlike offerPairing there is nothing to decode -- which is precisely why
+  // the bundle-taking arm could not be reached by a real user, and why this one
+  // is the one the host flow must call.
+  it('arms the host with no payload at all', async () => {
+    const calls: unknown[][] = [];
+    const native = fakeNative(calls);
+    const engine = createEngine(native, bindDaakEvents(native));
+
+    await engine.armHostPairing();
+
+    expect(calls).toContainEqual(['armHostPairing']);
   });
 });

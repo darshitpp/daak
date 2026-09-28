@@ -59,6 +59,22 @@ export class InProcessEngine implements DaakEngine {
     return { sas };
   }
 
+  // C2: the HOST half. The host scanned the joiner's bundle, so it already
+  // holds the exact bytes `pair` passes the other way; hand them to the native
+  // arm and the engine's pending slot is set for the inbound connection. No
+  // reply, no id -- arming is a local state change, and the result of the
+  // pairing arrives as the `pairing.sas` / `pairing.done` events.
+  async offerPairing(bundleCborHex: string): Promise<void> {
+    await this.native.offerPairing(hexToBytes(bundleCborHex));
+  }
+
+  // Spec 3.3 Mode A. No bundle crosses: the host has none, and the engine
+  // learns the peer's identity in-band. See the trust-surface note on
+  // DaakEngine.armHostPairing.
+  async armHostPairing(): Promise<void> {
+    await this.native.armHostPairing();
+  }
+
   async send(req: SendRequest): Promise<{ transferId: string; queued: boolean }> {
     const hasText = typeof req.text === 'string' && req.text.length > 0;
     const hasFiles = (req.files?.length ?? 0) > 0;

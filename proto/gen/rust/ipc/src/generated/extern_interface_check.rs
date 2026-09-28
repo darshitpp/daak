@@ -73,6 +73,10 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::PairArgs>();
     _assert_serialize::<crate::generated::PairRequest>();
     _assert_deserialize::<crate::generated::PairRequest>();
+    _assert_serialize::<crate::generated::PairingDoneArgs>();
+    _assert_deserialize::<crate::generated::PairingDoneArgs>();
+    _assert_serialize::<crate::generated::PairingDoneEvent>();
+    _assert_deserialize::<crate::generated::PairingDoneEvent>();
     _assert_serialize::<crate::generated::PairingSasArgs>();
     _assert_deserialize::<crate::generated::PairingSasArgs>();
     _assert_serialize::<crate::generated::PairingSasEvent>();

@@ -11,6 +11,8 @@ import type { Spec as NativeDaakSpec } from '../src/NativeDaak';
 const METHODS: (keyof DaakEngine)[] = [
   'start', 'stop', 'devices', 'pair', 'send', 'cancel',
   'retry', 'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+  'offerPairing',
+  'armHostPairing',
 ];
 
 // Compile-time only: adding, removing or renaming a DaakEvent member breaks tsc.
@@ -36,6 +38,8 @@ type NativeMethods = Exclude<keyof NativeDaakSpec, 'getConstants'>;
 const NATIVE_METHODS: Record<NativeMethods, true> = {
   start: true,
   pairingBundle: true,
+  offerPairing: true,
+  armHostPairing: true,
   pairWith: true,
   acceptPairing: true,
   sendText: true,
@@ -68,14 +72,16 @@ describe('contract types', () => {
     const exhaustive: Record<keyof DaakEngine, true> = {
       start: true, stop: true, devices: true, pair: true, send: true, cancel: true,
       retry: true, listTransfers: true, listInbox: true, setDisplayName: true,
-      setPresence: true, on: true,
+      setPresence: true, on: true, offerPairing: true, armHostPairing: true,
     };
     expect(Object.keys(EVENT_TYPES).length).toBe(9);
     expect(Object.keys(exhaustive).length).toBe(METHODS.length);
   });
 
   it('pins the TurboModule spec the native modules implement', () => {
-    expect(Object.keys(NATIVE_METHODS).length).toBe(17);
+    // 19 = 18 UDL methods + armHostPairing, the bundle-less host arm. A count
+    // bump here means a native method was added without a decision here.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(19);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -98,6 +104,7 @@ describe('contract types', () => {
       'device.discovered': { device: 'object' },
       'device.state': { deviceId: 'string', state: 'string' },
       'pairing.sas': { peerDeviceId: 'string', sas: 'string' },
+      'pairing.done': { deviceId: 'string' },
       'transfer.progress': { transferId: 'string', bytesDone: 'number', bytesTotal: 'number' },
       'transfer.item': { transferId: 'string', itemIndex: 'number', state: 'string' },
       'transfer.done': { transferId: 'string' },
@@ -148,6 +155,11 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
     listInbox: async () => '[]',
     setDisplayName: async () => {},
     setPresence: async () => {},
+    // The host arm (spec 3.3 Mode A). It takes no bundle, so there is nothing
+    // for the fake to validate -- and a missing method here is a TypeError in
+    // the shared suite rather than a silent pass, which is the point of the
+    // partial/unit split.
+    armHostPairing: async () => {},
     addListener: () => {},
     removeListeners: () => {},
     ...over,
@@ -228,6 +240,36 @@ describe('InProcessEngine', () => {
     const native = fakeNative({ listDevices: async () => '[{"deviceId":"d1","addr":"10.0.0.2:9000"}]' });
     const engine = new InProcessEngine(native, () => () => {});
     await expect(engine.pair('d1', 'qr')).rejects.toThrow(/bundle/);
+  });
+
+  // C2. The host arm: the scanned joiner's bundle CBOR reaches the native
+  // offer_pairing as the SAME decoded bytes `pair` sends the other way, and
+  // an un-decodable hex string is refused at the boundary rather than
+  // half-decoded into the engine.
+  it('arms the host with the scanned bundle bytes, and refuses non-hex', async () => {
+    const seen: number[][] = [];
+    const native = fakeNative({
+      offerPairing: async (cbor: number[]) => {
+        seen.push(cbor);
+      },
+    });
+    const engine = new InProcessEngine(native, () => () => {});
+    await engine.offerPairing('ccdd');
+    expect(seen).toEqual([[0xcc, 0xdd]]);
+    await expect(engine.offerPairing('xyz')).rejects.toThrow(/hex/);
+  });
+
+  // The host arm a real user reaches (spec 3.3 Mode A). Two facts: it takes NO
+  // argument, and it crosses to the native module with no payload at all --
+  // there is no bundle to hex-decode, which is exactly why the previous
+  // bundle-taking arm was unreachable for a real user.
+  it('arms the host with no bundle and no payload crossing the bridge', async () => {
+    const calls: string[] = [];
+    const engine = new InProcessEngine(fakeNative({
+      armHostPairing: async () => { calls.push('armHostPairing'); },
+    }), () => () => {});
+    await engine.armHostPairing();
+    expect(calls).toEqual(['armHostPairing']);
   });
 
   it('parses the device list and rejects a non-array payload', async () => {

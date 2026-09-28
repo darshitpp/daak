@@ -218,6 +218,11 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
             payload_json: serde_json::to_string(&inbox_entry_json(&row))
                 .expect("an InboxEntry is strings, numbers and array-or-null"),
         },
+        // C2. Same field name and same hex encoding as the daak-ffi arm, so
+        // `case 'PairingDone'` in DaemonClient reads one shape on both bridges.
+        EngineEvent::PairingDone { device_id } => IpcEvent::PairingDone {
+            device_id: hex::encode(device_id),
+        },
     }
 }
 

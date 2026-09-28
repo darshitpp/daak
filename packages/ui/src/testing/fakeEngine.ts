@@ -9,6 +9,13 @@ export function fakeEngine(devices: DeviceInfo[] = [
     stop: async () => {},
     devices: async () => devices,
     pair: async () => ({ sas: '123456' }),
+    // C2: the host arm. A no-op is the honest fake: arming is local engine
+    // state with no reply, so the fake can neither fail nor prove anything.
+    offerPairing: async () => {},
+    // Spec 3.3 Mode A host arm. A no-op is the honest fake: arming is local
+    // engine state with no reply, so the fake can neither fail nor prove
+    // anything. What matters to a caller is that it takes NO argument.
+    armHostPairing: async () => {},
     send: async () => ({ transferId: 'aa'.repeat(16), queued: true }),
     cancel: async () => {},
     retry: async () => {},

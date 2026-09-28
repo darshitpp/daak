@@ -143,6 +143,7 @@ ipc-event =
     device-found-event
   / device-state-event
   / pairing-sas-event
+  / pairing-done-event
   / transfer-progress-event
   / transfer-item-event
   / transfer-done-event
@@ -152,6 +153,7 @@ ipc-event =
 device-found-event      = { "DeviceFound": device-found-args }
 device-state-event      = { "DeviceState": device-state-args }
 pairing-sas-event       = { "PairingSas": pairing-sas-args }
+pairing-done-event      = { "PairingDone": pairing-done-args }
 transfer-progress-event = { "TransferProgress": transfer-progress-args }
 transfer-item-event     = { "TransferItem": transfer-item-args }
 transfer-done-event     = { "TransferDone": transfer-ref }
@@ -161,6 +163,7 @@ inbox-received-event    = { "InboxReceived": inbox-received-args }
 device-found-args      = { "device_id": tstr, "name": tstr, "addr": tstr }
 device-state-args      = { "device_id": tstr, "online": bool }
 pairing-sas-args       = { "peer_device_id": tstr, "sas": tstr }
+pairing-done-args      = { "device_id": tstr }
 transfer-progress-args = { "transfer_id": tstr, "bytes_done": uint, "bytes_total": uint }
 transfer-item-args     = { "transfer_id": tstr, "item_index": uint, "state": tstr, "dest_path": tstr }
 transfer-failed-args   = { "transfer_id": tstr, "error": tstr }

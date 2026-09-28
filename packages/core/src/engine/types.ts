@@ -66,6 +66,38 @@ export interface DaakEngine {
   stop(): Promise<void>;
   devices(): Promise<DeviceInfo[]>;
   pair(deviceId: string, mode: 'qr' | 'code', secret?: string): Promise<{ sas: string }>;
+  /**
+   * HOST half of QR pairing: arm the engine to accept the peer whose bundle
+   * CBOR hex is given, before that peer dials in. Without it the host's own QR
+   * is decorative -- the inbound connection is refused as unpaired and the
+   * host's `pairing.sas` never fires.
+   *
+   * Mobile-only: it is a method on the in-process FFI engine, and there is
+   * deliberately no `IpcRequest` for it (see DaemonClientEngine).
+   */
+  offerPairing(bundleCborHex: string): Promise<void>;
+  /**
+   * HOST half of QR pairing, spec 3.3 Mode A: arm the accept slot for the first
+   * inbound pairing, naming no peer.
+   *
+   * This is the arm a real user reaches. The QR flow is asymmetric -- only the
+   * JOINER scans, so only the joiner ever holds the host's bundle, and the
+   * sanctioned flow never gives the host the joiner's. `offerPairing` above
+   * needs a bundle and is therefore the re-arm path for a caller that has one.
+   *
+   * TRUST SURFACE: the host has no pre-known peer, so it cannot pre-empt an
+   * identity substitution the way `offerPairing` does. The engine still
+   * verifies the in-band identity (device-id agreement plus the static-key
+   * binding), authenticates it in the Noise XX handshake, confirms the session
+   * per spec 3.5, and derives the SAS from a hash bound to both static keys.
+   * What the user gains is comparing the two SAS values; that comparison is now
+   * the only thing binding the peer's self-declared identity to a human.
+   *
+   * One-shot: the accept slot is consumed by the connection it accepts.
+   * Mobile-only: it arms in-process engine state, and there is deliberately
+   * no `IpcRequest` for it (see DaemonClientEngine).
+   */
+  armHostPairing(): Promise<void>;
   send(req: SendRequest): Promise<{ transferId: string; queued: boolean }>;
   cancel(transferId: string): Promise<void>;
   retry(transferId: string): Promise<void>;

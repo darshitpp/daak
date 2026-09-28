@@ -1460,6 +1460,9 @@ impl cbor_event::se::Serialize for IpcEvent {
                 device_state_event.serialize(serializer)
             }
             IpcEvent::PairingSasEvent(pairing_sas_event) => pairing_sas_event.serialize(serializer),
+            IpcEvent::PairingDoneEvent(pairing_done_event) => {
+                pairing_done_event.serialize(serializer)
+            }
             IpcEvent::TransferProgressEvent(transfer_progress_event) => {
                 transfer_progress_event.serialize(serializer)
             }
@@ -1505,6 +1508,14 @@ impl Deserialize for IpcEvent {
                 Ok(pairing_sas_event) => return Ok(Self::PairingSasEvent(pairing_sas_event)),
                 Err(e) => {
                     errs.push(e.annotate("PairingSasEvent"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = PairingDoneEvent::deserialize(raw);
+            match deser_variant {
+                Ok(pairing_done_event) => return Ok(Self::PairingDoneEvent(pairing_done_event)),
+                Err(e) => {
+                    errs.push(e.annotate("PairingDoneEvent"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -2441,6 +2452,172 @@ impl Deserialize for PairRequest {
             Ok(Self { pair })
         })()
         .map_err(|e| e.annotate("PairRequest"))
+    }
+}
+
+impl cbor_event::se::Serialize for PairingDoneArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("device_id")?;
+        serializer.write_text(&self.device_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for PairingDoneArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "device_id" => {
+                            if device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "device_id".into(),
+                                ))
+                                .into());
+                            }
+                            device_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let device_id =
+                match device_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("device_id"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { device_id })
+        })()
+        .map_err(|e| e.annotate("PairingDoneArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for PairingDoneEvent {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("PairingDone")?;
+        self.pairing_done.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for PairingDoneEvent {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut pairing_done = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "PairingDone" => {
+                            if pairing_done.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "PairingDone".into(),
+                                ))
+                                .into());
+                            }
+                            pairing_done = Some(
+                                PairingDoneArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("pairing_done"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let pairing_done =
+                match pairing_done {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("PairingDone"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { pairing_done })
+        })()
+        .map_err(|e| e.annotate("PairingDoneEvent"))
     }
 }
 

@@ -14,14 +14,45 @@ import type { DaakEngine } from '../src/engine/types';
 //   - send()'s row is asserted in the daemon-backed spec only, because the
 //     in-process engine here runs against a FAKE native module that has no
 //     SQLite behind it.
+//   - armHostPairing() is MOBILE-ONLY BY RULING, not by oversight. It arms the
+//     engine's accept slot, which lives inside the in-process engine; exposing
+//     it on the daemon would mean a new IpcRequest variant, which the C2 brief
+//     forbids (and IPC_MINOR stays 0). DaemonClientEngine therefore REJECTS it
+//     loudly rather than no-oping -- a silent no-op would leave a desktop host
+//     showing a QR that accepts nothing, which is the bug C2 was raised for.
+//     So it is deliberately NOT in the shared list below; the in-process arm is
+//     pinned by contract.spec.ts and the daemon rejection by
+//     daemon-client.spec.ts. The method-set pin at the top of this file still
+//     requires BOTH engines to expose it, which is the real cross-engine
+//     contract; what differs is behaviour, and that is engine-specific.
 export function runContractSuite(name: string, factory: () => Promise<DaakEngine>): void {
   it(`${name}: exposes the full DaakEngine method set`, async () => {
     const e = await factory();
     const methods: (keyof DaakEngine)[] = [
       'start', 'stop', 'devices', 'pair', 'send', 'cancel',
       'retry', 'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+      'armHostPairing',
     ];
     for (const m of methods) expect(typeof e[m], `${name}.${m}`).toBe('function');
+    await e.stop();
+  });
+
+  // The host arm is the ONE method whose correct behaviour DIFFERS per engine,
+  // so it cannot be a shared assertion. Rather than leave that as a note, it is
+  // here as a branch: both engines are asked to arm, and each must answer
+  // correctly for its own deployment. A future IpcRequest would flip the daemon
+  // branch to resolve, and this test would then hold them to the same contract.
+  it(`${name}: armHostPairing answers correctly for this deployment`, async () => {
+    const e = await factory();
+    await e.start();
+    if (name === 'daemon') {
+      // Mobile-only ruling, asserted rather than commented.
+      await expect(e.armHostPairing()).rejects.toThrow(/mobile-only/);
+    } else {
+      // The in-process engine arms its accept slot. There is no peer yet, so
+      // this must NOT throw and must NOT invent a pairing.
+      await expect(e.armHostPairing()).resolves.toBeUndefined();
+    }
     await e.stop();
   });
 

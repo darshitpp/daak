@@ -73,6 +73,35 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().pairWith(addr: addr, bundleCbor: bytes) }
   }
 
+  // C2 RE-ARM path: the caller holds the peer's bundle, so this takes the same
+  // bytes pairWith takes and arms the accept slot for that peer.
+  // The trailing `return nil` is load-bearing, exactly as on cancel/retry/
+  // setPresence: the generated method returns Void and run<T> takes a
+  // `() throws -> T?`, so a single-expression closure leaves T ambiguous and
+  // does not type-check.
+  @objc func offerPairing(_ bundleCbor: [NSNumber],
+                          resolve: @escaping RCTPromiseResolveBlock,
+                          reject: @escaping RCTPromiseRejectBlock) {
+    let bytes = bundleCbor.map { UInt8(truncatingIfNeeded: $0.intValue) }
+    run(resolve, reject) { try self.need().offerPairing(bundleCbor: bytes); return nil }
+  }
+
+  // C2, second review: the host arm spec 3.3 Mode A actually needs. The QR
+  // flow is asymmetric -- only the JOINER scans, so the host never holds the
+  // joiner's bundle, and an arm that requires one is unreachable. This takes
+  // NO argument: the engine learns the peer's identity in-band and verifies it
+  // in the Noise XX handshake, and the user comparing the two SAS values is
+  // what binds it to a human. See PendingArm::Open in crates/daak-core.
+  //
+  // The trailing `return nil` is load-bearing, exactly as on cancel/retry/
+  // setPresence: the generated method returns Void and run<T> takes a
+  // `() throws -> T?`, so a single-expression closure leaves T ambiguous and
+  // does not type-check.
+  @objc func armHostPairing(_ resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().armHostPairing(); return nil }
+  }
+
   @objc func acceptPairing(_ resolve: @escaping RCTPromiseResolveBlock,
                            reject: @escaping RCTPromiseRejectBlock) {
     run(resolve, reject) { try self.need().acceptPairing() }

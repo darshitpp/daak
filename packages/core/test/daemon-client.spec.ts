@@ -278,6 +278,7 @@ describe('DaemonClientEngine', () => {
     h.event({ DeviceState: { device_id: 'd1', online: true } });
     h.event({ DeviceState: { device_id: 'd2', online: false } });
     h.event({ PairingSas: { peer_device_id: 'd1', sas: '1-2-3' } });
+    h.event({ PairingDone: { device_id: 'd1' } });
     h.event({ TransferProgress: { transfer_id: 't1', bytes_done: 5, bytes_total: 10 } });
     h.event({ TransferItem: { transfer_id: 't1', item_index: 1, state: 'receiving', dest_path: '/a' } });
     h.event({ TransferDone: { transfer_id: 't1' } });
@@ -287,6 +288,7 @@ describe('DaemonClientEngine', () => {
       { type: 'device.state', deviceId: 'd1', state: 'online' },
       { type: 'device.state', deviceId: 'd2', state: 'offline' },
       { type: 'pairing.sas', peerDeviceId: 'd1', sas: '1-2-3' },
+      { type: 'pairing.done', deviceId: 'd1' },
       { type: 'transfer.progress', transferId: 't1', bytesDone: 5, bytesTotal: 10 },
       { type: 'transfer.item', transferId: 't1', itemIndex: 1, state: 'receiving', destPath: '/a' },
       { type: 'transfer.done', transferId: 't1' },
@@ -318,5 +320,30 @@ describe('DaemonClientEngine', () => {
     off();
     h.event({ TransferDone: { transfer_id: 't1' } });
     expect(seen).toEqual([]);
+  });
+
+  // Minor 4 / C2 ruling: host QR arming is in-process only. There is no
+  // IpcRequest that offers a pairing and none is added, so the daemon bridge
+  // must fail LOUDLY -- a silent no-op would leave the desktop host showing a
+  // QR that accepts nothing, which is the exact bug C2 was raised for. This
+  // pins both the message and the fact that nothing is written to the wire.
+  it('rejects the mobile-only host QR arm and writes no request', async () => {
+    const h = makeEngine();
+    await expect(h.engine.offerPairing('ccdd')).rejects.toThrow(/mobile-only/);
+    expect(h.written).toEqual([]);
+    expect(h.sent).toEqual([]);
+  });
+
+  // The same ruling for the bundle-less host arm a real user actually reaches
+  // (spec 3.3 Mode A). Pinned HERE, in a suite that binds no socket, because
+  // the shared contract-suite branch for the daemon runs inside
+  // daemon.contract.spec.ts -- which the sandbox cannot execute (PermissionDenied
+  // on bind). If that test is ever the only one, this loud failure becomes an
+  // untested one.
+  it('rejects the mobile-only bundle-less host arm and writes no request', async () => {
+    const h = makeEngine();
+    await expect(h.engine.armHostPairing()).rejects.toThrow(/mobile-only/);
+    expect(h.written).toEqual([]);
+    expect(h.sent).toEqual([]);
   });
 });

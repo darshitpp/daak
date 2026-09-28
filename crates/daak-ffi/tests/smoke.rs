@@ -519,6 +519,14 @@ fn sample_events(hex: &str) -> Vec<(&'static str, FfiEvent)> {
             },
         ),
         (
+            "PairingDone",
+            FfiEvent::PairingDone {
+                data: daak_ffi::PairingDoneEvent {
+                    device_id: hex.into(),
+                },
+            },
+        ),
+        (
             "TransferProgress",
             FfiEvent::TransferProgress {
                 data: daak_ffi::ProgressEvent {

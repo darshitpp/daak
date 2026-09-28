@@ -10,6 +10,9 @@ export type IpcEventJSON =
       PairingSasEvent: PairingSasEventJSON;
     }
   | {
+      PairingDoneEvent: PairingDoneEventJSON;
+    }
+  | {
       TransferProgressEvent: TransferProgressEventJSON;
     }
   | {
@@ -134,6 +137,12 @@ export interface PairingSasEventJSON {
 export interface PairingSasArgsJSON {
   peer_device_id: string;
   sas: string;
+}
+export interface PairingDoneEventJSON {
+  pairing_done: PairingDoneArgsJSON;
+}
+export interface PairingDoneArgsJSON {
+  device_id: string;
 }
 export interface TransferProgressEventJSON {
   transfer_progress: TransferProgressArgsJSON;

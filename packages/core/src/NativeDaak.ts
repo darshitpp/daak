@@ -11,6 +11,10 @@ export interface Spec extends TurboModule {
   start(dataDir: string, displayName: string, listenPort: number): Promise<void>;
   /** UDL: pairing_bundle() -> {cbor, name, device_id} (R11) */
   pairingBundle(): Promise<string>;
+  /** UDL: offer_pairing(sequence<u8> bundle_cbor) -- the RE-ARM path, peer known */
+  offerPairing(bundleCbor: number[]): Promise<void>;
+  /** UDL: arm_host_pairing() -- spec 3.3 Mode A host arm, takes no bundle */
+  armHostPairing(): Promise<void>;
   /** UDL: pair_with(string addr, sequence<u8> bundle_cbor) -> {sas, peer_device_id} */
   pairWith(addr: string, bundleCbor: number[]): Promise<string>;
   /** UDL: accept_pairing() -> the inbound SAS string */
