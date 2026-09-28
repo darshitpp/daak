@@ -16,6 +16,19 @@ pub enum CoreError {
     Protocol(String),
     #[error("transfer: {0}")]
     Transfer(String),
+    /// B4: the receiver received every chunk, verified the hashes, and HELD an
+    /// item in quarantine. Distinct from `Transfer` because it is a permanent
+    /// verdict on these exact bytes, not a transport failure: the caller must
+    /// settle the row instead of retrying, and `item_index` is the one item the
+    /// ack named. Carries the transfer id so the caller never has to infer it.
+    #[error(
+        "receiver quarantined item {item_index} of transfer {}: hash mismatch",
+        hex::encode(transfer_id)
+    )]
+    Quarantined {
+        transfer_id: [u8; 16],
+        item_index: u32,
+    },
     #[error("transfer interrupted; resume state persisted")]
     TransferInterrupted,
     #[error("discovery: {0}")]
@@ -52,6 +65,10 @@ impl CoreError {
             CoreError::Protocol(_) => ErrorCategory::PeerRejected,
             CoreError::Codec(_) | CoreError::Cbor(_) => ErrorCategory::PeerRejected,
             CoreError::Transfer(_) => ErrorCategory::PeerRejected,
+            // Same class as Transfer: the peer made a decision about the data.
+            // It stays OUT of Network so nothing upstream reads a quarantine as
+            // a flaky link worth retrying.
+            CoreError::Quarantined { .. } => ErrorCategory::PeerRejected,
             CoreError::TransferInterrupted => ErrorCategory::Network,
             CoreError::Discovery(_) => ErrorCategory::Network,
             CoreError::UnsupportedSchema => ErrorCategory::UnsupportedSchema,

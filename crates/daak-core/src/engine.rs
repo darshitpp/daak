@@ -19,7 +19,7 @@ use crate::net::tcp;
 use crate::net::Connection;
 use crate::outbox::OutboxWorker;
 use crate::pairing::{PairMode, PairingBundle};
-use crate::session::{BoxConnect, BoxFutureConn, SessionRegistry, SharedSessions};
+use crate::session::{BoxConnect, BoxFutureConn, SessionRegistry, SharedSessions, TcpConn};
 use crate::staging::Staging;
 use crate::store::inbox::InboxRow;
 use crate::store::outbox::OutboxRow;
@@ -1195,15 +1195,20 @@ const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 // a cold peer serializes every other peer's connect. N is small (a room's worth
 // of devices) and a LAN handshake is ~ms; shard the registry per peer, or dial
 // outside the lock, if that ever stops being true.
-async fn send_secure_with(
-    sessions: &SharedSessions,
+async fn send_secure_with<T: crate::net::FrameTransport + Send>(
+    sessions: &SharedSessions<T>,
     peer_device_id: [u8; 16],
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
 ) -> Result<()> {
     let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
-    if send_on_session(&handle, manifest, paths).await.is_ok() {
-        return Ok(());
+    match send_on_session(&handle, manifest, paths).await {
+        Ok(()) => return Ok(()),
+        // B4: a hash mismatch is a PERMANENT verdict on bytes the receiver
+        // already holds, so the retry below cannot change it -- it would upload
+        // the whole payload a second time to earn the identical answer.
+        Err(e @ CoreError::Quarantined { .. }) => return Err(e),
+        Err(_) => {}
     }
     // ponytail: the retry re-sends the WHOLE payload, so a transient error after
     // the receiver already wrote the bytes costs a full re-send. Upgrade to the
@@ -1217,8 +1222,8 @@ async fn send_secure_with(
 /// One send over an existing session, holding the session lock for the whole
 /// transfer (a session multiplexes one transfer at a time). A failure marks the
 /// session broken so nobody reuses the half-written connection.
-async fn send_on_session(
-    handle: &crate::session::SessionHandle,
+async fn send_on_session<T: crate::net::FrameTransport + Send>(
+    handle: &crate::session::SessionHandle<T>,
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
 ) -> Result<()> {
@@ -1236,12 +1241,12 @@ async fn send_on_session(
 
 /// What the outbox drain closure needs; the closure itself is a plain `Fn`, so
 /// the per-row state is cloned into a task per row.
-struct DrainCtx {
+struct DrainCtx<T = TcpConn> {
     db: Arc<Db>,
     staging: Arc<Staging>,
     /// R-T11-12: the SAME sessions the Engine holds, so a drained send reuses
     /// (and re-dials) the same per-peer connection a direct send would.
-    sessions: SharedSessions,
+    sessions: SharedSessions<T>,
 }
 
 /// Give up on a row after this many failed delivery attempts. 8 with the 4.3
@@ -1355,7 +1360,10 @@ fn settle_failed_attempt(
 }
 
 /// Rebuild a queued send from its row and push it, then settle the row state.
-async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
+async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
+    ctx: DrainCtx<T>,
+    row: OutboxRow,
+) {
     let db = &ctx.db;
     let retry = |jitter: u64| {
         // R-T10-5: cap the retries. Without this a permanently unreachable peer
@@ -1440,6 +1448,83 @@ async fn drain_outbox_row(ctx: DrainCtx, row: OutboxRow) {
             }
         }
         Err(e) => {
+            // B4: the receiver QUARANTINED an item. That is a verdict about
+            // these exact bytes, not a transport hiccup, so it must not enter
+            // the retry path: retrying re-sends the same payload, the receiver
+            // recomputes the same hash, and the sender burns all 8 attempts
+            // over ~35 minutes before a row that was never going to succeed
+            // reads 'failed'. Record what the receiver said, settle once, stop.
+            //
+            // Only the item the ack NAMES is marked. The receiver reports the
+            // FIRST failed item and AckMsg has room for exactly one, so the
+            // sender does NOT know whether a manifest with several bad items
+            // quarantined one or five. Marking them all would be a guess, and a
+            // guess that writes 'quarantined' onto files the receiver actually
+            // accepted is worse than silence. The honest one-item record
+            // leaves the other items with NO ROW AT ALL, which is accurate:
+            // this sender cannot see their outcome, and the receiver's own DB
+            // is authoritative about them anyway.
+            if let CoreError::Quarantined { item_index, .. } = e {
+                // 'quarantined' is transfer_items vocabulary (spec 4.2), the
+                // SAME word the receiver writes, so both sides agree on what a
+                // held file is.
+                //
+                // The row is written HERE, from the manifest already in hand,
+                // rather than with a bare set_item_state: nothing on the
+                // outbound path creates sender-side transfer_items rows, so an
+                // UPDATE would match zero rows and the verdict would evaporate.
+                // A local DB write must not fail a drain, hence the `let _`.
+                //
+                // Two things the next reader will otherwise assume away:
+                //  - NOTHING reads this row yet. There is no listItems in the
+                //    UDL, no items variant in IpcRequest (only ListTransfers
+                //    and ListInbox) and no item accessor in packages/core, so
+                //    the row is DB-only today. Surfacing it is a Phase 4
+                //    listItems job.
+                //  - The verdict's REASON is persisted nowhere the user can
+                //    see it: the outbox table has no error column and
+                //    set_transfer_state writes only state + updated_at, so
+                //    `why` below is consumed by tracing::warn! alone. The
+                //    user-visible effect of this whole branch is therefore
+                //    that a quarantined share fails IMMEDIATELY instead of
+                //    after ~35 minutes of retries -- the wording, not the
+                //    timing, is what Phase 4 has to add.
+                match manifest.items.iter().find(|i| i.index == item_index) {
+                    Some(item) => {
+                        let _ = db.upsert_item(&crate::store::transfers::ItemRow {
+                            transfer_id: row.id,
+                            item_index: item.index,
+                            item_type: item.item_type.as_str().to_string(),
+                            name: item.name.clone(),
+                            mime: item.mime.clone(),
+                            size: item.size,
+                            hash: item.hash,
+                            // Sender side: there is no local file at a
+                            // destination, and inventing one would be a lie.
+                            dest_path: None,
+                            state: "quarantined".into(),
+                        });
+                    }
+                    // The ack names an index this manifest does not have, so
+                    // there is no item to name and guessing one would be worse
+                    // than recording nothing. The verdict itself still settles
+                    // the outbox row, but see below: the REASON survives only
+                    // in this log line and on the item row.
+                    None => tracing::warn!(
+                        "outbox drain: peer quarantined item {item_index}, which is not in the manifest"
+                    ),
+                }
+                tracing::warn!(
+                    "outbox drain: peer quarantined item {} of transfer {}",
+                    item_index,
+                    hex::encode(row.id),
+                );
+                terminal(
+                    db,
+                    format!("receiver quarantined item {item_index} after a hash mismatch"),
+                );
+                return;
+            }
             tracing::warn!(
                 "outbox drain: send to {} failed: {e}",
                 hex::encode(row.peer_device_id)
@@ -1765,6 +1850,383 @@ mod tests {
         assert!(
             db.due_outbox(i64::MAX).unwrap().is_empty(),
             "and it is not due again"
+        );
+    }
+
+    // ---------------------------------------------------------------- B4 ---
+    // A receiver-side QUARANTINE is a verdict, not a transport failure. The
+    // old code returned the same Err for both, so the generic retry path
+    // burned the whole budget (~35 min) and the sender's UI said "failed" for
+    // a file the receiver deliberately held. Socket-free: a MemConn-backed
+    // registry plus a stub peer answers the ack, like session.rs's own test.
+    fn stub_peer_registry(
+        hash_ok: bool,
+        item_index: u32,
+    ) -> (
+        SharedSessions<crate::net::secure::MemConn>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = connects.clone();
+        let sessions: SharedSessions<crate::net::secure::MemConn> =
+            Arc::new(Mutex::new(SessionRegistry::new(
+                std::time::Duration::from_secs(30),
+                Box::new(move |_p: [u8; 16]| {
+                    let c = c.clone();
+                    Box::pin(async move {
+                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let (mine, mut theirs) = crate::net::secure::SecureConnection::<
+                            crate::net::secure::MemConn,
+                        >::test_pair();
+                        tokio::spawn(async move {
+                            use crate::net::FrameTransport;
+                            let mut expect: Option<(Vec<u8>, u64)> = None;
+                            let mut chunks = 0usize;
+                            loop {
+                                match theirs.recv().await {
+                                    Ok(Some(f)) if f.kind == RecordType::Manifest => {
+                                        // Read the whole manifest, then EVERY
+                                        // chunk, and only then hash and ack --
+                                        // what a real receiver does. Acking
+                                        // after one chunk and hanging up would
+                                        // test a broken peer, not a verdict.
+                                        if let Ok(m) = Manifest::from_cbor(&f.body) {
+                                            let total: u64 = m
+                                                .items
+                                                .iter()
+                                                .map(|i| i.chunk_count.unwrap_or(0))
+                                                .sum();
+                                            expect = Some((m.payload_id.to_vec(), total));
+                                        }
+                                    }
+                                    Ok(Some(f)) if f.kind == RecordType::Chunk => chunks += 1,
+                                    Ok(Some(_)) => {}
+                                    Ok(None) | Err(_) => return,
+                                }
+                                let Some((pid, total)) = expect.as_ref() else {
+                                    continue;
+                                };
+                                if chunks < *total as usize {
+                                    continue;
+                                }
+                                let ack = crate::control::AckMsg {
+                                    transfer_id: <[u8; 16]>::try_from(pid.as_slice()).unwrap(),
+                                    item_index,
+                                    complete: true,
+                                    hash_ok,
+                                };
+                                let _ = theirs
+                                    .send(
+                                        crate::session::CONTROL_STREAM,
+                                        RecordType::Ack,
+                                        Bytes::from(ack.to_cbor().unwrap()),
+                                    )
+                                    .await;
+                                return;
+                            }
+                        });
+                        Ok(mine)
+                    })
+                        as crate::session::BoxFutureConn<crate::net::secure::MemConn>
+                }) as crate::session::BoxConnect<crate::net::secure::MemConn>,
+            )));
+        (sessions, connects)
+    }
+
+    /// One real file, staged and enqueued exactly as a production send is, and
+    /// NOT ONE LINE MORE. There is deliberately no `upsert_item` here: the
+    /// sender's own item row is the code under test (nothing on the outbound
+    /// path writes one today), and hand-inserting it in the fixture would let a
+    /// green suite hide that the production path records nothing.
+    fn enqueued_file(db: &Db, staging: &Staging) -> [u8; 16] {
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join("a.bin");
+        std::fs::write(&f, b"data").unwrap();
+        let item =
+            crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT).unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![item],
+        )
+        .unwrap();
+        crate::outbox::enqueue(db, staging, &[9u8; 16], &manifest, std::slice::from_ref(&f))
+            .unwrap()
+    }
+
+    async fn drain_one(
+        db: &Arc<Db>,
+        staging: &Arc<Staging>,
+        sessions: SharedSessions<crate::net::secure::MemConn>,
+        id: [u8; 16],
+    ) {
+        assert!(
+            db.mark_outbox_sending(&id).unwrap(),
+            "the drain claims its row"
+        );
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        drain_outbox_row(
+            DrainCtx {
+                db: db.clone(),
+                staging: staging.clone(),
+                sessions,
+            },
+            row,
+        )
+        .await;
+    }
+
+    /// B4 core: a hash-mismatch ack must NOT go through the generic retry
+    /// path. The row settles on the FIRST attempt, the named item reads
+    /// "quarantined" -- the one word from spec 4.2's vocabulary that the
+    /// receiver also writes, so both sides name a held file the same way.
+    #[tokio::test]
+    async fn a_hash_mismatch_ack_quarantines_the_item_instead_of_retrying() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let id = enqueued_file(&db, &staging);
+
+        let (sessions, _connects) = stub_peer_registry(false, 0);
+        drain_one(&db, &staging, sessions, id).await;
+
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        assert_eq!(
+            row.state, "failed",
+            "a quarantine is terminal: the receiver will never accept these bytes"
+        );
+        assert_eq!(
+            row.attempts, 0,
+            "a permanent verdict must not burn a retry attempt"
+        );
+        assert!(
+            db.due_outbox(i64::MAX).unwrap().is_empty(),
+            "and it must not be due again"
+        );
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "failed",
+            "the transfers row follows the terminal settle"
+        );
+
+        assert_eq!(
+            db.get_item(&id, 0).unwrap().unwrap().state,
+            "quarantined",
+            "the sender records the receiver's verdict, in the shared vocabulary"
+        );
+    }
+
+    /// The blind re-send is skipped for a quarantine: the bytes are identical
+    /// on a second attempt, so the hash verdict is identical too. ONE dial.
+    #[tokio::test]
+    async fn a_quarantine_never_re_dials_or_re_sends_the_payload() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let id = enqueued_file(&db, &staging);
+
+        let (sessions, connects) = stub_peer_registry(false, 0);
+        drain_one(&db, &staging, sessions, id).await;
+        assert_eq!(
+            connects.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a hash mismatch is permanent; re-sending the same bytes cannot help"
+        );
+    }
+
+    /// B4 fail-closed: a clean ack still delivers exactly as before.
+    #[tokio::test]
+    async fn a_clean_ack_still_marks_the_row_done() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let id = enqueued_file(&db, &staging);
+
+        let (sessions, connects) = stub_peer_registry(true, 0);
+        drain_one(&db, &staging, sessions, id).await;
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "done");
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "done",
+            "the transfers row follows a delivered share (B2/F4)"
+        );
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// B4 fail-closed: a GENUINE transport failure must still retry, still
+    /// back off, and still count the attempt. Quarantine must not have
+    /// narrowed the retry path for real errors.
+    #[tokio::test]
+    async fn an_unreachable_peer_still_backs_off_and_retries() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let id = enqueued_file(&db, &staging);
+
+        // A connect closure that cannot reach the peer: the transport failure
+        // path, entirely distinct from a hash verdict.
+        let sessions: SharedSessions<crate::net::secure::MemConn> =
+            Arc::new(Mutex::new(SessionRegistry::new(
+                std::time::Duration::from_secs(30),
+                Box::new(
+                    |_p: [u8; 16]| -> crate::session::BoxFutureConn<crate::net::secure::MemConn> {
+                        Box::pin(async {
+                            Err(CoreError::Io(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionRefused,
+                                "peer gone",
+                            )))
+                        })
+                    },
+                ) as crate::session::BoxConnect<crate::net::secure::MemConn>,
+            )));
+
+        drain_one(&db, &staging, sessions, id).await;
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        assert_eq!(
+            row.state, "pending",
+            "a real transport failure backs off and retries"
+        );
+        assert_eq!(row.attempts, 1, "and it counts the attempt");
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "paused",
+            "still retrying, not failed"
+        );
+        assert_eq!(
+            db.get_item(&id, 0).unwrap(),
+            None,
+            "a transport failure quarantines nothing, and invents no item row"
+        );
+    }
+
+    /// The receiver reports only the FIRST failed item and AckMsg has room for
+    /// exactly one index, so a manifest with three items can hide two more
+    /// quarantines. The sender must record ONLY the index it was told about:
+    /// marking the others would be a guess, and a guess here writes
+    /// 'quarantined' onto files the receiver may well have accepted.
+    #[tokio::test]
+    async fn only_the_item_the_ack_names_is_marked_quarantined() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+
+        let src = tempfile::tempdir().unwrap();
+        let mut files = Vec::new();
+        let mut items = Vec::new();
+        for i in 0..3u32 {
+            let f = src.path().join(format!("{i}.bin"));
+            std::fs::write(&f, b"data").unwrap();
+            items.push(
+                crate::manifest::Item::from_file(i, &f, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            );
+            files.push(f);
+        }
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            items,
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(&db, &staging, &[9u8; 16], &manifest, &files).unwrap();
+
+        // The peer quarantines item 1 only, so a non-zero index goes over the
+        // wire and the test can prove the sender marks THAT item and no other.
+        let (sessions, _connects) = stub_peer_registry(false, 1);
+
+        drain_one(&db, &staging, sessions, id).await;
+
+        assert_eq!(
+            db.get_item(&id, 1).unwrap().unwrap().state,
+            "quarantined",
+            "the named item carries the verdict"
+        );
+        for idx in [0u32, 2] {
+            assert!(
+                db.get_item(&id, idx).unwrap().is_none(),
+                "item {idx} was never named by the ack, so the sender must not invent a row for it"
+            );
+        }
+        assert_eq!(
+            db.get_outbox(&id).unwrap().unwrap().state,
+            "failed",
+            "the outbox row still settles: the verdict is real even though it is partial"
+        );
+    }
+
+    /// A connection that dies AFTER the chunks but BEFORE the ack is not a
+    /// verdict and cannot be one: the receiver never told us anything. So it
+    /// must still take the blind re-dial inside send_secure_with, which is the
+    /// fail-closed behaviour B4 must not narrow.
+    #[tokio::test]
+    async fn a_close_after_the_chunks_still_re_dials_and_retries() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let id = enqueued_file(&db, &staging);
+
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = connects.clone();
+        let sessions: SharedSessions<crate::net::secure::MemConn> =
+            Arc::new(Mutex::new(SessionRegistry::new(
+                std::time::Duration::from_secs(30),
+                Box::new(move |_p: [u8; 16]| {
+                    let c = c.clone();
+                    Box::pin(async move {
+                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let (mine, mut theirs) = crate::net::secure::SecureConnection::<
+                            crate::net::secure::MemConn,
+                        >::test_pair();
+                        tokio::spawn(async move {
+                            use crate::net::FrameTransport;
+                            let mut chunks = 0usize;
+                            loop {
+                                match theirs.recv().await {
+                                    Ok(Some(f)) if f.kind == RecordType::Chunk => chunks += 1,
+                                    Ok(Some(_)) => {}
+                                    Ok(None) | Err(_) => return,
+                                }
+                                // All the bytes have arrived; hang up without
+                                // an ack, the worst case for the receiver.
+                                if chunks > 0 {
+                                    return;
+                                }
+                            }
+                        });
+                        Ok(mine)
+                    })
+                        as crate::session::BoxFutureConn<crate::net::secure::MemConn>
+                }) as crate::session::BoxConnect<crate::net::secure::MemConn>,
+            )));
+
+        drain_one(&db, &staging, sessions, id).await;
+
+        assert_eq!(
+            connects.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "a real transport failure still earns the blind re-dial"
+        );
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        assert_eq!(row.state, "pending", "and it is still retryable");
+        assert_eq!(row.attempts, 1, "counting exactly one drain attempt");
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "paused",
+            "not failed: the receiver never returned a verdict"
+        );
+        assert!(
+            db.get_item(&id, 0).unwrap().is_none(),
+            "no verdict means no item row and nothing quarantined"
         );
     }
 

@@ -110,10 +110,15 @@ pub async fn send_transfer<T: FrameTransport>(
                 }
                 if ack.complete {
                     if !ack.hash_ok {
-                        return Err(CoreError::Transfer(format!(
-                            "receiver rejected item {}: hash mismatch",
-                            ack.item_index
-                        )));
+                        // B4: a quarantine, not a transfer failure. The
+                        // receiver got every byte and hashed it; the verdict is
+                        // about THESE bytes, so it can never be re-sent into a
+                        // different answer. Naming the item keeps the caller
+                        // from having to parse the message to find it.
+                        return Err(CoreError::Quarantined {
+                            transfer_id: manifest.payload_id,
+                            item_index: ack.item_index,
+                        });
                     }
                     return Ok(());
                 }
@@ -148,6 +153,7 @@ mod tests {
     use super::*;
     use crate::framing::RecordType;
     use crate::manifest::{DeviceRef, Item, PayloadKind};
+    use crate::net::secure::{MemConn, SecureConnection};
     use crate::net::tcp;
 
     fn sender() -> DeviceRef {
@@ -155,6 +161,50 @@ mod tests {
             device_id: [1u8; 16],
             name: "sender".into(),
         }
+    }
+
+    /// Drives `send_transfer` over a real (socket-free) peer that answers with
+    /// ONE ack, so the ack loop's verdict is observable without a port.
+    async fn send_to_ack(
+        ack: impl FnOnce([u8; 16]) -> AckMsg + Send + 'static,
+    ) -> (Result<()>, Manifest) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.bin");
+        std::fs::write(&p, vec![5u8; 2_000]).unwrap();
+        let item = Item::from_file(0, &p, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, sender(), vec![item]);
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let path = p.clone();
+        let peer = tokio::spawn(async move {
+            // Drain the manifest + every chunk, then answer with the ack the
+            // test asked for. No socket, so this runs in any sandbox.
+            let mut chunks = 0usize;
+            loop {
+                match theirs.recv().await {
+                    Ok(Some(f)) if f.kind == RecordType::Chunk => chunks += 1,
+                    Ok(Some(_)) => {}
+                    Ok(None) => return,
+                    Err(_) => return,
+                }
+                if chunks == 1 {
+                    let a = ack(m.payload_id);
+                    theirs
+                        .send(
+                            crate::net::CONTROL_STREAM,
+                            RecordType::Ack,
+                            bytes::Bytes::from(a.to_cbor().unwrap()),
+                        )
+                        .await
+                        .unwrap();
+                    return;
+                }
+            }
+        });
+        let r = send_transfer(&mut mine, &manifest, &[Some(path)], &[], |_| {}).await;
+        peer.await.unwrap();
+        (r, manifest)
     }
 
     #[test]
@@ -225,5 +275,68 @@ mod tests {
             .await
             .unwrap();
         server.await.unwrap();
+    }
+
+    /// B4: a hash-mismatch ack is NOT a transport failure. The receiver holds
+    /// the item in quarantine and says so; the sender must be able to tell the
+    /// two apart without parsing an error STRING, because `drain_outbox_row`
+    /// routes on exactly that distinction (retry vs. record a quarantine).
+    #[tokio::test]
+    async fn a_hash_mismatch_ack_is_a_quarantine_naming_the_item() {
+        let (r, manifest) = send_to_ack(move |id| AckMsg {
+            transfer_id: id,
+            item_index: 0,
+            complete: true,
+            hash_ok: false,
+        })
+        .await;
+        match r {
+            Err(CoreError::Quarantined {
+                transfer_id,
+                item_index,
+            }) => {
+                assert_eq!(transfer_id, manifest.payload_id);
+                assert_eq!(item_index, 0, "the ack names the failed item");
+            }
+            other => panic!("a hash mismatch must be a Quarantined error, got {other:?}"),
+        }
+    }
+
+    /// ...and a clean ack is still Ok. Guards the fail-closed direction: the
+    /// new error must not swallow a good delivery.
+    #[tokio::test]
+    async fn a_good_ack_is_still_ok() {
+        let (r, _manifest) = send_to_ack(move |id| AckMsg {
+            transfer_id: id,
+            item_index: 0,
+            complete: true,
+            hash_ok: true,
+        })
+        .await;
+        r.unwrap_or_else(|e| panic!("a clean ack must not fail, got {e:?}"));
+    }
+
+    /// B4 fail-closed: a connection that closes BEFORE the ack is a genuine
+    /// transport failure and must keep its existing error, so the retry path
+    /// still sees something it is allowed to retry.
+    #[tokio::test]
+    async fn a_close_before_ack_is_still_a_protocol_error_not_a_quarantine() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.bin");
+        std::fs::write(&p, vec![5u8; 2_000]).unwrap();
+        let item = Item::from_file(0, &p, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, sender(), vec![item]);
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = tokio::spawn(async move {
+            // Read the manifest, then hang up without an ack.
+            let _ = theirs.recv().await;
+        });
+        let r = send_transfer(&mut mine, &manifest, &[Some(p)], &[], |_| {}).await;
+        peer.await.unwrap();
+        assert!(
+            matches!(r, Err(CoreError::Protocol(_))),
+            "a close before the ack is a retryable transport error, got {r:?}"
+        );
     }
 }
