@@ -66,41 +66,56 @@ pub(crate) fn item_destination(out_dir: &Path, item: &Item) -> Result<PathBuf> {
         // exactly where the item would have gone before B1.
         _ => return item_output_path(out_dir, item),
     };
-    // Both caps are on the PEER's string, before it becomes a mkdir loop or a
-    // path the OS has to resolve.
-    if rel.len() > MAX_PATH_LEN {
-        return Err(CoreError::Protocol(format!(
-            "item {} relative path length {} exceeds cap {MAX_PATH_LEN}",
-            item.index,
-            rel.len()
-        )));
-    }
-    let mut dir = out_dir.to_path_buf();
-    let mut kept = 0usize;
-    for component in rel.split(['/', '\\']) {
-        if component.is_empty() || component == "." || component == ".." {
-            continue;
-        }
-        if kept == MAX_PATH_COMPONENTS {
-            return Err(CoreError::Protocol(format!(
-                "item {} relative path has more than {MAX_PATH_COMPONENTS} components",
-                item.index
-            )));
-        }
-        dir.push(safe_component(component, item.index));
-        kept += 1;
-    }
-    if kept == 0 {
+    let components = safe_components(rel, item.index)?;
+    if components.is_empty() {
         // attrs["path"] was pure traversal: the item lands at its bare name
         // rather than at out_dir itself, which would be a DIRECTORY where the
         // receiver is about to open a file.
         return item_output_path(out_dir, item);
     }
-    Ok(dir)
+    Ok(components
+        .into_iter()
+        .fold(out_dir.to_path_buf(), |mut dir, c| {
+            dir.push(c);
+            dir
+        }))
 }
 
-/// One sanitised path component, for the folder case.
-fn safe_component(raw: &str, index: u32) -> String {
+/// The SANITISED components of a relative path, in order: the one place the
+/// split, the traversal filter, the reserved-component remap and both caps
+/// live. `pub(crate)` so the builder reserves the destination it is about to
+/// claim by asking THIS rather than re-deriving the loop -- two copies of
+/// "what does this attrs["path"] become" is exactly the drift that let the
+/// builder claim a destination the receiver remaps elsewhere.
+pub(crate) fn safe_components(rel: &str, index: u32) -> Result<Vec<String>> {
+    // Both caps are on the PEER's string, before it becomes a mkdir loop or a
+    // path the OS has to resolve.
+    if rel.len() > MAX_PATH_LEN {
+        return Err(CoreError::Protocol(format!(
+            "item {} relative path length {} exceeds cap {MAX_PATH_LEN}",
+            index,
+            rel.len()
+        )));
+    }
+    let mut kept: Vec<String> = Vec::new();
+    for component in rel.split(['/', '\\']) {
+        if component.is_empty() || component == "." || component == ".." {
+            continue;
+        }
+        if kept.len() == MAX_PATH_COMPONENTS {
+            return Err(CoreError::Protocol(format!(
+                "item {} relative path has more than {MAX_PATH_COMPONENTS} components",
+                index
+            )));
+        }
+        kept.push(safe_component(component, index));
+    }
+    Ok(kept)
+}
+
+/// One sanitised path component, component-wise: the builder reserving
+/// `sub/quarantine` must get `sub/item_{index}`, not a top-level `item_{index}`.
+pub(crate) fn safe_component(raw: &str, index: u32) -> String {
     match Path::new(raw).file_name().and_then(|n| n.to_str()) {
         Some(n) if !n.is_empty() && !is_reserved(n) => n.to_owned(),
         _ => format!("item_{index}"),
@@ -1396,10 +1411,6 @@ mod tests {
                     .await;
         });
         let res = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
-        // The receiver refuses this manifest before reading any chunk, so the
-        // sender is still waiting for an Ack that will never come. Abort it
-        // rather than await: `mine` cannot be dropped until the await above
-        // returns, which is the very thing that would unblock the sender.
         sender.abort();
 
         assert!(
@@ -1633,8 +1644,9 @@ mod tests {
         ));
     }
 
-    /// The end of the same hole, through the real receive: the collision must
-    /// be caught before a single destination file exists.
+    /// The backstop stays load-bearing against a peer that controls
+    /// attrs["path"] outright, which is why this is hand-built rather than
+    /// produced by the builder.
     #[tokio::test]
     async fn a_colliding_relative_path_writes_nothing() {
         let src = tempfile::tempdir().unwrap();
@@ -1658,17 +1670,18 @@ mod tests {
 
         let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
         let m = manifest.clone();
-        let sender = tokio::spawn(async move {
-            let _ =
-                crate::transfer::send_transfer(&mut theirs, &m, &[Some(p0), Some(p1)], &[], |_| {})
-                    .await;
+        // Only the manifest goes over the wire: there is no sender here to
+        // assert on, because a builder-produced manifest cannot reach this.
+        tokio::spawn(async move {
+            let _ = theirs
+                .send(
+                    CONTROL_STREAM,
+                    RecordType::Manifest,
+                    Bytes::from(m.to_cbor().unwrap()),
+                )
+                .await;
         });
         let res = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
-        // The receiver refuses this manifest before reading any chunk, so the
-        // sender is still waiting for an Ack that will never come. Abort it
-        // rather than await: `mine` cannot be dropped until the await above
-        // returns, which is the very thing that would unblock the sender.
-        sender.abort();
 
         assert!(matches!(res, Err(CoreError::Protocol(_))), "got {res:?}");
         assert!(

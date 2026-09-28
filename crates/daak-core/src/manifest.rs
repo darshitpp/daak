@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::hash::blake2b256_reader;
+use crate::transfer::receiver::{safe_component, safe_components};
 
 pub const MANIFEST_VERSION: u16 = 1;
 pub const SCHEMA_MINOR: u16 = 0;
@@ -288,11 +289,7 @@ impl Item {
         for (n, path) in files.iter().enumerate() {
             let index = start_index + n as u32;
             let mut item = Self::from_file(index, path, chunk_size)?;
-            // attrs["path"] IS a folder child's receiver destination, so IT is
-            // what has to be unique, not the name. The same unique_name
-            // suffixing the names use works on a path: it appends to the last
-            // component, so `sub/x.bin` becomes `sub/x.bin~1`.
-            let rel = unique_name(dests, &relative_under(root, path)?);
+            let rel = unique_destination(dests, &relative_under(root, path)?, index)?;
             item.attrs
                 .insert("path".into(), ciborium::value::Value::Text(rel));
             let name = item.name.clone().unwrap_or_else(|| format!("item_{index}"));
@@ -370,6 +367,67 @@ fn unique_name(used: &mut HashSet<String>, name: &str) -> String {
     unique
 }
 
+/// Reserve the DESTINATION an item resolves to, keyed on the SANITISED path:
+/// that is the file the receiver will really open, and a reserved component
+/// (`. .. quarantine staging`) becomes `item_{index}` there, so `quarantine`
+/// and `item_1` are distinct strings and ONE destination.
+fn unique_destination(dests: &mut HashSet<String>, rel: &str, index: u32) -> Result<String> {
+    if dests.insert(sanitised_destination(rel, index)?) {
+        return Ok(rel.to_owned());
+    }
+    for n in 1.. {
+        let candidate = format!("{rel}~{n}");
+        if dests.insert(sanitised_destination(&candidate, index)?) {
+            return Ok(candidate);
+        }
+    }
+    // Sanitise FIRST, then look for a free variant: a bare `quarantine` is
+    // remapped, not suffixed, so the two never fight over one name. A capped
+    // path returns Err above instead of reaching here -- `~N` never shortens a
+    // path -- which is what makes this termination argument sound.
+    unreachable!("a longer path is still longer, so ~N must free up eventually")
+}
+
+/// The out_dir-relative destination `rel` becomes, from the receiver's own
+/// resolver. Its cap error PROPAGATES: absorbing it would collapse every
+/// capped path onto one `dests` key and spin the caller looking for a `~N`
+/// that a longer path can never produce.
+fn sanitised_destination(rel: &str, index: u32) -> Result<String> {
+    Ok(safe_components(rel, index)?.join("/"))
+}
+
+/// The name a loose file with a RESERVED name ships under, claimed in BOTH
+/// namespaces: staging keys on the name, and the receiver opens the
+/// `item_{index}` it remaps to. `safe_component` cannot fail, so neither can
+/// this.
+fn unique_flat_name(
+    dests: &mut HashSet<String>,
+    used: &HashSet<String>,
+    name: &str,
+    index: u32,
+) -> String {
+    if name_is_free(dests, used, name, index) {
+        return name.to_owned();
+    }
+    for n in 1.. {
+        let candidate = format!("{name}~{n}");
+        if name_is_free(dests, used, &candidate, index) {
+            return candidate;
+        }
+    }
+    unreachable!("a longer name is still longer, so ~N must free up eventually")
+}
+
+/// Claim `name` as both a manifest name and a destination, or report it taken.
+fn name_is_free(
+    dests: &mut HashSet<String>,
+    used: &HashSet<String>,
+    name: &str,
+    index: u32,
+) -> bool {
+    !used.contains(name) && dests.insert(safe_component(name, index))
+}
+
 /// Depth-first walk collecting regular files. `symlink_metadata`, not
 /// `metadata`: a symlink is never followed, so a link out of the share root
 /// cannot smuggle a foreign file in and a symlinked directory cannot make the
@@ -441,6 +499,11 @@ pub fn from_picked_paths(
     // `used` and `dests` are therefore reserved together, before any folder is
     // walked, and the loop below reuses the reserved name verbatim instead of
     // deduping a second time.
+    //
+    // B1-C1: a RESERVED bare name is deferred to the loop below, which is the
+    // first place its index is known. Its destination is `item_{index}`, and
+    // the index is not knowable until every folder ahead of it has been walked;
+    // reserving the raw name here would claim a file the receiver never opens.
     let mut dests: HashSet<String> = HashSet::new();
     let mut flat_names: Vec<Option<String>> = vec![None; picked.len()];
     for (slot, path) in flat_names.iter_mut().zip(picked) {
@@ -451,7 +514,9 @@ pub fn from_picked_paths(
             continue;
         };
         let name = unique_name(&mut used, &basename.to_string_lossy());
-        dests.insert(name.clone());
+        if safe_component(&name, 0) == name {
+            dests.insert(name.clone());
+        }
         *slot = Some(name);
     }
     for (path, reserved) in picked.iter().zip(&flat_names) {
@@ -475,11 +540,25 @@ pub fn from_picked_paths(
             // receiver's flat staging namespace nor two items that claim one
             // file on disk.
             let mut item = Item::from_file(start, path, chunk_size)?;
-            // Already reserved by the pre-pass under exactly this name, so it
-            // is taken verbatim: re-running unique_name here would see its own
-            // reservation and bump it to `x.bin~1`, colliding with the folder
-            // child that holds that destination.
+            // Taken verbatim from the pre-pass: re-running unique_name here
+            // would see its own reservation and bump it to `x.bin~1`,
+            // colliding with the folder child holding that destination.
             item.name = reserved.clone();
+            if let Some(name) = reserved.as_deref() {
+                // A RESERVED bare name does not ship: the receiver rewrites it
+                // to `item_{index}`, so the name it lands under -- and its
+                // destination, which is the same string -- are only knowable
+                // now, and a `~N` bump moves BOTH. Mint one through both sets.
+                // The pre-pass's claim on `name` is released first, or the
+                // search would skip the name itself and land on a gratuitous
+                // `~1` whose layout then depends on the pick order.
+                if safe_component(name, start) != name {
+                    used.remove(name);
+                    let name = unique_flat_name(&mut dests, &used, name, start);
+                    used.insert(name.clone());
+                    item.name = Some(name);
+                }
+            }
             items.push(item);
             sources.push(path.clone());
         }
@@ -808,6 +887,177 @@ mod tests {
             .expect("the receiver must accept a manifest from_picked_paths built");
     }
 
+    /// B1-C1 loose half: two loose picked files, NEITHER carrying an
+    /// attrs["path"], so both resolve through the bare-name route. `quarantine`
+    /// remaps to `item_{index}` and a literal `item_1` IS that file, so the two
+    /// orders are built -- the index that decides it is handed out in pick
+    /// order -- and both must come out distinct. A regression guard for the
+    /// loose-only path, NOT a reproduction of the original defect: the pre-pass
+    /// already gave the two distinct `used` names, so what collided back then
+    /// was the DESTINATION, which is what this asserts on.
+    #[test]
+    fn two_loose_files_naming_a_reserved_component_and_its_remap_are_split_either_way_round() {
+        for names in [
+            ["quarantine", "item_1"],
+            ["item_1", "quarantine"],
+            ["staging", "item_1"],
+            ["item_1", "staging"],
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut picked = Vec::new();
+            for n in names {
+                let p = dir.path().join(n);
+                std::fs::write(&p, b"loose").unwrap();
+                picked.push(p);
+            }
+            let (manifest, sources) =
+                from_picked_paths(dev(), &picked, CHUNK_SIZE_DEFAULT).unwrap();
+            let label = format!("loose {names:?}");
+            assert_eq!(manifest.items.len(), 2, "{label}");
+            assert_eq!(sources.len(), 2, "{label}: one source per item");
+            for item in &manifest.items {
+                assert!(!item.attrs.contains_key("path"), "{label}: {item:?}");
+            }
+            assert_distinct_and_accepted(&manifest);
+        }
+    }
+
+    /// B1-C1 folder half: two children of the SAME folder, one named for a
+    /// reserved component and one for the remap it becomes. Only the TWO-file
+    /// form collides: children are numbered in sorted order, so `item_1` is
+    /// item 0 and `quarantine` remaps onto the file `item_1` already holds. A
+    /// third child sorting ahead shifts both indices and separates them again.
+    #[test]
+    fn two_folder_children_naming_a_reserved_component_and_its_remap_are_split() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("item_1"), b"the remap").unwrap();
+        std::fs::write(root.join("quarantine"), b"reserved name").unwrap();
+
+        let (manifest, sources) = from_picked_paths(dev(), &[root], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 2);
+        assert_eq!(sources.len(), 2);
+        let dests = destinations(&manifest);
+        assert_eq!(
+            dests.iter().filter(|d| d.ends_with("item_1")).count(),
+            1,
+            "exactly one item may land on item_1, got {dests:?}"
+        );
+        assert_distinct_and_accepted(&manifest);
+    }
+
+    /// A reserved component nested in a SUBdirectory remaps IN PLACE:
+    /// `sub/quarantine` becomes `sub/item_N`, not a top-level `item_N`. So the
+    /// dedup has to be component-wise, not whole-path or last-component.
+    #[test]
+    fn a_nested_reserved_component_gets_a_distinct_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/item_1"), b"the remap").unwrap();
+        std::fs::write(root.join("sub/quarantine"), b"reserved leaf").unwrap();
+
+        let (manifest, _sources) = from_picked_paths(dev(), &[root], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 2);
+        assert_distinct_and_accepted(&manifest);
+    }
+
+    /// B1-C1 cross-population: a folder child and a loose file resolve by
+    /// DIFFERENT routes (attrs["path"] vs bare name), which is exactly where
+    /// the raw string used to agree with the destination and hide the remap.
+    /// Both pick orders, because the deciding index is handed out in pick order.
+    #[test]
+    fn a_folder_child_and_a_loose_file_naming_a_reserved_component_and_its_remap_are_split() {
+        for (child, loose) in [
+            ("quarantine", "item_1"),
+            ("item_1", "quarantine"),
+            ("staging", "item_1"),
+            ("item_1", "staging"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("album");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join(child), b"in the folder").unwrap();
+            let loose_path = dir.path().join(loose);
+            std::fs::write(&loose_path, b"loose").unwrap();
+
+            for picked in [
+                vec![loose_path.clone(), root.clone()],
+                vec![root.clone(), loose_path.clone()],
+            ] {
+                let (manifest, sources) =
+                    from_picked_paths(dev(), &picked, CHUNK_SIZE_DEFAULT).unwrap();
+                let label = format!("child={child} loose={loose} picked={picked:?}");
+                assert_eq!(manifest.items.len(), 2, "{label}");
+                assert_eq!(sources.len(), 2, "{label}");
+                assert_distinct_and_accepted(&manifest);
+            }
+        }
+    }
+
+    /// BLOCKER 1: a capped path must PROPAGATE, not be absorbed. Absorbing it
+    /// collapses every capped path onto one `dests` key, and the second one
+    /// then spins in `unique_destination` forever -- `~N` never shortens a
+    /// path. 70 components is past `MAX_PATH_COMPONENTS` (64), well inside what
+    /// an ordinary user can hand over: a macOS tempdir is already ~50 deep.
+    #[test]
+    fn a_folder_deeper_than_the_receivers_path_cap_is_refused_not_looped_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        let deep = (0..70).fold(root.clone(), |d, i| d.join(format!("d{i}")));
+        std::fs::create_dir_all(&deep).unwrap();
+        // TWO leaves, not one: the first capped child inserts the empty key
+        // once and returns, so it is the SECOND that finds `""` taken and
+        // spins looking for a free variant that `~N` can never produce.
+        std::fs::write(deep.join("a.bin"), b"deep").unwrap();
+        std::fs::write(deep.join("b.bin"), b"deep").unwrap();
+
+        let err = from_picked_paths(dev(), &[root], CHUNK_SIZE_DEFAULT)
+            .expect_err("a path past the receiver's cap must not build");
+        assert!(
+            matches!(err, CoreError::Protocol(_)),
+            "the receiver's own cap error must reach the caller, got {err:?}"
+        );
+    }
+
+    /// MAJOR 2: the name a reserved bare name ships under (`quarantine` ->
+    /// `quarantine~1`) was claimed in `dests` ONLY. A folder child already
+    /// holding the literal `quarantine~1` holds it in `used` too, and the two
+    /// items then shipped the SAME manifest name -- staging is a flat per-
+    /// payload namespace keyed on `item.name`, so one staged file was hard-
+    /// linked over the other and the sender streamed one file's bytes against
+    /// the other's declared hash. Distinct DESTINATIONS is not enough here;
+    /// distinct NAMES has to be asserted as well.
+    #[test]
+    fn a_reserved_loose_name_bumped_for_its_destination_still_gets_a_unique_manifest_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/quarantine~1"), b"in the folder").unwrap();
+        std::fs::write(root.join("item_2"), b"in the folder").unwrap();
+        let loose = dir.path().join("quarantine");
+        std::fs::write(&loose, b"loose").unwrap();
+
+        let (manifest, _sources) =
+            from_picked_paths(dev(), &[root, loose], CHUNK_SIZE_DEFAULT).unwrap();
+
+        let mut names: Vec<&str> = manifest
+            .items
+            .iter()
+            .map(|i| i.name.as_deref().unwrap())
+            .collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            total,
+            "item names must stay unique per manifest, got {names:?}"
+        );
+        assert_distinct_and_accepted(&manifest);
+    }
+
     /// F4, builder half: a loose picked file and a folder child of the same
     /// name resolve through DIFFERENT routes (bare name vs attrs["path"]), so
     /// deduplicating only the manifest name let them land on one file -- the
@@ -842,11 +1092,13 @@ mod tests {
         assert_eq!(std::fs::read(&sources[1]).unwrap(), b"in the folder");
     }
 
-    /// The same share picked the other way round. Order must not matter, and it
-    /// does not: the claim is reserved in a pre-pass, so in BOTH orders the
-    /// loose file keeps the bare `x.bin` and the folder child yields to
-    /// `x.bin~1`. The old version of this test accepted either claimant, which
-    /// is what let the order-dependence hide.
+    /// The other half of `a_loose_file_naming_a_folder_child_gets_a_distinct_destination`:
+    /// a same-name share must deliver the same SET of files in EITHER pick
+    /// order, so a picker that reorders the user's selection cannot decide
+    /// whether their share works. A reserved name against a literal `item_N`
+    /// is exempt and is covered by
+    /// `a_folder_child_and_a_loose_file_naming_a_reserved_component_and_its_remap_are_split`:
+    /// the remap is `item_{index}`, so the two orders legitimately differ.
     #[test]
     fn the_folder_first_pick_order_is_collision_free_too() {
         let dir = tempfile::tempdir().unwrap();
@@ -856,12 +1108,23 @@ mod tests {
         let loose = dir.path().join("x.bin");
         std::fs::write(&loose, b"loose").unwrap();
 
-        let (manifest, _sources) =
-            from_picked_paths(dev(), &[root, loose], CHUNK_SIZE_DEFAULT).unwrap();
-        assert_eq!(manifest.items.len(), 2);
-        assert_eq!(item_rel(&manifest.items[0]).unwrap(), "x.bin~1");
-        assert!(!manifest.items[1].attrs.contains_key("path"));
-        assert_distinct_and_accepted(&manifest);
+        let (folder_first, sources) =
+            from_picked_paths(dev(), &[root.clone(), loose.clone()], CHUNK_SIZE_DEFAULT).unwrap();
+        let (loose_first, _) =
+            from_picked_paths(dev(), &[loose, root], CHUNK_SIZE_DEFAULT).unwrap();
+
+        assert_eq!(folder_first.items.len(), 2, "folder-first");
+        assert_eq!(loose_first.items.len(), 2, "loose-first");
+        assert_distinct_and_accepted(&folder_first);
+        assert_distinct_and_accepted(&loose_first);
+        assert_eq!(sources.len(), 2);
+        // A picker that reorders the user's selection must not change the set
+        // of files the share delivers.
+        let mut a = destinations(&folder_first);
+        let mut b = destinations(&loose_first);
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "pick order changed the delivered layout");
     }
 
     /// The receiver's backstop: a HAND-BUILT manifest claiming one destination
