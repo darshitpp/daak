@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -231,6 +231,77 @@ impl Item {
         })
     }
 
+    /// One binary item per REGULAR FILE under `root`, flattened, each
+    /// carrying its share-root-relative path in `attrs["path"]`. `start_index`
+    /// is the first item index to hand out, so a folder can follow other items
+    /// in a mixed share and stay contiguous (Manifest::batch rejects a gap).
+    pub fn from_folder(start_index: u32, root: &Path, chunk_size: u32) -> Result<Vec<Self>> {
+        Ok(Self::from_folder_into(
+            start_index,
+            root,
+            chunk_size,
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+        )?
+        .into_iter()
+        .map(|(item, _source)| item)
+        .collect())
+    }
+
+    /// `used` is the MANIFEST-wide set of item names already taken. Staging is
+    /// flat per payload, so it has to be shared across every folder and every
+    /// loose file in one share; `from_folder` alone starts a fresh one, which is
+    /// only correct for a share that is a single folder.
+    ///
+    /// `dests` is the matching set of RECEIVER DESTINATIONS already claimed, as
+    /// out_dir-relative strings. Names are not destinations -- a folder child
+    /// lands at its attrs["path"], a loose file at its bare name -- so the two
+    /// sets are threaded separately, and it is their PAIR that must be unique.
+    /// It starts empty here, so a lone folder share is unaffected;
+    /// `from_picked_paths` seeds it with every loose file up front.
+    ///
+    /// Each item comes back with the file it is read from: the walked path, NOT
+    /// `root.join(attrs["path"])` -- a deduplicated path carries a `~1` that no
+    /// file on disk has.
+    pub(crate) fn from_folder_into(
+        start_index: u32,
+        root: &Path,
+        chunk_size: u32,
+        used: &mut HashSet<String>,
+        dests: &mut HashSet<String>,
+    ) -> Result<Vec<(Self, PathBuf)>> {
+        if !root.is_dir() {
+            // A missing path, or a plain file handed to from_folder, is the
+            // caller's error -- not an empty share that "succeeds".
+            return Err(CoreError::Transfer(format!(
+                "not a directory: {}",
+                root.display()
+            )));
+        }
+        let mut files = Vec::new();
+        collect_files(root, &mut files)?;
+        // Deterministic order: the manifest is user-visible (inbox summary,
+        // item list) and a HashMap-order walk would shuffle the share every
+        // time. Sorting the paths does it once, here.
+        files.sort();
+        let mut out = Vec::with_capacity(files.len());
+        for (n, path) in files.iter().enumerate() {
+            let index = start_index + n as u32;
+            let mut item = Self::from_file(index, path, chunk_size)?;
+            // attrs["path"] IS a folder child's receiver destination, so IT is
+            // what has to be unique, not the name. The same unique_name
+            // suffixing the names use works on a path: it appends to the last
+            // component, so `sub/x.bin` becomes `sub/x.bin~1`.
+            let rel = unique_name(dests, &relative_under(root, path)?);
+            item.attrs
+                .insert("path".into(), ciborium::value::Value::Text(rel));
+            let name = item.name.clone().unwrap_or_else(|| format!("item_{index}"));
+            item.name = Some(unique_name(used, &name));
+            out.push((item, path.clone()));
+        }
+        Ok(out)
+    }
+
     pub fn folder(index: u32, name: &str) -> Self {
         Self {
             index,
@@ -240,16 +311,186 @@ impl Item {
         }
     }
 
-    /// Folders and unknown (custom) types carry no chunk series of their own and must
-    /// not enter the binary path. Folder materialization is not implemented yet:
-    /// a folder's children are walked by consumers. (# ponytail: add folder expansion
-    /// when a consumer needs to write a bundle to disk.)
+    /// Folders and unknown (custom) types carry no chunk series of their own and
+    /// must not enter the binary path. B1: a picked folder never reaches the wire
+    /// as a Folder item -- `from_folder_into` flattens it into one binary item
+    /// per regular file, each carrying its share-root-relative `attrs["path"]`.
+    /// The item list is flat on the wire; the tree is rebuilt by the receiver.
     pub fn is_binary(&self) -> bool {
         !matches!(
             self.item_type,
             ItemType::Text | ItemType::Folder | ItemType::Custom(_)
         )
     }
+}
+
+/// A folder child's path RELATIVE to the share root, which is the only form
+/// allowed on the wire: an absolute path would rebuild the sender's local
+/// directory layout on the receiver.
+fn relative_under(root: &Path, path: &Path) -> Result<String> {
+    path.strip_prefix(root)
+        .map(|rel| rel.to_string_lossy().into_owned())
+        .map_err(|_| {
+            CoreError::Transfer(format!(
+                "folder child {} is not under the share root {}",
+                path.display(),
+                root.display()
+            ))
+        })
+}
+
+/// The relative path a folder child carries. A MISSING or non-Text one is a
+/// builder bug, not something to skip past: dropping the item here would shift
+/// every later source index and misalign `sources` with item indices. Only the
+/// tests read it now -- `from_folder_into` fills the attribute itself -- and it
+/// stays as the one place that turns the wire value into a `&str`.
+#[cfg(test)]
+fn item_rel(item: &Item) -> Result<&str> {
+    match item.attrs.get("path") {
+        Some(ciborium::value::Value::Text(rel)) => Ok(rel.as_str()),
+        other => Err(CoreError::Transfer(format!(
+            "item {} has no textual relative path ({other:?})",
+            item.index
+        ))),
+    }
+}
+
+/// Staging is a FLAT namespace keyed by name, so two "index.html" in
+/// different folders would stage onto each other and ship one file's bytes
+/// under the other's hash. Disambiguate on collision; attrs["path"] is what
+/// the receiver uses to rebuild the tree.
+fn unique_name(used: &mut HashSet<String>, name: &str) -> String {
+    let mut unique = name.to_owned();
+    for n in 1.. {
+        if used.insert(unique.clone()) {
+            break;
+        }
+        unique = format!("{name}~{n}");
+    }
+    unique
+}
+
+/// Depth-first walk collecting regular files. `symlink_metadata`, not
+/// `metadata`: a symlink is never followed, so a link out of the share root
+/// cannot smuggle a foreign file in and a symlinked directory cannot make the
+/// walk recurse forever.
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let entries = std::fs::read_dir(dir)?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            // A dangling symlink or a file removed mid-walk is not the share's
+            // failure; skip it the way a file browser would.
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
+            collect_files(&path, out)?;
+        } else if meta.is_file() {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// B1: the one place a picked set of paths becomes a shareable manifest.
+/// A picker hands over a MIX of files and folders; a directory expands into one
+/// item per file under it. Returns the manifest and the source paths indexed by
+/// ITEM index, which is what `outbox::enqueue` stages from and what
+/// `send_secure` streams.
+///
+/// Before B1 every call site did `Item::from_file(i, p, ..)` per path, and a
+/// directory made that fail with IsADirectory -- so a folder could not be
+/// shared at all. Three call sites (daakd, daak-ffi, daak-cli) each inlined
+/// that loop, so they are all routed here instead of being patched three times.
+pub fn from_picked_paths(
+    sender: DeviceRef,
+    picked: &[PathBuf],
+    chunk_size: u32,
+) -> Result<(Manifest, Vec<PathBuf>)> {
+    let mut items: Vec<Item> = Vec::new();
+    let mut sources: Vec<PathBuf> = Vec::new();
+    // B1/F2: item names are unique per MANIFEST, not per folder. Staging keys
+    // every binary item by its manifest name inside one flat payload dir, so a
+    // per-folder set let folder B's notes.txt reuse folder A's name: the second
+    // staged file was hard-linked over the first and the sender streamed one
+    // file's bytes against the other's hash. Loose files join the set too.
+    let mut used: HashSet<String> = HashSet::new();
+    // B1/F4: names are not destinations. A folder child lands at its
+    // attrs["path"] and a loose file at its bare name, so the two resolve by
+    // different routes and a shared NAME set cannot see the collision: a loose
+    // `x.bin` beside a folder holding a top-level `x.bin` produced two
+    // uniquely-named items that both landed on out_dir/x.bin, and the receiver
+    // interleaved their chunks into one file. The invariant is distinct
+    // DESTINATIONS. Two picked folders cannot collide -- the receiver puts
+    // each under its own attrs["path"] root, so their children never share a
+    // destination -- so seeding from the loose files is enough, and it makes
+    // the outcome independent of pick order.
+    // The claim is a PRE-PASS, and it has to claim BOTH sets. Doing it as the
+    // walk reached each loose file made the outcome depend on pick order, so a
+    // folder picked first handed the bare `x.bin` to its own child and the
+    // loose file got `x.bin~1` instead of the other way round -- collision-free
+    // both times, but the same share produced two different layouts depending
+    // on how the picker ordered it, which the reverse-order test pins.
+    //
+    // Reserving only `dests` with the raw basename was wrong too, and in a way
+    // that reintroduced the very collision this set exists to prevent: a flat
+    // file's destination is its FINAL name, so if `used` then renamed it to
+    // `x.bin~1` it landed on the same file the folder child had just claimed.
+    // `used` and `dests` are therefore reserved together, before any folder is
+    // walked, and the loop below reuses the reserved name verbatim instead of
+    // deduping a second time.
+    let mut dests: HashSet<String> = HashSet::new();
+    let mut flat_names: Vec<Option<String>> = vec![None; picked.len()];
+    for (slot, path) in flat_names.iter_mut().zip(picked) {
+        if path.is_dir() {
+            continue;
+        }
+        let Some(basename) = path.file_name() else {
+            continue;
+        };
+        let name = unique_name(&mut used, &basename.to_string_lossy());
+        dests.insert(name.clone());
+        *slot = Some(name);
+    }
+    for (path, reserved) in picked.iter().zip(&flat_names) {
+        let start = items.len() as u32;
+        if path.is_dir() {
+            for (item, source) in
+                Item::from_folder_into(start, path, chunk_size, &mut used, &mut dests)?
+            {
+                items.push(item);
+                sources.push(source);
+            }
+        } else {
+            // A loose picked file is NOT given an attrs["path"] and so lands
+            // FLAT under its bare name on the receiver, while a folder child
+            // carries one and lands in a subdirectory. That asymmetry is
+            // deliberate, not an oversight: a loose file has no tree to
+            // preserve, and a peer that renames it into a subdirectory would be
+            // inventing structure the sender never picked. Both paths still go
+            // through the same `used` (name) and `dests` (destination) sets, so
+            // the two builders can never emit a name that collides in the
+            // receiver's flat staging namespace nor two items that claim one
+            // file on disk.
+            let mut item = Item::from_file(start, path, chunk_size)?;
+            // Already reserved by the pre-pass under exactly this name, so it
+            // is taken verbatim: re-running unique_name here would see its own
+            // reservation and bump it to `x.bin~1`, colliding with the folder
+            // child that holds that destination.
+            item.name = reserved.clone();
+            items.push(item);
+            sources.push(path.clone());
+        }
+    }
+    if items.is_empty() {
+        return Err(CoreError::Transfer(
+            "nothing to send: the picked paths hold no files".into(),
+        ));
+    }
+    let manifest = Manifest::batch(sender, items)?;
+    Ok((manifest, sources))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -395,6 +636,255 @@ mod tests {
         assert_eq!(clamp_chunk_size(0), CHUNK_SIZE_MIN);
         assert_eq!(clamp_chunk_size(u32::MAX), CHUNK_SIZE_MAX);
         assert_eq!(clamp_chunk_size(CHUNK_SIZE_DEFAULT), CHUNK_SIZE_DEFAULT);
+    }
+
+    fn dev() -> DeviceRef {
+        DeviceRef {
+            device_id: [1u8; 16],
+            name: "s".into(),
+        }
+    }
+
+    /// F1: `path.strip_prefix(root).unwrap_or(path)` silently degraded to an
+    /// ABSOLUTE attrs["path"] whenever the walked child was not a lexical
+    /// descendant of the root, so the receiver rebuilt the sender's local
+    /// directory layout. It has to be an error naming both paths.
+    #[test]
+    fn a_child_outside_the_root_is_an_error_not_an_absolute_path() {
+        let err = relative_under(Path::new("/share/root"), Path::new("/elsewhere/secret.txt"))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("/share/root") && msg.contains("/elsewhere/secret.txt"),
+            "the error must name BOTH paths, got: {msg}"
+        );
+        assert!(matches!(err, CoreError::Transfer(_)));
+    }
+
+    /// F1, the invariant the hole broke: no attrs["path"] a folder share emits
+    /// may be absolute, because the receiver would rebuild the sender's local
+    /// directory layout. (The failure itself is pinned on `relative_under`
+    /// above: `collect_files` builds every child path lexically from `root`, so
+    /// from_folder cannot reach the branch itself -- the helper is where a
+    /// future caller could, and it is now an error rather than a fallback.)
+    #[test]
+    fn a_folder_share_never_emits_an_absolute_relative_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("ok.txt"), b"fine").unwrap();
+        for item in Item::from_folder(0, &root, CHUNK_SIZE_DEFAULT).unwrap() {
+            let rel = item_rel(&item).unwrap();
+            assert!(!rel.starts_with('/'), "attrs[path] must be relative: {rel}");
+            assert_eq!(rel, "ok.txt");
+        }
+    }
+
+    /// F2: the used-name set used to be per-from_folder, so two picked folders
+    /// each holding notes.txt produced two items with the SAME name. Staging is
+    /// flat per payload, so one item's staged file is hard-linked over the
+    /// other's and the sender streams the wrong bytes against the wrong hash.
+    #[test]
+    fn two_folders_with_the_same_basename_get_unique_manifest_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        for root in [&a, &b] {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(root.join("notes.txt"), b"same basename").unwrap();
+            std::fs::write(root.join("other.txt"), b"same basename").unwrap();
+        }
+        let (manifest, sources) = from_picked_paths(dev(), &[a, b], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 4, "two files from each folder");
+
+        let mut names: Vec<&str> = manifest
+            .items
+            .iter()
+            .map(|i| i.name.as_deref().unwrap())
+            .collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            total,
+            "item names must be unique per manifest, got {names:?}"
+        );
+        assert_eq!(
+            sources.len(),
+            4,
+            "one source per item, indexed by item index"
+        );
+    }
+
+    /// F2b: the set is seeded with loose picked files too, so a picked
+    /// notes.txt and a folder child notes.txt cannot share a staged name.
+    #[test]
+    fn a_loose_file_is_deduplicated_against_a_folder_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("shared.txt"), b"in the folder").unwrap();
+        let loose = dir.path().join("shared.txt");
+        std::fs::write(&loose, b"loose").unwrap();
+
+        let (manifest, _sources) =
+            from_picked_paths(dev(), &[loose, root], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 2);
+        let mut names: Vec<&str> = manifest
+            .items
+            .iter()
+            .map(|i| i.name.as_deref().unwrap())
+            .collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            total,
+            "a loose file must not reuse a folder child's name, got {names:?}"
+        );
+    }
+
+    /// F5: a non-Text attrs["path"] used to hit `_ => continue`, silently
+    /// dropping the child and shifting every later source index by one, so
+    /// `sources[i]` no longer named item i. It is an error.
+    #[test]
+    fn a_non_text_relative_path_is_an_error_not_a_silently_dropped_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+
+        let mut item = Item::from_file(0, &root.join("a.txt"), CHUNK_SIZE_DEFAULT).unwrap();
+        item.attrs
+            .insert("path".into(), ciborium::value::Value::Integer(7.into()));
+        let err = item_rel(&item).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("item 0"),
+            "the error must name the item, got: {msg}"
+        );
+        assert!(matches!(err, CoreError::Transfer(_)));
+    }
+
+    /// And the same for a child that carries no attrs["path"] at all.
+    #[test]
+    fn a_missing_relative_path_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let item = Item::from_file(3, &f, CHUNK_SIZE_DEFAULT).unwrap();
+        let err = item_rel(&item).unwrap_err();
+        assert!(err.to_string().contains("item 3"), "got: {err}");
+    }
+
+    /// Where an item actually LANDS, straight from the receiver's own
+    /// resolver, so these tests pin the invariant the builder owes rather
+    /// than a re-implementation of it.
+    fn destinations(manifest: &Manifest) -> Vec<std::path::PathBuf> {
+        let out = std::path::Path::new("/out");
+        manifest
+            .binary_items()
+            .map(|i| crate::transfer::receiver::item_destination(out, i).unwrap())
+            .collect()
+    }
+
+    fn assert_distinct_and_accepted(manifest: &Manifest) {
+        let dests = destinations(manifest);
+        let total = dests.len();
+        let mut sorted = dests.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            total,
+            "destinations must be distinct, got {dests:?}"
+        );
+        // The proof that the fix is at the right layer: the receiver's
+        // duplicate-destination backstop must not fire on anything the
+        // builder produces.
+        crate::transfer::receiver::validate_manifest(manifest)
+            .expect("the receiver must accept a manifest from_picked_paths built");
+    }
+
+    /// F4, builder half: a loose picked file and a folder child of the same
+    /// name resolve through DIFFERENT routes (bare name vs attrs["path"]), so
+    /// deduplicating only the manifest name let them land on one file -- the
+    /// receiver then interleaved both chunk series into it and failed the
+    /// hash. The builder must guarantee distinct DESTINATIONS, not names.
+    #[test]
+    fn a_loose_file_naming_a_folder_child_gets_a_distinct_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("x.bin"), b"in the folder").unwrap();
+        let loose = dir.path().join("x.bin");
+        std::fs::write(&loose, b"loose").unwrap();
+
+        let (manifest, sources) =
+            from_picked_paths(dev(), &[loose.clone(), root.clone()], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 2);
+        assert!(!manifest.items[0].attrs.contains_key("path"));
+        assert_ne!(
+            item_rel(&manifest.items[1]).unwrap(),
+            "x.bin",
+            "the folder child, not the loose file, yields the claim on the name"
+        );
+        assert_distinct_and_accepted(&manifest);
+        // The dedup is a destination-only trick: sources[i] must still be the
+        // file on disk that was actually picked, with its own content. This is
+        // why from_folder_into hands the source back instead of the caller
+        // rebuilding it as root.join(attrs["path"]): that name now carries a
+        // `~1` that no file on disk has.
+        assert_eq!(sources[0], loose);
+        assert_eq!(sources[1], root.join("x.bin"));
+        assert_eq!(std::fs::read(&sources[1]).unwrap(), b"in the folder");
+    }
+
+    /// The same share picked the other way round. Order must not matter, and it
+    /// does not: the claim is reserved in a pre-pass, so in BOTH orders the
+    /// loose file keeps the bare `x.bin` and the folder child yields to
+    /// `x.bin~1`. The old version of this test accepted either claimant, which
+    /// is what let the order-dependence hide.
+    #[test]
+    fn the_folder_first_pick_order_is_collision_free_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("album");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("x.bin"), b"in the folder").unwrap();
+        let loose = dir.path().join("x.bin");
+        std::fs::write(&loose, b"loose").unwrap();
+
+        let (manifest, _sources) =
+            from_picked_paths(dev(), &[root, loose], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 2);
+        assert_eq!(item_rel(&manifest.items[0]).unwrap(), "x.bin~1");
+        assert!(!manifest.items[1].attrs.contains_key("path"));
+        assert_distinct_and_accepted(&manifest);
+    }
+
+    /// The receiver's backstop: a HAND-BUILT manifest claiming one destination
+    /// twice is still refused, so a hostile or buggy peer cannot interleave
+    /// chunks either. The builder tests above must not weaken it.
+    #[test]
+    fn a_hand_built_colliding_manifest_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let flat = dir.path().join("x.bin");
+        std::fs::write(&flat, b"loose").unwrap();
+        let mut carried = Item::from_file(1, &flat, CHUNK_SIZE_DEFAULT).unwrap();
+        carried
+            .attrs
+            .insert("path".into(), ciborium::value::Value::Text("x.bin".into()));
+        let manifest = Manifest::batch(
+            dev(),
+            vec![
+                Item::from_file(0, &flat, CHUNK_SIZE_DEFAULT).unwrap(),
+                carried,
+            ],
+        )
+        .unwrap();
+        assert!(crate::transfer::receiver::validate_manifest(&manifest).is_err());
     }
 
     fn map_get<'a>(value: &'a ciborium::value::Value, key: &str) -> &'a ciborium::value::Value {

@@ -8,7 +8,9 @@ use daak_core::crypto::identity::import_from_store;
 use daak_core::crypto::secret_store::FileSecretStore;
 use daak_core::discovery::{default_display_name, unique_display_name};
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
-use daak_core::manifest::{DeviceRef, Item, Manifest, PayloadKind, CHUNK_SIZE_DEFAULT};
+use daak_core::manifest::{
+    from_picked_paths, DeviceRef, Item, Manifest, PayloadKind, CHUNK_SIZE_DEFAULT,
+};
 use daak_core::pairing::{PairMode, PairingBundle};
 use daak_core::store::Db;
 
@@ -160,28 +162,37 @@ async fn main() -> Result<()> {
                 name: engine.display_name().await,
             };
 
-            let manifest = match (text, files.is_empty()) {
-                (Some(t), true) => Manifest::text(&t),
-                (None, false) => build_file_manifest(me, &files)?,
+            // B1: a picked path may be a DIRECTORY, which has no bytes of its
+            // own. from_picked_paths expands a folder into one item per file
+            // and returns the source path per ITEM index, so `sources` is what
+            // the sender streams -- indexing `files` by item index (the old
+            // code) silently pointed at the wrong file once a folder shifted
+            // the indices.
+            let (manifest, sources) = match (text, files.is_empty()) {
+                (Some(t), true) => (Manifest::text(&t), Vec::new()),
+                (None, false) => from_picked_paths(me, &files, CHUNK_SIZE_DEFAULT)?,
                 (Some(t), false) => {
-                    let mut m = build_file_manifest(me, &files)?;
+                    let (mut m, sources) = from_picked_paths(me, &files, CHUNK_SIZE_DEFAULT)?;
                     m.items.push(Item::text(m.items.len() as u32, t));
                     m.kind = PayloadKind::Batch;
-                    m
+                    (m, sources)
                 }
                 (None, true) => unreachable!(),
             };
-            let paths = manifest
+            let paths: Vec<Option<PathBuf>> = manifest
                 .items
                 .iter()
+                // `get`, not `[]`: the item index is peer-of-us data that only
+                // happens to be in range because from_picked_paths assigns it.
+                // `[]` would panic on any future caller that hands us a manifest
+                // it did not build. A missing source stays None, which the sender
+                // already reports as a Transfer error rather than a panic.
                 .map(|i| {
-                    if !i.is_binary() {
-                        None
-                    } else {
-                        files.get(i.index as usize).cloned()
-                    }
+                    i.is_binary()
+                        .then(|| sources.get(i.index as usize).cloned())
+                        .flatten()
                 })
-                .collect::<Vec<_>>();
+                .collect();
 
             // R-T11-3: send_secure no longer takes an addr -- the session
             // registry resolves it from the device map, so seed the entry from
@@ -231,14 +242,6 @@ fn parse_device_id(s: &str) -> Result<[u8; 16]> {
 fn bundle_from_hex(s: &str) -> Result<PairingBundle> {
     let bytes = hex::decode(s.trim()).context("bundle must be hex")?;
     PairingBundle::from_cbor(&bytes).context("invalid pairing bundle")
-}
-
-fn build_file_manifest(me: DeviceRef, files: &[PathBuf]) -> Result<Manifest> {
-    let mut items = Vec::new();
-    for (i, f) in files.iter().enumerate() {
-        items.push(Item::from_file(i as u32, f, CHUNK_SIZE_DEFAULT)?);
-    }
-    Ok(Manifest::batch(me, items)?)
 }
 
 fn hex_id(id: [u8; 16]) -> String {

@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use daak_core::discovery::PresenceState;
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
-use daak_core::manifest::{DeviceRef, Item, Manifest, CHUNK_SIZE_DEFAULT};
+use daak_core::manifest::{from_picked_paths, DeviceRef, Manifest, CHUNK_SIZE_DEFAULT};
 use daak_core::pairing::PairingBundle;
 use daak_core::store::Db;
 use daak_ipc::IpcEvent;
@@ -790,15 +790,13 @@ async fn send(
         m.sender = sender_ref;
         (m, Vec::new())
     } else {
-        let mut items = Vec::with_capacity(files.len());
-        for (i, p) in files.iter().enumerate() {
-            match Item::from_file(i as u32, std::path::Path::new(p), CHUNK_SIZE_DEFAULT) {
-                Ok(item) => items.push(item),
-                Err(e) => return err(e),
-            }
-        }
-        match Manifest::batch(sender_ref, items) {
-            Ok(m) => (m, files.into_iter().map(std::path::PathBuf::from).collect()),
+        // B1: a picked path can be a DIRECTORY, which Item::from_file rejects
+        // outright. from_picked_paths expands a folder into one item per file
+        // so a folder share has bytes to send at all.
+        let picked: Vec<std::path::PathBuf> =
+            files.into_iter().map(std::path::PathBuf::from).collect();
+        match from_picked_paths(sender_ref, &picked, CHUNK_SIZE_DEFAULT) {
+            Ok(pair) => pair,
             Err(e) => return err(e),
         }
     };

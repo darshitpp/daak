@@ -22,7 +22,13 @@ pub fn enqueue(
     // and the CLI both look it up with `item.index as usize`).
     for item in manifest.binary_items() {
         if let Some(src) = files.get(item.index as usize) {
-            staging.stage(&manifest.payload_id, src)?;
+            // The MANIFEST's name, not the source's leaf: a folder can hold two
+            // files with the same leaf, and staging is a flat namespace.
+            staging.stage(
+                &manifest.payload_id,
+                src,
+                item.name.as_deref().unwrap_or_default(),
+            )?;
         }
     }
     // R-T10-11: the row id IS the payload id. Every other transfer id in the

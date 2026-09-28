@@ -20,15 +20,27 @@ const MAX_ITEM_CHUNKS: u64 = 1 << 24;
 const MAX_ITEMS: usize = 65536;
 const MAX_TOTAL_CHUNKS: u64 = 1 << 27;
 const BITMAP_PERSIST_INTERVAL: u64 = 256;
+/// A peer-supplied attrs["path"] is a directory-creation loop and a path the
+/// OS has to resolve, so both its component count and its joined length are
+/// capped. 64 components is far past any real folder share; 4096 bytes is the
+/// classic PATH_MAX.
+const MAX_PATH_COMPONENTS: usize = 64;
+const MAX_PATH_LEN: usize = 4096;
 
 fn safe_item_name(item: &Item) -> String {
     let raw = item.name.as_deref().unwrap_or("");
     match Path::new(raw).file_name().and_then(|n| n.to_str()) {
-        // `quarantine` is the reserved quarantine root inside out_dir: a peer
-        // naming an item that would turn the directory into a file.
-        Some(n) if !n.is_empty() && n != "." && n != ".." && n != "quarantine" => n.to_owned(),
+        Some(n) if !n.is_empty() && !is_reserved(n) => n.to_owned(),
         _ => format!("item_{}", item.index),
     }
+}
+
+/// Names the receiver owns inside out_dir. `quarantine` holds items whose hash
+/// failed; `staging` is the OUTBOUND staging root engine.rs creates there, with
+/// live staged files for sends in flight. A peer naming either as a file would
+/// break the directory it is about to use.
+fn is_reserved(name: &str) -> bool {
+    matches!(name, "." | ".." | "quarantine" | "staging")
 }
 
 fn item_output_path(out_dir: &Path, item: &Item) -> Result<PathBuf> {
@@ -42,7 +54,143 @@ fn item_output_path(out_dir: &Path, item: &Item) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn validate_manifest(manifest: &Manifest) -> Result<()> {
+/// B1: a folder share arrives FLAT -- one item per file, each carrying its
+/// path relative to the share root in attrs["path"]. This is where the tree
+/// comes back. Every component is run through the same `safe_item_name` filter
+/// as `name`, so a peer-supplied path cannot escape out_dir, address the
+/// reserved `quarantine` root, or name a device (`C:` on Windows).
+pub(crate) fn item_destination(out_dir: &Path, item: &Item) -> Result<PathBuf> {
+    let rel = match item.attrs.get("path") {
+        Some(ciborium::value::Value::Text(rel)) => rel.as_str(),
+        // No relative path, or one of the wrong type: the bare name, which is
+        // exactly where the item would have gone before B1.
+        _ => return item_output_path(out_dir, item),
+    };
+    // Both caps are on the PEER's string, before it becomes a mkdir loop or a
+    // path the OS has to resolve.
+    if rel.len() > MAX_PATH_LEN {
+        return Err(CoreError::Protocol(format!(
+            "item {} relative path length {} exceeds cap {MAX_PATH_LEN}",
+            item.index,
+            rel.len()
+        )));
+    }
+    let mut dir = out_dir.to_path_buf();
+    let mut kept = 0usize;
+    for component in rel.split(['/', '\\']) {
+        if component.is_empty() || component == "." || component == ".." {
+            continue;
+        }
+        if kept == MAX_PATH_COMPONENTS {
+            return Err(CoreError::Protocol(format!(
+                "item {} relative path has more than {MAX_PATH_COMPONENTS} components",
+                item.index
+            )));
+        }
+        dir.push(safe_component(component, item.index));
+        kept += 1;
+    }
+    if kept == 0 {
+        // attrs["path"] was pure traversal: the item lands at its bare name
+        // rather than at out_dir itself, which would be a DIRECTORY where the
+        // receiver is about to open a file.
+        return item_output_path(out_dir, item);
+    }
+    Ok(dir)
+}
+
+/// One sanitised path component, for the folder case.
+fn safe_component(raw: &str, index: u32) -> String {
+    match Path::new(raw).file_name().and_then(|n| n.to_str()) {
+        Some(n) if !n.is_empty() && !is_reserved(n) => n.to_owned(),
+        _ => format!("item_{index}"),
+    }
+}
+
+/// Create the directory chain `parent` needs under `out_dir`, verifying EVERY
+/// component with `symlink_metadata` BEFORE creating anything beneath it.
+///
+/// F3. This must NOT be `create_dir_all`. `create_dir_all` walks the chain
+/// first, so a symlink planted at `out_dir/a` is FOLLOWED and the real
+/// directory `out_dir/a/b` appears to be created -- after the fact,
+/// `symlink_metadata(out_dir/a/b)` sees a plain directory and the escape is
+/// invisible. Worse, the write then lands outside `out_dir` entirely, from a
+/// peer that only had to pick a name. out_dir is long-lived and every
+/// non-reserved peer-chosen name is fair game for a directory component, so a
+/// prior delivery can plant the symlink and a later one walks through it.
+///
+/// Per-component `create_dir` (not `create_dir_all`) is the cheapest correct
+/// form: it creates exactly one level, so a component that already exists
+/// surfaces as AlreadyExists and gets re-verified here, and the deepest
+/// existing prefix is checked before we descend into it. Nothing is created
+/// beneath a component we have not confirmed to be a real directory.
+///
+/// NOT canonicalise-and-recompare: on macOS /var and /private/var are one
+/// directory under two names, so comparing canonical forms would reject every
+/// honest receive into a tempdir.
+///
+/// Residual race, accepted: a component that is a real directory when we stat
+/// it can still be swapped for a symlink before the write below. It is defence
+/// in depth, not a privilege boundary -- the attacker would already need write
+/// access to the receiver's own out_dir, which is what lets them write the
+/// victim file directly.
+async fn ensure_real_dir_chain(out_dir: &Path, parent: &Path, index: u32) -> Result<()> {
+    let rel = parent.strip_prefix(out_dir).map_err(|_| {
+        CoreError::Protocol(format!(
+            "item {index} destination {} is outside the output directory",
+            parent.display()
+        ))
+    })?;
+    let mut dir = out_dir.to_path_buf();
+    for component in rel.components() {
+        dir.push(component);
+        match tokio::fs::symlink_metadata(&dir).await {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(CoreError::Protocol(format!(
+                    "item {index} destination {} traverses the symlink {}",
+                    parent.display(),
+                    dir.display()
+                )));
+            }
+            // An existing FILE cannot become a directory, and descending into it
+            // is not what the peer asked for.
+            Ok(m) if !m.is_dir() => {
+                return Err(CoreError::Protocol(format!(
+                    "item {index} destination {} is blocked by the non-directory {}",
+                    parent.display(),
+                    dir.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // The component does not exist yet, so by the match arm above
+                // it is not a symlink. Create exactly this one level and move
+                // on; the next iteration verifies whatever is beneath it.
+                match tokio::fs::create_dir(&dir).await {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) => {
+                        return Err(CoreError::Protocol(format!(
+                            "item {index} cannot create {}: {e}",
+                            dir.display()
+                        )));
+                    }
+                }
+            }
+            // Unrelated to the symlink concern: a path we cannot even stat (a
+            // permissions wall, an I/O error) is not something to write through.
+            Err(e) => {
+                return Err(CoreError::Protocol(format!(
+                    "item {index} destination {} is not inspectable: {e}",
+                    dir.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
     if manifest.items.len() > MAX_ITEMS {
         return Err(CoreError::Protocol(format!(
             "manifest has {} items exceeds cap {MAX_ITEMS}",
@@ -55,6 +203,40 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
             return Err(CoreError::Protocol(format!(
                 "manifest item at position {pos} declares index {}",
                 item.index
+            )));
+        }
+    }
+    // F4: two items resolving to the SAME destination both open that file and
+    // write interleaved chunks into it. The key is the RESOLVED destination of
+    // EVERY binary item, not the raw attrs["path"], because the two populations
+    // resolve by different routes: a loose picked file carries no attrs["path"]
+    // at all and lands at out_dir/<safe name>, while a folder child carries one
+    // and lands at out_dir/<sanitised path>. Restricting the check to items with
+    // a Text attrs["path"] therefore left a cross-population collision
+    // invisible -- a file plus a folder containing a top-level file of the same
+    // name, which is what the iOS share sheet produces. `item_destination`
+    // already falls back to `item_output_path` for an absent or non-Text path,
+    // so iterating every binary item covers all three cases.
+    //
+    // BACKSTOP, not the fix. The collision is CREATED by the builder, and
+    // from_picked_paths now prevents it: every loose file's destination and
+    // every folder child's attrs["path"] go through one `dests` set there, so a
+    // manifest the builder produces has pairwise-distinct destinations and this
+    // loop never fires on it (pinned by the socket-free unit tests in
+    // manifest.rs). What is left here is defence against a hand-built or
+    // hostile manifest -- the one case the peer fully controls -- and the
+    // cheap place to catch it, before a byte is written or a file created.
+    // Tightening this check alone, without the builder fix, rejected our OWN
+    // sender's output and wedged send_transfer in its ack loop.
+    // Non-binary items are never materialised, so they cannot collide.
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for item in manifest.items.iter().filter(|i| i.is_binary()) {
+        let dest = item_destination(Path::new(""), item)?;
+        if !seen.insert(dest.clone()) {
+            return Err(CoreError::Protocol(format!(
+                "item {} resolves to an already-claimed destination {}",
+                item.index,
+                dest.display()
             )));
         }
     }
@@ -147,7 +329,12 @@ pub async fn receive_transfer<T: FrameTransport>(
                 "manifest chunks exceed total cap {MAX_TOTAL_CHUNKS}"
             )));
         }
-        let path = item_output_path(out_dir, item)?;
+        let path = item_destination(out_dir, item)?;
+        if let Some(parent) = path.parent() {
+            // B1: a folder's children arrive in subdirectories that do not
+            // exist yet on the receiver.
+            ensure_real_dir_chain(out_dir, parent, item.index).await?;
+        }
         // Open without truncating: a resumed receive must preserve already-written
         // partial chunks so the persisted bitmap still points at real on-disk data.
         let f = tokio::fs::OpenOptions::new()
@@ -157,7 +344,30 @@ pub async fn receive_transfer<T: FrameTransport>(
             .open(&path)
             .await?;
         files.push(Some(f));
-        bitmaps.push(Some(ChunkBitmap::new(chunk_count)));
+        // B1: a resumed folder share reconnects and the sender only re-sends the
+        // chunks it was NACKed for, so a blank bitmap would leave the receive
+        // blocked forever on a chunk that is already on disk. Load the
+        // persisted state instead. R-T7-5 key policy: payload_id, never a
+        // separate transfer id -- that is what the resuming peer NACKs against.
+        //
+        // TRUST: a persisted bitmap is a HINT, never authority. ChunkBitmap has
+        // no "unset" state, so "nothing persisted" and "every chunk
+        // persisted" are indistinguishable here except via is_complete(); this
+        // code does not care which it is. A stale or lying row can at worst make
+        // the receive wait for a chunk the peer already believes it sent, or
+        // re-write a chunk -- both benign, because the per-item BLAKE2b at the
+        // end of this function is the sole authority on done vs quarantined. That
+        // hash is why this needs no extra get_transfer lookup: the query would
+        // buy nothing the hash does not already decide.
+        //
+        // A bitmap persisted under a DIFFERENT chunk_count is benign: set_word
+        // drops words past this bitmap's end, so both shortening (stale extra
+        // words ignored) and lengthening (new tail still zero) stay safe.
+        let bitmap = match db {
+            Some(db) => db.load_bitmap(&manifest.payload_id, item.index, chunk_count)?,
+            None => ChunkBitmap::new(chunk_count),
+        };
+        bitmaps.push(Some(bitmap));
     }
 
     let all_received = |bitmaps: &[Option<ChunkBitmap>]| {
@@ -273,7 +483,7 @@ pub async fn receive_transfer<T: FrameTransport>(
     let mut failed: Vec<u32> = Vec::new();
     let mut held_paths: Vec<(u32, PathBuf)> = Vec::new();
     for item in manifest.binary_items() {
-        let path = item_output_path(out_dir, item)?;
+        let path = item_destination(out_dir, item)?;
         let f = std::fs::File::open(&path)?;
         let actual = blake2b256_reader(f)?;
         if Some(actual) == item.hash {
@@ -315,7 +525,7 @@ pub async fn receive_transfer<T: FrameTransport>(
             } else {
                 let dest = match held_paths.iter().find(|(i, _)| *i == item.index) {
                     Some((_, p)) => p.clone(),
-                    None => item_output_path(out_dir, item)?,
+                    None => item_destination(out_dir, item)?,
                 };
                 dest.to_str().map(|s| s.to_string())
             };
@@ -386,7 +596,7 @@ pub async fn receive_transfer<T: FrameTransport>(
         // No DB row to report a quarantined item against, so the caller cannot
         // learn WHICH file failed: keep today's whole-transfer failure.
         if let Some(item) = manifest.items.iter().find(|i| Some(i.index) == failed_item) {
-            let good = item_output_path(out_dir, item)?;
+            let good = item_destination(out_dir, item)?;
             let dest = quarantine.slot(&manifest.payload_id, &safe_item_name(item));
             if let Some(dir) = dest.parent() {
                 let _ = tokio::fs::create_dir_all(dir).await;
@@ -948,6 +1158,452 @@ mod tests {
         assert!(dst.path().join("later.bin").exists());
     }
 
+    // ---- B1: a folder's children keep their place in the tree ----
+
+    /// B1: the sender flattens a folder into one binary item per file, each
+    /// carrying its share-root-relative path in attrs["path"]. The receiver has
+    /// to put each one back at that path, or a shared folder arrives as a pile
+    /// of loose files. Assert the TREE, not the item list.
+    #[tokio::test]
+    async fn an_item_with_a_relative_path_attribute_lands_inside_its_folder() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("photo.jpg");
+        let payload: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &payload).unwrap();
+
+        let mut item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        item.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("album/holiday/photo.jpg".into()),
+        );
+        let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![item]);
+
+        let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let sender_manifest = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+            crate::transfer::send_transfer(
+                &mut conn,
+                &sender_manifest,
+                &[Some(path.clone())],
+                &[],
+                |_| {},
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut conn = tcp::dial(addr).await.unwrap();
+        receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
+            .await
+            .unwrap();
+        sender.await.unwrap();
+
+        assert_eq!(
+            std::fs::read(dst.path().join("album/holiday/photo.jpg")).unwrap(),
+            payload,
+            "a folder's child must keep its place in the tree"
+        );
+    }
+
+    /// B1 trust boundary: attrs is peer-controlled, exactly like name, so a
+    /// relative path from the wire is sanitised component by component.
+    #[tokio::test]
+    async fn a_relative_path_cannot_escape_the_output_directory() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("x.bin");
+        std::fs::write(&path, vec![4u8; 40_000]).unwrap();
+
+        let mut item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        item.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("../../escaped.bin".into()),
+        );
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+
+        let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let sender_manifest = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+            crate::transfer::send_transfer(
+                &mut conn,
+                &sender_manifest,
+                &[Some(path.clone())],
+                &[],
+                |_| {},
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut conn = tcp::dial(addr).await.unwrap();
+        receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
+            .await
+            .unwrap();
+        sender.await.unwrap();
+
+        assert!(
+            dst.path().join("escaped.bin").exists(),
+            "the traversal prefix must be stripped, leaving the file in out_dir"
+        );
+        assert!(
+            !dst.path().parent().unwrap().join("escaped.bin").exists(),
+            "a peer-supplied relative path must not escape out_dir"
+        );
+    }
+
+    // ---- FIX PASS: the folder tree is a peer-controlled write path ----
+
+    /// A hand-built item, so a path/caps test needs no real file on disk.
+    fn peer_item(index: u32, rel: &str) -> Item {
+        let mut item = Item {
+            index,
+            item_type: ItemType::Document,
+            name: Some(format!("f{index}.bin")),
+            size: Some(100),
+            chunk_size: Some(CHUNK_SIZE_MIN),
+            chunk_count: Some(1),
+            ..Default::default()
+        };
+        item.attrs
+            .insert("path".into(), ciborium::value::Value::Text(rel.to_string()));
+        item
+    }
+
+    /// F3: a symlink ALREADY inside out_dir defeats the per-component filter,
+    /// because create_dir_all(parent) follows it and the OpenOptions write goes
+    /// straight through it. MemConn, so no socket is needed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_inside_out_dir_cannot_carry_a_write_out_of_it() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = src.path().join("x.bin");
+        std::fs::write(&path, vec![5u8; 40_000]).unwrap();
+
+        let mut item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        item.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("sub/planted.bin".into()),
+        );
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+
+        // The attacker (or an earlier share) put a symlink exactly where the
+        // receive is about to make a directory.
+        std::os::unix::fs::symlink(outside.path(), dst.path().join("sub")).unwrap();
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let _ =
+                crate::transfer::send_transfer(&mut theirs, &m, &[Some(path.clone())], &[], |_| {})
+                    .await;
+        });
+        let res = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
+        // The receiver refuses this manifest before reading any chunk, so the
+        // sender is still waiting for an Ack that will never come. Abort it
+        // rather than await: `mine` cannot be dropped until the await above
+        // returns, which is the very thing that would unblock the sender.
+        sender.abort();
+
+        assert!(
+            matches!(res, Err(CoreError::Protocol(_))),
+            "writing through a symlinked directory must be refused, got {res:?}"
+        );
+        assert!(
+            !outside.path().join("planted.bin").exists(),
+            "no byte may land outside out_dir"
+        );
+    }
+
+    /// F3, DEEP half, and the one that was actually exploitable. The single-
+    /// component test above plants the symlink at the FINAL parent, so the
+    /// post-hoc `symlink_metadata(parent)` sees the symlink and refuses. Plant
+    /// it one level UP and that check inspects a plain directory that
+    /// `create_dir_all` only just created *through* the symlink, so it passes
+    /// and the write lands outside out_dir. Every component of the path has to
+    /// be verified before anything is created beneath it.
+    #[tokio::test]
+    async fn a_symlink_below_an_intermediate_component_cannot_carry_a_write_out_of_it() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = src.path().join("x.bin");
+        std::fs::write(&path, vec![7u8; 40_000]).unwrap();
+
+        let mut item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        item.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("planted/deep/leaf.bin".into()),
+        );
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+
+        // The first component is a symlink pointing out of out_dir; the two
+        // components BELOW it do not exist yet and will be created through it.
+        std::os::unix::fs::symlink(outside.path(), dst.path().join("planted")).unwrap();
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let _ =
+                crate::transfer::send_transfer(&mut theirs, &m, &[Some(path.clone())], &[], |_| {})
+                    .await;
+        });
+        let res = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
+        sender.abort();
+
+        assert!(
+            matches!(res, Err(CoreError::Protocol(_))),
+            "a symlinked INTERMEDIATE component must be refused before anything is created beneath it, got {res:?}"
+        );
+        assert!(
+            !outside.path().join("deep/leaf.bin").exists(),
+            "no byte may land outside out_dir"
+        );
+        assert!(
+            !outside.path().join("deep").exists(),
+            "nothing may be CREATED through the symlink either: the escape is a write primitive, not only a completed file"
+        );
+    }
+
+    /// F3, cap half: a peer-supplied attrs["path"] may not name an unbounded
+    /// number of directories.
+    #[test]
+    fn a_path_with_too_many_components_is_refused() {
+        let out = Path::new("/tmp/out");
+        let deep: Vec<String> = (0..MAX_PATH_COMPONENTS + 1)
+            .map(|i| format!("d{i}"))
+            .collect();
+        let item = peer_item(0, &format!("{}/x.bin", deep.join("/")));
+        let err = item_destination(out, &item).unwrap_err();
+        assert!(matches!(err, CoreError::Protocol(_)), "got {err:?}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("components") && msg.contains("item 0"),
+            "the error must name the limit and the item, got: {msg}"
+        );
+    }
+
+    /// F3, cap half: nor an unbounded joined length. 200 fat components clear
+    /// the component cap and are still an absurd path.
+    #[test]
+    fn a_path_with_an_over_long_joined_length_is_refused() {
+        let out = Path::new("/tmp/out");
+        let fat: Vec<String> = (0..MAX_PATH_COMPONENTS).map(|_| "x".repeat(200)).collect();
+        let item = peer_item(1, &format!("{}/x.bin", fat.join("/")));
+        let err = item_destination(out, &item).unwrap_err();
+        assert!(matches!(err, CoreError::Protocol(_)), "got {err:?}");
+        assert!(
+            err.to_string().contains("length"),
+            "the error must name the length cap, got: {err}"
+        );
+    }
+
+    /// The caps must not clip a real folder share: a 20-deep tree is a
+    /// legitimate project directory.
+    #[test]
+    fn a_reasonable_depth_is_still_accepted() {
+        let out = Path::new("/tmp/out");
+        let deep: Vec<String> = (0..20).map(|i| format!("d{i}")).collect();
+        let rel = format!("{}/x.bin", deep.join("/"));
+        let dest = item_destination(out, &peer_item(0, &rel)).unwrap();
+        assert!(dest.starts_with(out), "got {dest:?}");
+        assert!(dest.ends_with("x.bin"), "got {dest:?}");
+    }
+
+    /// F4: two items claiming the SAME attrs["path"] both open the same file
+    /// and write interleaved chunks into it. Reject in validate_manifest,
+    /// before any byte is written and before any file is created.
+    #[test]
+    fn validate_manifest_rejects_two_items_with_the_same_relative_path() {
+        let manifest = Manifest::new(
+            PayloadKind::Batch,
+            dev(),
+            vec![
+                peer_item(0, "same/place.bin"),
+                peer_item(1, "same/place.bin"),
+            ],
+        );
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::Protocol(m)) if m.contains("same") && m.contains("item 1")
+        ));
+    }
+
+    /// Two DIFFERENT relative strings that sanitise to one destination are the
+    /// same hazard, which is why the duplicate check keys on the RESOLVED
+    /// destination and not on the raw text. `a/place.bin` and `./a//place.bin`
+    /// are different strings and the same file.
+    #[test]
+    fn validate_manifest_rejects_two_paths_that_resolve_to_one_destination() {
+        let out = Path::new("/tmp/out");
+        let manifest = Manifest::new(
+            PayloadKind::Batch,
+            dev(),
+            vec![peer_item(0, "a/place.bin"), peer_item(1, "./a//place.bin")],
+        );
+        assert_eq!(
+            item_destination(out, &manifest.items[0]).unwrap(),
+            item_destination(out, &manifest.items[1]).unwrap(),
+            "this test only means something if they collide"
+        );
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::Protocol(_))
+        ));
+    }
+
+    /// The dedup must key on the RESOLVED destination of EVERY binary item,
+    /// not only on the ones carrying a Text attrs["path"]. A loose picked file
+    /// deliberately has no attrs["path"] and resolves to out_dir/<safe name>,
+    /// while a folder child resolves to out_dir/<sanitised path> -- the two
+    /// resolution functions are separate, so comparing only the folder side
+    /// leaves a cross-population collision invisible.
+    #[test]
+    fn validate_manifest_rejects_a_flat_item_colliding_with_a_path_item() {
+        let flat = Item {
+            index: 0,
+            item_type: ItemType::Document,
+            name: Some("x.bin".into()),
+            size: Some(100),
+            chunk_size: Some(CHUNK_SIZE_MIN),
+            chunk_count: Some(1),
+            ..Default::default()
+        };
+        // A folder child whose sanitised path lands on the same file.
+        let mut carried = peer_item(1, "x.bin");
+        carried.name = Some("x.bin~1".into());
+        assert!(!flat.attrs.contains_key("path"));
+        assert!(carried.attrs.contains_key("path"));
+        let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![flat, carried]);
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::Protocol(m)) if m.contains("x.bin") && m.contains("item 1")
+        ));
+    }
+
+    /// Same hole reached through a NON-Text attrs["path"]: `item_destination`
+    /// falls back to the bare name for it, so it collides with a flat item too.
+    #[test]
+    fn validate_manifest_rejects_a_non_text_path_colliding_with_a_flat_item() {
+        let mut odd = Item {
+            index: 0,
+            item_type: ItemType::Document,
+            name: Some("y.bin".into()),
+            size: Some(100),
+            chunk_size: Some(CHUNK_SIZE_MIN),
+            chunk_count: Some(1),
+            ..Default::default()
+        };
+        odd.attrs
+            .insert("path".into(), ciborium::value::Value::Integer(7.into()));
+        let flat = Item {
+            index: 1,
+            item_type: ItemType::Document,
+            name: Some("y.bin".into()),
+            size: Some(100),
+            chunk_size: Some(CHUNK_SIZE_MIN),
+            chunk_count: Some(1),
+            ..Default::default()
+        };
+        let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![odd, flat]);
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::Protocol(_))
+        ));
+    }
+
+    /// The flat counterpart of the cross-population case above, kept for the
+    /// same reason: a hand-built manifest with two items claiming one file is
+    /// refused. Pre-B1 this shape was accepted and the second write
+    /// overwrote the first, but no BUILDER produces it either (one `used` set
+    /// for names, one `dests` set for destinations), so this pins the backstop
+    /// against a hostile peer rather than a behaviour we rely on.
+    #[test]
+    fn validate_manifest_rejects_two_flat_items_with_the_same_name() {
+        let mk = |index: u32| Item {
+            index,
+            item_type: ItemType::Document,
+            name: Some("dup.bin".into()),
+            size: Some(100),
+            chunk_size: Some(CHUNK_SIZE_MIN),
+            chunk_count: Some(1),
+            ..Default::default()
+        };
+        let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![mk(0), mk(1)]);
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::Protocol(m)) if m.contains("dup.bin") && m.contains("item 1")
+        ));
+    }
+
+    /// The end of the same hole, through the real receive: the collision must
+    /// be caught before a single destination file exists.
+    #[tokio::test]
+    async fn a_colliding_relative_path_writes_nothing() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let p0 = src.path().join("a.bin");
+        let p1 = src.path().join("b.bin");
+        std::fs::write(&p0, vec![1u8; 40_000]).unwrap();
+        std::fs::write(&p1, vec![2u8; 40_000]).unwrap();
+
+        let mut i0 = Item::from_file(0, &p0, 64 * 1024).unwrap();
+        i0.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("same/place.bin".into()),
+        );
+        let mut i1 = Item::from_file(1, &p1, 64 * 1024).unwrap();
+        i1.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("same/place.bin".into()),
+        );
+        let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![i0, i1]);
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let _ =
+                crate::transfer::send_transfer(&mut theirs, &m, &[Some(p0), Some(p1)], &[], |_| {})
+                    .await;
+        });
+        let res = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
+        // The receiver refuses this manifest before reading any chunk, so the
+        // sender is still waiting for an Ack that will never come. Abort it
+        // rather than await: `mine` cannot be dropped until the await above
+        // returns, which is the very thing that would unblock the sender.
+        sender.abort();
+
+        assert!(matches!(res, Err(CoreError::Protocol(_))), "got {res:?}");
+        assert!(
+            !dst.path().join("same/place.bin").exists(),
+            "the collision must be caught before any bytes are written"
+        );
+    }
+
+    /// F3b: `staging` is the reserved outbound staging ROOT inside out_dir
+    /// (engine.rs creates it there), holding live staged files for sends in
+    /// flight, so a peer must not be able to name it.
+    #[test]
+    fn staging_is_a_reserved_component() {
+        let out = Path::new("/tmp/out");
+        let dest = item_destination(out, &peer_item(0, "staging/live.bin")).unwrap();
+        assert!(
+            !dest.starts_with(out.join("staging")),
+            "staging must be remapped, got {dest:?}"
+        );
+        // The same name as a LEAF is reserved too, not just as a directory.
+        let dest = item_destination(out, &peer_item(0, "sub/staging")).unwrap();
+        assert_ne!(dest, out.join("sub/staging"), "got {dest:?}");
+        // An item whose bare NAME is `staging` must not land there either.
+        let mut item = peer_item(0, "x");
+        item.name = Some("staging".into());
+        assert_ne!(item_output_path(out, &item).unwrap(), out.join("staging"));
+    }
+
     #[tokio::test]
     async fn rejects_out_of_range_chunk_index_with_protocol_error() {
         let src = tempfile::tempdir().unwrap();
@@ -1217,10 +1873,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.bin");
         std::fs::write(&path, vec![1u8; 100]).unwrap();
-        let items = vec![
-            Item::from_file(0, &path, 64 * 1024).unwrap(),
-            Item::from_file(1, &path, 64 * 1024).unwrap(),
-        ];
+        let mut second = Item::from_file(1, &path, 64 * 1024).unwrap();
+        // Distinct destination: this test is about the INDEX check. Two binary
+        // items resolving to one file are a separate rejection (see
+        // validate_manifest_rejects_two_flat_items_with_the_same_name), so both
+        // items were built from the same file on purpose and the second is
+        // renamed to give it its own destination -- otherwise this test would
+        // be testing the duplicate rule by accident.
+        second.name = Some("b.bin".into());
+        let items = vec![Item::from_file(0, &path, 64 * 1024).unwrap(), second];
         let manifest = Manifest::new(PayloadKind::Media, dev(), items);
         validate_manifest(&manifest).unwrap();
     }

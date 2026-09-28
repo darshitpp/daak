@@ -8,13 +8,13 @@
 // lint is allowed crate-wide rather than patched upstream.
 #![allow(clippy::empty_line_after_doc_comments)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use daak_core::crypto::identity::{import_from_store, verify_static_binding};
 use daak_core::discovery::PresenceState;
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
-use daak_core::manifest::{DeviceRef, Item, Manifest, CHUNK_SIZE_DEFAULT};
+use daak_core::manifest::{from_picked_paths, DeviceRef, Manifest, CHUNK_SIZE_DEFAULT};
 use daak_core::pairing::{PairMode, PairingBundle};
 use daak_core::store::Db;
 use daak_core::CoreError;
@@ -547,24 +547,18 @@ impl DaakEngine {
 
     pub fn send_files(&self, peer_id: String, paths: Vec<String>) -> Result<String, FfiError> {
         let engine = self.engine()?;
-        let mut items = Vec::with_capacity(paths.len());
-        for (i, p) in paths.iter().enumerate() {
-            items.push(
-                Item::from_file(i as u32, Path::new(p), CHUNK_SIZE_DEFAULT).map_err(engine_err)?,
-            );
-        }
-        let manifest = Manifest::batch(
+        // B1: the share sheet hands over directories too, and a directory is not
+        // a file. from_picked_paths expands a folder into one item per file.
+        let picked: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+        let (manifest, sources) = from_picked_paths(
             device_ref(&engine, self.rt.block_on(engine.display_name())),
-            items,
+            &picked,
+            CHUNK_SIZE_DEFAULT,
         )
         .map_err(engine_err)?;
         let id = self
             .rt
-            .block_on(engine.enqueue_outbox_send(
-                parse_id(&peer_id)?,
-                manifest,
-                paths.into_iter().map(PathBuf::from).collect(),
-            ))
+            .block_on(engine.enqueue_outbox_send(parse_id(&peer_id)?, manifest, sources))
             .map_err(engine_err)?;
         Ok(to_hex(&id))
     }
