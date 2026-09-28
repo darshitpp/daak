@@ -32,6 +32,40 @@ fn accept_error_is_fatal(err: &crate::error::CoreError) -> bool {
     !matches!(err, crate::error::CoreError::Protocol(_))
 }
 
+/// A JSON array of strings, for the one column that holds JSON: inbox
+/// saved_paths, which both bridges parse with serde_json on the way out.
+///
+/// daak-core has no JSON dependency and does not get one for this: the value is
+/// an array of OS paths, so the only characters needing escape are the quote,
+/// the backslash and the C0 controls. A control byte is emitted as \u00XX
+/// rather than passed through, because serde_json correctly rejects a raw
+/// control inside a string and a row that will not parse bridges as `null`.
+fn json_string_array(items: &[String]) -> String {
+    let mut out = String::from("[");
+    for (i, s) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\u{8}' => out.push_str("\\b"),
+                '\u{c}' => out.push_str("\\f"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+    }
+    out.push(']');
+    out
+}
+
 pub struct EngineConfig {
     pub display_name: String,
     pub listen_addr: SocketAddr,
@@ -835,7 +869,7 @@ impl Engine {
     /// Called from the accept loop after a successful inbound transfer.
     /// Returns the row it wrote, so the caller can put THE PERSISTED row on the
     /// event bus rather than rebuilding it from the manifest a second time.
-    fn record_inbox(db: &Db, manifest: &Manifest) -> Result<InboxRow> {
+    fn record_inbox(db: &Db, manifest: &Manifest, saved_paths: &[String]) -> Result<InboxRow> {
         let summary = match manifest.kind {
             PayloadKind::Text => manifest
                 .items
@@ -852,9 +886,11 @@ impl Engine {
             item_count: manifest.items.len() as u32,
             summary,
             received_at: crate::manifest::now_ms() as i64 / 1000,
-            // Placeholder: the real paths are filled in when the receive path
-            // reports them (later task).
-            saved_paths: "[]".into(),
+            // The destinations the receiver ACTUALLY created, harvested from
+            // the TransferItem events receive_transfer already emits -- not a
+            // recomputation from the manifest, which would name the final path
+            // of an item that was remapped into quarantine.
+            saved_paths: json_string_array(saved_paths),
         };
         db.add_inbox(&row)?;
         Ok(row)
@@ -1033,6 +1069,12 @@ impl Engine {
             .get_pairing(&hello.device_id)?
             .ok_or_else(|| CoreError::Protocol("unpaired inbound connection".into()))?;
         let static_secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
+        // B3: the destinations the receiver actually created, read off the item
+        // events as they are emitted. `on_item` is called synchronously by
+        // receive_transfer on this task and the borrow ends when it returns, so
+        // by the time recv_secure_transfer hands back the manifest the vec is
+        // complete -- no lock, no channel, no await point in between.
+        let mut saved_paths: Vec<String> = Vec::new();
         // R6: the real Db, not None -- inbound transfers are persisted so the
         // NACK-driven resume path (bitmaps, quarantine rows) is reachable.
         match recv_secure_transfer(
@@ -1042,6 +1084,12 @@ impl Engine {
             out_dir,
             Some(db),
             |ev| {
+                if let EngineEvent::TransferItem {
+                    dest_path: Some(p), ..
+                } = &ev
+                {
+                    saved_paths.push(p.clone());
+                }
                 let _ = tx.send(ev);
             },
         )
@@ -1054,7 +1102,7 @@ impl Engine {
                 // broadcast receiver sees these in send order. If the row
                 // cannot be written there is no entry to report, so only the
                 // warn! survives -- no event for a row that does not exist.
-                match Self::record_inbox(db, &manifest) {
+                match Self::record_inbox(db, &manifest, &saved_paths) {
                     Ok(row) => {
                         let _ = tx.send(EngineEvent::InboxReceived(row));
                     }
@@ -1416,6 +1464,34 @@ async fn read_identity_public(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B3: the saved_paths column is hand-built JSON that both bridges parse
+    /// with serde_json. A path that needs escaping must still parse, and a
+    /// control byte must not be passed through raw -- serde_json rejects a raw
+    /// control in a string, and the row would bridge as `null` (the corrupt-row
+    /// signal) instead of a real list. daak-core cannot assert this with
+    /// serde_json (it has no such dependency), so these are the exact strings
+    /// serde_json's own escaping produces, pinned here and on the bridge side.
+    #[test]
+    fn saved_paths_json_escapes_what_a_path_can_contain() {
+        assert_eq!(json_string_array(&[]), "[]");
+        assert_eq!(
+            json_string_array(&["/tmp/a.bin".into()]),
+            r#"["/tmp/a.bin"]"#
+        );
+        assert_eq!(
+            json_string_array(&["/tmp/a".into(), "/tmp/b".into()]),
+            r#"["/tmp/a","/tmp/b"]"#
+        );
+        assert_eq!(
+            json_string_array(&[r#"C:\tmp\q"#.into(), r#"/a"b"#.into()]),
+            r#"["C:\\tmp\\q","/a\"b"]"#
+        );
+        assert_eq!(
+            json_string_array(&["/tmp/\u{1}tab\t\nnl\r\u{8}\u{c}".into()]),
+            r#"["/tmp/\u0001tab\t\nnl\r\b\f"]"#
+        );
+    }
 
     /// Finding 3. Both device-id guards are pinned here, as UNIT tests on the
     /// guard itself, because neither can be reached through the public API:
