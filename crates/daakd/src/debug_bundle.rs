@@ -59,11 +59,12 @@ fn set_private(_path: &Path) -> std::io::Result<()> {
 ///
 /// It is a `MakeWriter` rather than a `Layer` because capturing the FORMATTED
 /// line is what the bundle needs, and the fmt layer already knows how to format
-/// one. Implementing `Layer` directly would mean hand-rolling a field visitor
-/// (or naming `tracing_core::Event`, which needs a `tracing` dependency daakd
-/// does not have) to rebuild the same string. ponytail: this is the whole
-/// subscriber -- there is no level filter and no file sink; add those when a
-/// bug report needs more than the last 512 lines.
+/// one. A `Layer` would have to rebuild that same string by hand: either walk
+/// the event's fields through a typed visitor, or name `tracing_core::Event`
+/// and pick its fields apart, and either way the formatting lives in daakd
+/// instead of in the fmt layer that already gets it right. ponytail: this is
+/// the whole subscriber -- there is no level filter and no file sink; add those
+/// when a bug report needs more than the last 512 lines.
 #[derive(Clone, Default)]
 pub struct RecentLog {
     lines: Arc<Mutex<VecDeque<String>>>,

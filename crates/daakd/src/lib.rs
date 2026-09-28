@@ -19,9 +19,11 @@ use daak_core::pairing::PairingBundle;
 use daak_core::store::Db;
 use daak_ipc::IpcEvent;
 #[cfg(unix)]
-use daak_ipc::{read_message, write_message};
+use daak_ipc::{read_message, write_message, IPC_MAJOR};
 #[cfg(unix)]
 use daak_ipc::{IpcMessage, IpcRequest, IpcResponse};
+#[cfg(unix)]
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
 use tokio::sync::RwLock as AsyncRwLock;
 
@@ -63,9 +65,10 @@ impl DaemonState {
         let guard = self.slot.read().await;
         match guard.as_ref() {
             Some(slot) => Ok(slot.engine.clone()),
-            None => Err(IpcResponse::Error {
-                message: NOT_STARTED.into(),
-            }),
+            // B6: routed through err() so the single most common daemon error
+            // -- a request that arrived before Start -- is in the bundle. It
+            // is hand-built here only because it lives before err().
+            None => Err(err(NOT_STARTED)),
         }
     }
 
@@ -91,15 +94,41 @@ impl Default for DaemonState {
 /// share one parser. A malformed id is a caller bug and is refused rather than
 /// silently degrading into a filter that matches nothing.
 fn parse_id(s: &str) -> Result<[u8; 16], IpcResponse> {
-    let bytes = hex::decode(s).map_err(|e| IpcResponse::Error {
-        message: format!("id must be 32 hex chars: {e}"),
-    })?;
-    bytes.try_into().map_err(|_| IpcResponse::Error {
-        message: format!("id must be 32 hex chars, got {} chars", s.len()),
-    })
+    let bytes = hex::decode(s).map_err(|e| err(format!("id must be 32 hex chars: {e}")))?;
+    bytes
+        .try_into()
+        .map_err(|_| err(format!("id must be 32 hex chars, got {} chars", s.len())))
+}
+
+/// B6: the most chars of any one peer-supplied error string.
+///
+/// This is a BACKSTOP, not a fix for a measured leak. `err()` is handed
+/// arbitrary strings built from peer input, and the IPC frame cap is 4 MiB, so
+/// a future call site that interpolates a peer string could otherwise put
+/// megabytes into each of 512 ring slots -- enough to evict everything the ring
+/// exists to capture. Today the known peer-influenced errors are all small and
+/// free of peer content: `read_message` yields "bad IPC magic", a
+/// "frame of N bytes exceeds the ... cap" naming only digits, or an `io:`
+/// wrapper around a `std::io::Error`, and a ciborium decode error reports the
+/// expected TYPE rather than echoing the offending value.
+///
+/// The head is kept because that is the part that names the failure. The bound
+/// is pinned by `err_bounds_whatever_it_is_handed`.
+const LOG_MAX_CHARS: usize = 512;
+
+fn log_line(msg: impl std::fmt::Display) -> String {
+    let s = msg.to_string();
+    if s.chars().count() <= LOG_MAX_CHARS {
+        return s;
+    }
+    s.chars().take(LOG_MAX_CHARS).collect::<String>() + "...[truncated]"
 }
 
 fn err(message: impl std::fmt::Display) -> IpcResponse {
+    // B6: the client is told the error and the process forgot it, so a debug
+    // bundle exported for exactly this failure had an empty `recent log`. This
+    // is the one line every IPC failure funnels through.
+    tracing::warn!("ipc error: {}", log_line(&message));
     IpcResponse::Error {
         message: message.to_string(),
     }
@@ -254,96 +283,152 @@ pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std
         let (stream, _) = listener.accept().await?;
         let sender = sender.clone();
         let state = state.clone();
-        tokio::spawn(async move {
-            // The read and write halves are separate owners, so select! can
-            // borrow one in each arm; a single &mut stream would not
-            // borrow-check.
-            let (mut rd, mut wr) = stream.into_split();
-            let mut rx = sender.subscribe();
-            let mut subscribed = false;
-            // read_message is NOT cancel-safe: it reads into fresh buffers, so
-            // dropping it mid-frame throws away every byte it already ate and
-            // the next read sees a frame tail as a magic. Keep ONE future
-            // alive across select! iterations and replace it only after it has
-            // completed, so a losing branch never discards bytes.
-            let mut rd_fut = Box::pin(read_message(&mut rd));
-            loop {
-                tokio::select! {
-                    msg = &mut rd_fut => {
-                        // A major-version mismatch is answerable: tell the
-                        // peer the lowest major we speak, then drop it. Without
-                        // this the client only sees a closed socket and cannot
-                        // tell an old app from a dead daemon.
-                        if let Err(daak_ipc::IpcError::UpdateRequired { min_major }) = &msg {
-                            let _ = write_message(
-                                &mut wr,
-                                &IpcMessage::Response(IpcResponse::UpdateRequired {
-                                    min_major: *min_major,
-                                }),
-                            )
-                            .await;
-                            break;
-                        }
-                        // A clean disconnect (Ok(None)) and a truncated body
-                        // (Err) both end this connection.
-                        let Some(IpcMessage::Request(req)) = msg.ok().flatten() else {
-                            break;
-                        };
-                        let reply = match req {
-                            IpcRequest::Subscribe => {
-                                subscribed = true;
-                                IpcMessage::Response(IpcResponse::Ok)
-                            }
-                            IpcRequest::Shutdown => {
-                                // The engine owns a listener, a DB handle and
-                                // four background tasks; a daemon that exits
-                                // without stopping them leaves a bound port
-                                // and an open SQLite file behind.
-                                //
-                                // B4: the engine is TAKEN out of the slot, not
-                                // just shut down in place. Left in the slot, a
-                                // later Start with the same args took the
-                                // idempotent branch and answered Port for a
-                                // port whose accept task was aborted. Taking
-                                // it also drops the last Arc, which is what
-                                // actually closes the DB and stops the tasks.
-                                if let Some(slot) = state.slot.write().await.take() {
-                                    let _ = slot.engine.shutdown().await;
-                                }
-                                break
-                            }
-                            // `sender` is the broadcast Sender itself, so a
-                            // Start inside it can spawn the engine -> IpcEvent
-                            // bridge; the per-connection `rx` is already
-                            // subscribed above, so bridge events fan out.
-                            other => {
-                                IpcMessage::Response(
-                                    dispatch(&state, &sender, other).await,
-                                )
-                            }
-                        };
-                        // The read is done, so the future is spent: drop it
-                        // first (its borrow of rd dies with it) and pin a fresh
-                        // read for the next round.
-                        drop(rd_fut);
-                        rd_fut = Box::pin(read_message(&mut rd));
-                        if write_message(&mut wr, &reply).await.is_err() {
-                            break;
-                        }
+        // The read and write halves are separate owners, so select! can
+        // borrow one in each arm; a single &mut stream would not borrow-check.
+        let (rd, wr) = stream.into_split();
+        tokio::spawn(serve_connection(state, sender, rd, wr));
+    }
+}
+
+/// The per-connection handler, split out of the accept loop so it can be
+/// driven over an in-memory duplex. The two paths that were silent on the
+/// accept loop -- a write that fails because the client is gone, and a read
+/// that ends -- are NOT REACHABLE from an accepted-socket test: the reply to
+/// every request a client can send before `Start` is ~50 bytes, and the
+/// kernel buffer accepts that with no reader at all, so the daemon lands on
+/// its READ arm and never on the write failure. The read half is generic for
+/// the same reason -- nothing about these paths needs a real socket, and a
+/// test that needs one has to be run escalated.
+#[cfg(unix)]
+async fn serve_connection<R, W>(
+    state: Arc<DaemonState>,
+    sender: Arc<broadcast::Sender<IpcEvent>>,
+    mut rd: R,
+    mut wr: W,
+) where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut rx = sender.subscribe();
+    let mut subscribed = false;
+    // read_message is NOT cancel-safe: it reads into fresh buffers, so
+    // dropping it mid-frame throws away every byte it already ate and
+    // the next read sees a frame tail as a magic. Keep ONE future
+    // alive across select! iterations and replace it only after it has
+    // completed, so a losing branch never discards bytes.
+    let mut rd_fut = Box::pin(read_message(&mut rd));
+    loop {
+        tokio::select! {
+            msg = &mut rd_fut => {
+                // A major-version mismatch is answerable: tell the
+                // peer the lowest major we speak, then drop it. Without
+                // this the client only sees a closed socket and cannot
+                // tell an old app from a dead daemon.
+                if let Err(daak_ipc::IpcError::UpdateRequired { min_major }) = &msg {
+                    // B6: an old app is a real support case and the
+                    // client only ever saw a closed socket, so the
+                    // reason it was closed has to be in the bundle --
+                    // whether or not the answer below lands.
+                    tracing::warn!("ipc version mismatch: peer needs major {min_major}, this build speaks major {IPC_MAJOR}");
+                    let refused = write_message(
+                        &mut wr,
+                        &IpcMessage::Response(IpcResponse::UpdateRequired {
+                            min_major: *min_major,
+                        }),
+                    )
+                    .await;
+                    if let Err(e) = refused {
+                        tracing::warn!("ipc version-mismatch reply write failed: {e}");
                     }
-                    ev = rx.recv(), if subscribed => {
-                        // ponytail: a lagged subscriber keeps its connection
-                        // and silently misses events; Task 9 can drop the
-                        // client or send an Error when that matters.
-                        if let Ok(ev) = ev {
-                            if write_message(&mut wr, &IpcMessage::Event(ev)).await.is_err() {
-                                break;
-                            }
+                    break;
+                }
+                // A clean disconnect (Ok(None)) and a truncated body
+                // (Err) both end this connection.
+                let req = match msg {
+                    // A well-formed frame carrying an Event or a
+                    // Response, i.e. the client is speaking the
+                    // server's half of the protocol.
+                    Ok(Some(IpcMessage::Response(_))) | Ok(Some(IpcMessage::Event(_))) => {
+                        tracing::warn!("ipc client sent a non-request frame");
+                        break;
+                    }
+                    Ok(Some(IpcMessage::Request(req))) => req,
+                    // Ok(None) is the ordinary case: the app quit.
+                    // One line per connection, and a desktop app
+                    // reconnects on every foreground, so this is a
+                    // handful of lines per session, not a flood.
+                    Ok(None) => {
+                        tracing::warn!("ipc client disconnected");
+                        break;
+                    }
+                    // A peer that sent a magic and then a truncated or
+                    // malformed body is NOT a normal close, and this
+                    // used to be a bare `break` with nothing recorded
+                    // anywhere. `e` is peer-controlled, so it goes
+                    // through the same cap as err().
+                    Err(e) => {
+                        tracing::warn!(
+                            "ipc connection ended on an unreadable frame: {}",
+                            log_line(e)
+                        );
+                        break;
+                    }
+                };
+                let reply = match req {
+                    IpcRequest::Subscribe => {
+                        subscribed = true;
+                        IpcMessage::Response(IpcResponse::Ok)
+                    }
+                    IpcRequest::Shutdown => {
+                        // The engine owns a listener, a DB handle and
+                        // four background tasks; a daemon that exits
+                        // without stopping them leaves a bound port
+                        // and an open SQLite file behind.
+                        //
+                        // B4: the engine is TAKEN out of the slot, not
+                        // just shut down in place. Left in the slot, a
+                        // later Start with the same args took the
+                        // idempotent branch and answered Port for a
+                        // port whose accept task was aborted. Taking
+                        // it also drops the last Arc, which is what
+                        // actually closes the DB and stops the tasks.
+                        if let Some(slot) = state.slot.write().await.take() {
+                            let _ = slot.engine.shutdown().await;
                         }
+                        break
+                    }
+                    // `sender` is the broadcast Sender itself, so a
+                    // Start inside it can spawn the engine -> IpcEvent
+                    // bridge; the per-connection `rx` is already
+                    // subscribed above, so bridge events fan out.
+                    other => {
+                        IpcMessage::Response(
+                            dispatch(&state, &sender, other).await,
+                        )
+                    }
+                };
+                // The read is done, so the future is spent: drop it
+                // first (its borrow of rd dies with it) and pin a fresh
+                // read for the next round.
+                drop(rd_fut);
+                rd_fut = Box::pin(read_message(&mut rd));
+                if let Err(e) = write_message(&mut wr, &reply).await {
+                    tracing::warn!("ipc reply write failed: {e}");
+                    break;
+                }
+            }
+            ev = rx.recv(), if subscribed => {
+                // ponytail: a lagged subscriber keeps its connection
+                // and silently misses events; Task 9 can drop the
+                // client or send an Error when that matters.
+                if let Ok(ev) = ev {
+                    if let Err(e) = write_message(&mut wr, &IpcMessage::Event(ev)).await {
+                        tracing::warn!("ipc event write failed: {e}");
+                        break;
                     }
                 }
             }
-        });
+        }
     }
 }
 
@@ -493,9 +578,7 @@ async fn dispatch(
             // let any same-user client overwrite the DB, the key store or a
             // service file through a diagnostics request.
             let Some(data_dir) = state.data_dir().await else {
-                return IpcResponse::Error {
-                    message: NOT_STARTED.into(),
-                };
+                return err(NOT_STARTED);
             };
             let name = match debug_bundle::sanitize_bundle_name(&path) {
                 Ok(n) => n,
@@ -611,6 +694,353 @@ pub async fn serve_with(_path: &Path, _events: broadcast::Sender<IpcEvent>) -> s
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// B6: a user attaches the bundle to a bug report, and its `recent log`
+    /// section is a ring buffer of FORMATTED lines. Asserting on the ring is
+    /// therefore asserting on the exact bytes the user reads, not on some side
+    /// channel.
+    ///
+    /// `init_tracing` is a process-global `try_init`, and the tests below run
+    /// on many threads, so the losers of that race are a real possibility: a
+    /// test that lost would install nothing and then assert on an empty ring.
+    /// The `Once` makes the first caller do the install and makes every other
+    /// caller wait for it to finish. Lines from a concurrent test are tolerated
+    /// because the assertions are `any(..)`, never an exact set.
+    fn capture_log() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            debug_bundle::init_tracing().expect("the first installer in this test binary must win");
+        });
+    }
+
+    /// Drive the REAL per-connection handler over an in-memory duplex, so
+    /// none of these tests binds a listener and none of them needs the
+    /// escalated privileges a `bind` does. `client` gets the raw duplex end:
+    /// feed it frames with `write_message`, and drop it to hang up.
+    async fn serve_over_duplex() -> (tokio::io::DuplexStream, tokio::task::JoinHandle<()>) {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let (rd, wr) = tokio::io::split(server);
+        let (events, _rx) = broadcast::channel::<IpcEvent>(16);
+        let handler = tokio::spawn(serve_connection(
+            Arc::new(DaemonState::new()),
+            Arc::new(events),
+            rd,
+            wr,
+        ));
+        (client, handler)
+    }
+
+    /// The headline defect: an IPC error was answered to the client and then
+    /// dropped on the floor, so the bundle had nothing to show.
+    #[test]
+    fn an_ipc_error_reaches_the_debug_bundles_recent_log() {
+        capture_log();
+        let resp = err("data_dir /nope: permission denied");
+        // The ANSWER is unchanged: logging is additive, the client's error
+        // text is the contract packages/core asserts on.
+        assert!(matches!(
+            &resp,
+            IpcResponse::Error { message } if message == "data_dir /nope: permission denied"
+        ));
+        let lines = debug_bundle::recent_log().snapshot();
+        assert!(
+            lines.iter().any(|l| l.contains("permission denied")),
+            "err() logged nothing: {lines:?}"
+        );
+    }
+
+    /// A peer-controlled string reaches err(): `PairingBundle::from_cbor`
+    /// decodes bytes the client sent, and a ciborium error embeds the value
+    /// it choked on. The IPC frame cap is 4 MiB, so an untruncated line would
+    /// put megabytes into each of 512 ring slots. Bounded, and the front of
+    /// the message (the part that names the failure) survives.
+    #[test]
+    fn a_peer_controlled_error_message_is_capped_in_the_log() {
+        capture_log();
+        let _ = err(format!("BEGIN{}END", "x".repeat(100_000)));
+        let lines = debug_bundle::recent_log().snapshot();
+        let line = lines
+            .iter()
+            .find(|l| l.contains("BEGIN"))
+            .unwrap_or_else(|| panic!("the oversized message was not logged at all: {lines:?}"));
+        assert!(
+            line.chars().count() <= 1024,
+            "logged {} chars, expected a cap",
+            line.chars().count()
+        );
+    }
+
+    /// The bug had FOUR hand-built `IpcResponse::Error` sites that never went
+    /// through `err()` (both NOT_STARTED returns and both `parse_id`
+    /// failures). Wiring only `err()` would leave the single most common
+    /// daemon error -- a request before Start -- still invisible.
+    #[tokio::test]
+    async fn the_errors_that_bypass_err_are_logged_too() {
+        capture_log();
+        let state = DaemonState::new();
+        // Every engine-backed request before Start. This is the error a user
+        // hits when the app and the daemon disagree about startup order.
+        assert!(state.engine().await.is_err());
+        // A malformed id from the client.
+        assert!(parse_id("not hex").is_err());
+        assert!(parse_id("aabb").is_err());
+        let lines = debug_bundle::recent_log().snapshot();
+        assert!(
+            lines.iter().any(|l| l.contains(NOT_STARTED)),
+            "engine-not-started was not logged: {lines:?}"
+        );
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("32 hex chars")).count(),
+            2,
+            "both parse_id rejections must be logged: {lines:?}"
+        );
+    }
+
+    /// B6: the reply-write path, driven through the REAL handler over a
+    /// duplex. The client end is dropped, so the handler's write fails
+    /// deterministically -- no timing, no listener, no escalation.
+    ///
+    /// A real accepted socket CANNOT reach this: the reply to any request a
+    /// client can send before `Start` is ~50 bytes and a Unix socket's kernel
+    /// buffer swallows that with no reader, so the daemon lands on its READ
+    /// arm instead. That is why this is a duplex test and not an ipc_smoke one.
+    #[tokio::test]
+    async fn a_reply_that_cannot_be_written_is_logged() {
+        capture_log();
+        let (mut client, handler) = serve_over_duplex().await;
+        // The engine was never started, so the reply is the NOT_STARTED error:
+        // this drives the err() line AND the reply-write line together.
+        write_message(&mut client, &IpcMessage::Request(IpcRequest::ListInbox))
+            .await
+            .unwrap();
+        // The client vanishes, so the reply has nowhere to go.
+        drop(client);
+        handler.await.unwrap();
+
+        let lines = debug_bundle::recent_log().snapshot();
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("ipc reply write failed"),
+            "the failed reply left no line in the ring: {lines:?}"
+        );
+    }
+
+    /// B6: the other silent break. A peer that sends a magic and then a body
+    /// it cannot finish used to close the connection with a bare `break`,
+    /// which is the shape of a crash from the outside. Nothing at all reached
+    /// the bundle.
+    #[tokio::test]
+    async fn an_unreadable_frame_ends_the_connection_with_a_line_in_the_bundle() {
+        capture_log();
+        use tokio::io::AsyncWriteExt;
+        let (mut client, handler) = serve_over_duplex().await;
+        // Magic, a length prefix, then far fewer bytes than it claims: the
+        // read future returns Err, not Ok(None).
+        client.write_all(&daak_ipc::IPC_MAGIC).await.unwrap();
+        client
+            .write_all(&(2 * 1024 * 1024u32).to_be_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        // Then the peer goes, so the handler's read sees the short frame.
+        drop(client);
+        handler.await.unwrap();
+
+        let lines = debug_bundle::recent_log().snapshot();
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("unreadable frame") && joined.contains("early eof"),
+            "the truncated frame left no line in the ring: {lines:?}"
+        );
+    }
+
+    /// B6: the branch the brief named explicitly. An old app is answered with
+    /// the lowest major this build speaks and then dropped -- from the app's
+    /// side that is a closed socket and nothing else, and from the bundle's
+    /// side it used to be nothing at all, so "my app is too old" was
+    /// unanswerable from a bug report.
+    ///
+    /// A real major bump is not reproducible in a test, so the frame is
+    /// hand-built the way daak-ipc's own tests do it: the magic, a length
+    /// prefix, and a CBOR body whose `v` has a foreign major.
+    #[tokio::test]
+    async fn a_version_mismatch_is_logged_even_though_the_reply_succeeds() {
+        capture_log();
+        let (mut client, handler) = serve_over_duplex().await;
+        // (2 << 8) | 0: major 2, which this build (major 1) refuses.
+        let mut inner = Vec::new();
+        ciborium::into_writer(
+            &serde_json::json!({
+            "v": 512u64,
+            "msg": { "Request": { "Devices": null } },
+            }),
+            &mut inner,
+        )
+        .unwrap();
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&daak_ipc::IPC_MAGIC);
+        frame.extend_from_slice(&(inner.len() as u32).to_be_bytes());
+        frame.extend_from_slice(&inner);
+        use tokio::io::AsyncWriteExt;
+        client.write_all(&frame).await.unwrap();
+        client.flush().await.unwrap();
+
+        // The client still gets its answer: the log line is ADDITIVE.
+        let answer = read_message(&mut client).await.unwrap().unwrap();
+        assert!(
+            matches!(
+                answer,
+                IpcMessage::Response(IpcResponse::UpdateRequired { .. })
+            ),
+            "the daemon must still answer an old app: {answer:?}"
+        );
+        drop(client);
+        handler.await.unwrap();
+
+        let lines = debug_bundle::recent_log().snapshot();
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("version mismatch"),
+            "the version refusal left no line in the ring: {lines:?}"
+        );
+    }
+
+    /// B6 review I-1a, as a REGRESSION GUARD and not a reproduction. The review
+    /// reported that `SetPresence` let a 1 MB peer string through as a
+    /// 1,000,049-char ring line. That was a STALE READING: `err()` caps its
+    /// own argument (`log_line(&message)`), and this arm reaches the ring only
+    /// through `err()`, so the line is already bounded. Measured on this tree
+    /// before any fix: 1,000,000 chars in, 579 out.
+    ///
+    /// The test is still worth its place, because it is the only one that pins
+    /// the END-TO-END bound on a real `dispatch` arm -- oversized peer state
+    /// reaches the ring bounded AND the client still receives the FULL original
+    /// text. The two halves matter separately: capping the response as well as
+    /// the log would be a silent protocol change, and nothing else says that
+    /// does not happen.
+    ///
+    /// The funnel invariant itself is pinned by
+    /// `err_bounds_whatever_it_is_handed`.
+    #[tokio::test]
+    async fn an_oversized_presence_state_is_capped_in_the_log_but_not_in_the_reply() {
+        capture_log();
+        let state = DaemonState::new();
+        let (events, _rx) = broadcast::channel::<IpcEvent>(16);
+        let hostile = "x".repeat(1_000_000);
+        let resp = dispatch(
+            &state,
+            &events,
+            IpcRequest::SetPresence {
+                state: hostile.clone(),
+            },
+        )
+        .await;
+
+        // The answer the client sees is unchanged, megabytes and all.
+        let IpcResponse::Error { message } = &resp else {
+            panic!("a bogus presence must be refused, got {resp:?}");
+        };
+        assert_eq!(
+            message,
+            &format!("presence state must be 'online' or 'away', got {hostile:?}"),
+            "the CLIENT's error text must not be truncated"
+        );
+
+        let lines = debug_bundle::recent_log().snapshot();
+        let line = lines
+            .iter()
+            .find(|l| l.contains("presence state must be"))
+            .unwrap_or_else(|| panic!("the refusal was not logged at all: {lines:?}"));
+        assert!(
+            line.chars().count() <= 1024,
+            "the ring line is {} chars; a peer must not be able to evict the ring",
+            line.chars().count()
+        );
+    }
+
+    /// B6 review I-1a, second pin: the invariant at the FUNNEL, which is where
+    /// the bound actually lives. `err()` applies `log_line` to whatever it is
+    /// handed, so every one of its ~25 call sites is bounded without each site
+    /// having to remember. That is the guarantee; the per-site tests only
+    /// happen to observe it.
+    ///
+    /// Driven straight through `err()` rather than through a request arm, so
+    /// it is a separate pin from the `SetPresence` guard above and would still
+    /// bite if every arm were rewritten. The input is deliberately NOT a
+    /// String: it is a bare `Display`, because `err()` takes `impl Display`
+    /// and the bound must not depend on the argument happening to be one.
+    #[test]
+    fn err_bounds_whatever_it_is_handed() {
+        capture_log();
+        struct Hostile;
+        impl std::fmt::Display for Hostile {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                for _ in 0..1_000_000 {
+                    f.write_str("x")?;
+                }
+                Ok(())
+            }
+        }
+        let resp = err(Hostile);
+        // The client is answered in full: the cap is for the RING, and
+        // shortening the response would be a protocol change.
+        let IpcResponse::Error { message } = &resp else {
+            panic!("err() must still answer with an Error, got {resp:?}");
+        };
+        assert_eq!(
+            message.chars().count(),
+            1_000_000,
+            "err() must hand the client the WHOLE message"
+        );
+
+        let lines = debug_bundle::recent_log().snapshot();
+        let line = lines
+            .iter()
+            .find(|l| l.contains("ipc error: xxx"))
+            .unwrap_or_else(|| panic!("err() logged nothing: {lines:?}"));
+        assert!(
+            line.chars().count() <= 1024,
+            "the funnel let {} chars into the ring; the cap is not being applied",
+            line.chars().count()
+        );
+    }
+
+    /// B6 review M-2: the one B6 line with no coverage. A client that speaks
+    /// the server's half of the protocol -- a `Response` or an `Event` where
+    /// a `Request` belongs -- used to be a bare `break`, so a misbehaving or
+    /// confused app looked exactly like a daemon that hung up for no reason.
+    ///
+    /// Asserts BOTH halves of the behaviour, because either alone is easy to
+    /// get wrong: the line lands in the ring, AND the client gets no reply at
+    /// all. A daemon that logged the refusal and then answered it would be a
+    /// different (also wrong) protocol, and this pins that it does not.
+    #[tokio::test]
+    async fn a_non_request_frame_is_logged_and_gets_no_reply() {
+        capture_log();
+        let (mut client, handler) = serve_over_duplex().await;
+        // A well-formed frame the daemon can decode perfectly well, carrying
+        // the wrong half of the protocol. Nothing is malformed here, which is
+        // what makes this a distinct path from the unreadable-frame test.
+        write_message(&mut client, &IpcMessage::Response(IpcResponse::Ok))
+            .await
+            .unwrap();
+
+        // No reply: the handler breaks, so the read side sees a clean EOF
+        // rather than a frame.
+        assert!(
+            read_message(&mut client).await.unwrap().is_none(),
+            "a non-request frame must get no reply"
+        );
+        drop(client);
+        handler.await.unwrap();
+
+        let lines = debug_bundle::recent_log().snapshot();
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("non-request frame"),
+            "the non-request frame left no line in the ring: {lines:?}"
+        );
+    }
 
     #[test]
     fn a_parent_owned_by_another_uid_is_refused_and_not_repaired() {
