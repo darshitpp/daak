@@ -274,7 +274,12 @@ pub async fn receive_transfer<T: FrameTransport>(
             direction: "in".into(),
             kind: format!("{:?}", manifest.kind).to_lowercase(),
             state: "active".into(),
-            bytes_total: manifest.items.iter().filter_map(|i| i.size).sum(),
+            // B2: bytes_total is the bytes that will be WRITTEN. A non-binary
+            // item is never materialised (see the dest_path note below), so a
+            // size the peer attached to one must not be counted -- otherwise the
+            // UI shows 100% for a file that does not exist. is_binary(), not
+            // size.is_some(): any peer can put a size on a Text/Folder item.
+            bytes_total: manifest.binary_items().filter_map(|i| i.size).sum(),
             bytes_done: 0,
             item_count: manifest.items.len() as u32,
             created_at: now,
@@ -554,7 +559,7 @@ pub async fn receive_transfer<T: FrameTransport>(
                 state: state.into(),
                 dest_path,
             });
-            if !quarantined {
+            if !quarantined && item.is_binary() {
                 bytes_done += item.size.unwrap_or(0);
             }
         }
@@ -565,7 +570,9 @@ pub async fn receive_transfer<T: FrameTransport>(
             direction: "in".into(),
             kind: format!("{:?}", manifest.kind).to_lowercase(),
             state: "done".into(),
-            bytes_total: manifest.items.iter().filter_map(|i| i.size).sum(),
+            // Same rule as the initial upsert above: only materialised items
+            // have bytes. item_count below still counts every item.
+            bytes_total: manifest.binary_items().filter_map(|i| i.size).sum(),
             bytes_done,
             item_count: manifest.items.len() as u32,
             created_at: crate::manifest::now_ms() as i64 / 1000,
@@ -986,6 +993,92 @@ mod tests {
             err.contains("1") && err.contains("quarantin"),
             "error must name how many items were quarantined, got {err:?}"
         );
+    }
+
+    // B2: a peer can put ANY size on a non-binary item. Nothing is ever
+    // written for it, so it must contribute 0 to bytes_total and bytes_done --
+    // while item_count still counts it, because it IS an item.
+    #[tokio::test]
+    async fn a_sized_text_item_counts_as_an_item_but_not_as_bytes() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let f = src.path().join("real.bin");
+        std::fs::write(&f, vec![3u8; 10_000]).unwrap();
+
+        let mut text = Item::text(0, "note");
+        text.size = Some(500_000); // no file will ever exist for this
+        let manifest = Manifest::new(
+            PayloadKind::Batch,
+            dev(),
+            vec![text, Item::from_file(1, &f, 64 * 1024).unwrap()],
+        );
+
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let _ = crate::transfer::send_transfer(
+                &mut theirs,
+                &m,
+                &[None, Some(f.clone())],
+                &[],
+                |_| {},
+            )
+            .await;
+        });
+        receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db), |_| {})
+            .await
+            .unwrap();
+        sender.await.unwrap();
+
+        let row = db.get_transfer(&manifest.payload_id).unwrap().unwrap();
+        assert_eq!(row.bytes_total, 10_000);
+        assert_eq!(row.bytes_done, 10_000);
+        assert_eq!(row.item_count, 2);
+    }
+
+    // B2 regression guard: a pure-binary transfer is unchanged. The fix must
+    // not be "zero everything".
+    #[tokio::test]
+    async fn a_pure_binary_transfer_counts_every_real_byte() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let a = src.path().join("a.bin");
+        let b = src.path().join("b.bin");
+        std::fs::write(&a, vec![1u8; 40_000]).unwrap();
+        std::fs::write(&b, vec![2u8; 15_000]).unwrap();
+        let manifest = Manifest::new(
+            PayloadKind::Batch,
+            dev(),
+            vec![
+                Item::from_file(0, &a, 64 * 1024).unwrap(),
+                Item::from_file(1, &b, 64 * 1024).unwrap(),
+            ],
+        );
+
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let _ = crate::transfer::send_transfer(
+                &mut theirs,
+                &m,
+                &[Some(a.clone()), Some(b.clone())],
+                &[],
+                |_| {},
+            )
+            .await;
+        });
+        receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db), |_| {})
+            .await
+            .unwrap();
+        sender.await.unwrap();
+
+        let row = db.get_transfer(&manifest.payload_id).unwrap().unwrap();
+        assert_eq!(row.bytes_total, 55_000);
+        assert_eq!(row.bytes_done, 55_000);
     }
 
     /// R-T12-6: a GOOD transfer under db:Some persists the parent row and one

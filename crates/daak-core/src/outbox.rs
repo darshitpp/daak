@@ -39,7 +39,12 @@ pub fn enqueue(
     // payload_id per share, so the primary key stays unique.
     let id = manifest.payload_id;
     let now = crate::manifest::now_ms() as i64 / 1000;
-    let total_bytes: u64 = manifest.items.iter().filter_map(|i| i.size).sum();
+    // B2: only MATERIALISED items have bytes. A Text/Folder/Custom item is never
+    // staged, never sent and never written, so counting its size claims bytes
+    // that do not exist -- a share reads 100% done with nothing on disk. Gate
+    // on is_binary(), not on size being None: a peer may put any size on any
+    // item, and the receiver trusts it.
+    let total_bytes: u64 = manifest.binary_items().filter_map(|i| i.size).sum();
     // Encoded once and reused by BOTH inserts below: they store the identical
     // bytes, and a second to_cbor() is a second chance for the two rows to
     // disagree.
@@ -179,7 +184,7 @@ mod tests {
         assert_eq!(row.kind, format!("{:?}", manifest.kind).to_lowercase());
         assert_eq!(
             row.bytes_total,
-            manifest.items.iter().filter_map(|i| i.size).sum()
+            manifest.binary_items().filter_map(|i| i.size).sum()
         );
         assert!(row.error.is_none());
 
@@ -314,5 +319,47 @@ mod tests {
             staging.staged_path(&manifest.payload_id, "b.bin").exists(),
             "the file item (index 1) must be the one staged"
         );
+    }
+
+    // B2: total_bytes must be the bytes that will actually be SENT, and a
+    // non-binary item is never staged, never sent and never written. A Text
+    // item normally leaves size None (Item::text sets no size), so the sum
+    // below accidentally worked -- but the receiver trusts item.size off the
+    // wire, so any peer can put a size on a Text item. Counting it claims
+    // bytes that do not exist.
+    #[test]
+    fn enqueue_excludes_a_sized_non_binary_item_from_total_bytes() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join("c.bin");
+        std::fs::write(&f, vec![7u8; 123]).unwrap();
+
+        let mut text = crate::manifest::Item::text(0, "note");
+        text.size = Some(999); // a hostile/legacy peer may claim any size
+        let manifest = crate::manifest::Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![
+                text,
+                crate::manifest::Item::from_file(1, &f, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+
+        let mut files: Vec<PathBuf> = vec![PathBuf::new()];
+        files.push(f.clone());
+        let id = enqueue(&db, &staging, &[9u8; 16], &manifest, &files).unwrap();
+
+        // Only the 123-byte binary item counts. The Text item is still an ITEM.
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().total_bytes, 123);
+        let row = db.get_transfer(&id).unwrap().unwrap();
+        assert_eq!(row.bytes_total, 123);
+        assert_eq!(row.item_count, 2);
     }
 }
