@@ -17,8 +17,9 @@ import type { DaakEngine } from '../src/engine/types';
 //   - armHostPairing() is MOBILE-ONLY BY RULING, not by oversight. It arms the
 //     engine's accept slot, which lives inside the in-process engine; exposing
 //     it on the daemon would mean a new IpcRequest variant, which the C2 brief
-//     forbids (and IPC_MINOR stays 0). DaemonClientEngine therefore REJECTS it
-//     loudly rather than no-oping -- a silent no-op would leave a desktop host
+//     forbids (and a new request is what owes an IPC_MINOR bump).
+//     DaemonClientEngine therefore REJECTS it loudly rather than no-oping -- a
+//     silent no-op would leave a desktop host
 //     showing a QR that accepts nothing, which is the bug C2 was raised for.
 //     So it is deliberately NOT in the shared list below; the in-process arm is
 //     pinned by contract.spec.ts and the daemon rejection by

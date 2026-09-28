@@ -115,17 +115,19 @@ export class DaemonClientEngine implements DaakEngine {
   // C2: the host arm is IN-PROCESS ONLY and that is deliberate, not a gap I
   // papered over. Adding it to the daemon would mean a new IpcRequest variant,
   // which the C2 brief forbids (a new method on the FFI interface is not a new
-  // request, so IPC_MINOR stays 0). Until the desktop ships that request, a
-  // desktop UI calling this must fail loudly -- a silent no-op would leave the
-  // host showing a QR that accepts nothing, which is the bug C2 is about.
+  // request, and a new request is what owes an IPC_MINOR bump). Until the
+  // desktop ships that request, a desktop UI calling this must fail loudly -- a
+  // silent no-op would leave the host showing a QR that accepts nothing, which
+  // is the bug C2 is about.
   async offerPairing(_bundleCborHex: string): Promise<void> {
     throw new Error('host QR arming is mobile-only: no IpcRequest offers a pairing');
   }
 
   // Same ruling as offerPairing above, and for the same reason: the arm is
   // in-process engine state. There is no IpcRequest that arms a pairing, the
-  // C2 brief forbids adding one, and IPC_MINOR stays 0. Loud, not silent -- a
-  // desktop host that no-oped here would show a QR that accepts nothing.
+  // C2 brief forbids adding one, and adding one is exactly what would owe an
+  // IPC_MINOR bump. Loud, not silent -- a desktop host that no-oped here would
+  // show a QR that accepts nothing.
   async armHostPairing(): Promise<void> {
     throw new Error('host QR arming is mobile-only: no IpcRequest arms a pairing');
   }

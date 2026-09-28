@@ -3,6 +3,7 @@
 // round trip against the real binary is daemon.contract.spec.ts.
 import { describe, expect, it } from 'vitest';
 import { DaemonClientEngine, IpcUpdateRequiredError } from '../src/engine/DaemonClient';
+import { IPC_VERSION } from '../src/ipc/transport';
 import type { IpcEvent, IpcMessage, IpcResponse } from '../src/ipc/transport';
 
 function makeEngine() {
@@ -96,7 +97,9 @@ describe('DaemonClientEngine', () => {
     const { Encoder } = await import('cbor-x');
     const enc = new Encoder({ mapsAsObjects: true, useRecords: false, variableMapSize: true });
     const startMsg = h.written[0] as { Request: { Start: Record<string, unknown> } };
-    const bytes = Buffer.from(enc.encode({ v: 256, msg: startMsg })).toString('hex');
+    // IPC_VERSION, not a literal: a hardcoded v drifts the moment the minor
+    // is bumped, and this frame is what the daemon's version header must match.
+    const bytes = Buffer.from(enc.encode({ v: IPC_VERSION, msg: startMsg })).toString('hex');
     // data_dir / display_name / listen_port, spelled exactly as Rust spells them.
     expect(bytes).toContain(Buffer.from('data_dir').toString('hex'));
     expect(bytes).toContain(Buffer.from('display_name').toString('hex'));

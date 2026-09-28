@@ -217,8 +217,12 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
         // logical event on TWO transports, not a coincidence -- if the two
         // bridges ever disagree, mobile and desktop show different facts about
         // the same received file. IpcEvent::TransferItem already existed
-        // (daak-ipc/src/lib.rs:181-186) and is unchanged, so no IpcRequest
-        // variant and no new wire field, and no IPC_MINOR bump.
+        // (daak-ipc/src/lib.rs:181-186) and is unchanged, so this arm added no
+        // IpcRequest variant and no new wire field. An IPC_MINOR bump is owed
+        // when a new IpcRequest variant IS added -- a new request key is the
+        // additive extension, since TransferFilter's deny_unknown_fields
+        // forbids a new key on an existing wire struct -- and none is owed
+        // here for exactly that reason.
         EngineEvent::TransferItem {
             transfer_id,
             item_index,
