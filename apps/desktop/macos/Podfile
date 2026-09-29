@@ -1,0 +1,38 @@
+# Resolve through node so the hoisted pnpm store is searched, rather than
+# require_relative. Same approach as apps/mobile/ios/Podfile.
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native-macos/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+prepare_react_native_project!
+
+target 'Daak-macOS' do
+  platform :macos, '11.0'
+
+  # Two deviations from the generated template, both forced by this being a
+  # pnpm workspace, both proven by running the original and reading the error:
+  #
+  #  - No `require '@react-native-community/cli-platform-ios/native_modules'`:
+  #    that package is a transitive dep of @react-native-community/cli and pnpm
+  #    links only direct deps, so it is not resolvable from this app.
+  #  - The react-native path is the react-native-macos FORK, named explicitly.
+  #    use_native_modules! returns the plain react-native path here, and with it
+  #    every podspec fetch 404s (SocketRocket was the first to fail).
+  config = use_native_modules!
+
+  use_react_native!(
+    :path => '../node_modules/react-native-macos',
+    # The desktop host is not the mobile binding: Task 10's Linux shell uses
+    # JavaScriptCore, and nothing in Phase 6 needs Hermes on desktop. Matches
+    # what the generator shipped.
+    :hermes_enabled => false,
+    :fabric_enabled => ENV['RCT_NEW_ARCH_ENABLED'] == '1',
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(installer)
+  end
+end

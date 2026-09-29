@@ -1,0 +1,26 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  // "node" is not in the RN preset's `types` (it is exactly
+  // ["react-native","jest"]). Desktop imports @daak/core's DaemonClient half
+  // at RUNTIME -- unlike mobile, which only takes its types -- and that half is
+  // a Node daemon client using Buffer and node:net. "jest" is deliberately
+  // absent: this package tests with vitest, and the include below is narrow so
+  // no OTHER package's jest-only test files get pulled into this program.
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    // The preset sets allowJs but not checkJs, so index.js was in the program
+    // without being checked: mode="popovr" passed CI silently. index.js is the
+    // whole deliverable -- it wires the engine and registers both roots -- so it
+    // gets checked. This is the only tsconfig in the repo with checkJs; that is
+    // deliberate for Phase 6 and the other packages are left alone.
+    "checkJs": true,
+    "types": ["react-native", "node"]
+  },
+  // tsc follows the @daak/core and @daak/ui imports transitively (they are .ts
+  // sources, not .d.ts), so listing ../../packages/*/src here would add nothing
+  // except every sibling package's *.test.ts(x), which are written against
+  // their own runners and do not belong in this program.
+  "include": ["src", "test", "index.js"]
+}
