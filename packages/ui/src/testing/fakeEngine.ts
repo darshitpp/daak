@@ -1,7 +1,10 @@
 import type { DaakEngine, DaakEvent, DeviceInfo } from '@daak/core';
 
 export function fakeEngine(devices: DeviceInfo[] = [
-  { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true },
+  // No `online`: NO engine puts one there. daak-ffi omits it deliberately, daakd
+  // omits the key, and the Rust DeviceInfo has no such field. A test that needs
+  // an online peer passes one in explicitly.
+  { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001' },
 ]): DaakEngine {
   const handlers = new Set<(e: DaakEvent) => void>();
   const engine = {

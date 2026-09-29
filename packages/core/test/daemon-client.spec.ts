@@ -287,7 +287,7 @@ describe('DaemonClientEngine', () => {
     h.event({ TransferDone: { transfer_id: 't1' } });
     h.event({ TransferFailed: { transfer_id: 't1', error: 'boom' } });
     expect(seen).toEqual([
-      { type: 'device.discovered', device: { deviceId: 'd1', name: 'peer', addr: '10.0.0.2:9000' } },
+      { type: 'device.discovered', device: { deviceId: 'd1', name: 'peer', addr: '10.0.0.2:9000', online: true } },
       { type: 'device.state', deviceId: 'd1', state: 'online' },
       { type: 'device.state', deviceId: 'd2', state: 'offline' },
       { type: 'pairing.sas', peerDeviceId: 'd1', sas: '1-2-3' },

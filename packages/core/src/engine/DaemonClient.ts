@@ -249,7 +249,12 @@ const num = (v: unknown): number => Number(v ?? 0);
 export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent | undefined {
   switch (name) {
     case 'DeviceFound':
-      return { type: 'device.discovered', device: { deviceId: str(d.device_id), name: str(d.name), addr: str(d.addr) } };
+      // `online: true` mirrors the FFI arm: the daemon only emits DeviceFound
+      // for a device it is currently hearing, and nothing else in the UI sets
+      // liveness until a presence announce arrives (a peer that was already up
+      // never re-announces). Without this the composer is permanently dead on
+      // the daemon path.
+      return { type: 'device.discovered', device: { deviceId: str(d.device_id), name: str(d.name), addr: str(d.addr), online: true } };
     case 'DeviceState':
       return { type: 'device.state', deviceId: str(d.device_id), state: d.online ? 'online' : 'offline' };
     case 'PairingSas':
