@@ -1,0 +1,16 @@
+{
+  "name": "@daak/rn-tray",
+  "version": "0.1.0",
+  "private": true,
+  "main": "js/index.ts",
+  "react-native": "js/index.ts",
+  "codegenConfig": {
+    "name": "DaakTraySpec",
+    "type": "modules",
+    "jsSrcsDir": "js"
+  },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": { "@daak/core": "workspace:*", "@daak/ui": "workspace:*" },
+  "peerDependencies": { "react": "^18", "react-native": ">=0.76" },
+  "devDependencies": { "typescript": "^5.6.0", "vitest": "^2", "@types/react": "^18.2.6" }
+}

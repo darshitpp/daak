@@ -1,0 +1,16 @@
+{
+  // packages/core's options verbatim, plus jsx: @daak/ui's index re-exports
+  // .tsx files, so without it every one of them is TS6142. Needed at all
+  // because the `typecheck` script is bare `tsc --noEmit`, which without a
+  // tsconfig just prints the help text and exits 1.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["js", "test"]
+}

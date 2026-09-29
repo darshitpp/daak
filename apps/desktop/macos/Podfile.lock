@@ -1,5 +1,7 @@
 PODS:
   - boost (1.84.0)
+  - DaakTray (0.1.0):
+    - React-Core
   - DoubleConversion (1.1.6)
   - FBLazyVector (0.76.5)
   - fmt (9.1.0)
@@ -1469,6 +1471,7 @@ PODS:
 
 DEPENDENCIES:
   - boost (from `../node_modules/react-native-macos/third-party-podspecs/boost.podspec`)
+  - "DaakTray (from `../node_modules/@daak/rn-tray`)"
   - DoubleConversion (from `../node_modules/react-native-macos/third-party-podspecs/DoubleConversion.podspec`)
   - FBLazyVector (from `../node_modules/react-native-macos/Libraries/FBLazyVector`)
   - fmt (from `../node_modules/react-native-macos/third-party-podspecs/fmt.podspec`)
@@ -1537,6 +1540,8 @@ DEPENDENCIES:
 EXTERNAL SOURCES:
   boost:
     :podspec: "../node_modules/react-native-macos/third-party-podspecs/boost.podspec"
+  DaakTray:
+    :path: "../node_modules/@daak/rn-tray"
   DoubleConversion:
     :podspec: "../node_modules/react-native-macos/third-party-podspecs/DoubleConversion.podspec"
   FBLazyVector:
@@ -1662,6 +1667,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   boost: 4c384cc67784d4b15fd14e25b3877c442c1d8064
+  DaakTray: 7dfd22ae65c6793ecad18724917ccea10c9d26b1
   DoubleConversion: c914223d2d29c914635ef1b0721d8a77cca6a732
   FBLazyVector: a19375abbb611b65eaa0ef0659bee9e6b4434f51
   fmt: cca1eb84179ad528ae1ba9fdf135ed1ac49e19cb
