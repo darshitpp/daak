@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Application
+Name=Daak
+Comment=Send files over the LAN with Daak
+Exec=/usr/bin/daak-shell %F
+TryExec=/usr/bin/daak-shell
+# Icon is a THEME ICON NAME. "dev.darshit.daak" is the hicolor icon basename
+# Phase 8 installs to /usr/share/icons/hicolor/256x256/apps/, which is what the
+# freedesktop lookup resolves; a bare name is the correct form and an absolute
+# path would hardcode one size. (Not changed by this task.)
+Icon=dev.darshit.daak
+Terminal=false
+# Network;FileTransfer;Utility -- FileTransfer is the registered main category
+# for a file-sending app; the plan's Utility;Network; is kept because Task 7
+# rewrites this whole file from the C template and asserts these lines, so the
+# two must agree or Task 7's rewrite silently changes the categories.
+Categories=Utility;Network;
+# GTK4 sets this from g_set_prgname/g_set_application_name. The prgname is the
+# desktop id, so StartupWMClass must equal it, which it does. This is what makes
+# the window be matched to the .desktop entry for icon and focus handling.
+StartupWMClass=dev.darshit.daak
+MimeType=text/plain;image/png;image/jpeg;application/pdf;video/mp4;inode/directory;

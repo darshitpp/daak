@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>Daak</string>
+  <!--
+    Required AT LOAD, and NOT cosmetic: without CFBundleExecutable the bundle
+    has no main executable name and dyld has nothing to launch, so the share
+    entry never appears. Same for CFBundleIdentifier and CFBundlePackageType.
+    The version keys are read by the share-sheet cache, which indexes entries
+    by version -- a missing CFBundleVersion is a launch-time risk, not a
+    cosmetic one. CFBundleInfoDictionaryVersion and CFBundleName are the
+    cosmetic pair (label + l10n); every shipping .appex carries them and so does
+    the iOS extension, so they stay. Apple's own SimulatorShareExtension.appex
+    carries all seven; this file matches that set rather than the plan's four.
+  -->
+  <key>CFBundleExecutable</key>
+  <string>$(EXECUTABLE_NAME)</string>
+  <key>CFBundleIdentifier</key>
+  <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>$(PRODUCT_NAME)</string>
+  <key>CFBundlePackageType</key>
+  <string>XPC!</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$(MARKETING_VERSION)</string>
+  <key>CFBundleVersion</key>
+  <string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionPointIdentifier</key>
+    <string>com.apple.share-services</string>
+    <!-- Module-qualified: the class is Swift, so it is not in the ObjC runtime
+         under a bare name. Apple's own .appex uses "Module.Class". A bare
+         "ShareViewController" only resolves if the extension target has an
+         ObjC bridging header naming it. -->
+    <key>NSExtensionPrincipalClass</key>
+    <string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
+    <key>NSExtensionAttributes</key>
+    <dict>
+      <key>NSExtensionActivationRule</key>
+      <dict>
+        <key>NSExtensionActivationSupportsText</key>
+        <true/>
+        <key>NSExtensionActivationSupportsFileWithMaxCount</key>
+        <integer>50</integer>
+      </dict>
+    </dict>
+  </dict>
+</dict>
+</plist>
