@@ -1,6 +1,8 @@
 #import "AppDelegate.h"
 
+#import <Carbon/Carbon.h>
 #import <React/RCTBundleURLProvider.h>
+#import <React/RCTLinkingManager.h>
 #import <RNWindowHost.h>
 
 @implementation AppDelegate
@@ -57,6 +59,37 @@
 #else
   return [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #endif
+}
+
+// daak:// links (RNDirectShare's Share menu, and any other app) arrive here.
+// macOS has no per-app openURL callback with a usable signature beyond the Apple
+// event this delegate already implements, and react-native-macos already OWNS
+// URL delivery: RCTLinkingManager stores a cold-launch initialURL and posts
+// RCTOpenURLNotification, which it forwards to JS as the `url` event. Reusing
+// that is the whole point -- a second native emitter would be invisible to
+// JS Linking.getInitialURL() / Linking.addEventListener('url'), which is where
+// apps/desktop/index.js reads the route from.
+- (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls
+{
+  for (NSURL *url in urls) {
+    NSString *absolute = [url absoluteString];
+    if (absolute == nil) {
+      continue;
+    }
+    // The same descriptor shape the Finder 'open location' / mail client kAEGetURL
+    // event carries, and the only one RCTLinkingManager knows how to read: it
+    // takes the string out of keyDirectObject. Handing it anything else would
+    // post a notification with a nil URL.
+    NSAppleEventDescriptor *event =
+        [[NSAppleEventDescriptor alloc] initWithEventClass:kInternetEventClass
+                                                 eventID:kAEGetURL
+                                          targetDescriptor:nil
+                                                  returnID:kAutoGenerateReturnID
+                                             transactionID:kAnyTransactionID];
+    [event setParamDescriptor:[NSAppleEventDescriptor descriptorWithString:absolute]
+                  forKeyword:keyDirectObject];
+    [RCTLinkingManager getUrlEventHandler:event withReplyEvent:nil];
+  }
 }
 
 /// This method controls whether the `concurrentRoot`feature of React18 is turned on or off.

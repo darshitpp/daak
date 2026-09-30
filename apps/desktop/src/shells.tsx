@@ -1,4 +1,4 @@
-import React, { useCallback, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { DaakUiApp } from '@daak/ui';
 import type { UiRuntime } from '@daak/ui';
 // The @daak/core barrel re-exports NativeDaak, which calls
@@ -10,6 +10,7 @@ import { useTrayOverlay } from '@daak/rn-tray';
 import type { TrayAction } from '@daak/rn-tray';
 import { closePopover, openDashboard } from './window-host';
 import { applyTrayAction } from './tray-action';
+import { getDirectSharePeer, publishDevices, subscribeDirectSharePeer } from './direct-share';
 
 function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {
@@ -50,10 +51,26 @@ export function DaakDashboardShell({ engine, runtime }: {
   engine: DaakEngine;
   runtime: UiRuntime;
 }) {
+  // The dashboard window is built at launch and only orderOut afterwards
+  // (AppDelegate.mm), so a daak:// link arrives at a tree that is ALREADY
+  // mounted. useState here would be seeded long before the event, and the link
+  // would be retained but never applied -- precisely the failure the reviewer
+  // called out. An external store read through useSyncExternalStore is what
+  // lets an event arriving after mount re-render it.
+  const subscribePeer = useCallback(
+    (onChange: () => void) => subscribeDirectSharePeer(onChange),
+    [],
+  );
+  const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
   return (
     <>
       <DaakTrayOverlay runtime={runtime} />
-      <DaakUiApp mode="dashboard" engine={engine} runtime={runtime} />
+      <DaakUiApp
+        mode="dashboard"
+        engine={engine}
+        runtime={runtime}
+        peerDeviceId={peerDeviceId ?? undefined}
+      />
     </>
   );
 }
@@ -75,6 +92,16 @@ function DaakTrayOverlay({ runtime }: { runtime: UiRuntime }) {
     [runtime],
   );
   const state = useSyncExternalStore(subscribe, () => runtime.getState());
+  // Feed the macOS Share menu. Republish ONLY on a devices-ARRAY identity
+  // change: this component re-renders on every engine event, and transfer.item
+  // fires once per file per batch, so an unconditional publish would serialise
+  // the whole peer list into the native side many times a second for a list that
+  // had not changed. reduceUiState already returns the SAME array when nothing
+  // about the list moved (state/store.ts:30), so identity is a real signal
+  // rather than a guess.
+  useEffect(() => {
+    void publishDevices(state.devices);
+  }, [state.devices]);
   useTrayOverlay(state.devices, state.transfers, onTrayAction);
   return null;
 }

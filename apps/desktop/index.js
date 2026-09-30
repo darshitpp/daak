@@ -3,6 +3,7 @@ import { AppRegistry } from 'react-native';
 import { createUiRuntime } from '@daak/ui';
 import { DaakPopoverShell, DaakDashboardShell } from './src/shells';
 import { createDesktopEngine, daakSocketPath } from './src/engine';
+import { onDirectShareUrl } from './src/direct-share';
 
 // One engine for the whole process; popover and dashboard share the same
 // daemon connection and event stream.
@@ -12,6 +13,12 @@ import { createDesktopEngine, daakSocketPath } from './src/engine';
 // before it renders (packages/ui/src/headless.ts:40).
 createDesktopEngine(daakSocketPath(process.env, process.platform)).then((engine) => {
   const runtime = createUiRuntime(engine);
+
+  // daak://send?deviceId=... routing. Registered HERE, above both roots, because
+  // the dashboard window is created at launch and merely orderOut: a link that
+  // arrives has to be able to reach a tree that is already mounted.
+  onDirectShareUrl();
+
   engine.start()
     .then(() => runtime.prime())
     .catch((error) => console.warn('daakd not reachable yet:', error));

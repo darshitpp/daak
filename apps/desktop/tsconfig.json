@@ -22,5 +22,10 @@
   // sources, not .d.ts), so listing ../../packages/*/src here would add nothing
   // except every sibling package's *.test.ts(x), which are written against
   // their own runners and do not belong in this program.
-  "include": ["src", "test", "index.js"]
+  // ../../apps/mobile/src/deeplink is listed because
+  // test/direct-share-contract.spec.ts imports the REAL mobile parser across the
+  // package boundary. tsc only type-checks files reachable from the program, so
+  // without the explicit path that import is an untyped hole -- and it is exactly
+  // that import which keeps the two apps' daak:// contract from drifting.
+  "include": ["src", "test", "index.js", "../../apps/mobile/src/deeplink.ts"]
 }
