@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@daak/core": "workspace:*",
+    "@daak/rn-share": "workspace:*",
     "@daak/rn-tray": "workspace:*",
     "@daak/ui": "workspace:*",
     "react": "18.3.1",
