@@ -1,0 +1,35 @@
+[Unit]
+# The plan's `Documentation=https://localhost/daak` placeholder was dropped:
+# there is no such URL and a dead Documentation= is worse than none.
+Description=Daak LAN transfer daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# No --listen-port: daakd takes no arguments (crates/daakd/src/main.rs is
+# `daakd::serve(&socket_path()).await`; the engine is created by the IPC Start
+# request the client sends). install.sh writes the ExecStart line below from
+# scratch using the path it resolved -- a systemd unit cannot expand
+# $DAAKD_BIN -- so this placeholder is a documentation default, not a patch
+# target.
+ExecStart=%h/.local/bin/daakd
+Restart=always
+RestartSec=2
+# The IPC socket lives at $XDG_RUNTIME_DIR/daak/daakd.sock, which is %t for a
+# user unit. Keeping the daemon in the user manager is what makes the socket
+# same-user; daakd itself chmods the socket to 0600 and the parent dir to 0700
+# (crates/daakd/src/lib.rs::bind), so no unit-level chmod is needed.
+Environment=XDG_RUNTIME_DIR=%t
+Environment=RUST_LOG=info
+# Only NoNewPrivileges: this unit deliberately does NOT claim a writable
+# allowlist. The client picks its data dir as ${XDG_DATA_HOME ?? ~/.local/share}
+# /daak, and the user manager's environment need not match the client's, so any
+# ReadWritePaths list here (ProtectSystem=strict plus a fixed
+# %h/.local/share/daak) silently breaks a custom XDG_DATA_HOME with EROFS on
+# every write -- while SubState stays `running`, so the unit LOOKS healthy and
+# the app can never connect. Fixing that per-machine is a packaging question.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -1,6 +1,7 @@
 export * from './engine';
 export * from './bgsched';
 export * from './clipboard';
+export * from './daemon';
 export * from './fspaths';
 export * from './inbound';
 export * from './notify';

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.darshit.daak.daakd</string>
+  <!--
+    ProgramArguments is ONLY the daemon path. daakd takes no arguments:
+    crates/daakd/src/main.rs is `daakd::serve(&socket_path()).await` and the
+    engine (data dir, display name, listen port) is created by the IPC Start
+    request the CLIENT sends (packages/core/src/engine/DaemonClient.ts). The
+    plan's `--listen-port 0` here would be silently ignored argv, so it is left
+    out rather than written as a lie.
+
+    install.sh rewrites the daemon path below with the real binary it found, so
+    this placeholder must match the default it is copied from.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/daakd</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restart on any exit, including a clean one: the socket must come back. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/tmp/daakd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/daakd.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RUST_LOG</key>
+    <string>info</string>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+</dict>
+</plist>
