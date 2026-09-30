@@ -1,6 +1,7 @@
 import React from 'react';
 import { AppRegistry } from 'react-native';
-import { DaakUiApp, createUiRuntime } from '@daak/ui';
+import { createUiRuntime } from '@daak/ui';
+import { DaakPopoverShell, DaakDashboardShell } from './src/shells';
 import { createDesktopEngine, daakSocketPath } from './src/engine';
 
 // One engine for the whole process; popover and dashboard share the same
@@ -23,19 +24,15 @@ createDesktopEngine(daakSocketPath(process.env, process.platform)).then((engine)
   // (packages/core/src/engine/DaemonClient.ts:27). Reconnect and supervision
   // are Phase 8's, not this file's.
   //
-  // NAME MISMATCH, still open: the generated
-  // apps/desktop/macos/Daak-macOS/AppDelegate.mm sets moduleName = "Daak", but
-  // only 'DaakPopover' and 'DaakDashboard' are registered below, so neither name
-  // matches what the native app asks React Native for. Task 4 owns renaming the
-  // native moduleName to 'DaakDashboard'; until then the macOS shell starts and
-  // then renders no root. Do not paper over it by renaming the two roots here.
+  // The native moduleName is 'DaakDashboard' (AppDelegate.mm), which IS the
+  // second key registered below, so the shell and the dashboard now agree.
   AppRegistry.registerComponent('DaakPopover', () =>
     function DaakPopoverRoot() {
-      return <DaakUiApp mode="popover" engine={engine} runtime={runtime} />;
+      return <DaakPopoverShell engine={engine} runtime={runtime} />;
     });
 
   AppRegistry.registerComponent('DaakDashboard', () =>
     function DaakDashboardRoot() {
-      return <DaakUiApp mode="dashboard" engine={engine} runtime={runtime} />;
+      return <DaakDashboardShell engine={engine} runtime={runtime} />;
     });
 }).catch((error) => console.warn('daakd not reachable yet:', error));

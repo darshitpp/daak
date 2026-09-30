@@ -8,6 +8,25 @@ export interface TrayMenuItem {
   enabled: boolean;
 }
 
+export type TrayAction =
+  | { kind: 'send'; deviceId: string }
+  | { kind: 'transfer'; transferId: string }
+  | { kind: 'dashboard' }
+  | { kind: 'quit' };
+
+// The ONLY place a menu id becomes a typed action. buildTrayMenu above is the
+// only place a TrayAction's id is minted, so these two lists must move
+// together: an id with no case here is dropped, not dispatched.
+export function interpretTraySelection(id: string): TrayAction | null {
+  if (id.startsWith('send:')) return { kind: 'send', deviceId: id.slice('send:'.length) };
+  if (id.startsWith('transfer:')) {
+    return { kind: 'transfer', transferId: id.slice('transfer:'.length) };
+  }
+  if (id === 'dashboard') return { kind: 'dashboard' };
+  if (id === 'quit') return { kind: 'quit' };
+  return null;
+}
+
 export function buildTrayMenu(devices: DeviceInfo[], transfers: TransferRow[]): TrayMenuItem[] {
   const items: TrayMenuItem[] = [];
 

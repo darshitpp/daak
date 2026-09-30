@@ -1,17 +1,53 @@
 #import "AppDelegate.h"
 
 #import <React/RCTBundleURLProvider.h>
+#import <RNWindowHost.h>
 
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
-  self.moduleName = @"Daak";
+  // "Daak" was the generated name and matched NO AppRegistry key, so the shell
+  // launched and rendered no root at all. Only DaakPopover and DaakDashboard
+  // are registered (apps/desktop/index.js).
+  self.moduleName = @"DaakDashboard";
   // You can add your custom initial props in the dictionary below.
   // They will be passed down to the ViewController used by React Native.
   self.initialProps = @{};
 
-  return [super applicationDidFinishLaunching:notification];
+  [super applicationDidFinishLaunching:notification];
+
+  // Menu-bar app: LSUIElement in Info.plist means there is no Dock icon, and
+  // the dashboard must not appear at launch. It is ordered in on demand. The
+  // root view stays alive inside the window, because that is what shares the
+  // bridge with the popover -- orderOut hides, it does not tear down.
+  self.window.title = @"Daak";
+  [self.window orderOut:nil];
+
+  // The dashboard root above was created by this delegate's rootViewFactory.
+  // Hand the SAME factory AND the SAME window to the window host: the popover
+  // root comes out of the same bridge, and openDashboard just orders in the
+  // window that is already hosting the dashboard root. A second RCTBridge would
+  // be a second JS runtime and a second daakd connection (apps/desktop/index.js:
+  // one engine, whole process), and a second window would be a second copy of
+  // the whole dashboard.
+  [[RNWindowHost shared] adoptRootViewFactory:self.rootViewFactory];
+  [[RNWindowHost shared] adoptDashboardWindow:self.window];
+
+  // A status item owns the popover; RNTray installs the icon and posts this
+  // notification on click. The observer has to be registered HERE, not in the
+  // window host: this delegate is the only object that holds both the
+  // rootViewFactory (a React-RCTAppDelegate type the tray pod does not link) and
+  // the dashboard window, and the host is inert until it is handed them.
+  //
+  // The note object is the NSStatusItem, so the host gets its anchor directly
+  // instead of having to reach back into the tray for one.
+  [[NSNotificationCenter defaultCenter] addObserverForName:@"DaakTrayClicked"
+                                                    object:nil
+                                                     queue:[NSOperationQueue mainQueue]
+                                                usingBlock:^(NSNotification *note) {
+    [[RNWindowHost shared] presentPopoverFrom:(NSStatusItem *)note.object];
+  }];
 }
 
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
