@@ -22,6 +22,12 @@ trap cleanup EXIT
 
 cargo build -p daakd
 
+# Debug-only seam: keep this daemon off the login Keychain, which would block
+# on a password prompt that a rebuilt, unsigned binary cannot inherit trust for.
+# Honoured by crates/daakd/src/main.rs under cfg(debug_assertions) only, so the
+# release daemon still uses the OS keystore.
+export DAAK_TEST_FILE_STORE=1
+
 # NO ARGUMENTS. daakd has no PORT argument (crates/daakd/src/main.rs calls
 # serve_with_store(&socket_path(), store)); the plan's `--listen-port 0` would
 # be ignored as argv[1] and nothing more. The engine is configured by the IPC

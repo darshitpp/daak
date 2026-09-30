@@ -54,7 +54,14 @@ if (existsSync(BIN)) {
     // Keep stderr: a daemon that cannot bind (no privileges, stale socket)
     // exits immediately, and a bare 10s hook timeout hides the real reason.
     let err = '';
-    daemon = spawn(BIN, { env: { ...process.env, DAAK_SOCK: sock }, stdio: ['ignore', 'ignore', 'pipe'] });
+    // DAAK_TEST_FILE_STORE keeps the spawned debug daakd on the 0600 file store
+    // instead of the login Keychain, which blocks on a password prompt a
+    // rebuilt binary cannot inherit trust for. main.rs honours it only in debug
+    // builds. See crates/daakd/src/main.rs.
+    daemon = spawn(BIN, {
+      env: { ...process.env, DAAK_SOCK: sock, DAAK_TEST_FILE_STORE: '1' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
     daemon.stderr?.on('data', (c) => { err += String(c); });
     const exited = new Promise<never>((_, reject) =>
       daemon?.once('exit', (code) => reject(new Error(`daakd exited with ${code}: ${err.trim()}`))),

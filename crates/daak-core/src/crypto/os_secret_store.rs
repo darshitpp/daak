@@ -17,6 +17,13 @@ use crate::crypto::secret_store::SecretStore;
 use crate::error::{CoreError, Result};
 
 pub struct OsSecretStore {
+    /// Read by the macOS and Linux arms, which pass it to Keychain and
+    /// `secret-tool` as the service name. The Windows arm never reads it --
+    /// it keys by `<key>.bin` under `dir` and only DPAPI-wraps the blob -- and
+    /// neither does the mobile catch-all. `new` still takes the service so ONE
+    /// constructor serves every target, hence the cfg-conditional allow rather
+    /// than a field whose shape changes per target.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     service: String,
     #[cfg(target_os = "windows")]
     dir: std::path::PathBuf,
@@ -36,6 +43,10 @@ impl OsSecretStore {
     }
 }
 
+// There is no mobile backend to report: every desktop arm uses this, but the
+// iOS/Android catch-all builds its own CoreError inline, so this function is
+// not part of that build at all rather than unused there.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn backend_err<E: std::fmt::Display>(e: E) -> CoreError {
     CoreError::Io(std::io::Error::other(e.to_string()))
 }
