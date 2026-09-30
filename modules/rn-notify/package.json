@@ -10,5 +10,7 @@
     "jsSrcsDir": "js",
     "android": { "javaPackageName": "dev.darshit.daak.notify" }
   },
-  "peerDependencies": { "react-native": ">=0.76" }
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "peerDependencies": { "react-native": ">=0.76" },
+  "devDependencies": { "typescript": "^5.6.0", "vitest": "^2" }
 }
