@@ -22,9 +22,13 @@ trap cleanup EXIT
 
 cargo build -p daakd
 
-# NO ARGUMENTS. daakd has no argument parser at all (crates/daakd/src/main.rs
-# is serve(&socket_path())); the plan's `--listen-port 0` would be ignored as
-# argv[1] and nothing more. The engine is configured by the IPC Start request.
+# NO ARGUMENTS. daakd has no PORT argument (crates/daakd/src/main.rs calls
+# serve_with_store(&socket_path(), store)); the plan's `--listen-port 0` would
+# be ignored as argv[1] and nothing more. The engine is configured by the IPC
+# Start request. main.rs does accept exactly one flag, `--passphrase-stdin`,
+# which is NOT used here: it would block on a stdin this background launch does
+# not provide, and the identity would then be unreadable. The engine is
+# configured by the IPC Start request.
 # The log goes in $runtime, not /tmp: /tmp is world-writable and the name was
 # predictable, so a symlink there could redirect the write and concurrent runs
 # would clobber each other's. $runtime is ours, 0700, and the trap removes it.

@@ -9,9 +9,9 @@
 //! back as a queued outbox row id, which is the whole reason the outbox exists.
 
 use std::path::Path;
-#[cfg(unix)]
 use std::sync::Arc;
 
+use daak_core::crypto::secret_store::SecretStore;
 use daak_core::discovery::PresenceState;
 use daak_core::engine::{Engine, EngineConfig, EngineEvent};
 use daak_core::manifest::{from_picked_paths, DeviceRef, Manifest, CHUNK_SIZE_DEFAULT};
@@ -52,12 +52,30 @@ struct EngineSlot {
 /// engine, so a request never blocks another.
 pub struct DaemonState {
     slot: AsyncRwLock<Option<EngineSlot>>,
+    /// Where `Start` gets the identity from, when the caller supplied one.
+    /// `None` -- every pre-Task-13 caller, including all the tests -- keeps
+    /// today's behaviour exactly: a 0600 file per key under the CLIENT's
+    /// `data_dir`. `Some` is the OS keystore, injected by `serve_with_store`.
+    /// Read only inside `start_engine`, which already holds the write lock, so
+    /// no extra synchronisation is needed.
+    key_store: Option<Arc<dyn SecretStore>>,
 }
 
 impl DaemonState {
     pub fn new() -> Self {
         Self {
             slot: AsyncRwLock::new(None),
+            key_store: None,
+        }
+    }
+
+    /// The daemon's identity comes from `key_store` instead of from
+    /// `<data_dir>/keys`.
+    #[cfg(unix)]
+    pub fn with_key_store(key_store: Arc<dyn SecretStore>) -> Self {
+        Self {
+            slot: AsyncRwLock::new(None),
+            key_store: Some(key_store),
         }
     }
 
@@ -264,12 +282,46 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
 pub async fn serve(path: &Path) -> std::io::Result<()> {
     // The bundle's `recent log` section IS this ring buffer, and it is a
     // global default, so it must be installed before the engine starts
-    // logging -- which happens inside serve_with, right after this.
+    // logging -- which happens inside the accept loop, right after this.
     debug_bundle::init_tracing()
         .map_err(|e| std::io::Error::other(format!("cannot capture daemon logs: {e}")))?;
+    // DELIBERATE: serve() stays on the 0600 FILE store under the client's
+    // data_dir. It does NOT call platform_store(None), because doing so would
+    // silently re-home every existing desktop identity: an install created
+    // before Task 13 has its keys on disk, an empty OS keystore reads as
+    // (None, None), and import_from_store would MINT A BRAND-NEW IDENTITY --
+    // every stored pairing row would point at the old device id and the device
+    // would re-pair as new with nothing on screen saying why. That is the exact
+    // R40(a) failure this file already warns about three times.
+    //
+    // Migrating the existing keys into the keystore is deliberately NOT done
+    // here: a silent migration is more code, more risk, and a different task.
+    // The SHIPPED daemon is unaffected either way -- main.rs calls
+    // serve_with_store directly -- so this choice only stops serve() from
+    // being a trap for the next caller.
     // The receiver is dropped on purpose; each subscriber gets its own.
     let (events, _rx) = broadcast::channel::<IpcEvent>(EVENT_BUFFER);
-    serve_with(path, events).await
+    accept_loop(path, Arc::new(events), Arc::new(DaemonState::new())).await
+}
+
+/// Same as `serve`, but the identity comes from `store` -- the OS keystore,
+/// optionally behind the Argon2id passphrase gate.
+///
+/// There is deliberately no `serve_with` counterpart that takes a store: the
+/// two existing entry points (`serve`, and `serve_with` for an injected event
+/// sender) are the ones every test and the JS-side daemon contract suite calls,
+/// so they keep their exact signatures. `serve_with_store` is the store-aware
+/// one; a test that needs both simply composes the two parts below.
+#[cfg(unix)]
+pub async fn serve_with_store(path: &Path, store: Arc<dyn SecretStore>) -> std::io::Result<()> {
+    // The receiver is dropped on purpose; each subscriber gets its own.
+    let (events, _rx) = broadcast::channel::<IpcEvent>(EVENT_BUFFER);
+    accept_loop(
+        path,
+        Arc::new(events),
+        Arc::new(DaemonState::with_key_store(store)),
+    )
+    .await
 }
 
 /// Same as serve, but the event source is injected. Task 9 bridges the
@@ -279,13 +331,23 @@ pub async fn serve(path: &Path) -> std::io::Result<()> {
 /// Only the production entry point in serve() pays for it.
 #[cfg(unix)]
 pub async fn serve_with(path: &Path, events: broadcast::Sender<IpcEvent>) -> std::io::Result<()> {
+    accept_loop(path, Arc::new(events), Arc::new(DaemonState::new())).await
+}
+
+/// The accept loop itself, with the state and the event sender both injected.
+/// Split out of `serve_with` so `serve_with_store` can install the OS store
+/// without a second copy of the loop.
+#[cfg(unix)]
+async fn accept_loop(
+    path: &Path,
+    events: Arc<broadcast::Sender<IpcEvent>>,
+    state: Arc<DaemonState>,
+) -> std::io::Result<()> {
     let listener = bind(path)?;
-    let sender = Arc::new(events);
-    let state = Arc::new(DaemonState::new());
 
     loop {
         let (stream, _) = listener.accept().await?;
-        let sender = sender.clone();
+        let sender = events.clone();
         let state = state.clone();
         // The read and write halves are separate owners, so select! can
         // borrow one in each arm; a single &mut stream would not borrow-check.
@@ -689,6 +751,18 @@ pub async fn serve(path: &Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 pub async fn serve_with(_path: &Path, _events: broadcast::Sender<IpcEvent>) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "named-pipe server not implemented; see Task 10",
+    ))
+}
+
+/// The store-injecting entry point on Windows, refused for the same reason as
+/// `serve_with` above: there is no named-pipe server, so there is nothing for a
+/// store to be an input TO. It exists so the ungated `main.rs` call site
+/// resolves on every target instead of failing to compile.
+#[cfg(windows)]
+pub async fn serve_with_store(_path: &Path, _store: Arc<dyn SecretStore>) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "named-pipe server not implemented; see Task 10",
@@ -1121,11 +1195,17 @@ async fn start_engine(
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return err(format!("data_dir {data_dir}: {e}"));
     }
-    let store = match daak_core::crypto::secret_store::PersistentFileStore::new(dir.join("keys")) {
-        Ok(s) => s,
-        Err(e) => return err(e),
+    // The injected store when there is one, else the 0600 file store under the
+    // client's data_dir -- the pre-Task-13 behaviour, unchanged for every
+    // caller that did not ask for a store.
+    let store: Arc<dyn SecretStore> = match &state.key_store {
+        Some(s) => s.clone(),
+        None => match daak_core::crypto::secret_store::PersistentFileStore::new(dir.join("keys")) {
+            Ok(s) => Arc::new(s),
+            Err(e) => return err(e),
+        },
     };
-    let identity = match daak_core::crypto::identity::import_from_store(&store) {
+    let identity = match daak_core::crypto::identity::import_from_store(store.as_ref()) {
         Ok(i) => i,
         Err(e) => return err(e),
     };

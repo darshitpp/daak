@@ -324,8 +324,10 @@ pub struct DaakEngine {
     // Set by the [Name=new_with_store] constructor only. `new` leaves it None
     // and start() then falls back to the 0600 file store exactly as before
     // (R40(a)): a MemorySecretStore default would mint a new Ed25519 identity on
-    // every launch and re-pair the device forever.
-    store: Option<Arc<dyn SecureStore + Send + Sync>>,
+    // every launch and re-pair the device forever. The UDL callback is adapted
+    // to daak-core's byte-oriented SecretStore HERE, at construction, so
+    // start() deals in one type and the adapter's lifetime is the engine's.
+    store: Option<Arc<dyn daak_core::crypto::secret_store::SecretStore>>,
 }
 
 /// The name the plan and the JS layer use for the engine handle.
@@ -339,13 +341,7 @@ impl DaakEngine {
         // Re-pinning is a no-op today (EventSink: Send + Sync) but keeps the
         // constructor honest if the supertraits are ever dropped.
         let sink: Box<dyn EventSink + Send + Sync> = sink;
-        DaakEngine {
-            rt: tokio::runtime::Runtime::new().expect("tokio runtime"),
-            engine: Mutex::new(None),
-            sink: Arc::from(sink),
-            pairing_sas: Mutex::new(None),
-            store: None,
-        }
+        Self::with_core_store(None, sink)
     }
 
     /// The mobile constructor: the identity lives in the OS keystore. Same
@@ -354,15 +350,10 @@ impl DaakEngine {
     /// `start`, where a failure CAN reject the start (R40(c)).
     pub fn with_store(store: Box<dyn SecureStore + Send + Sync>, sink: Box<dyn EventSink>) -> Self {
         let sink: Box<dyn EventSink + Send + Sync> = sink;
-        DaakEngine {
-            rt: tokio::runtime::Runtime::new().expect("tokio runtime"),
-            engine: Mutex::new(None),
-            sink: Arc::from(sink),
-            pairing_sas: Mutex::new(None),
-            // UniFFI hands the callback over boxed; the engine is reached from
-            // several threads, so it is held shared from here on.
-            store: Some(Arc::from(store)),
-        }
+        // UniFFI hands the callback over boxed; the engine is reached from
+        // several threads, so it is held shared from here on.
+        let adapted = Arc::new(FfiSecretStore::new(Arc::from(store)));
+        Self::with_core_store(Some(adapted), sink)
     }
 
     /// The UDL declares this as `[Name=new_with_store]`, so uniffi codegen
@@ -375,6 +366,22 @@ impl DaakEngine {
         Self::with_store(store, sink)
     }
 
+    /// The one place a `DaakEngine` is built. `store` is already a core
+    /// SecretStore; `None` means "no store was injected", which start()
+    /// answers with the 0600 file store under the data_dir (R40(a)).
+    fn with_core_store(
+        store: Option<Arc<dyn daak_core::crypto::secret_store::SecretStore>>,
+        sink: Box<dyn EventSink + Send + Sync>,
+    ) -> Self {
+        DaakEngine {
+            rt: tokio::runtime::Runtime::new().expect("tokio runtime"),
+            engine: Mutex::new(None),
+            sink: Arc::from(sink),
+            pairing_sas: Mutex::new(None),
+            store,
+        }
+    }
+
     pub fn start(
         &self,
         data_dir: String,
@@ -384,12 +391,9 @@ impl DaakEngine {
         let dir = PathBuf::from(&data_dir);
         std::fs::create_dir_all(&dir).map_err(engine_err)?;
         // A supplied keystore wins; otherwise the 0600 file store that has
-        // always been the default here (R40(a)). The adapter borrows the
-        // callback, so nothing is moved out of self and a second start() would
-        // still work.
-        let adapter = self.store.clone().map(FfiSecretStore::new);
-        let identity = match &adapter {
-            Some(store) => import_from_store(store).map_err(engine_err)?,
+        // always been the default here (R40(a)).
+        let identity = match &self.store {
+            Some(store) => import_from_store(store.as_ref()).map_err(engine_err)?,
             None => import_from_store(&FileKeyStore::new(dir.join("keys")).map_err(engine_err)?)
                 .map_err(engine_err)?,
         };

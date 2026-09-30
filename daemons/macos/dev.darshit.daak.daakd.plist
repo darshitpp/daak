@@ -5,12 +5,21 @@
   <key>Label</key>
   <string>dev.darshit.daak.daakd</string>
   <!--
-    ProgramArguments is ONLY the daemon path. daakd takes no arguments:
-    crates/daakd/src/main.rs is `daakd::serve(&socket_path()).await` and the
-    engine (data dir, display name, listen port) is created by the IPC Start
-    request the CLIENT sends (packages/core/src/engine/DaemonClient.ts). The
-    plan's `--listen-port 0` here would be silently ignored argv, so it is left
-    out rather than written as a lie.
+    ProgramArguments is ONLY the daemon path. daakd takes no port argument:
+    crates/daakd/src/main.rs calls
+    `daakd::serve_with_store(&socket_path(), store)` and the engine (data dir,
+    display name, listen port) is created by the IPC Start request the CLIENT
+    sends (packages/core/src/engine/DaemonClient.ts). The plan's
+    `--listen-port 0` here would be silently ignored argv, so it is left out
+    rather than written as a lie.
+
+    main.rs does accept ONE flag, `--passphrase-stdin`, which reads a
+    passphrase from stdin and wraps the identity store in Argon2id +
+    ChaCha20-Poly1305. It is deliberately NOT passed here: a launchd agent has
+    no stdin to read it from, and the plist has no key that expresses "the user
+    opted in". Until something can, adding the flag would be a line that
+    deadlocks the agent waiting on a stdin that never delivers. See SHOULD-FIX 8
+    in the Task 13 report.
 
     install.sh rewrites the daemon path below with the real binary it found, so
     this placeholder must match the default it is copied from.
