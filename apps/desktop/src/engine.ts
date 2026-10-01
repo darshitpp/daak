@@ -4,8 +4,9 @@
 import { DaemonClientEngine } from '@daak/core/src/engine/DaemonClient';
 import type { DaakEngine } from '@daak/core';
 
-// This module is in the React Native bundle (index.js imports daakSocketPath)
-// and a bundle has no Node runtime: Metro refused to build at all with
+// This module is no longer on the shipped bundle graph (index.js builds its
+// engine from @daak/platform/src/engine, D16.10.3) and a bundle has no Node
+// runtime: Metro refused to build at all with
 // "Unable to resolve module node:path from src/engine.ts". `join` did exactly
 // one POSIX join, and the edge case it existed for is the blank base, handled
 // by posixJoin below rather than by a module Metro cannot resolve.

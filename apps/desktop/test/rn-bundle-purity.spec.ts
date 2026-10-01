@@ -74,28 +74,21 @@ function graph(entry: string): string[] {
 describe('the desktop bundle reaches no Node builtin', () => {
   const files = graph(join(APP, 'index.js'));
 
-  // Found by this test on 2026-10-01, and NOT yet fixable inside Phase 6:
+  // This set was NOT empty. Found by this test on 2026-10-01:
   //
   //   packages/core/src/ipc/transport.ts      node:net  (connect, Socket)
   //   packages/core/src/engine/DaemonClient.ts node:os   (homedir)
   //
-  // DaemonClientEngine is a NODE engine. The Phase 6 plan mandates it in the RN
-  // app (plan Task 2: "selects DaemonClientEngine"), but react-native-macos has
-  // no node:net shim, so Metro cannot build a bundle containing it at all. Both
-  // also use Buffer, which RN polyfills, but a socket it does not.
+  // DaemonClientEngine is a NODE engine, and react-native-macos shims neither
+  // builtin, so Metro could not BUILD the desktop bundle at all. Ruling D16.10.3
+  // resolved it architecturally rather than by patching: macOS runs the engine
+  // IN-PROCESS via UniFFI, so index.js no longer reaches DaemonClient. See
+  // test/macos-inprocess-ffi.spec.ts and ledger D16.8/D16.10.3.
   //
-  // The fix is an architectural decision, not a patch: either a native
-  // TurboModule that speaks the daakd IPC wire, or the in-process FFI engine on
-  // desktop, which contradicts the locked "desktop = daakd daemon + IPC
-  // client" shape in AGENTS.md. Deliberately NOT done silently. See ledger D16.8.
-  //
-  // Pinned as an EXACT set, so this cannot quietly grow: a third offender fails
-  // the test, and fixing one of these two fails it too, which is the signal to
-  // shrink the list.
-  const KNOWN_UNFIXABLE = new Set([
-    join(__dirname, '..', '..', '..', 'packages', 'core', 'src', 'ipc', 'transport.ts'),
-    join(__dirname, '..', '..', '..', 'packages', 'core', 'src', 'engine', 'DaemonClient.ts'),
-  ]);
+  // Pinned as an EXACT set, so it cannot quietly regrow. Empty means empty: one
+  // new offender fails the test below, which is the signal that the daemon
+  // shape has leaked back onto the running app's module graph.
+  const KNOWN_UNFIXABLE = new Set<string>();
 
   it('has files to check, so this cannot pass vacuously', () => {
     // 39, measured. The floor is not decorative: the first version of this walk
@@ -118,7 +111,7 @@ describe('the desktop bundle reaches no Node builtin', () => {
     ).toEqual([]);
   });
 
-  it('still has exactly the two documented offenders, no more and no fewer', () => {
+  it('still has exactly zero documented offenders, no more and no fewer', () => {
     expect(offenders.map((f) => f.replace(APP + '/', '')).sort()).toEqual(
       [...KNOWN_UNFIXABLE].map((f) => f.replace(APP + '/', '')).sort(),
     );

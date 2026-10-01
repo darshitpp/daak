@@ -15,5 +15,22 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- The engine binds a TCP listener in-process (D16.10.3), so the app needs
+	     server as well as client. client-only was correct for the daakd shape,
+	     where the app talks out and the daemon binds. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- D16.12.5: the identity keychain needs this. kSecUseDataProtectionKeychain
+	     is available only to a sandboxed app that holds keychain-access-groups,
+	     and WITHOUT the entitlement every SecItem call returns
+	     errSecMissingEntitlement (-34018). That is not an ad-hoc-only failure: a
+	     signature grants what this plist REQUESTS and invents nothing, so an
+	     earlier version of this file that omitted the key would have made the
+	     engine unstartable on a properly signed build too. Requested with an
+	     explicit group, matching AGENTS.md's group.dev.darshit.daak. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)group.dev.darshit.daak</string>
+	</array>
 </dict>
 </plist>

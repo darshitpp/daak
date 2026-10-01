@@ -10,13 +10,27 @@
 		3BDA2F4728BE7D7C93CB53A3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F3D5652021687B19DB71C4D9 /* PrivacyInfo.xcprivacy */; };
 		3DF30159AF7061D271E1957F /* libPods-Daak-macOS.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 59C87E0AA9501ADA74585BE5 /* libPods-Daak-macOS.a */; };
 		5142014D2437B4B30078DB4F /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 5142014C2437B4B30078DB4F /* AppDelegate.mm */; };
-		514201702437B4B30078DB4F /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5142016B2437B4B30078DB4F /* ShareViewController.swift */; };
-		514201782437B4B30078DB4F /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 5142016E2437B4B30078DB4F /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		514201522437B4B40078DB4F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 514201512437B4B40078DB4F /* Assets.xcassets */; };
 		514201552437B4B40078DB4F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 514201532437B4B40078DB4F /* Main.storyboard */; };
 		514201582437B4B40078DB4F /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 514201572437B4B40078DB4F /* main.m */; };
+		514201702437B4B30078DB4F /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5142016B2437B4B30078DB4F /* ShareViewController.swift */; };
+		514201782437B4B30078DB4F /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 5142016E2437B4B30078DB4F /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A00AF9C3879654578198F226 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F3D5652021687B19DB71C4D9 /* PrivacyInfo.xcprivacy */; };
+		DA0A00012C0000010000AA01 /* Daak.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00022C0000010000AA02 /* Daak.swift */; };
+		DA0A00032C0000010000AA03 /* DaakModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00042C0000010000AA04 /* DaakModule.mm */; };
+		DA0A00052C0000010000AA05 /* KeychainSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00062C0000010000AA06 /* KeychainSecureStore.swift */; };
+		DA0A000B2C0000010000AA0B /* daak_ffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A000C2C0000010000AA0C /* daak_ffi.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		514201792437B4B40078DB4F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5142016F2437B4B30078DB4F;
+			remoteInfo = ShareExtension;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		514201772437B4B30078DB4F /* Embed App Extensions */ = {
@@ -31,16 +45,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
-
-/* Begin PBXContainerItemProxy section */
-		514201792437B4B40078DB4F /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 5142016F2437B4B30078DB4F;
-			remoteInfo = ShareExtension;
-		};
-/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		13B07F961A680F5B00A75B9A /* Daak.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Daak.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -58,6 +62,12 @@
 		5142016E2437B4B30078DB4F /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		59C87E0AA9501ADA74585BE5 /* libPods-Daak-macOS.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Daak-macOS.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF838D96A5C132B6CB483340 /* Pods-Daak-macOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak-macOS.debug.xcconfig"; path = "Target Support Files/Pods-Daak-macOS/Pods-Daak-macOS.debug.xcconfig"; sourceTree = "<group>"; };
+		DA0A00022C0000010000AA02 /* Daak.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Daak.swift; sourceTree = "<group>"; };
+		DA0A00042C0000010000AA04 /* DaakModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = DaakModule.mm; sourceTree = "<group>"; };
+		DA0A00062C0000010000AA06 /* KeychainSecureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainSecureStore.swift; sourceTree = "<group>"; };
+		DA0A00082C0000010000AA08 /* libdaak_ffi.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; name = libdaak_ffi.a; path = build/generated/ffi/lib/libdaak_ffi.a; sourceTree = "<group>"; };
+		DA0A00092C0000010000AA09 /* Daak-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Daak-Bridging-Header.h"; sourceTree = "<group>"; };
+		DA0A000C2C0000010000AA0C /* daak_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = daak_ffi.swift; path = "build/generated/ffi/daak_ffi.swift"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F3D5652021687B19DB71C4D9 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		F65E598AB1FD93F035EEEA07 /* Pods-Daak-macOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak-macOS.release.xcconfig"; path = "Target Support Files/Pods-Daak-macOS/Pods-Daak-macOS.release.xcconfig"; sourceTree = "<group>"; };
@@ -108,6 +118,10 @@
 				514201562437B4B40078DB4F /* Info.plist */,
 				514201572437B4B40078DB4F /* main.m */,
 				514201592437B4B40078DB4F /* Daak.entitlements */,
+				DA0A00092C0000010000AA09 /* Daak-Bridging-Header.h */,
+				DA0A00022C0000010000AA02 /* Daak.swift */,
+				DA0A00042C0000010000AA04 /* DaakModule.mm */,
+				DA0A00062C0000010000AA06 /* KeychainSecureStore.swift */,
 			);
 			path = "Daak-macOS";
 			sourceTree = "<group>";
@@ -120,12 +134,14 @@
 				5142016D2437B4B30078DB4F /* ShareExtension.entitlements */,
 			);
 			name = ShareExtension;
-			path = ../../../extensions/macos-share;
+			path = "../../../extensions/macos-share";
 			sourceTree = "<group>";
 		};
 		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
 			isa = PBXGroup;
 			children = (
+				DA0A00082C0000010000AA08 /* libdaak_ffi.a */,
+				DA0A000C2C0000010000AA0C /* daak_ffi.swift */,
 			);
 			name = Libraries;
 			sourceTree = "<group>";
@@ -192,6 +208,7 @@
 			buildConfigurationList = 5142015A2437B4B40078DB4F /* Build configuration list for PBXNativeTarget "Daak-macOS" */;
 			buildPhases = (
 				1A938104A937498D81B3BD3B /* [CP] Check Pods Manifest.lock */,
+				DA0AB0341A68108700B75C01 /* Generate daak ffi bindings */,
 				514201452437B4B30078DB4F /* Sources */,
 				514201462437B4B30078DB4F /* Frameworks */,
 				514201472437B4B30078DB4F /* Resources */,
@@ -306,6 +323,27 @@
 			shellPath = /bin/sh;
 			shellScript = "export NODE_BINARY=node\n../node_modules/react-native-macos/scripts/react-native-xcode.sh\n";
 		};
+		DA0AB0341A68108700B75C01 /* Generate daak ffi bindings */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${SRCROOT}/../../../crates/daak-ffi/src/daak.udl",
+				"${SRCROOT}/../../mobile/scripts/gen-macos-ffi.sh",
+			);
+			name = "Generate daak ffi bindings";
+			outputPaths = (
+				"${SRCROOT}/build/generated/ffi/daak_ffi.swift",
+				"${SRCROOT}/build/generated/ffi/lib/libdaak_ffi.a",
+				"${SRCROOT}/build/generated/ffi/Headers/module.modulemap",
+				"${SRCROOT}/build/generated/ffi/Headers/daak_ffiFFI.h",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "bash \"${SRCROOT}/../../mobile/scripts/gen-macos-ffi.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
 		1A938104A937498D81B3BD3B /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -388,6 +426,10 @@
 			files = (
 				514201582437B4B40078DB4F /* main.m in Sources */,
 				5142014D2437B4B30078DB4F /* AppDelegate.mm in Sources */,
+				DA0A00032C0000010000AA03 /* DaakModule.mm in Sources */,
+				DA0A00012C0000010000AA01 /* Daak.swift in Sources */,
+				DA0A00052C0000010000AA05 /* KeychainSecureStore.swift in Sources */,
+				DA0A000B2C0000010000AA0B /* daak_ffi.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -421,55 +463,6 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
-		514201752437B4B30078DB4F /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ../../../extensions/macos-share/ShareExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = ../../../extensions/macos-share/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@executable_path/../../../../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 11.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
-		514201762437B4B30078DB4F /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ../../../extensions/macos-share/ShareExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = ../../../extensions/macos-share/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@executable_path/../../../../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 11.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
 		13B07F941A680F5B00A75B9A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -518,20 +511,34 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = "Daak-macOS/Daak.entitlements";
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = NO;
-				CODE_SIGN_ENTITLEMENTS = Daak-macOS/Daak.entitlements;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/build/generated/ffi/Headers",
+					"${PODS_ROOT}/Headers/Public",
+					"${PODS_ROOT}/Headers/Public/React-Core",
+				);
 				INFOPLIST_FILE = "Daak-macos/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LIBRARY_SEARCH_PATHS = (
+					"$(SDKROOT)/usr/lib/swift",
+					"$(inherited)",
+					"$(SRCROOT)/build/generated/ffi/lib",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-ldaak_ffi",
 				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/build/generated/ffi/Headers/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak;
 				PRODUCT_NAME = Daak;
 				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "Daak-macOS/Daak-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 			};
@@ -543,19 +550,74 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = "Daak-macOS/Daak.entitlements";
 				CURRENT_PROJECT_VERSION = 1;
-				CODE_SIGN_ENTITLEMENTS = Daak-macOS/Daak.entitlements;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/build/generated/ffi/Headers",
+					"${PODS_ROOT}/Headers/Public",
+					"${PODS_ROOT}/Headers/Public/React-Core",
+				);
 				INFOPLIST_FILE = "Daak-macos/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LIBRARY_SEARCH_PATHS = (
+					"$(SDKROOT)/usr/lib/swift",
+					"$(inherited)",
+					"$(SRCROOT)/build/generated/ffi/lib",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-ldaak_ffi",
 				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/build/generated/ffi/Headers/module.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak;
 				PRODUCT_NAME = Daak;
 				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "Daak-macOS/Daak-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		514201752437B4B30078DB4F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "../../../extensions/macos-share/ShareExtension.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "../../../extensions/macos-share/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		514201762437B4B30078DB4F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "../../../extensions/macos-share/ShareExtension.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "../../../extensions/macos-share/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -689,15 +751,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		514201742437B4B30078DB4F /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				514201752437B4B30078DB4F /* Debug */,
-				514201762437B4B30078DB4F /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		13B07F931A680F5B00A75B9A /* Build configuration list for PBXNativeTarget "Daak-iOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -712,6 +765,15 @@
 			buildConfigurations = (
 				5142015B2437B4B40078DB4F /* Debug */,
 				5142015C2437B4B40078DB4F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		514201742437B4B30078DB4F /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				514201752437B4B30078DB4F /* Debug */,
+				514201762437B4B30078DB4F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
