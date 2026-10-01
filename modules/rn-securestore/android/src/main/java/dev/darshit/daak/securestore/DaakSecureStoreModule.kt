@@ -92,7 +92,7 @@ class DaakSecureStoreModule(reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  override fun delete(key: String, promise: Promise) {
+  override fun remove(key: String, promise: Promise) {
     try {
       promise.resolve(prefs.edit().remove(key).commit())
     } catch (t: Throwable) {

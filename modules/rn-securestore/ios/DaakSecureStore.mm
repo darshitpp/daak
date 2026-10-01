@@ -5,6 +5,6 @@ RCT_EXTERN_METHOD(get:(NSString *)key
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(set:(NSString *)key value:(NSString *)value
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
-RCT_EXTERN_METHOD(delete:(NSString *)key
+RCT_EXTERN_METHOD(remove:(NSString *)key
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 @end

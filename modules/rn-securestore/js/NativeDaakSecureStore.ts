@@ -9,7 +9,7 @@ export interface Spec extends TurboModule {
    */
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<boolean>;
-  delete(key: string): Promise<boolean>;
+  remove(key: string): Promise<boolean>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('DaakSecureStore');

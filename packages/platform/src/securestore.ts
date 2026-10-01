@@ -18,5 +18,5 @@ export async function secureSet(key: string, value: string): Promise<boolean> {
 }
 
 export async function secureDelete(key: string): Promise<boolean> {
-  return NativeDaakSecureStore.delete(key);
+  return NativeDaakSecureStore.remove(key);
 }

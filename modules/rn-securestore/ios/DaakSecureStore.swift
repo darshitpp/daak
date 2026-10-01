@@ -81,7 +81,7 @@ class DaakSecureStore: NSObject {
     }
   }
 
-  @objc func delete(_ key: String,
+  @objc func remove(_ key: String,
                     resolve: @escaping RCTPromiseResolveBlock,
                     reject: @escaping RCTPromiseRejectBlock) {
     let status = SecItemDelete(Self.baseQuery(key) as CFDictionary)

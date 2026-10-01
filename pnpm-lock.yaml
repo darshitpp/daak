@@ -106,6 +106,9 @@ importers:
       '@babel/core':
         specifier: ^7.25.0
         version: 7.29.7
+      '@react-native-community/cli':
+        specifier: ^15.0.1
+        version: 15.1.3(typescript@5.6.3)
       '@react-native/babel-preset':
         specifier: 0.76.5
         version: 0.76.5(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7))
@@ -5062,7 +5065,6 @@ snapshots:
       chalk: 4.1.2
       execa: 5.1.1
       fast-glob: 3.3.3
-    optional: true
 
   '@react-native-community/cli-config-android@15.1.3':
     dependencies:
@@ -5070,7 +5072,6 @@ snapshots:
       chalk: 4.1.2
       fast-glob: 3.3.3
       fast-xml-parser: 4.5.7
-    optional: true
 
   '@react-native-community/cli-config-apple@15.0.1':
     dependencies:
@@ -5085,7 +5086,6 @@ snapshots:
       chalk: 4.1.2
       execa: 5.1.1
       fast-glob: 3.3.3
-    optional: true
 
   '@react-native-community/cli-config@15.0.1(typescript@5.6.3)':
     dependencies:
@@ -5108,7 +5108,6 @@ snapshots:
       joi: 17.13.8
     transitivePeerDependencies:
       - typescript
-    optional: true
 
   '@react-native-community/cli-debugger-ui@15.0.1':
     dependencies:
@@ -5121,7 +5120,6 @@ snapshots:
       serve-static: 1.16.3
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@react-native-community/cli-doctor@15.0.1(typescript@5.6.3)':
     dependencies:
@@ -5164,7 +5162,6 @@ snapshots:
       yaml: 2.9.1
     transitivePeerDependencies:
       - typescript
-    optional: true
 
   '@react-native-community/cli-platform-android@15.0.1':
     dependencies:
@@ -5182,7 +5179,6 @@ snapshots:
       chalk: 4.1.2
       execa: 5.1.1
       logkitty: 0.7.1
-    optional: true
 
   '@react-native-community/cli-platform-apple@15.0.1':
     dependencies:
@@ -5199,7 +5195,6 @@ snapshots:
       chalk: 4.1.2
       execa: 5.1.1
       fast-xml-parser: 4.5.7
-    optional: true
 
   '@react-native-community/cli-platform-ios@15.0.1':
     dependencies:
@@ -5208,7 +5203,6 @@ snapshots:
   '@react-native-community/cli-platform-ios@15.1.3':
     dependencies:
       '@react-native-community/cli-platform-apple': 15.1.3
-    optional: true
 
   '@react-native-community/cli-server-api@15.0.1':
     dependencies:
@@ -5241,7 +5235,6 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
-    optional: true
 
   '@react-native-community/cli-tools@15.0.1':
     dependencies:
@@ -5270,7 +5263,6 @@ snapshots:
       semver: 7.8.5
       shell-quote: 1.10.0
       sudo-prompt: 9.2.1
-    optional: true
 
   '@react-native-community/cli-types@15.0.1':
     dependencies:
@@ -5279,7 +5271,6 @@ snapshots:
   '@react-native-community/cli-types@15.1.3':
     dependencies:
       joi: 17.13.8
-    optional: true
 
   '@react-native-community/cli@15.0.1(typescript@5.6.3)':
     dependencies:
@@ -5328,7 +5319,6 @@ snapshots:
       - supports-color
       - typescript
       - utf-8-validate
-    optional: true
 
   '@react-native-mac/virtualized-lists@0.76.4(@types/react@18.3.31)(react-native@0.76.5(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7))(@react-native-community/cli-server-api@15.1.3)(@types/react@18.3.31)(react@18.3.1))(react@18.3.1)':
     dependencies:

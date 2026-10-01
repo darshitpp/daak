@@ -10,20 +10,22 @@
 		00E356F31AD99517003FC87E /* DaakTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 00E356F21AD99517003FC87E /* DaakTests.m */; };
 		0C80B921A6F3F58F76C31292 /* libPods-Daak.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-Daak.a */; };
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
-		DA0AB0011A68108700A75B9A /* DaakModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0031A68108700A75B9A /* DaakModule.mm */; };
-		DA0AB0021A68108700A75B9A /* Daak.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0041A68108700A75B9A /* Daak.swift */; };
-		DA0AB00A1A68108700A75B9A /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB00C1A68108700A75B9A /* ShareViewController.swift */; };
-		DA0AB0201A68108700A75B9A /* DaakIntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */; };
-		DA0AB0261A68108700A75B9A /* DaakNotificationDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0271A68108700A75B9A /* DaakNotificationDelegate.swift */; };
-		DA0AB0211A68108700A75B9A /* SendToDeviceIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */; };
-		DA0AB0241A68108700A75B9A /* AppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0251A68108700A75B9A /* AppShortcuts.swift */; };
-		DA0AB0281A68108700A75B9A /* KeychainSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0291A68108700A75B9A /* KeychainSecureStore.swift */; };
-		DA0AB02A1A68108700A75B9A /* DaakBgLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB02B1A68108700A75B9A /* DaakBgLaunch.swift */; };
-		DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = DA0AB00E1A68108700A75B9A /* DaakShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
 		7699B88040F8A987B510C191 /* libPods-Daak-DaakTests.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 19F6CBCC0A4E27FBF8BF4A61 /* libPods-Daak-DaakTests.a */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		C8DEA77604FB6F443DC0D047 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
+		DA0AB0011A68108700A75B9A /* DaakModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0031A68108700A75B9A /* DaakModule.mm */; };
+		DA0AB0021A68108700A75B9A /* Daak.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0041A68108700A75B9A /* Daak.swift */; };
+		DA0AB00A1A68108700A75B9A /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB00C1A68108700A75B9A /* ShareViewController.swift */; };
+		DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = DA0AB00E1A68108700A75B9A /* DaakShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DA0AB0201A68108700A75B9A /* DaakIntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */; };
+		DA0AB0211A68108700A75B9A /* SendToDeviceIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */; };
+		DA0AB0241A68108700A75B9A /* AppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0251A68108700A75B9A /* AppShortcuts.swift */; };
+		DA0AB0261A68108700A75B9A /* DaakNotificationDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0271A68108700A75B9A /* DaakNotificationDelegate.swift */; };
+		DA0AB0281A68108700A75B9A /* KeychainSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0291A68108700A75B9A /* KeychainSecureStore.swift */; };
+		DA0AB02A1A68108700A75B9A /* DaakBgLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB02B1A68108700A75B9A /* DaakBgLaunch.swift */; };
+		DA0AB0301A68108700A75B9A /* daak_ffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0311A68108700A75B9A /* daak_ffi.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,20 +45,31 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		DA0AB01A1A68108700A75B9A /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		00E356EE1AD99517003FC87E /* DaakTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DaakTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		00E356F11AD99517003FC87E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		00E356F21AD99517003FC87E /* DaakTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DaakTests.m; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* Daak.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Daak.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FAF1A68108700A75B9A /* AppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AppDelegate.h; path = Daak/AppDelegate.h; sourceTree = "<group>"; };
-		DA0AB0051A68108700A75B9A /* Daak-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "Daak-Bridging-Header.h"; path = "Daak/Daak-Bridging-Header.h"; sourceTree = "<group>"; };
 		13B07FB01A68108700A75B9A /* AppDelegate.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = AppDelegate.mm; path = Daak/AppDelegate.mm; sourceTree = "<group>"; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Daak/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Daak/Info.plist; sourceTree = "<group>"; };
 		13B07FB71A68108700A75B9A /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = main.m; path = Daak/main.m; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = Daak/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		DA0AB0041A68108700A75B9A /* Daak.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Daak.swift; path = Daak.swift; sourceTree = "<group>"; };
-		DA0AB0031A68108700A75B9A /* DaakModule.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = DaakModule.mm; path = DaakModule.mm; sourceTree = "<group>"; };
 		19F6CBCC0A4E27FBF8BF4A61 /* libPods-Daak-DaakTests.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Daak-DaakTests.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B4392A12AC88292D35C810B /* Pods-Daak.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak.debug.xcconfig"; path = "Target Support Files/Pods-Daak/Pods-Daak.debug.xcconfig"; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-Daak.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak.release.xcconfig"; path = "Target Support Files/Pods-Daak/Pods-Daak.release.xcconfig"; sourceTree = "<group>"; };
@@ -64,18 +77,23 @@
 		5DCACB8F33CDC322A6C60F78 /* libPods-Daak.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Daak.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = Daak/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		89C6BE57DB24E9ADA2F236DE /* Pods-Daak-DaakTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak-DaakTests.release.xcconfig"; path = "Target Support Files/Pods-Daak-DaakTests/Pods-Daak-DaakTests.release.xcconfig"; sourceTree = "<group>"; };
-		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		DA0AB0031A68108700A75B9A /* DaakModule.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = DaakModule.mm; path = DaakModule.mm; sourceTree = "<group>"; };
+		DA0AB0041A68108700A75B9A /* Daak.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Daak.swift; path = Daak.swift; sourceTree = "<group>"; };
+		DA0AB0051A68108700A75B9A /* Daak-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "Daak-Bridging-Header.h"; path = "Daak/Daak-Bridging-Header.h"; sourceTree = "<group>"; };
 		DA0AB00C1A68108700A75B9A /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		DA0AB00D1A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		DA0AB00E1A68108700A75B9A /* DaakShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DaakShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		DA0AB00F1A68108700A75B9A /* DaakShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DaakShareExtension.entitlements; sourceTree = "<group>"; };
+		DA0AB0111A68108700A75B9A /* Daak.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Daak.entitlements; sourceTree = "<group>"; };
 		DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaakIntentBridge.swift; path = Daak/DaakIntentBridge.swift; sourceTree = "<group>"; };
+		DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SendToDeviceIntent.swift; path = Daak/SendToDeviceIntent.swift; sourceTree = "<group>"; };
+		DA0AB0251A68108700A75B9A /* AppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppShortcuts.swift; path = Daak/AppShortcuts.swift; sourceTree = "<group>"; };
 		DA0AB0271A68108700A75B9A /* DaakNotificationDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaakNotificationDelegate.swift; path = Daak/DaakNotificationDelegate.swift; sourceTree = "<group>"; };
 		DA0AB0291A68108700A75B9A /* KeychainSecureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KeychainSecureStore.swift; path = Daak/KeychainSecureStore.swift; sourceTree = "<group>"; };
 		DA0AB02B1A68108700A75B9A /* DaakBgLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaakBgLaunch.swift; path = Daak/DaakBgLaunch.swift; sourceTree = "<group>"; };
-		DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SendToDeviceIntent.swift; path = Daak/SendToDeviceIntent.swift; sourceTree = "<group>"; };
-		DA0AB0251A68108700A75B9A /* AppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppShortcuts.swift; path = Daak/AppShortcuts.swift; sourceTree = "<group>"; };
-		DA0AB00D1A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		DA0AB00F1A68108700A75B9A /* DaakShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DaakShareExtension.entitlements; sourceTree = "<group>"; };
-		DA0AB0111A68108700A75B9A /* Daak.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Daak.entitlements; sourceTree = "<group>"; };
-		DA0AB00E1A68108700A75B9A /* DaakShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DaakShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		DA0AB0311A68108700A75B9A /* daak_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = daak_ffi.swift; path = build/generated/ffi/daak_ffi.swift; sourceTree = "<group>"; };
+		DA0AB0321A68108700A75B9A /* libdaak_ffi.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; name = libdaak_ffi.a; path = build/generated/ffi/lib/libdaak_ffi.a; sourceTree = "<group>"; };
+		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -154,16 +172,6 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
-		DA0AB0171A68108700A75B9A /* DaakShareExtension */ = {
-			isa = PBXGroup;
-			children = (
-				DA0AB00C1A68108700A75B9A /* ShareViewController.swift */,
-				DA0AB00D1A68108700A75B9A /* Info.plist */,
-				DA0AB00F1A68108700A75B9A /* DaakShareExtension.entitlements */,
-			);
-			path = DaakShareExtension;
-			sourceTree = "<group>";
-		};
 		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
 			isa = PBXGroup;
 			children = (
@@ -177,6 +185,7 @@
 				13B07FAE1A68108700A75B9A /* Daak */,
 				DA0AB0041A68108700A75B9A /* Daak.swift */,
 				DA0AB0031A68108700A75B9A /* DaakModule.mm */,
+				DA0AB0331A68108700A75B9A /* FFI (generated) */,
 				DA0AB0171A68108700A75B9A /* DaakShareExtension */,
 				832341AE1AAA6A7D00B99B32 /* Libraries */,
 				00E356EF1AD99517003FC87E /* DaakTests */,
@@ -210,6 +219,25 @@
 			path = Pods;
 			sourceTree = "<group>";
 		};
+		DA0AB0171A68108700A75B9A /* DaakShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				DA0AB00C1A68108700A75B9A /* ShareViewController.swift */,
+				DA0AB00D1A68108700A75B9A /* Info.plist */,
+				DA0AB00F1A68108700A75B9A /* DaakShareExtension.entitlements */,
+			);
+			path = DaakShareExtension;
+			sourceTree = "<group>";
+		};
+		DA0AB0331A68108700A75B9A /* FFI (generated) */ = {
+			isa = PBXGroup;
+			children = (
+				DA0AB0311A68108700A75B9A /* daak_ffi.swift */,
+				DA0AB0321A68108700A75B9A /* libdaak_ffi.a */,
+			);
+			name = "FFI (generated)";
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -239,6 +267,7 @@
 			buildConfigurationList = 13B07F931A680F5B00A75B9A /* Build configuration list for PBXNativeTarget "Daak" */;
 			buildPhases = (
 				C38B50BA6285516D6DCD4F65 /* [CP] Check Pods Manifest.lock */,
+				DA0AB0341A68108700A75B9A /* Generate UniFFI bindings + Rust staticlib */,
 				13B07F871A680F5B00A75B9A /* Sources */,
 				13B07F8C1A680F5B00A75B9A /* Frameworks */,
 				13B07F8E1A680F5B00A75B9A /* Resources */,
@@ -327,10 +356,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
-		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
-		);
-		runOnlyForDeploymentPostprocessing = 0;
-	};
+				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+				C8DEA77604FB6F443DC0D047 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DA0AB0191A68108700A75B9A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -339,20 +369,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		DA0AB01A1A68108700A75B9A /* Embed App Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */,
-			);
-			name = "Embed App Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */ = {
@@ -449,6 +465,24 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Daak-DaakTests/Pods-Daak-DaakTests-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		DA0AB0341A68108700A75B9A /* Generate UniFFI bindings + Rust staticlib */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../../../crates/daak-ffi/src/daak.udl",
+				"$(SRCROOT)/../../../Cargo.lock",
+			);
+			name = "Generate UniFFI bindings + Rust staticlib";
+			outputPaths = (
+				"$(SRCROOT)/build/generated/ffi/daak_ffi.swift",
+				"$(SRCROOT)/build/generated/ffi/lib/libdaak_ffi.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n\n# Which Rust triple to build depends on the SDK, and the script takes it\n# as an argument rather than hardcoding a simulator default: an archive or a\n# TestFlight build links the device slice and the simulator slice would not link.\ncase \"$PLATFORM_NAME\" in\n  iphonesimulator) rust_target=\"aarch64-apple-ios-sim\" ;;\n  *)               rust_target=\"aarch64-apple-ios\" ;;\nesac\n\nDAAK_IOS_RUST_TARGET=\"$rust_target\" \\\n  bash \"$SRCROOT/../scripts/gen-ios-ffi.sh\"\n";
+		};
 		E235C05ADACE081382539298 /* [CP] Copy Pods Resources */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -508,6 +542,7 @@
 				DA0AB0261A68108700A75B9A /* DaakNotificationDelegate.swift in Sources */,
 				DA0AB0281A68108700A75B9A /* KeychainSecureStore.swift in Sources */,
 				DA0AB02A1A68108700A75B9A /* DaakBgLaunch.swift in Sources */,
+				DA0AB0301A68108700A75B9A /* daak_ffi.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -522,18 +557,15 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		DA0AB0121A68108700A75B9A /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = DA0AB0101A68108700A75B9A /* DaakShareExtension */;
-			targetProxy = DA0AB0131A68108700A75B9A /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
-/* Begin PBXTargetDependency section */
 		00E356F51AD99517003FC87E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 13B07F861A680F5B00A75B9A /* Daak */;
 			targetProxy = 00E356F41AD99517003FC87E /* PBXContainerItemProxy */;
+		};
+		DA0AB0121A68108700A75B9A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DA0AB0101A68108700A75B9A /* DaakShareExtension */;
+			targetProxy = DA0AB0131A68108700A75B9A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -559,7 +591,7 @@
 					"-lc++",
 					"$(inherited)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak.DaakTests";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.DaakTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Daak.app/Daak";
 			};
@@ -583,7 +615,7 @@
 					"-lc++",
 					"$(inherited)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak.DaakTests";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.DaakTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Daak.app/Daak";
 			};
@@ -604,16 +636,23 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SDKROOT)/usr/lib/swift",
+					"$(SRCROOT)/build/generated/ffi/lib",
+					"$(inherited)",
+				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-ldaak_ffi",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak";
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/build/generated/ffi/Headers/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak;
 				PRODUCT_NAME = Daak;
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_OBJC_BRIDGING_HEADER = "Daak/Daak-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
@@ -633,13 +672,20 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(SDKROOT)/usr/lib/swift",
+					"$(SRCROOT)/build/generated/ffi/lib",
+					"$(inherited)",
+				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-ldaak_ffi",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak";
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/build/generated/ffi/Headers/module.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak;
 				PRODUCT_NAME = Daak;
 				SWIFT_OBJC_BRIDGING_HEADER = "Daak/Daak-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -716,7 +762,14 @@
 					"-DFOLLY_CFG_NO_COROUTINES=1",
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
 				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					" ",
+				);
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				USE_HERMES = true;
 			};
 			name = Debug;
 		};
@@ -781,14 +834,17 @@
 					"-DFOLLY_CFG_NO_COROUTINES=1",
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
 				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					" ",
+				);
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
+				USE_HERMES = true;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
-/* End XCBuildConfiguration section */
-
-/* Begin XCBuildConfiguration section for DaakShareExtension */
 		DA0AB01B1A68108700A75B9A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -804,7 +860,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak.ShareExtension";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -827,14 +883,14 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.darshit.daak.ShareExtension";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
-/* End XCBuildConfiguration section for DaakShareExtension */
+/* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		00E357021AD99517003FC87E /* Build configuration list for PBXNativeTarget "DaakTests" */ = {
