@@ -15,7 +15,17 @@ enum FfiError {
 // Engine or Protocol.
 [Error]
 interface FfiStoreError {
-  Store(string message);
+  // `reason`, NOT `message`. uniffi_bindgen 0.28.3's ErrorTemplate.kt emits
+  // each field as a `val <name>` on a class that extends kotlin.Exception, and
+  // Throwable already declares `message`. A field named `message` therefore
+  // generates `val `message`: kotlin.String` alongside `override val message`
+  // and :app:compileDebugKotlin fails with "Conflicting declarations" plus a
+  // recursive-type-check error on the field_name interpolation. There is no
+  // UDL keyword to escape a field name (macros.kt field_name emits
+  // field.name()|var_name verbatim, backtick-quoting only), so the only fix is
+  // to not use the name. The exception's own .message still renders it, as
+  // "reason=<text>".
+  Store(string reason);
 };
 
 callback interface EventSink {

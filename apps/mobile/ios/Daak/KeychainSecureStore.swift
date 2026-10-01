@@ -35,18 +35,18 @@ final class KeychainSecureStore: NSObject, SecureStore {
     case errSecSuccess:
       guard let data = item as? Data,
             let value = String(data: data, encoding: .utf8)
-      else { throw FfiStoreError.Store(message: "keychain item for \(key) is not UTF-8") }
+      else { throw FfiStoreError.Store(reason: "keychain item for \(key) is not UTF-8") }
       return value
     case errSecItemNotFound:
       return nil
     default:
-      throw FfiStoreError.Store(message: "keychain read failed for \(key): \(status)")
+      throw FfiStoreError.Store(reason: "keychain read failed for \(key): \(status)")
     }
   }
 
   func set(key: String, value: String) throws {
     guard let data = value.data(using: .utf8) else {
-      throw FfiStoreError.Store(message: "value for \(key) is not encodable")
+      throw FfiStoreError.Store(reason: "value for \(key) is not encodable")
     }
     // SecItemUpdate first, SecItemAdd only when there was nothing to update. The
     // reverse order (add, then update on duplicate) costs a second write and
@@ -56,14 +56,14 @@ final class KeychainSecureStore: NSObject, SecureStore {
       [kSecValueData as String: data] as CFDictionary)
     if status == errSecSuccess { return }
     guard status == errSecItemNotFound else {
-      throw FfiStoreError.Store(message: "keychain write failed for \(key): \(status)")
+      throw FfiStoreError.Store(reason: "keychain write failed for \(key): \(status)")
     }
     var add = Self.baseQuery(key)
     add[kSecValueData as String] = data
     add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     let addStatus = SecItemAdd(add as CFDictionary, nil)
     guard addStatus == errSecSuccess else {
-      throw FfiStoreError.Store(message: "keychain write failed for \(key): \(addStatus)")
+      throw FfiStoreError.Store(reason: "keychain write failed for \(key): \(addStatus)")
     }
   }
 
@@ -72,7 +72,7 @@ final class KeychainSecureStore: NSObject, SecureStore {
   func delete(key: String) throws {
     let status = SecItemDelete(Self.baseQuery(key) as CFDictionary)
     guard status == errSecSuccess || status == errSecItemNotFound else {
-      throw FfiStoreError.Store(message: "keychain delete failed for \(key): \(status)")
+      throw FfiStoreError.Store(reason: "keychain delete failed for \(key): \(status)")
     }
   }
 

@@ -268,12 +268,17 @@ describe('the app-target uniffi SecureStore implementations', () => {
     expect(swift).toMatch(/func delete\(key: String\) throws/);
   });
 
-  // The generated fielded error is `FfiStoreException.Store(message)` in
-  // Kotlin and `FfiStoreError.Store(message:)` in Swift. Any other error type
+  // The generated fielded error is `FfiStoreException.Store(reason)` in
+  // Kotlin and `FfiStoreError.Store(reason:)` in Swift. Any other error type
   // would not be the one the uniffi callback scaffolding knows how to lower.
+  //
+  // `reason`, not `message`: uniffi 0.28.3 emits a fielded-error field as a
+  // `val` on a kotlin.Exception subclass, so a field named `message` collides
+  // with Throwable.message and the bindings do not compile at all. Pinned so
+  // nobody "tidies" the name back.
   it('raises the generated fielded store error, not a flat one', () => {
     expect(kt).toMatch(/FfiStoreException\.Store\(/);
-    expect(swift).toMatch(/FfiStoreError\.Store\(message: /);
+    expect(swift).toMatch(/FfiStoreError\.Store\(reason: /);
   });
 
   // The engine's identity: readable by the background accept loop, never

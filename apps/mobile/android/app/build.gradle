@@ -77,6 +77,22 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
+    // Both source sets are produced by apps/mobile/scripts/gen-android-ffi.sh,
+    // the Android counterpart of gen-ios-ffi.sh, into build/ (already
+    // gitignored). Nothing generated is committed and a clean cannot leave a
+    // stale copy behind a green build.
+    sourceSets {
+        main {
+            // daak_ffi.kt: the uniffi_bindgen output DaakModule.kt imports.
+            // gen-android-ffi.sh writes it to <out>/uniffi, so this dir must be
+            // <out> itself for the uniffi/daak_ffi/ package path to resolve.
+            kotlin.srcDirs += ["$buildDir/generated/daak-ffi"]
+            // libdaak_ffi.so per ABI, so the APK carries the cdylib uniffi
+            // loads through JNA.
+            jniLibs.srcDirs += ["$buildDir/generated/daak-ffi/jniLibs"]
+        }
+    }
+
     namespace "dev.darshit.daak"
     defaultConfig {
         applicationId "dev.darshit.daak"
@@ -116,4 +132,24 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // How the generated uniffi bindings reach the Rust cdylib: they declare
+    // their FFI surface as a com.sun.jna.Library and call Native.load. Without
+    // JNA every engine method throws UnsatisfiedLinkError at the first call on
+    // a device, and nothing at build time notices. uniffi_bindgen 0.28.3 emits
+    // no JNA dependency of its own, so the app declares it. Pinned by
+    // src/__tests__/androidFfiWiring.test.ts.
+    //
+    // 5.14.0, NOT the 5.6.0 that was here first, and the version is load-bearing
+    // rather than incidental. uniffi 0.28.3's JVM object-cleaner template
+    // references com.sun.jna.internal.Cleaner, which JNA DELETED in 5.0 as part
+    // of the Java 9 module-encapsulation cleanup: jna 5.6.0's jar contains zero
+    // Cleaner classes, so :app:compileDebugKotlin fails with "Unresolved
+    // reference: Cleaner" and the failure is in GENERATED code, so it cannot
+    // be fixed on the Kotlin side. JNA reintroduced it in 5.13.0 for exactly
+    // this reason; 5.14.0 is the current release and ships
+    // Cleaner.getCleaner() plus Cleaner$Cleanable.clean(), the precise API the
+    // template calls. Bytecode is major version 52 (Java 8), so it is safe on
+    // minSdk 24.
+    implementation("net.java.dev.jna:jna:5.14.0")
 }

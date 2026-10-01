@@ -69,7 +69,7 @@ mod tests {
 
     fn store_error(msg: &str) -> FfiStoreError {
         FfiStoreError::Store {
-            message: msg.to_string(),
+            reason: msg.to_string(),
         }
     }
 

@@ -58,9 +58,14 @@ class ScannerActivity : ComponentActivity() {
         {
           try {
             val provider = future.get()
-            val preview = Preview.Builder().build().also {
-              it.surfaceProvider = previewView.surfaceProvider
-            }
+            // setSurfaceProvider(...) is a METHOD on the built Preview. There
+            // is no Kotlin `surfaceProvider` property to assign: Preview has a
+            // setter and no getter, so Kotlin does not synthesise one. It is
+            // also not on Preview.Builder. Build() freezes config only; the
+            // provider is attached afterwards, which is why this is a separate
+            // statement and not a one-line builder chain.
+            val preview = Preview.Builder().build()
+            preview.setSurfaceProvider(previewView.surfaceProvider)
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()

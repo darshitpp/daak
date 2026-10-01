@@ -40,7 +40,10 @@ class DaakClipboardModule(reactContext: ReactApplicationContext) :
   private fun clipboard(): ClipboardManager =
       reactApplicationContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
-  private inline fun onMain(promise: Promise, block: () -> Unit) {
+  // Not `inline`: an inline lambda inlined into `Handler.post`'s Runnable
+  // cannot contain a non-local return, and the two call sites below do exactly
+  // that. Dropping `inline` is the whole fix and costs one call per invoke.
+  private fun onMain(promise: Promise, block: () -> Unit) {
     Handler(reactApplicationContext.mainLooper).post {
       try { block() } catch (t: Throwable) { promise.reject("E_CLIPBOARD", t) }
     }

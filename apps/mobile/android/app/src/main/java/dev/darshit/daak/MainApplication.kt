@@ -38,6 +38,23 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // Must run BEFORE anything touches the uniffi bindings: findLibraryName()
+    // reads this system property once, the first time it loads the library, and
+    // caches the result for the life of the process.
+    //
+    // uniffi_bindgen 0.28.3 hardcodes "uniffi_daak_ffi" there and offers no
+    // build-time way to change it -- there is no UDL keyword for it in 0.28.3
+    // (library_override does not exist until later versions). "daak_ffi" is the
+    // library BASENAME, which is what JNA wants: it prepends lib and appends the
+    // platform suffix itself, and gen-android-ffi.sh packages the cdylib as
+    // libdaak_ffi.so, so this is the one string that has to line up.
+    //
+    // The alternative was renaming the .so to libuniffi_daak_ffi.so instead.
+    // That was not chosen because every other consumer of the crate expects the
+    // daak_ffi name (the iOS staticlib, daakd), and one override here is
+    // smaller than renaming the artifact everywhere. Pinned by
+    // src/__tests__/androidFfiWiring.test.ts.
+    System.setProperty("uniffi.component.daak_ffi.libraryOverride", "daak_ffi")
     SoLoader.init(this, OpenSourceMergedSoMapping)
     if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
       // If you opted-in for the New Architecture, we load the native entry point for this app.

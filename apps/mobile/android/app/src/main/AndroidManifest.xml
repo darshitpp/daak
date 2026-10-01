@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Daak is LAN-only: mDNS discovery needs multicast lock/state control. -->
@@ -9,8 +10,8 @@
       Package visibility, API 30+ (Android 11). Since API 30 an app cannot see
       other apps' intent filters unless it declares a <queries> element for
       them, so DaakFsPathsModule's resolveActivity() would answer null for
-      every ACTION_VIEW and startActivity() would throw ActivityNotFoundException
-      -- making reveal a silent no-op on every modern device. This declares
+      every ACTION_VIEW and startActivity() would throw ActivityNotFoundException,
+      making reveal a silent no-op on every modern device. This declares
       visibility only; it grants no permission and does not export anything.
     -->
     <queries>
@@ -87,9 +88,27 @@
         android:authorities="dev.darshit.daak.fileprovider"
         android:exported="false"
         android:grantUriPermissions="true">
+        <!--
+          modules/rn-share declares a FileProvider too, and the manifest merger
+          keys provider on android:name, which is the same androidx class in
+          both, so the two entries COLLAPSE into one element carrying both
+          FILE_PROVIDER_PATHS children, and the two different android:resource
+          values collide. The authorities do NOT collide: rn-share's
+          ${applicationId}.fileprovider resolves to exactly this string.
+
+          tools:replace on the meta-data is the fix, not a workaround. The
+          surviving @xml/daak_fspaths_file_paths declares files-path,
+          external-files-path and cache-path, the same three roots
+          @xml/daak_file_paths declared, all at path ".", so every path
+          rn-share's getUriForFile() resolves (its share-inbox lives under
+          cacheDir) still resolves. One provider with one meta-data instead of
+          two would have been the alternative; that needs rn-share to stop
+          declaring its own, which is more churn for the same result.
+        -->
         <meta-data
           android:name="android.support.FILE_PROVIDER_PATHS"
-          android:resource="@xml/daak_fspaths_file_paths" />
+          android:resource="@xml/daak_fspaths_file_paths"
+          tools:replace="android:resource" />
       </provider>
     </application>
 </manifest>

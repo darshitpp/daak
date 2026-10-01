@@ -3,7 +3,7 @@
   A SEPARATE resource from modules/rn-share's daak_file_paths.xml on purpose:
   two provider entries in one merged manifest cannot share an
   android:authorities, so this module's paths carry a unique name and the APP
-  manifest pairs them with its own authority. Both halves must be present --
+  manifest pairs them with its own authority. Both halves must be present:
   getUriForFile throws IllegalArgumentException on an undeclared authority.
 -->
 <paths>

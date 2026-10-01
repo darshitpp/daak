@@ -77,12 +77,19 @@ class ShareTrampolineActivity : Activity() {
         if (uris.size > 1) {
           Intent(Intent.ACTION_SEND_MULTIPLE).apply {
             type = "*/*"
+            // putParcelableArrayListExtra takes a CONCRETE java.util.ArrayList,
+            // not a kotlin.collections.List. `uris` is already an ArrayList, so
+            // this needs no copy.
             putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
           }
         } else {
           Intent(Intent.ACTION_SEND).apply {
             type = "*/*"
-            if (uris.size == 1) putParcelableExtra(Intent.EXTRA_STREAM, uris[0])
+            // There is no putParcelableExtra on Intent: the single-item
+            // Parcelable overload is putExtra(String, Parcelable). The
+            // ARRAY-LIST form one branch up IS a distinct method, which is why
+            // only this one looked plausible.
+            if (uris.size == 1) putExtra(Intent.EXTRA_STREAM, uris[0])
           }
         }
     // Without the grant flag no receiver can read the URIs, and without
@@ -99,12 +106,15 @@ class ShareTrampolineActivity : Activity() {
   }
 
   /** @return the entry's saved files, or an empty list for anything unreadable. */
-  private fun savedPaths(payload: String): List<String> =
-      try {
-        val arr = JSONObject(payload).optJSONArray("savedPaths") ?: return emptyList()
-        (0 until arr.length()).mapNotNull { arr.optString(it, null) }.filter { it.isNotEmpty() }
-      } catch (t: Throwable) {
-        Log.w(TAG, "unreadable notification payload", t)
-        emptyList()
-      }
+  // A BLOCK body, not an expression body: the `?: return emptyList()` below is a
+  // return out of savedPaths, which Kotlin forbids in an expression-bodied fun.
+  private fun savedPaths(payload: String): List<String> {
+    try {
+      val arr = JSONObject(payload).optJSONArray("savedPaths") ?: return emptyList()
+      return (0 until arr.length()).mapNotNull { arr.optString(it, null) }.filter { it.isNotEmpty() }
+    } catch (t: Throwable) {
+      Log.w(TAG, "unreadable notification payload", t)
+      return emptyList()
+    }
+  }
 }

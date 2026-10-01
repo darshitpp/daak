@@ -38,8 +38,12 @@ pub enum FfiError {
 /// and because every engine failure still has to surface as Engine/Protocol.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FfiStoreError {
-    #[error("{message}")]
-    Store { message: String },
+    // Field named `reason`, not `message`: see the note on the UDL declaration.
+    // uniffi 0.28.3's Kotlin ErrorTemplate emits a fielded-error field as a
+    // `val` on a kotlin.Exception subclass, where `message` collides with
+    // Throwable.message and the bindings do not compile.
+    #[error("{reason}")]
+    Store { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

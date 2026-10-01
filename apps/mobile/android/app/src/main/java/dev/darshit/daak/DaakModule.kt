@@ -156,7 +156,11 @@ class DaakModule(reactContext: ReactApplicationContext) :
     // Every engine call blocks on the engine's tokio runtime, so none of it runs
     // on the JS or main thread. T is nullable so the Unit-returning methods can
     // resolve null rather than the Unit that Promise.resolve rejects.
-    private inline fun <T> resolve(promise: Promise, block: () -> T?) {
+    // Not `inline`, same reason DaakClipboardModule's onMain is not: the
+    // lambdas below contain non-local returns (`return null`, `?: throw`),
+    // which Kotlin forbids in an inlined lambda. Thread is already created per
+    // call, so inlining saved nothing.
+    private fun <T> resolve(promise: Promise, block: () -> T?) {
         Thread {
             try { promise.resolve(block()) }
             catch (t: Throwable) { promise.reject("E_DAAK", t) }

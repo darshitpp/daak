@@ -224,21 +224,29 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         // of them sends anything; the engine outbox owns every send.
         .addAction(0, "Open", actionPending(id, ACTION_OPEN, payloadJson))
         .addAction(0, "Share", actionPending(id, ACTION_SHARE, payloadJson))
+        .apply {
+          // setContentIntent is a BUILDER method, so it has to run before
+          // build(). It was called on the Notification build() returns, where
+          // contentIntent is only a public FIELD: the call went nowhere and
+          // tapping the notification body did nothing at all.
+          launchIntent(ctx)?.let { launch ->
+            // Tapping the BODY is the same user-visible thing as the Open
+            // button: both foreground the app to the inbox, and daak.open is
+            // already wired end to end. So the body intent carries no extras:
+            // nothing reads launch extras (MainActivity is a bare
+            // ReactActivity with no onNewIntent, and bootstrap.ts never reads
+            // them), and writing them asserted a path that does not exist. Add
+            // them back only alongside a real onNewIntent handler that feeds
+            // consumePendingAction.
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            // A request code per id keeps two posts from sharing one
+            // PendingIntent, which would make the second overwrite the first's
+            // payload.
+            setContentIntent(
+                PendingIntent.getActivity(ctx, (id + ":open").hashCode(), launch, IMMUTABLE))
+          }
+        }
         .build()
-    launchIntent(ctx)?.let { launch ->
-      // Tapping the BODY is the same user-visible thing as the Open button --
-      // both foreground the app to the inbox, and daak.open is already wired
-      // end to end. So the body intent carries no extras: nothing reads launch
-      // extras (MainActivity is a bare ReactActivity with no onNewIntent, and
-      // bootstrap.ts never reads them), and writing them asserted a path that
-      // does not exist. Add them back only alongside a real onNewIntent
-      // handler that feeds consumePendingAction.
-      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-      // A request code per id keeps two posts from sharing one PendingIntent,
-      // which would make the second overwrite the first's payload.
-      notification.setContentIntent(
-          PendingIntent.getActivity(ctx, (id + ":open").hashCode(), launch, IMMUTABLE))
-    }
     try {
       NotificationManagerCompat.from(ctx).notify(id.hashCode(), notification)
     } catch (t: Throwable) {

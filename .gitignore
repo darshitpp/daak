@@ -16,6 +16,13 @@ docs/superpowers/plans/
 proto/gen/rust/*/target/
 proto/gen/rust/*/Cargo.lock
 
+# Gradle output for the autolinked native modules. apps/mobile/.gitignore has a
+# `build/` rule, but that file only covers apps/mobile/** -- the modules/*
+# packages are siblings of it, not children, so their android/build/ dirs were
+# untracked and unignored until the first Android build ever ran in this repo.
+# Scoped to the exact path shape so it cannot swallow a source dir named build.
+modules/*/android/build/
+
 # OS junk
 .DS_Store
 
