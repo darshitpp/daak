@@ -171,7 +171,11 @@ describe('the iOS scan and generate path', () => {
     const pod = read(qr + 'ios/DaakQrScanner.podspec');
     expect(pod).toMatch(/s\.name = "DaakQrScanner"/);
     expect(pod).toMatch(/s\.platforms = \{ :ios => "16\.0" \}/);
-    expect(pod).toMatch(/s\.source_files = "ios\/\*\*\/\*\.\{swift,mm,h\}"/);
+    // The glob is relative to the podspec's own directory (modules/rn-qrscanner/
+    // ios), so a leading "ios/" pointed at ios/ios/** and the pod compiled ZERO
+    // sources -- a green pod install with an empty module. No leading "ios/".
+    expect(pod).toMatch(/s\.source_files = "\*\*\/\*\.\{swift,mm,h\}"/);
+    expect(pod).not.toMatch(/s\.source_files = "ios\//);
     expect(pod).toMatch(/s\.dependency "React-Core"/);
   });
 

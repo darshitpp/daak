@@ -54,7 +54,13 @@ final class DaakNotify: RCTEventEmitter {
 
   override func supportedEvents() -> [String]! { [DaakNotify.event] }
 
-  @objc static func requiresMainQueueSetup() -> Bool { false }
+  // `override`, and it was missing until 2026-10-01. RCTEventEmitter declares
+  // requiresMainQueueSetup, so this overrides it. Nothing caught the omission
+  // because the podspec's source_files resolved to a nonexistent ios/ios/**
+  // and CocoaPods compiled ZERO sources for every @daak iOS pod -- this file
+  // had never been through a compiler. The other RCTEventEmitter in the tree,
+  // DaakBgSched.swift, gets the same rule right; see react-native.config.js.
+  override class func requiresMainQueueSetup() -> Bool { false }
 
   override func startObserving() {
     hasListeners = true
@@ -71,7 +77,7 @@ final class DaakNotify: RCTEventEmitter {
   /// answered -- including a denial -- must get that answer back, so JS can
   //  decide not to depend on the banner.
   @objc func requestPermission(_ resolve: @escaping RCTPromiseResolveBlock,
-                               reject: RCTPromiseRejectBlock) {
+                               reject: @escaping RCTPromiseRejectBlock) {
     let center = UNUserNotificationCenter.current()
     center.getNotificationSettings { settings in
       switch settings.authorizationStatus {
@@ -88,8 +94,8 @@ final class DaakNotify: RCTEventEmitter {
   }
 
   @objc func registerCategories(_ categoriesJson: String,
-                                resolve: RCTPromiseResolveBlock,
-                                reject: RCTPromiseRejectBlock) {
+                                resolve: @escaping RCTPromiseResolveBlock,
+                                reject: @escaping RCTPromiseRejectBlock) {
     let actions = DaakNotify.actionTitles.map {
       UNNotificationAction(identifier: $0.id, title: $0.title, options: [.foreground])
     }
@@ -104,15 +110,19 @@ final class DaakNotify: RCTEventEmitter {
     // a delegate set from JS is nil in exactly the case the stash exists for.
     // What JS CAN do is pick up the live path, so the observer goes here.
     if observer == nil {
-      observer = CFNotificationCenterAddObserver(
+      let opaque = Unmanaged.passUnretained(self).toOpaque()
+      CFNotificationCenterAddObserver(
         CFNotificationCenterGetDarwinNotifyCenter(),
-        Unmanaged.passUnretained(self).toOpaque(),
+        opaque,
         { _, observer, _, _, _ in
           guard let observer else { return }
           let emitter = Unmanaged<DaakNotify>.fromOpaque(observer).takeUnretainedValue()
           emitter.deliverStashed()
         },
-        actionChanged as CFString, nil, .deliverImmediately)
+        Self.actionChanged as CFString, nil, .deliverImmediately)
+      // AddObserver RETURNS Void. The handle we keep for RemoveObserver is the
+      // opaque pointer we just passed in, so it is stored here instead.
+      observer = opaque
     }
     resolve(nil)
   }
@@ -120,7 +130,7 @@ final class DaakNotify: RCTEventEmitter {
   @objc func post(_ id: String, title: String, body: String, category: String,
                   payloadJson: String,
                   resolve: @escaping RCTPromiseResolveBlock,
-                  reject: RCTPromiseRejectBlock) {
+                  reject: @escaping RCTPromiseRejectBlock) {
     let center = UNUserNotificationCenter.current()
     // R36: posting without authorization throws, and this is called straight
     // from the engine's inbox.received handler. Skip the banner, keep the
@@ -147,8 +157,8 @@ final class DaakNotify: RCTEventEmitter {
   }
 
   @objc func cancel(_ id: String,
-                    resolve: RCTPromiseResolveBlock,
-                    reject: RCTPromiseRejectBlock) {
+                    resolve: @escaping RCTPromiseResolveBlock,
+                    reject: @escaping RCTPromiseRejectBlock) {
     let center = UNUserNotificationCenter.current()
     center.removeDeliveredNotifications(withIdentifiers: [id])
     center.removePendingNotificationRequests(withIdentifiers: [id])
@@ -156,7 +166,7 @@ final class DaakNotify: RCTEventEmitter {
   }
 
   @objc func consumePendingAction(_ resolve: @escaping RCTPromiseResolveBlock,
-                                  reject: RCTPromiseRejectBlock) {
+                                  reject: @escaping RCTPromiseRejectBlock) {
     // On disk in the App Group, not in a static: the whole point is surviving the
     // process being killed between the tap and JS booting. Cleared only here,
     // after the value has been handed to JS.
@@ -205,7 +215,7 @@ final class DaakNotify: RCTEventEmitter {
     if let observer {
       CFNotificationCenterRemoveObserver(
         CFNotificationCenterGetDarwinNotifyCenter(),
-        observer, CFNotificationName(actionChanged as CFString), nil)
+        observer, CFNotificationName(Self.actionChanged as CFString), nil)
     }
   }
 }

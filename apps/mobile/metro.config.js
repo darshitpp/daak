@@ -10,7 +10,6 @@ const config = {
       path.resolve(__dirname, 'node_modules'),
       path.resolve(workspaceRoot, 'node_modules'),
     ],
-    disableHierarchicalLookup: true,
   },
 };
 

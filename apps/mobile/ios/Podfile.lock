@@ -1,5 +1,19 @@
 PODS:
   - boost (1.84.0)
+  - DaakBgSched (0.1.0):
+    - React-Core
+  - DaakClipboard (0.1.0):
+    - React-Core
+  - DaakFsPaths (0.1.0):
+    - React-Core
+  - DaakNotify (0.1.0):
+    - React-Core
+  - DaakQrScanner (0.1.0):
+    - React-Core
+  - DaakSecureStore (0.1.0):
+    - React-Core
+  - DaakShare (0.1.0):
+    - React-Core
   - DoubleConversion (1.1.6)
   - FBLazyVector (0.76.5)
   - fmt (9.1.0)
@@ -1514,6 +1528,13 @@ PODS:
 
 DEPENDENCIES:
   - boost (from `../node_modules/react-native/third-party-podspecs/boost.podspec`)
+  - DaakBgSched (from `../../../modules/rn-bgsched/ios`)
+  - DaakClipboard (from `../../../modules/rn-clipboard/ios`)
+  - DaakFsPaths (from `../../../modules/rn-fspaths/ios`)
+  - DaakNotify (from `../../../modules/rn-notify/ios`)
+  - DaakQrScanner (from `../../../modules/rn-qrscanner/ios`)
+  - DaakSecureStore (from `../../../modules/rn-securestore/ios`)
+  - DaakShare (from `../../../modules/rn-share/ios`)
   - DoubleConversion (from `../node_modules/react-native/third-party-podspecs/DoubleConversion.podspec`)
   - FBLazyVector (from `../node_modules/react-native/Libraries/FBLazyVector`)
   - fmt (from `../node_modules/react-native/third-party-podspecs/fmt.podspec`)
@@ -1586,6 +1607,20 @@ SPEC REPOS:
 EXTERNAL SOURCES:
   boost:
     :podspec: "../node_modules/react-native/third-party-podspecs/boost.podspec"
+  DaakBgSched:
+    :path: "../../../modules/rn-bgsched/ios"
+  DaakClipboard:
+    :path: "../../../modules/rn-clipboard/ios"
+  DaakFsPaths:
+    :path: "../../../modules/rn-fspaths/ios"
+  DaakNotify:
+    :path: "../../../modules/rn-notify/ios"
+  DaakQrScanner:
+    :path: "../../../modules/rn-qrscanner/ios"
+  DaakSecureStore:
+    :path: "../../../modules/rn-securestore/ios"
+  DaakShare:
+    :path: "../../../modules/rn-share/ios"
   DoubleConversion:
     :podspec: "../node_modules/react-native/third-party-podspecs/DoubleConversion.podspec"
   FBLazyVector:
@@ -1714,6 +1749,13 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   boost: 1dca942403ed9342f98334bf4c3621f011aa7946
+  DaakBgSched: 4f818f0f7f50d96696f5f88ec4d45531f63a33f6
+  DaakClipboard: 01f5f2223fb9af003748aebaa20066f793e11b21
+  DaakFsPaths: 73d5231c1a8e069c44dcbcea68c4b30acc2c45ce
+  DaakNotify: d64035bc6c8c1c5585327a9c4ec4ed8c1b09a1da
+  DaakQrScanner: 245b6c0af26eee1405e5c831533800a7c005bab3
+  DaakSecureStore: 753f65a13cff1af1e3cf9619593d0c5fd8a6e83f
+  DaakShare: 6223b0d7a324a3aca354155cbc67fdfa57824886
   DoubleConversion: f16ae600a246532c4020132d54af21d0ddb2a385
   FBLazyVector: 1bf99bb46c6af9a2712592e707347315f23947aa
   fmt: 10c6e61f4be25dc963c36bd73fc7b1705fe975be
