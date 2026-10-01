@@ -134,7 +134,7 @@ describe('the Android Keystore store', () => {
   it('commits the write synchronously', () => {
     const set = store.slice(
       store.indexOf('override fun set('),
-      store.indexOf('override fun delete('),
+      store.indexOf('override fun remove('),
     );
     expect(set).toMatch(/\.commit\(\)/);
     expect(set).not.toMatch(/\.apply\(\)/);
