@@ -65,6 +65,27 @@ describe('Android uniffi wiring', () => {
     expect(version).not.toMatch(/^5\.(0|[1-9]|1[0-2])\./); // Cleaner-less window
   });
 
+  // (4) The version above is necessary and NOT sufficient. jna 5.14.0's POM
+  // says <packaging>jar</packaging>, so `implementation("net.java.dev.jna:jna:5.14.0")`
+  // resolves the JAR, and that jar ships no Android natives at all -- it has
+  // aix/darwin/linux/sunos/win32 and zero android-*. The Android build of
+  // JNA is published as a SEPARATE artifact with the same coordinates and the
+  // .aar extension (jna-5.14.0.aar), which carries jni/arm64-v8a/libjnidispatch.so
+  // et al. Gradle picks by packaging, so the plain coordinate never selects it.
+  //
+  // The failure this guards is the worst shape there is: SILENT at build time,
+  // invisible to every JS test, and it only appears as a device-side
+  // UnsatisfiedLinkError on the first engine call -- measured on an arm64
+  // emulator on 2026-10-01, where the app booted fine and logged
+  // "Native library (com/sun/jna/android-aarch64/libjnidispatch.so) not found
+  // in resource path (.)" with the engine dead behind it.
+  it('resolves JNA as an aar so its android jnidispatch natives are packaged', () => {
+    const gradle = read(appGradle);
+    // packaging = 'aar' on a module dependency is what forces the variant;
+    // the bare coordinate is what silently produced a jar.
+    expect(gradle).toMatch(/net\.java\.dev\.jna:jna:[\d.]+@aar/);
+  });
+
   // The generated bindings themselves. This is the check that would have
   // caught the `message` generator bug found on 2026-10-01, which no other
   // suite could see because it compile-fails ONLY on Android: uniffi emits a

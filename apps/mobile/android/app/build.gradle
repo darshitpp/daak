@@ -151,5 +151,18 @@ dependencies {
     // Cleaner.getCleaner() plus Cleaner$Cleanable.clean(), the precise API the
     // template calls. Bytecode is major version 52 (Java 8), so it is safe on
     // minSdk 24.
-    implementation("net.java.dev.jna:jna:5.14.0")
+    //
+    // @aar is LOAD-BEARING, not decoration. jna 5.14.0's POM declares
+    // <packaging>jar</packaging>, and that jar carries aix/darwin/linux/sunos/
+    // win32 natives and ZERO android-*. JNA's Android build ships as a separate
+    // artifact with the SAME coordinates and the .aar extension, holding
+    // jni/arm64-v8a/libjnidispatch.so et al. Gradle selects by packaging, so the
+    // bare coordinate silently resolves a jar with no Android native in it.
+    // Everything still compiles and the app still launches; the engine is just
+    // dead, with a device-only
+    //   UnsatisfiedLinkError: Native library
+    //   (com/sun/jna/android-aarch64/libjnidispatch.so) not found
+    // on the first engine call. Measured on an arm64 emulator, 2026-10-01.
+    // Pinned by src/__tests__/androidFfiWiring.test.ts.
+    implementation("net.java.dev.jna:jna:5.14.0@aar") { transitive = false }
 }
