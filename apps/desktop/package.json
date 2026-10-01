@@ -9,6 +9,7 @@
     "pods": "pod install --project-directory=macos"
   },
   "dependencies": {
+    "@babel/runtime": "7.29.7",
     "@daak/core": "workspace:*",
     "@daak/rn-notify": "workspace:*",
     "@daak/rn-share": "workspace:*",

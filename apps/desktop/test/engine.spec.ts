@@ -56,6 +56,23 @@ describe('daakSocketPath', () => {
     expect(daakSocketPath({ XDG_RUNTIME_DIR: '' }, 'darwin')).toBe('daak/daakd.sock');
   });
 
+  // Verified against real rustc, not assumed. PathBuf::from("/").join("daak")
+  // is "/daak", so a base of "/" must NOT collapse to the RELATIVE
+  // "daak" that the blank base above has to produce. These two are one line
+  // apart in the helper and one character of difference in the output, and a
+  // relative path points at the daemon in the caller's cwd instead of the one
+  // it is actually running: no daemon, no error.
+  it('keeps a root XDG_RUNTIME_DIR absolute', () => {
+    expect(daakSocketPath({ XDG_RUNTIME_DIR: '/' }, 'darwin')).toBe('/daak/daakd.sock');
+  });
+
+  // PathBuf::join also normalises a trailing separator, so "/tmp/" and
+  // "/tmp" derive the SAME path. A helper that left the trailing slash would
+  // emit "//daak" and desync from the daemon.
+  it('treats a trailing slash as no trailing slash', () => {
+    expect(daakSocketPath({ XDG_RUNTIME_DIR: '/tmp/' }, 'linux')).toBe('/tmp/daak/daakd.sock');
+  });
+
   it('uses the named pipe on windows', () => {
     expect(daakSocketPath({}, 'win32')).toBe(String.raw`\\.\pipe\daakd`);
   });

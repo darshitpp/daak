@@ -54,6 +54,18 @@
 
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
 {
+  return [self bundleURL];
+}
+
+// RCTAppDelegate on react-native-macos 0.76 asks the SUBCLASS for bundleURL,
+// and raises "Subclasses must implement a valid getBundleURL method" when it
+// is absent -- so the app could not load a bundle at all, from Metro or from a
+// release .jsbundle, and defining only sourceURLForBridge above was not enough.
+// BOTH stay: RCTBridge.mm's -setUp and RCTRootViewFactory call
+// sourceURLForBridge:, and the base RCTAppDelegate raises for it too, so both
+// must be answered. The body lives once, in bundleURL.
+- (NSURL *)bundleURL
+{
 #if DEBUG
   return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@"index"];
 #else

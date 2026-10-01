@@ -45,4 +45,11 @@ Pod::Spec.new do |s|
   s.source = { :git => "https://github.com/darshit/daak.git" }
   s.source_files = "macos/**/*.{mm,h}"
   s.dependency "React-Core"
+  # RNNotify.mm imports <UserNotifications/UserNotifications.h>, so the pod's
+  # own object file carries UN* symbol references. With no explicit link the app
+  # target never pulls the framework in and the final link dies on
+  # _OBJC_CLASS_$_UNUserNotificationCenter. CocoaPods infers this from the
+  # module's own framework declarations; this pod has none, so it is stated
+  # here.
+  s.frameworks = "UserNotifications"
 end
