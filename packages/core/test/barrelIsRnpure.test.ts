@@ -34,10 +34,13 @@ function reachable(): Map<string, string[]> {
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (seen.has(file)) continue;
-    const specs: string[] = [];
-    for (const line of readFileSync(file, 'utf8').split('\n')) {
-      const m = /(?:from|import|require\()\s*'([^']+)'/.exec(line);
-      if (m) specs.push(m[1]);
+      const specs: string[] = [];
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        // BOTH quote styles and bare `import 'x'` side-effect imports. A regex
+        // that only matched single quotes let `import "node:fs"` through, which
+        // is the same defect as the one this file exists to prevent.
+        const m = /(?:from|import|require\()\s*(?:'([^']+)'|"([^"]+)")/.exec(line);
+        if (m) specs.push(m[1] ?? m[2]);
     }
     seen.set(file, specs);
     for (const spec of specs) {
@@ -50,6 +53,16 @@ function reachable(): Map<string, string[]> {
 }
 
 describe('the @daak/core barrel stays loadable in a React Native bundle', () => {
+  it('still exports what the mobile app imports from it', () => {
+    // Without this, EMPTING the barrel satisfies the walk below trivially: one
+    // file with no imports reaches nothing and the guard passes. A guard that
+    // cannot fail is not a guard, so pin the two value exports the RN runtime
+    // path actually needs before checking that reaching them costs nothing.
+    const src = readFileSync(indexTs, 'utf8');
+    expect(src).toMatch(/export .*\bInProcessEngine\b/);
+    expect(src).toMatch(/export .*\bNativeDaak\b/);
+  });
+
   it('reaches no node: builtin from index.ts', () => {
     const offenders: string[] = [];
     for (const [file, specs] of reachable()) {

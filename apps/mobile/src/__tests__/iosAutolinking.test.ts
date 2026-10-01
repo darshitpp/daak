@@ -58,12 +58,32 @@ describe('every iOS TurboModule is autolinked', () => {
       // A podspecPath that exists but is the :osx spec links a pod whose
       // source_files is macos/**, which cannot compile for iOS. That surfaces as
       // a confusing missing-symbol build error rather than the real cause.
+      //
+      // Deliberately does NOT assert the spec's TEXT contains ':ios' or
+      // 'ios/**'. Those literals are satisfied by the podspec's own explanatory
+      // comments -- every one of the seven comments names modules/rn-<mod>/ios/
+      // ios/**, the very path that broke the build. A check that passes on a
+      // comment is worse than no check: it is green, and it fails when someone
+      // deletes a comment. iosPodSourceFiles.test.ts asserts the real invariant
+      // by matching source_files against real filenames, and the CLI-resolution
+ // test below proves the override reaches CocoaPods.
       const spec = readFileSync(
         config.dependencies[`@daak/${name}`].platforms.ios.podspecPath,
         'utf8',
       );
-      expect(spec).toContain(':ios');
-      expect(spec).toContain('ios/**');
+      // What must hold: the file the override names is under ios/, and declares
+      // the iOS platform, read from the executable part of the spec.
+      expect(config.dependencies[`@daak/${name}`].platforms.ios.podspecPath).toMatch(
+        /modules\/rn-[a-z]+\/ios\/Daak\w+\.podspec$/,
+      );
+      // Read the platforms line as code: an uncommented `s.platforms = {...}`
+      // carrying :ios. Stripping comments first means the check cannot be
+      // satisfied by prose about :ios, and cannot break when prose is edited.
+      const code = spec
+        .split('\n')
+        .filter((l) => !l.trim().startsWith('#'))
+        .join('\n');
+      expect(code).toMatch(/s\.platforms\s*=\s*\{\s*:ios\s*=>/);
     });
   }
 

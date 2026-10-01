@@ -13,6 +13,6 @@ export type { EventSubscribe } from './engine/InProcess';
 //
 // RN-RUNTIME ONLY. Importing this barrel -- or `NativeDaak` itself -- executes
 // `TurboModuleRegistry.getEnforcing('Daak')` at module-eval time, which throws
-// outside a running RN app (Node, vitest, Jest, the daemon). Node code should
-// import NativeDaak directly from its module, not from here.
+// outside a running RN app (Node, vitest, Jest, the daemon). That is why the
+// desktop side deep-imports its engine: DaemonClient never touches this file.
 export { default as NativeDaak } from './NativeDaak';

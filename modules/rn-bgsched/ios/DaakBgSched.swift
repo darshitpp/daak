@@ -33,7 +33,7 @@ import React
 class DaakBgSched: RCTEventEmitter {
   // `override` is required: RCTEventEmitter declares this, and the omission sat
   // here uncompiled until 2026-10-01, when fixing the podspec source_files made
-  // this file reach a compiler for the first time. The four NSObject modules
+  // this file reach a compiler for the first time. The five NSObject modules
   // (clipboard, fspaths, qrscanner, securestore, share) declare the same method
   // WITHOUT override, correctly: NSObject does not define it. See also
   // DaakNotify.swift for the same one-word fix.

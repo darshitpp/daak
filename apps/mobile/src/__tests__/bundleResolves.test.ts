@@ -30,6 +30,7 @@ import { join } from 'path';
 // through Jest's own resolution while Metro failed in the real app. Asserting
 // the path is what actually distinguishes the two resolvers.
 const appDir = join(__dirname, '..', '..');
+const repoRoot = join(__dirname, '..', '..', '..', '..');
 
 describe("Metro's resolver is compatible with pnpm's isolated node_modules", () => {
   it('does not disable hierarchical lookup', () => {
@@ -54,8 +55,18 @@ describe("Metro's resolver is compatible with pnpm's isolated node_modules", () 
     // @babel/runtime is the one exception and is pinned above: transform-runtime
     // emits requires into the APP's own sources, so it must be declared by the
     // app regardless of how the resolver walks.
-    const config = require(join(appDir, 'metro.config.js'));
-    expect(config.resolver.disableHierarchicalLookup).toBeFalsy();
+    // BOTH apps, not just mobile. The flag was fixed in one of two configs that
+    // needed it: apps/desktop had the identical setting with the identical pnpm
+    // layout behind it, so macOS and Windows would have kept the red box while
+    // this test stayed green. A fix applied to one of N identical sites is half
+    // a fix, and only a loop over all of them notices.
+    for (const app of ['mobile', 'desktop']) {
+      const config = require(join(repoRoot, 'apps', app, 'metro.config.js'));
+      // FALSY, not `undefined`: mergeConfig folds in getDefaultConfig's value, so
+      // an unset flag reads back as `false` rather than absent. Asserting
+      // `undefined` would demand a deletion that mergeConfig then undoes.
+      expect(config.resolver.disableHierarchicalLookup).toBeFalsy();
+    }
   });
 });
 

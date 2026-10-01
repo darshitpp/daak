@@ -6,4 +6,6 @@ RCT_EXTERN_METHOD(downloadsDir:(RCTPromiseResolveBlock)resolve reject:(RCTPromis
 RCT_EXTERN_METHOD(appGroupDir:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(reveal:(NSString *)path
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(exists:(NSString *)path
+                  resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 @end

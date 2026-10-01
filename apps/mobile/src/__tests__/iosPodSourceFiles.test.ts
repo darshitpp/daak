@@ -175,3 +175,55 @@ describe('every iOS TurboModule still registers via the legacy interop path', ()
     });
   }
 });
+
+// CAUSE 3, the one the getEnforcing crash could not show. Fixing cause 1 made
+// the pods compile, and fixing that made them REGISTER -- which surfaced three
+// methods JS calls but the .mm never declared: DaakFsPaths.exists,
+// DaakShare.consumeIntentSends and DaakShare.updateShortcutTargets. All three
+// were @objc in the .swift and present in the TS Spec, so both languages agreed
+// and only the ObjC method table was short. That is invisible to the compiler
+// (an unimplemented selector is a runtime "unrecognized selector", not a build
+// error) and invisible to every test above, which check the module NAME and
+// never the METHOD LIST.
+//
+// consumeIntentSends is on the startup path -- bootstrap.ts awaits it -- so this
+// would have been a launch-time crash, found only by running the app.
+describe('every method in the JS Spec is exported by the .mm table', () => {
+  // `name(args): Promise<T>;` / `name(args): void;` at the top level of
+  // `interface Spec`. addListener/removeListeners are RCTEventEmitter's and are
+  // declared by the base class, not by the table.
+  const specMethodsOf = (src: string): string[] =>
+    [...src.matchAll(/^ {2}([a-zA-Z]\w*)\([^)]*\)\s*:\s*(?:Promise<|void)/gm)]
+      .map((m) => m[1])
+      .filter((m) => m !== 'addListener' && m !== 'removeListeners');
+
+  // RCT_EXTERN_METHOD's first selector piece IS the method name. Matched
+  // against the real macro so this file's own prose cannot satisfy it.
+  const mmMethodsOf = (src: string): string[] =>
+    [...src.matchAll(/RCT_EXTERN_METHOD\(\s*([a-zA-Z]\w*)\s*:/g)].map(
+      (m) => m[1],
+    );
+
+  for (const name of MODULES) {
+    const pod = POD_NAMES[name];
+    const read = (p: string) => readFileSync(join(repoRoot, p), 'utf8');
+    const specPath = `modules/${name}/js/NativeDaak${pod}.ts`;
+    const mmPath = `modules/${name}/ios/Daak${pod}.mm`;
+
+    it(`${name} .mm declares every Spec method`, () => {
+      const specMethods = specMethodsOf(read(specPath));
+      expect(specMethods.length).toBeGreaterThan(0);
+      const mmMethods = new Set(mmMethodsOf(read(mmPath)));
+      expect(specMethods.filter((m) => !mmMethods.has(m))).toEqual([]);
+    });
+
+    it(`${name} .mm declares nothing the Spec does not`, () => {
+      // The other direction: a .mm entry with no Spec method is unreachable code,
+      // and it is how a rename leaves two halves behind.
+      const specMethods = new Set(specMethodsOf(read(specPath)));
+      expect(mmMethodsOf(read(mmPath)).filter((m) => !specMethods.has(m))).toEqual(
+        [],
+      );
+    });
+  }
+});
