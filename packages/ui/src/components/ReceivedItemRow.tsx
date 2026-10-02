@@ -1,6 +1,8 @@
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { ItemState } from '@daak/core';
+import { ui } from '../theme';
+import { Btn } from './ds';
 
 export interface ReceivedItemView {
   transferId: string;
@@ -29,16 +31,13 @@ export function ReceivedItemRow({ item, onRetry }: {
 }) {
   const label = item.name ?? `item ${item.itemIndex}`;
   return (
-    <View accessibilityRole="summary">
-      <Text>{label}</Text>
-      <Text>{item.state}</Text>
+    <View style={ui.listRow} accessibilityRole="summary">
+      <View style={ui.fill}>
+        <Text style={ui.rowTitle} numberOfLines={1}>{label}</Text>
+        <Text style={ui.rowSub}>{item.state}</Text>
+      </View>
       {onRetry && item.state !== 'done' ? (
-        <Pressable
-          accessibilityLabel={`retry-${label}`}
-          onPress={() => onRetry(item.transferId, item.itemIndex)}
-        >
-          <Text>Retry</Text>
-        </Pressable>
+        <Btn label="Retry" onPress={() => onRetry(item.transferId, item.itemIndex)} testID={`retry-${label}`} />
       ) : null}
     </View>
   );

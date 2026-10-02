@@ -141,18 +141,12 @@ export async function startEngine(): Promise<void> {
 }
 
 /**
- * DELIBERATELY UNWIRED (R22). Do not call this from a mount effect yet.
- *
- * Nothing consumes a text/file item yet, and consumePendingShare is
- * all-or-nothing natively: it drains every batch and deletes the metadata that
- * names the item. Draining on mount would hand back a text/file item nobody
- * routes, throw its batch away, and leave the bytes unreferenced in the App
- * Group / cache dir. That is silent data loss on the inbound share path, and
- * the staged-and-intact batch is strictly the better resting state.
- *
- * Task 11 owns the composer route that can consume them; Tasks 7 and 9 own the
- * intent-send arm. Wire the drain only when a caller exists for all three
- * InboundShareItem arms.
+ * The OS share-sheet drain. consumePendingShare is all-or-nothing natively: it
+ * drains every batch and deletes the metadata that names the item, so a drain
+ * MUST have a consumer for the item it hands back or those bytes are lost. The
+ * consumer is App.tsx's Send composer (all three arms now route: text and file
+ * into the draft, intent-send is filtered here because bootstrap already sent
+ * it from its own non-destructive subdir).
  *
  * This is NOT a send: the engine's outbox owns delivery, so a drain on its own
  * never contacts a peer. A batch the native side could not parse is dropped

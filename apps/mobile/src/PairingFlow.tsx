@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
-import { PairingScreen, useEngine } from '@daak/ui';
-import { armHostPairing, hostPairingQr, joinWithScan } from './pairing';
+import { ScrollView, Text, View } from 'react-native';
+import { Btn, Note, PairingScreen, Section, useEngine } from '@daak/ui';
+import { armHostPairing, hostPairingQr, joinWithScan, parsePairingPayload } from './pairing';
 import { onPairingSas } from './bootstrap';
 
 type Phase = { kind: 'choose' } | { kind: 'host'; qrUri: string } | { kind: 'join' };
+
+// The shared scroll-content padding, restated here because packages/ui keeps
+// `ui.pad` internal to its screens; padding is a token, not a design system.
+const pad = { padding: 16, gap: 24 } as const;
 
 /**
  * The stateful half of QR pairing (R100): it lives in the APP, feeds the
@@ -21,13 +25,34 @@ type Phase = { kind: 'choose' } | { kind: 'host'; qrUri: string } | { kind: 'joi
  * is a fan-out from the ONE subscription inside bootstrap.startEngine
  * (R42/R91). The joiner's SAS comes back synchronously from engine.pair.
  */
-export function PairingFlow() {
+export function PairingFlow({ bundle }: { bundle?: string } = {}) {
   const engine = useEngine();
   const [phase, setPhase] = useState<Phase>({ kind: 'choose' });
   const [sas, setSas] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => onPairingSas((received) => setSas(received)), []);
+
+  // A link bundle IS a join, with no camera: the user already chose to pair by
+  // opening the link, and a scanner prompt on top of that is a step that does
+  // not exist in the flow. Joined on bundle IDENTITY, not on mount: this
+  // component is mounted whenever the pair route opens, so a plain mount effect
+  // would re-pair a user who came here from Devices.
+  useEffect(() => {
+    if (!bundle) return;
+    setSas('');
+    setError('');
+    setPhase({ kind: 'join' });
+    void Promise.resolve()
+      .then(() => {
+        const { deviceId, cbor } = parsePairingPayload(bundle);
+        return engine.pair(deviceId, 'qr', cbor);
+      })
+      .then(
+        ({ sas: received }) => setSas(received),
+        (e: unknown) => setError(e instanceof Error ? e.message : 'that pairing link did not work'),
+      );
+  }, [bundle, engine]);
 
   const startHost = () => {
     setSas('');
@@ -82,16 +107,17 @@ export function PairingFlow() {
 
   if (phase.kind === 'choose') {
     return (
-      <View>
-        <Text>Pair with another Daak device</Text>
-        <Pressable accessibilityLabel="host" onPress={startHost}>
-          <Text>Show QR</Text>
-        </Pressable>
-        <Pressable accessibilityLabel="join" onPress={startJoin}>
-          <Text>Scan</Text>
-        </Pressable>
-        {error ? <Text accessibilityLabel="pairing-error">{error}</Text> : null}
-      </View>
+      <ScrollView contentContainerStyle={pad}>
+        <Section title="Pair with another Daak device">
+          <Btn variant="primary" block testID="host" label="Show QR" onPress={startHost} />
+          <Btn variant="quiet" block testID="join" label="Scan" onPress={startJoin} />
+          {error ? <Note tone="err" testID="pairing-error" body={error} /> : null}
+          <Note
+            title="Nothing here leaves the network"
+            body="Pairing shows a code and reads one back. No account, no server."
+          />
+        </Section>
+      </ScrollView>
     );
   }
   return (
@@ -109,14 +135,14 @@ export function PairingFlow() {
           Rendered in the host phase unconditionally -- including before any
           SAS has arrived, which is the state a burnt arm leaves behind. */}
       {phase.kind === 'host' ? (
-        <Pressable accessibilityLabel="host-retry" onPress={startHost}>
-          <Text>Show a new QR</Text>
-        </Pressable>
+        <View style={pad}>
+          <Btn variant="quiet" block testID="host-retry" label="Show a new QR" onPress={startHost} />
+        </View>
       ) : null}
-      <Pressable accessibilityLabel="confirm" onPress={acknowledge}>
-        <Text>SAS matched - Done</Text>
-      </Pressable>
-      {error ? <Text accessibilityLabel="pairing-error">{error}</Text> : null}
+      <View style={pad}>
+        <Btn variant="primary" block testID="confirm" label="SAS matched - Done" onPress={acknowledge} />
+        {error ? <Note tone="err" testID="pairing-error" body={error} /> : null}
+      </View>
     </View>
   );
 }

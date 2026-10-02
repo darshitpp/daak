@@ -117,10 +117,10 @@ describe('startEngine: the foreground service and the one subscription', () => {
     await waitFor(() => expect(stopTransferForeground).toHaveBeenCalledTimes(1));
   });
 
-  // R22: the lifecycle owner calls startEngine, but must NOT drain the
-  // text/file share inbox. consumePendingShare is all-or-nothing natively and
-  // deletes the batch metadata that names a shared item, so a mount-time drain
-  // orphans bytes. drainInbound stays unwired.
+  // R22, restated now that a drain exists: startEngine itself must still NOT
+  // drain. App.tsx owns that drain, because only App.tsx has a consumer for
+  // the items -- consuming them here would delete the batch metadata with no
+  // composer to hold the bytes.
   it('does not drain the text/file share inbox', async () => {
     await startEngine();
     expect(jest.requireMock('@daak/platform').consumePendingShare).not.toHaveBeenCalled();

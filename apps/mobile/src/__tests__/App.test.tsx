@@ -1,7 +1,14 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import App from '../App';
 
+// The Send tab's picker is INJECTED, so the app supplies it and the real barrel
+// pulls the `Daak` TurboModule through @daak/core at module-eval time -- which
+// throws under Jest with no bridge. Same reason the two module mocks below exist.
+// The picker's own behaviour is packages/platform/src/share.test.ts's.
+jest.mock('@daak/platform', () => ({
+  pickFiles: jest.fn(async () => []),
+}));
 // App now imports BackgroundSyncNotice, which reaches @daak/platform for the
 // battery call. The real platform barrel pulls cbor-x (ESM) in through
 // @daak/core and jest cannot parse it. The notice is a Pressable, so mocking it
@@ -43,18 +50,21 @@ afterEach(() => warn.mockRestore());
 describe('App', () => {
   it('boots and renders the tab shell', () => {
     render(<App />);
-    expect(screen.getByText('dashboard')).toBeTruthy();
+    expect(screen.getAllByText('Send').length).toBeGreaterThan(0);
+    expect(screen.getByText('Devices')).toBeTruthy();
+    expect(screen.getByText('Inbox')).toBeTruthy();
+    expect(screen.getByText('Transfers')).toBeTruthy();
+    expect(screen.getByText('Settings')).toBeTruthy();
   });
 
-  it('does NOT drain the staged share inbox on mount', () => {
+  it('drains the staged share inbox only AFTER the engine is up', async () => {
     render(<App />);
-    // R22 regression guard. App MUST NOT drain on mount. consumePendingShare is
-    // all-or-nothing natively: draining here would delete the batch that names
-    // a shared text/file item while its bytes sit unreferenced, i.e. silent
-    // data loss on the inbound path. Nothing consumes those items yet (Task 11
-    // owns the composer route), so the staged batch is the correct resting
-    // state. Task 7/9 own the intent-send arm. Re-adding the effect fails here.
+    // consumePendingShare is all-or-nothing natively: draining before
+    // startEngineOnce resolves would hand back items with no engine to send
+    // them, delete their metadata, and lose the bytes.
     expect(drainInbound).not.toHaveBeenCalled();
+    await act(async () => {});
+    expect(drainInbound).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the engine untouched on mount', () => {
@@ -85,8 +95,42 @@ describe('App', () => {
     render(<App />);
     await waitFor(() => expect(warn).toHaveBeenCalled());
     expect(String(warn.mock.calls[0][0])).toContain('start');
+    // The log line is not the report: the user has to see it too, because
+    // every list below is empty for the rest of the process and nothing else
+    // on screen says why.
+    await act(async () => {});
+    expect(screen.getByText(/keystore rejected the key/)).toBeTruthy();
     // And the app still renders, rather than taking the whole UI down over a
     // fault the user may be able to fix.
-    expect(screen.getByText('dashboard')).toBeTruthy();
+    expect(screen.getByText('Devices')).toBeTruthy();
   });
+
+  // The gap this closes: a share-sheet text/file item was staged natively and
+  // nothing ever drained it, so sharing into Daak did nothing at all. Now both
+  // arms land in the composer and the engine gets the real paths.
+  it('routes a shared text and file into the Send composer', async () => {
+    const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: true });
+    drainInbound.mockImplementationOnce(async (onItems: (i: unknown[]) => void) =>
+      onItems([
+        { kind: 'text', text: 'from the share sheet' },
+        { kind: 'file', path: '/Documents/photo.png', name: 'photo.png' },
+        // Already sent by bootstrap from its own subdir: must not be re-imported.
+        { kind: 'intent-send', deviceId: 'aa', text: 'sent already' },
+      ]),
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByDisplayValue('from the share sheet')).toBeTruthy());
+    expect(screen.getByText('photo.png')).toBeTruthy();
+    fireEvent.press(await screen.findByLabelText('send'));
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith({
+        peerDeviceId: expect.any(String),
+        text: 'from the share sheet',
+        files: ['/Documents/photo.png'],
+      }),
+    );
+    // The intent-send arm is bootstrap's, not a draft: no 'sent already' note.
+    expect(screen.queryByDisplayValue('sent already')).toBeNull();
+  });
+
 });

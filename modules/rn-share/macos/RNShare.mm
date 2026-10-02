@@ -5,6 +5,7 @@
 
 @implementation RNShare {
   NSSharingServicePicker *_picker;
+  NSOpenPanel *_panel;
 }
 
 RCT_EXPORT_MODULE(DaakSystemShare)
@@ -81,6 +82,82 @@ RCT_EXPORT_METHOD(share : (NSString *)payloadJson resolve : (RCTPromiseResolveBl
   _picker = picker;
   [picker showRelativeToRect:rect ofView:view preferredEdge:NSRectEdgeMinY];
   resolve(nil);
+}
+
+// The document picker. Same signature as the mobile DaakShare.pickDocuments, so
+// the composer's injected picker is one `() => Promise<string[]>` on every
+// platform and packages/ui cannot tell them apart.
+//
+// Settles in the panel's COMPLETION, never around a blocking run: NSOpenPanel
+// presents a SHEET, which has no return value at all, so the completion handler
+// is the only place the selection can be read. runModal is the fallback for no
+// window (this app is LSUIElement with the dashboard ordered out), and it runs
+// its own nested event loop -- so its result is read AFTER it returns, inside
+// this method, which is the one place a modal response is legal.
+RCT_EXPORT_METHOD(pickDocuments : (BOOL)multiple resolve : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
+  RCTAssertMainQueue();
+
+  NSOpenPanel *panel = [NSOpenPanel openPanel];
+  panel.allowsMultipleSelection = multiple;
+  // A REPLACING panel: the previous one is held so it is not deallocated under
+  // the sheet, and replaced by the next pick, exactly like _picker above.
+  _panel = panel;
+
+  // The tray anchor, reused verbatim from share() above for the reason that
+  // comment gives: NSApp.keyWindow is nil whenever only the status item is up.
+  // The lookup is by NAME (no declared DaakTray dependency here) and the class
+  // method goes through -performSelector: because sending it through a Class is
+  // a compile error -- see the full note in share().
+  NSView *anchorView = nil;
+  Class trayClass = NSClassFromString(@"RNTray");
+  SEL statusItemSelector = NSSelectorFromString(@"statusItem");
+  if (trayClass != nil && [trayClass respondsToSelector:statusItemSelector]) {
+    NSStatusItem *statusItem = (NSStatusItem *)[trayClass performSelector:statusItemSelector];
+    anchorView = statusItem.button;
+  }
+  NSWindow *window = anchorView.window ?: NSApp.keyWindow ?: NSApp.mainWindow;
+
+  // One reader for both shapes, so the sheet and the modal arm cannot disagree
+  // about paths, order, or what a Cancel means.
+  void (^resolvePaths)(void) = ^{
+    if (panel.URLs == nil || panel.URLs.count == 0) {
+      // Cancelled. An EMPTY LIST, never a reject: dismissing a picker is an
+      // ordinary user action and a reject here is a red box in the app.
+      resolve(@[]);
+      return;
+    }
+    // filePath, not absoluteString/-path: engine.send takes filesystem paths and
+    // the composer's remove-<path> label reads them back.
+    NSMutableArray<NSString *> *paths = [NSMutableArray arrayWithCapacity:panel.URLs.count];
+    for (NSURL *url in panel.URLs) {
+      [paths addObject:url.filePath];
+    }
+    resolve(paths);
+  };
+
+  // The sheet needs a window that is actually ON SCREEN. anchorView alone does not
+  // say that: the tray button exists from install() onward, so once it is present
+  // it satisfies an `anchorView != nil` test even when `window` came from
+  // NSApp.mainWindow and that window is ordered out -- this app's normal state
+  // (LSUIElement, AppDelegate orderOut at launch). beginSheetModalForWindow: on
+  // an offscreen window throws NSInvalidArgumentException, so the first "Add
+  // files" click of a menu-bar-only run would crash.
+  //
+  // share() gates the same way and REJECTS the no-window case. Here the picker
+  // must still work with no window, so this falls through to runModal instead of
+  // rejecting -- that is the only difference from share().
+  if (window != nil && window.isVisible) {
+    // The SHEET. completionHandler: is not optional in practice: with a nil
+    // handler there is nowhere to answer, and the promise would never settle.
+    [panel beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
+      resolvePaths();
+    }];
+  } else {
+    // No window to anchor to. runModal blocks this nested loop and RETURNS the
+    // response, so the result is read here and not in a handler.
+    [panel runModal];
+    resolvePaths();
+  }
 }
 
 @end

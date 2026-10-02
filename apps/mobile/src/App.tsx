@@ -1,19 +1,30 @@
-import React, { useEffect } from 'react';
-import { SafeAreaView } from 'react-native';
-import { AppShell, BackgroundHint, EngineProvider } from '@daak/ui';
-import { engine, startEngineOnce } from './bootstrap';
+import React, { useEffect, useState } from 'react';
+import { SafeAreaView, View } from 'react-native';
+import { AppShell, BackgroundHint, EngineProvider, Note } from '@daak/ui';
+import { drainInbound, engine, startEngineOnce } from './bootstrap';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
-import { TransfersFlow } from './TransfersFlow';
-import { SendFlow, useSendPeer } from './SendFlow';
+import { pickAttachedFiles } from './SendFlow';
+import { mobileInboxActions } from './inbox-actions';
+import { onDeepLink, type DeepLink } from './deeplink';
 
 export default function App() {
-  // DeviceCard's Send used to be `onSend={() => {}}`: a real Pressable wired to
-  // nothing, in the shipped UI, on two screens. It now routes to the composer
-  // for that peer. This state is the whole route -- R22 stands, so nothing here
-  // drains the staged share inbox, and R37 stands, so daak.folder stays out.
-  const [sendPeer, openComposer, closeComposer] = useSendPeer();
-
+  // A start failure must be VISIBLE, not only logged: with the engine dead
+  // every peer list, outbox row and inbox is silently empty and the banner that
+  // used to explain that can never fire (inbox.received needs a running
+  // engine). startEngineOnce is idempotent, so a rejected start is permanent
+  // for the process -- the note is the honest resting state until a relaunch.
+  const [fault, setFault] = useState<string | null>(null);
+  // daak://send / daak://pair. Held as state and handed to AppShell, which does
+  // the routing and the seeding -- the shell already knows the Send screen and
+  // the pair slot, so re-implementing either here would be a second route
+  // table.
+  const [link, setLink] = useState<DeepLink>({ kind: 'none' });
+  // An OS share-sheet import. Held as state and handed to the shell, which
+  // SEEDS it into Send -- the same route a daak://send link takes, because
+  // from the app's side a shared file and a shared link are one instruction.
+  const [shared, setShared] = useState<{ text?: string; files: string[] } | null>(null);
+  const [shareFault, setShareFault] = useState('');
   // THE engine lifecycle owner, and the first production caller startEngine
   // has ever had (before Task 10 it had none, deliberately: R22 ruled against
   // the plan's version of this effect, which also drained the share inbox).
@@ -23,11 +34,9 @@ export default function App() {
   // remount cannot construct a second engine -- two identities and two
   // discovery stacks on one LAN.
   //
-  // It does NOT drain the text/file share inbox. R22 still holds:
+  // The share drain is chained onto THIS call, not a second effect:
   // consumePendingShare is all-or-nothing natively and deletes the metadata
-  // naming a staged item, and nothing can route a text/file arm yet (Task 11
-  // owns the composer route). bootstrap.ts keeps drainInbound unwired and
-  // App.test.tsx pins that this effect did not grow one.
+  // naming a staged item, so it has to be in the composer in the same tick.
   //
   // A start failure must NOT crash the app: startEngine never rejects on a
   // permission or a scheduling problem (R36, initBackgroundSync), so a throw
@@ -36,23 +45,74 @@ export default function App() {
   // showing; the ENGINE is dead, and every peer list, every outbox row and
   // every inbound banner is silently absent with nothing on screen to say so.
   //
-  // One warn line, because the previous claim that this was reported
-  // elsewhere was circular: the banner comes from inbox.received, which can
-  // never fire if start() threw. Rendering a real fault banner is Task 11's
-  // job and needs a state channel this app does not have; a log line costs
-  // nothing and is the difference between a diagnosable field report and a
-  // mystery.
   useEffect(() => {
-    void startEngineOnce().catch((e: unknown) => {
-      console.warn('daak: engine start failed; the app is running with no engine', e);
-    });
-  }, []);
+    let cancelled = false;
+    // One effect, TWO jobs, because the drain must not run before the engine
+    // is up and startEngineOnce must be called exactly once: two effects
+    // calling it is two calls, and the wrapper exists so a remount or a Fast
+    // Refresh cannot start a second engine.
+    //
+    // The drain is all-or-nothing natively -- the batch metadata naming these
+    // bytes is deleted as it is handed back -- so a drained item MUST be in the
+    // composer in this same tick or it is unreferenced. It is seeded, not sent:
+    // the user still picks a device and taps Send.
+    void startEngineOnce().then(
+      () =>
+        drainInbound((items) => {
+          if (cancelled) return;
+          // intent-send is bootstrap's: it names its own destination and was
+          // already sent from a separate, non-destructive subdir. Re-importing
+          // it here would draft a note the user never typed.
+          const text = items.find((i) => i.kind === 'text');
+          const files = items.filter((i) => i.kind === 'file').map((i) => i.path);
+          if (files.length === 0 && text === undefined) return;
+          setShared({
+            text: text?.kind === 'text' ? text.text : undefined,
+            files,
+          });
+        }).catch((e: unknown) => {
+          // Only reachable when the START succeeded: a rejected start is
+          // reported by the fault note below, and this would double-report it.
+          if (!cancelled) setShareFault(e instanceof Error ? e.message : String(e));
+        }),
+      (e: unknown) => {
+        console.warn('daak: engine start failed; the app is running with no engine', e);
+        if (!cancelled) setFault(e instanceof Error ? e.message : String(e));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [startEngineOnce]);
+
+  // Both sources, because both are needed: getInitialURL is the cold launch
+  // with no event after it, and the 'url' event is a link into a running app.
+  // No drain, no mount-time engine work -- a link only routes and prefills.
+  useEffect(() => onDeepLink(setLink), []);
 
   return (
     <SafeAreaView style={{ flex: 1 }}>
       <EngineProvider engine={engine}>
-        {/* R98: the pair tab is the reachable entry to QR pairing. PairingFlow is
-            app-side (R100): the shell stays presentational. */}
+        {fault === null ? null : (
+          <View style={{ padding: 16, paddingBottom: 0 }}>
+            <Note
+              tone="err"
+              title="Daak's engine did not start"
+              body={`Nothing can be sent or received until this is fixed: ${fault}`}
+            />
+          </View>
+        )}
+        {shareFault === '' ? null : (
+          <View style={{ padding: 16, paddingBottom: 0 }}>
+            <Note
+              tone="err"
+              title="A shared item did not arrive"
+              body={`Daak could not read what the other app shared: ${shareFault}`}
+            />
+          </View>
+        )}
+        {/* R98: pairing is reachable from Devices, not from a sixth tab. PairingFlow
+            is app-side (R100): the shell stays presentational. */}
         {/* BackgroundHint JOINS BackgroundSyncNotice rather than replacing it.
             Same slot, same truth told twice by two audiences: the notice is the
             Android-shaped action (allow background sync), the hint is the
@@ -64,16 +124,31 @@ export default function App() {
             outbox ticker already drains on reconnect, so there is nothing a
             foreground wake would add (GAP 1). */}
         <AppShell
+          layout="mobile"
           background={
             <>
               <BackgroundHint />
               <BackgroundSyncNotice />
             </>
           }
-          pair={<PairingFlow />}
-          transfers={<TransfersFlow />}
-          onSend={openComposer}
-          composer={<SendFlow peer={sendPeer} onCancel={closeComposer} />}
+          pair={<PairingFlow bundle={link.kind === 'pair' ? link.bundle : undefined} />}
+          // pickAttachedFiles is the real picker: iOS a
+          // UIDocumentPickerViewController (asCopy: true), Android
+          // ACTION_OPEN_DOCUMENT. It is INJECTED rather than called inside
+          // packages/ui, which takes no @daak/platform dependency and no
+          // TurboModule.
+          onPickFiles={pickAttachedFiles}
+          inboxActions={mobileInboxActions}
+          initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
+          // ?? '' and not `link.text`: a send link with NO text is an
+          // instruction to send nothing, and undefined here would leave the
+          // note the user typed for the previous target in the box -- attached
+          // to the files on a peer their own tap never chose.
+          initialText={
+            link.kind === 'send' ? link.text ?? '' : shared?.text
+          }
+          initialFiles={shared?.files}
+          pairBundle={link.kind === 'pair' ? link.bundle : undefined}
         />
       </EngineProvider>
     </SafeAreaView>

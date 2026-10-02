@@ -2,6 +2,7 @@ import React, { useCallback, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 import type { DaakEngine } from '@daak/core';
 import type { AppMode, UiRuntime } from './headless';
+import type { InboxActions } from './screens/HistoryScreen';
 import { Popover } from './modes/Popover';
 import { Dashboard } from './modes/Dashboard';
 
@@ -15,13 +16,21 @@ import { Dashboard } from './modes/Dashboard';
  * devices[0] default, which is what every host that has no such link wants.
  * Optional prop, not a platform check, so mobile compiles and behaves exactly
  * as it did.
+ *
+ * `onPickFiles` is threaded for the same reason: the composer's file picker is
+ * INJECTED (see ComposerScreen), and DaakUiApp is where the desktop shell hands
+ * its NSOpenPanel-backed picker down. The POPOVER also has a real send now
+ * (prototype: pick a device, pick a file, send), so it takes the same picker and
+ * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
   onExpand?: () => void;
   peerDeviceId?: string;
+  onPickFiles?: () => Promise<string[]>;
+  inboxActions?: InboxActions;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -36,8 +45,8 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   return (
     <View style={{ flex: 1 }}>
       {mode === 'popover'
-        ? <Popover state={state} onExpand={onExpand} />
-        : <Dashboard state={state} engine={engine} peerDeviceId={peerDeviceId} />}
+        ? <Popover state={state} engine={engine} onExpand={onExpand} onPickFiles={onPickFiles} />
+        : <Dashboard state={state} engine={engine} peerDeviceId={peerDeviceId} onPickFiles={onPickFiles} inboxActions={inboxActions} />}
     </View>
   );
 }

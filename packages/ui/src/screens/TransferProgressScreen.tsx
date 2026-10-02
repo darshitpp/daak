@@ -4,7 +4,13 @@ import type { TransferSummary } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { ProgressRow } from '../components/ProgressRow';
 import { ReceivedItemRow, type ReceivedItemView } from '../components/ReceivedItemRow';
+import { ui } from '../theme';
 
+/**
+ * One transfer, with its item rows. TransfersScreen is the list; this is the
+ * per-transfer detail the engine's transfer.item events address, and it is what
+ * the old I1 reachability pin kept alive.
+ */
 export function TransferProgressScreen({ transferId }: { transferId: string }) {
   const engine = useEngine();
   const [summary, setSummary] = useState<TransferSummary | null>(null);
@@ -28,10 +34,18 @@ export function TransferProgressScreen({ transferId }: { transferId: string }) {
   }, [engine, transferId]);
 
   return (
-    <View>
+    <View style={ui.stack}>
       {summary ? (
-        <ProgressRow name={summary.kind} bytesDone={summary.bytesDone} bytesTotal={summary.bytesTotal}
-          state={summary.state} />
+        <ProgressRow
+          name={summary.kind}
+          bytesDone={summary.bytesDone}
+          bytesTotal={summary.bytesTotal}
+          state={summary.state}
+          onCancel={summary.state === 'active' || summary.state === 'receiving'
+            ? () => void engine.cancel(summary.transferId)
+            : undefined}
+          onRetry={summary.state === 'failed' ? () => void engine.retry(summary.transferId) : undefined}
+        />
       ) : null}
       {/*
         NO onRetry: `Engine::retry_item` is real in Rust (engine.rs:720) but is

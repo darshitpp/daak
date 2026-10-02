@@ -1,5 +1,8 @@
 module.exports = {
   preset: 'react-native',
+  // Same reason as apps/mobile/jest.config.js: watchman needs a state dir
+  // outside the project and the tests never needed it.
+  watchman: false,
   testMatch: ['<rootDir>/src/**/*.test.tsx'],
   setupFilesAfterEnv: ['@testing-library/react-native/extend-expect'],
   // Same pnpm-store reason as apps/mobile/jest.config.js: the RN template's

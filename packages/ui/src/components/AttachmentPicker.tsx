@@ -1,21 +1,30 @@
 import React from 'react';
-import { FlatList, Pressable, Text } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import { Btn } from './ds';
+import { ui } from '../theme';
+
+const base = (p: string): string => p.split(/[\\/]/).pop() ?? p;
 
 export function AttachmentPicker({ files, onPick, onRemove }: {
   files: string[]; onPick: () => void; onRemove: (path: string) => void;
 }) {
   return (
-    <>
-      <Pressable onPress={onPick} accessibilityLabel="pick-files"><Text>Add files</Text></Pressable>
-      <FlatList
-        data={files}
-        keyExtractor={(p) => p}
-        renderItem={({ item }) => (
-          <Pressable onPress={() => onRemove(item)} accessibilityLabel={`remove-${item}`}>
-            <Text>{item.split('/').pop()}</Text>
-          </Pressable>
-        )}
-      />
-    </>
+    <View style={ui.stackSm}>
+      <Btn label="+  Add files" onPress={onPick} testID="pick-files" block />
+      {files.map((p) => (
+        <Pressable
+          key={p}
+          onPress={() => onRemove(p)}
+          accessibilityLabel={`remove-${base(p)}`}
+          style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
+        >
+          <Text style={ui.chipLabel} numberOfLines={1}>{base(p)}</Text>
+          <Text style={ui.chipLabelOn}>×</Text>
+        </Pressable>
+      ))}
+      <Text style={ui.hint}>
+        {files.length === 0 ? 'No files added yet.' : `${files.length} file(s) ready.`}
+      </Text>
+    </View>
   );
 }

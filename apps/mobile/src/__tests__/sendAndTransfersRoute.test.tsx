@@ -1,37 +1,30 @@
 import React from 'react';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import type { DaakEvent } from '@daak/core';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DeviceInfo } from '@daak/core';
 import { AppShell, EngineProvider, fakeEngine } from '@daak/ui';
-import { SendFlow, useSendPeer } from '../SendFlow';
-import { TransfersFlow } from '../TransfersFlow';
 
-// M1 + I1, the app half. These drive the REAL shell, so they fail if AppShell
-// stops threading the slot or the tab goes away -- the same reachability
-// discipline pairingFlow.test.tsx applies to the pair slot.
-function Shell({ onSend, composer }: { onSend?: (d: DeviceInfo) => void; composer?: React.ReactNode }) {
-  return (
-    <EngineProvider engine={engine}>
-      <AppShell onSend={onSend} composer={composer} transfers={<TransfersFlow />} />
-    </EngineProvider>
-  );
-}
-
+// M1 + I1, the app half. These drive the REAL shell, so they fail if the tab
+// goes away or if DeviceCard's Send stops routing. The shell's own tests prove
+ // the same paths from inside packages/ui; this file pins them from the app
+ // side, where the picker is injected and a slot could be dropped.
 const engine = fakeEngine();
-const device = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true };
+const device: DeviceInfo = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true };
 const TRANSFER_ID = 'bb'.repeat(16);
 
-function drive(e: DaakEvent) {
-  const h = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
-  act(() => { h.forEach((cb) => cb(e)); });
+function Shell() {
+  return (
+    <EngineProvider engine={engine}>
+      <AppShell onPickFiles={async () => ['/Users/d/Documents/a.pdf']} />
+    </EngineProvider>
+  );
 }
 
 beforeEach(() => {
   jest.restoreAllMocks();
   jest.spyOn(engine, 'devices').mockResolvedValue([device]);
-    jest.spyOn(engine, 'listTransfers').mockResolvedValue([
+  jest.spyOn(engine, 'listTransfers').mockResolvedValue([
     {
       transferId: TRANSFER_ID, peerDeviceId: device.deviceId, direction: 'in',
       kind: 'media', state: 'receiving', bytesDone: 1, bytesTotal: 2, itemCount: 1, updatedAt: 5,
@@ -39,67 +32,82 @@ beforeEach(() => {
   ]);
 });
 
-describe('the Send button routes to the composer (M1)', () => {
-  it('opens a real composer for the tapped peer and reaches engine.send', async () => {
-    const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: true });
-    function App() {
-      const [peer, open, close] = useSendPeer();
-      return <Shell onSend={open} composer={<SendFlow peer={peer} onCancel={close} />} />;
-    }
-    render(<App />);
-
-    // Tapping Send must mount a composer bound to THAT device, not a no-op.
-    fireEvent.press(await screen.findByLabelText(`send-to-${device.deviceId}`));
-    const field = await screen.findByPlaceholderText('Message');
-    fireEvent.changeText(field, 'hello');
-    fireEvent.press(screen.getByLabelText('send'));
-    await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: device.deviceId, text: 'hello', files: [] }));
-
-    // And Cancel closes it again, so the route is not a trap.
-    fireEvent.press(screen.getByLabelText('composer-cancel'));
-    await waitFor(() => expect(screen.queryByPlaceholderText('Message')).toBeNull());
-  });
-
-  // R22 stands: the composer route must not become a mount-time drain. A
-  // staged share is all-or-nothing natively and nothing routes a file arm yet.
-  it('does not drain the staged share inbox on the way to the composer', () => {
-    // Comments stripped first: the R86/R95 lesson is that a source pin which
-    // can be satisfied by PROSE is decoration, and this file's own comment
-    // names drainInbound while saying the opposite.
-    const src = readFileSync(join(__dirname, '..', 'SendFlow.tsx'), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '');
-    expect(src).not.toMatch(/drainInbound/);
-    expect(src).not.toMatch(/consumePendingShare/);
-  });
+// Tapping Send on a device card must land on a composer bound to THAT device,
+// and the engine must receive that device id -- that is the whole difference
+// between a route and a no-op.
+it('routes the device card Send into the Send tab for that peer', async () => {
+  const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TRANSFER_ID, queued: true });
+  render(<Shell />);
+  fireEvent.press(screen.getByText('Devices'));
+  fireEvent.press(await screen.findByLabelText('send-to-' + device.deviceId));
+  fireEvent.changeText(await screen.findByPlaceholderText('Message'), 'hello');
+  fireEvent.press(screen.getByLabelText('send'));
+  await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: device.deviceId, text: 'hello', files: [] }));
 });
 
-describe('the transfers tab shows real transfer.item rows (I1)', () => {
-  it('renders an item row from a live transfer.item event', async () => {
-    render(<Shell />);
-    fireEvent.press(screen.getByText('transfers'));
-    // Wait for the flow to resolve a transfer, THEN push the real event. The
-    // event carries no transferId the screen filters on, so the test drives the
-    // same one listTransfers returned.
-    await waitFor(() => expect(screen.getByText('media')).toBeTruthy());
-    drive({ type: 'transfer.item', transferId: TRANSFER_ID, itemIndex: 1, state: 'quarantined' });
-    expect(screen.getByText('item 1')).toBeTruthy();
-    expect(screen.getByText('quarantined')).toBeTruthy();
-  });
+// The send route must not grow its OWN drain: App.tsx is the single drain site
+// and it waits for the engine. A second one deletes the batch twice and loses
+// the bytes. SendFlow is the file that owns the picker, so it is the place a
+// second drain would grow.
+it('does not drain the staged share inbox on the way to Send', () => {
+  // Comments stripped first: a source pin which can be satisfied by PROSE is
+  // decoration, and the file's own comment names drainInbound while saying the
+  // opposite.
+  const src = readFileSync(join(__dirname, '..', 'SendFlow.tsx'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  expect(src).not.toMatch(/drainInbound/);
+  expect(src).not.toMatch(/consumePendingShare/);
+});
 
-  it('says so plainly when the engine has no transfers', async () => {
-    jest.spyOn(engine, 'listTransfers').mockResolvedValue([]);
-    render(<Shell />);
-    fireEvent.press(screen.getByText('transfers'));
-    await waitFor(() => expect(screen.getByText('No transfers yet')).toBeTruthy());
-  });
+// Two transfers at once used to leave the second invisible: the app-side
+// TransfersFlow picked the newest and rendered only that one.
+it('shows both transfers, and cancels by the id that was tapped', async () => {
+  const other: DeviceInfo = { deviceId: 'cc'.repeat(16), name: 'ThinkPad', addr: '192.168.1.10:40001' };
+  const NEW = 'cc'.repeat(16);
+  jest.spyOn(engine, 'devices').mockResolvedValue([device, other]);
+  jest.spyOn(engine, 'listTransfers').mockResolvedValue([
+    { transferId: TRANSFER_ID, peerDeviceId: device.deviceId, direction: 'in', kind: 'media',
+      state: 'receiving', bytesDone: 1, bytesTotal: 2, itemCount: 1, updatedAt: 5 },
+    { transferId: NEW, peerDeviceId: other.deviceId, direction: 'in', kind: 'media',
+      state: 'receiving', bytesDone: 1, bytesTotal: 2, itemCount: 1, updatedAt: 6 },
+  ]);
+  const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
+  render(<Shell />);
+  fireEvent.press(screen.getByText('Transfers'));
+  await waitFor(() => expect(screen.getByText('1 item(s) from ThinkPad')).toBeTruthy());
+  expect(screen.getByText('1 item(s) from Pixel 9')).toBeTruthy();
+  // The OLDER row, not the newest: the engine gets the id that was tapped.
+  fireEvent.press(screen.getByLabelText('cancel-1 item(s) from Pixel 9'));
+  await waitFor(() => expect(cancel).toHaveBeenCalledWith(TRANSFER_ID));
+});
+
+// The composer's picker is INJECTED (packages/ui takes no dependency on
+// @daak/platform and no TurboModule), so packages/platform's pickFiles -- tested
+// at packages/platform/src/share.test.ts -- is correct and has no import path to
+// this app at all. What can break is the WIRING: a host that supplies no picker
+// leaves "Add files" inert, and that is indistinguishable from a working button
+// at runtime. So this asserts the path a tap takes, not the facade.
+it('sends the paths the injected picker returned', async () => {
+  const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TRANSFER_ID, queued: true });
+  render(<Shell />);
+  fireEvent.press(screen.getByLabelText('pick-files'));
+  await waitFor(() => expect(screen.getByText('a.pdf')).toBeTruthy());
+  fireEvent.press(screen.getByLabelText('send'));
+  await waitFor(() =>
+    expect(send).toHaveBeenCalledWith({
+      peerDeviceId: device.deviceId,
+      text: undefined,
+      files: ['/Users/d/Documents/a.pdf'],
+    }),
+  );
 });
 
 // The source-level half of M1. `onSend={() => {}}` shipped in two screens and
 // no test could see it: DeviceCard's own test passes a real jest.fn(), so a
-// no-op at the call site was invisible. Comments are stripped first (R95) and
-// the assert is over the whole source tree, so it goes red the moment the
-// dead callback comes back anywhere.
+// no-op at the call site was invisible. Comments are stripped first and the
+// assert is over the whole source tree, so it goes red the moment the dead
+// callback comes back anywhere.
 describe('no dead onSend callback exists anywhere in the tree', () => {
   const roots = ['packages/ui/src', 'apps/mobile/src'];
 

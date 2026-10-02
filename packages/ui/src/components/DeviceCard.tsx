@@ -1,23 +1,29 @@
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { DeviceInfo } from '@daak/core';
+import { Avatar, Btn, Status, devicePresence } from './ds';
+import { ui } from '../theme';
 
 /**
- * `onSend` is OPTIONAL and the button renders only when it is supplied, the same
- * way ReceivedItemRow hides Retry: a visible Pressable wired to a no-op is a
- * dead button in the shipped UI, which is worse than no button (R37/R128).
- * apps/mobile supplies a real one (it opens the composer); nothing in the tree
- * passes an empty callback.
+ * `onSend` is OPTIONAL and the button renders only when it is supplied, the
+ * same way ReceivedItemRow hides Retry: a visible Pressable wired to a no-op is
+ * a dead button in the shipped UI, which is worse than no button.
+ *
+ * The status line is three-state because the engine is: `online` is undefined
+ * on a cold daemon, and printing "offline" there is a reachability claim the
+ * engine never makes (a send to an unknown-liveness peer queues and succeeds).
  */
 export function DeviceCard({ device, onSend }: { device: DeviceInfo; onSend?: (d: DeviceInfo) => void }) {
+  const presence = devicePresence(device.online);
   return (
-    <View>
-      <Text>{device.name}</Text>
-      <Text>{device.online ? 'online' : 'offline'}</Text>
+    <View style={ui.listRow}>
+      <Avatar letter={device.name} />
+      <View style={ui.fill}>
+        <Text style={ui.rowTitle} numberOfLines={1}>{device.name}</Text>
+        <Status tone={presence.tone} label={presence.label} />
+      </View>
       {onSend ? (
-        <Pressable onPress={() => onSend(device)} accessibilityLabel={`send-to-${device.deviceId}`}>
-          <Text>Send</Text>
-        </Pressable>
+        <Btn label="Send" onPress={() => onSend(device)} testID={`send-to-${device.deviceId}`} />
       ) : null}
     </View>
   );

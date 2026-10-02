@@ -15,7 +15,10 @@ describe('DaakUiApp', () => {
     act(() => {
       bus.forEach((h) => h({ type: 'device.discovered', device: { deviceId: 'a', name: 'A', addr: '1.2.3.4:1' } }));
     });
-    expect(screen.getByText('A')).toBeTruthy();
+    // The device name and the avatar initial are the same letter here, so this
+    // pins the row rather than counting name matches.
+    expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
+    expect(screen.getAllByText('A').length).toBeGreaterThan(0);
   });
 
   // finding 8: useSyncExternalStore resubscribes whenever `subscribe` changes

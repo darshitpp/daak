@@ -1,7 +1,7 @@
 import React from 'react';
 import { AppRegistry } from 'react-native';
 import { createUiRuntime } from '@daak/ui';
-import { DaakPopoverShell, DaakDashboardShell } from './src/shells';
+import { DaakPopoverShell, DaakDashboardShell, reportStartFault } from './src/shells';
 // Deep import, NOT the @daak/platform barrel, for the same reason
 // src/shells.tsx:1-8 and src/window-host.ts:1-3 already record. That barrel
 // re-exports bgsched/clipboard/fspaths/qr/securestore/share, each of which runs
@@ -13,6 +13,7 @@ import { DaakPopoverShell, DaakDashboardShell } from './src/shells';
 import { createEngine } from '@daak/platform/src/engine';
 import { onDirectShareUrl } from './src/direct-share';
 import { attachNotifyEngine, attachNotifyHost, onDesktopNotify } from './src/notify';
+import { attachPicker, nativeDesktopPickFiles } from './src/picker';
 import { openDashboard } from './src/window-host';
 
 // One engine for the whole process; popover and dashboard share the same engine
@@ -61,9 +62,21 @@ attachNotifyEngine(engine);
 attachNotifyHost(openDashboard);
 onDesktopNotify();
 
+// The composer's file picker (NSOpenPanel in RNShare.mm). Attached HERE, above
+// both roots, for the same reason as onDirectShareUrl(): the dashboard window is
+// created at launch, so a picker attached after registration would race the
+// first render.
+attachPicker(nativeDesktopPickFiles);
+
 engine.start()
   .then(() => runtime.prime())
-  .catch((error) => console.warn('daak: engine start failed:', error));
+  // Visible, not just logged: the shells render against an engine that is not
+  // up, so every peer list, transfer and inbox is empty and the tray says
+  // "nothing paired" with nothing on screen explaining why.
+  .catch((error) => {
+    console.warn('daak: engine start failed:', error);
+    reportStartFault(error);
+  });
 
 // Registration does NOT sit inside the .then(), unlike the daemon shape this
 // replaced. There is no connection to fail here, so deferring registration

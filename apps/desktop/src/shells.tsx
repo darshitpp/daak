@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { DaakUiApp } from '@daak/ui';
+import { View } from 'react-native';
+import { DaakUiApp, Note } from '@daak/ui';
 import type { UiRuntime } from '@daak/ui';
 // The @daak/core barrel re-exports NativeDaak, which calls
 // TurboModuleRegistry.getEnforcing('Daak') at module-eval time and throws in
@@ -11,6 +12,44 @@ import type { TrayAction } from '@daak/rn-tray';
 import { closePopover, openDashboard } from './window-host';
 import { applyTrayAction } from './tray-action';
 import { getDirectSharePeer, publishDevices, subscribeDirectSharePeer } from './direct-share';
+import { desktopPickFiles } from './picker';
+import { desktopInboxActions } from './inbox-actions';
+
+// A dead engine says nothing on screen: no peers, no transfers, no inbox, and
+// no error -- the same reason apps/mobile/src/App.tsx shows a note for it. A
+// module-level store rather than state because the roots are registered with
+// AppRegistry and cannot be handed a prop when start() rejects later.
+let startFault: string | null = null;
+const faultListeners = new Set<() => void>();
+
+export function startFaultMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function reportStartFault(error: unknown): void {
+  startFault = startFaultMessage(error);
+  faultListeners.forEach((listener) => listener());
+}
+
+function StartFaultNote() {
+  const fault = useSyncExternalStore(
+    useCallback((onChange: () => void) => {
+      faultListeners.add(onChange);
+      return () => faultListeners.delete(onChange);
+    }, []),
+    () => startFault,
+  );
+  if (fault === null) return null;
+  return (
+    <View style={{ padding: 16, paddingBottom: 0 }}>
+      <Note
+        tone="err"
+        title="Daak's engine did not start"
+        body={`Nothing can be sent or received until this is fixed: ${fault}`}
+      />
+    </View>
+  );
+}
 
 function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {
@@ -35,15 +74,19 @@ export function DaakPopoverShell({ engine, runtime }: {
   runtime: UiRuntime;
 }) {
   return (
-    <DaakUiApp
-      mode="popover"
-      engine={engine}
-      runtime={runtime}
-      onExpand={() => {
-        closePopover();
-        openDashboard();
-      }}
-    />
+    <View style={{ flex: 1 }}>
+      <StartFaultNote />
+      <DaakUiApp
+        mode="popover"
+        engine={engine}
+        runtime={runtime}
+        onPickFiles={desktopPickFiles}
+        onExpand={() => {
+          closePopover();
+          openDashboard();
+        }}
+      />
+    </View>
   );
 }
 
@@ -64,12 +107,15 @@ export function DaakDashboardShell({ engine, runtime }: {
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
   return (
     <>
+      <StartFaultNote />
       <DaakTrayOverlay runtime={runtime} />
       <DaakUiApp
         mode="dashboard"
         engine={engine}
         runtime={runtime}
         peerDeviceId={peerDeviceId ?? undefined}
+      onPickFiles={desktopPickFiles}
+      inboxActions={desktopInboxActions}
       />
     </>
   );

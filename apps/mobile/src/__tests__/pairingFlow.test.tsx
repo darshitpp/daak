@@ -68,7 +68,8 @@ beforeEach(() => {
 describe('QR pairing is reachable from the app shell', () => {
   it('mounts the flow lazily: no bundle fetch and no QR until the user asks', () => {
     renderShell();
-    fireEvent.press(screen.getByText('pair'));
+    fireEvent.press(screen.getByText('Devices'));
+      fireEvent.press(screen.getByLabelText('pair-a-device'));
     expect(screen.getByText('Show QR')).toBeTruthy();
     expect(screen.getByText('Scan')).toBeTruthy();
     expect(mockedBundle).not.toHaveBeenCalled();
@@ -80,7 +81,8 @@ describe('QR pairing is reachable from the app shell', () => {
     // what the host half of the flow reads (R91/R42 - no second subscription).
     await startEngine();
     renderShell();
-    fireEvent.press(screen.getByText('pair'));
+    fireEvent.press(screen.getByText('Devices'));
+      fireEvent.press(screen.getByLabelText('pair-a-device'));
 
     const armHostPairing = jest.spyOn(engine, 'armHostPairing');
     fireEvent.press(screen.getByText('Show QR'));
@@ -122,7 +124,8 @@ describe('QR pairing is reachable from the app shell', () => {
   // does: acknowledge the matching SAS and leave the flow.
   it('labels the final button as an acknowledgement, not as gating a pairing', async () => {
     renderShell();
-    fireEvent.press(screen.getByText('pair'));
+    fireEvent.press(screen.getByText('Devices'));
+      fireEvent.press(screen.getByLabelText('pair-a-device'));
     fireEvent.press(screen.getByText('Scan'));
     await waitFor(() => expect(screen.getByText('123456')).toBeTruthy());
 
@@ -133,7 +136,8 @@ describe('QR pairing is reachable from the app shell', () => {
   it('join half: scanning pairs through the engine and the SAS is shown', async () => {
     const pair = jest.spyOn(engine, 'pair');
     renderShell();
-    fireEvent.press(screen.getByText('pair'));
+    fireEvent.press(screen.getByText('Devices'));
+      fireEvent.press(screen.getByLabelText('pair-a-device'));
     fireEvent.press(screen.getByText('Scan'));
 
     await waitFor(() => expect(screen.getByText('123456')).toBeTruthy());
@@ -151,7 +155,8 @@ describe('QR pairing is reachable from the app shell', () => {
   describe('host phase recovery', () => {
     it('offers a re-arm control BEFORE any SAS has arrived (the finding-1 case)', async () => {
       renderShell();
-      fireEvent.press(screen.getByText('pair'));
+      fireEvent.press(screen.getByText('Devices'));
+      fireEvent.press(screen.getByLabelText('pair-a-device'));
       fireEvent.press(screen.getByText('Show QR'));
       await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
 
@@ -164,7 +169,8 @@ describe('QR pairing is reachable from the app shell', () => {
     it('re-fetches the QR and arms a SECOND time when the retry control is pressed', async () => {
       await startEngine();
       renderShell();
-      fireEvent.press(screen.getByText('pair'));
+      fireEvent.press(screen.getByText('Devices'));
+      fireEvent.press(screen.getByLabelText('pair-a-device'));
 
       const armHostPairing = jest.spyOn(engine, 'armHostPairing');
       fireEvent.press(screen.getByText('Show QR'));
@@ -183,7 +189,8 @@ describe('QR pairing is reachable from the app shell', () => {
     it('keeps the retry control available after a SAS arrived', async () => {
       await startEngine();
       renderShell();
-      fireEvent.press(screen.getByText('pair'));
+      fireEvent.press(screen.getByText('Devices'));
+      fireEvent.press(screen.getByLabelText('pair-a-device'));
       fireEvent.press(screen.getByText('Show QR'));
       await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
 
