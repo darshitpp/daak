@@ -25,10 +25,25 @@ rm -rf "$out"
 mkdir -p "$out/Headers" "$out/lib"
 
 # uniffi-bindgen is not a workspace member, so it is invoked through a small
-# bin built against the exact version Cargo.lock pins. Same generator the crate
-# compiled against is the point: the generated class and method names have to
-# match what Daak.swift calls.
-version="$(awk '/^name = "uniffi_bindgen"$/{getline; gsub(/version = "|"/,""); print; exit}' Cargo.lock)"
+# bin built against the same version the crate compiles against. Same generator
+# is the point: the generated class and method names have to match what Daak.swift
+# calls.
+#
+# From the TRACKED manifest, not from Cargo.lock. Cargo.lock is untracked and
+# forbidden from staging, so it is not part of the commit and cannot pin
+# anything reproducibly: on a clean checkout it does not exist, the old awk
+# came back EMPTY, and the script emitted `uniffi = { version = "=" }`, which
+# cargo cannot resolve. Worse, reading it when it happens to exist makes the pin
+# differ per machine (=0.28.3 here, =0.28 there) off the same commit. A tracked
+# 0.28 requirement resolves to the same 0.28.3 everywhere; `=0.28` is what the
+# lockfile path effectively wanted.
+#
+# head -1: `uniffi` appears TWICE in daak-ffi/Cargo.toml (dependencies and
+# build-dependencies) and sed prints both, giving version="0.28
+# 0.28" -- an unresolvable requirement. That is a real bug the first attempt at
+# this line had, found by running it.
+version="$(sed -n 's/^[[:space:]]*uniffi = { version = "\([0-9.]*\)".*/\1/p' crates/daak-ffi/Cargo.toml | head -1)"
+test -n "$version" || { echo "cannot read the uniffi pin from crates/daak-ffi/Cargo.toml" >&2; exit 1; }
 echo "uniffi_bindgen pinned at $version"
 
 # A FIXED directory under target/, not mktemp: a throwaway path gets a fresh
