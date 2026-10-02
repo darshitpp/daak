@@ -126,11 +126,12 @@ RCT_EXPORT_METHOD(pickDocuments : (BOOL)multiple resolve : (RCTPromiseResolveBlo
       resolve(@[]);
       return;
     }
-    // filePath, not absoluteString/-path: engine.send takes filesystem paths and
-    // the composer's remove-<path> label reads them back.
+    // -path, not absoluteString: engine.send takes filesystem paths and the
+    // composer's remove-<path> label reads them back. NSURL.filePath is the
+    // Swift bridge name and does not exist in Objective-C.
     NSMutableArray<NSString *> *paths = [NSMutableArray arrayWithCapacity:panel.URLs.count];
     for (NSURL *url in panel.URLs) {
-      [paths addObject:url.filePath];
+      [paths addObject:url.path];
     }
     resolve(paths);
   };

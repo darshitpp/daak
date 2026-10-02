@@ -127,9 +127,21 @@ describe('the macOS file picker exists and answers when the panel does', () => {
 
   it('resolves the selection in order, as absolute paths', () => {
     const body = methodBody();
-    // NSURL.filePath, NOT -absoluteString or -path: engine.send takes filesystem
-    // paths, and the composer's own remove-<path> label reads them back.
-    expect(body).toContain('.filePath');
+    // -path on NSURL, NOT -.filePath and NOT -absoluteString. The INTENT is
+    // right -- engine.send takes filesystem paths and the composer's own
+    // remove-<path> label reads them back -- but .filePath is the SWIFT bridge
+    // name and does not exist in Objective-C: `property 'filePath' not found on
+    // object of type 'NSURL *'`, which is a hard compile error the day anyone
+    // builds the macOS app. This file is Objective-C; the picker had shipped
+    // uncompiled long enough for the wrong-language accessor to pass a green
+    // source pin that itself demanded .filePath.
+    expect(body).toMatch(/\[paths addObject:url\.path\]/);
+    // Anchored on the addObject: call so the selector is the thing under test,
+    // not just the token appearing somewhere in the method body.
+    expect(body).not.toMatch(/\.filePath/);
+    // absoluteString is the other wrong answer: a percent-encoded file:// URL
+    // is not a path, and it reaches engine.send as a nonexistent file.
+    expect(body).not.toContain('absoluteString');
     // allowsMultipleSelection IS the `multiple` argument, or a button labelled
     // "Add files" quietly collects one file.
     expect(body).toMatch(/allowsMultipleSelection\s*=\s*multiple/);
