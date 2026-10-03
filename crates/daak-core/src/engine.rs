@@ -9,7 +9,7 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use crate::control::Hello;
 use crate::crypto::identity::{verify_static_binding, Identity, IdentityPublic};
 use crate::discovery::{
-    Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
+    advertise_ip, Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
 };
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
@@ -270,11 +270,17 @@ impl Engine {
         }
 
         let (listener, local_addr) = tcp::bind(cfg.listen_addr).await?;
-        let (advertiser, display_name) = Advertiser::start_resolving(
+        let (advertiser, display_name) = Advertiser::start_resolving_on(
             &base_name,
             local_addr.port(),
             device_id,
             &mut rand::thread_rng(),
+            // Every shipped entry point binds 0.0.0.0, and tcp::bind reports
+            // that wildcard back. Publishing it verbatim with addr_auto off
+            // writes 0.0.0.0:<port> into the A record, which a browsing peer
+            // resolves and then refuses as non-local. advertise_ip maps it back
+            // to None so the auto form is used instead.
+            advertise_ip(local_addr.ip()),
         )?;
         let browser = Arc::new(Browser::start()?);
         let presence = match PresenceSocket::bind().await {
@@ -539,16 +545,69 @@ impl Engine {
     /// R-T11-3: the registry resolves a peer's address from the device map, so a
     /// caller that was GIVEN an address (the CLI's `send --to`) must seed it.
     /// Discovery inserts the same entry; this is the one-shot path.
+    ///
+    /// An address the caller supplied WINS over a discovery-inserted one, and
+    /// what the code actually guarantees is this:
+    ///
+    /// * the `addr` on the map is always the caller's, for an existing entry as
+    ///   well as a new one -- so `send_secure` never dials an address the caller
+    ///   did not name;
+    /// * the `name` is NEVER taken from the caller for an existing entry,
+    ///   because the caller has no better one to offer (daak-cli passes the hex
+    ///   device id) and the UI is already showing the discovered name.
+    ///
+    /// It does NOT guarantee the map matches what a peer last advertised over
+    /// mDNS: this path is authoritative and can differ from discovery, by
+    /// design. Discovery re-announces on a timer, so a peer that later advertises
+    /// a different address overwrites this again -- which is why re-addressing
+    /// here has to be VISIBLE (below) rather than silent.
+    ///
+    /// The emitted `DeviceFound` is for the CHANGE case only, and only on an
+    /// address that really changed:
+    ///
+    /// * a fresh insert stays SILENT, unchanged from before this method ever
+    ///   mutated anything. Discovery is what announces a newly seen peer, and a
+    ///   caller seeding one was told about it already -- emitting here would
+    ///   double-report every seeded peer and invent a "discovery" for a peer
+    ///   that discovery has not seen;
+    /// * a changed address EMITS, because the discovery path emits on insert
+    ///   only (`is_new`), so a re-address would otherwise leave the UI holding
+    ///   an address nothing listens on, silently, until the next announce.
+    ///   Both bridges already carry a full `DeviceInfo` on `DeviceFound` and
+    ///   the UI store merges one by device id, so a re-address needs no new wire
+    ///   variant and no field.
+    ///
+    /// The devices lock is held only across the map mutation and dropped before
+    /// the send, so a subscriber that is slow to drain its channel cannot stall
+    /// the outbox wake-up below.
     pub async fn note_peer(&self, peer: [u8; 16], name: &str, addr: SocketAddr) {
-        self.devices
-            .lock()
-            .await
-            .entry(peer)
-            .or_insert_with(|| DeviceInfo {
-                device_id: peer,
-                name: name.to_string(),
-                addr,
-            });
+        let mut devices = self.devices.lock().await;
+        // None unless an EXISTING entry changed address. `and_modify` cannot
+        // report "changed" vs "left alone" without a captured flag, so the
+        // entry is matched directly and the old DeviceInfo is read back out of
+        // it -- one value, not two sources of truth.
+        let re_addressed = match devices.entry(peer) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if e.get().addr == addr {
+                    None
+                } else {
+                    e.get_mut().addr = addr;
+                    Some(e.get().clone())
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(DeviceInfo {
+                    device_id: peer,
+                    name: name.to_string(),
+                    addr,
+                });
+                None
+            }
+        };
+        drop(devices);
+        if let Some(info) = re_addressed {
+            let _ = self.tx.send(EngineEvent::DeviceFound(info));
+        }
         // Seeding an address means the peer is reachable NOW, so wake the drain
         // the same way the discovery and presence handlers do. Without this the
         // one-shot path (daak-cli `send --to`) would leave a queued row waiting
@@ -598,11 +657,16 @@ impl Engine {
         // recv_timeout on a background thread (up to ~1.3s), and the announce
         // below is a socket write; holding the profile mutex across both
         // stalled every display_name() / pairing_bundle() reader for that long.
-        let (advertiser, resolved) = Advertiser::start_resolving(
+        // The SAME bind IP as startup: a rename must not republish a record
+        // pointing at a different interface than the listener is on.
+        let (advertiser, resolved) = Advertiser::start_resolving_on(
             &name,
             self.local_addr.port(),
             self.identity.device_id(),
             &mut rand::thread_rng(),
+            // The SAME normalisation as startup (see the call there): a rename
+            // must not republish a literal wildcard.
+            advertise_ip(self.local_addr.ip()),
         )?;
         let mut p = self.profile.lock().await;
         // The new advertiser is created BEFORE the old one is stopped (above vs

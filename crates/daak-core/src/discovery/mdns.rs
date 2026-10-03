@@ -27,11 +27,43 @@ pub struct Advertiser {
     fullname: String,
 }
 
+/// The `bind_ip` an engine should advertise for a listener bound to `ip`.
+///
+/// THE shared rule, used by every call site: a WILDCARD bind means "listen on
+/// every interface", which is what all three shipped entry points request
+/// (`0.0.0.0:{port}` in daakd, daak-ffi and daak-cli) and what `tcp::bind`
+/// reports back. That is not an address any peer can dial, and publishing it
+/// verbatim with `addr_auto` off is strictly worse than publishing nothing:
+/// `pick_addr` does not filter the unspecified address, so a browsing peer
+/// resolves `0.0.0.0:<port>` and the dial is refused as non-local. So an
+/// unspecified IP maps to `None`, which keeps the auto form -- the daemon
+/// fills the record with the host's real interface addresses, and refills it
+/// when an interface changes.
+///
+/// Only an EXPLICIT interface becomes `Some`, and that is the case `Some` is
+/// for: the record then carries exactly the address the listener is on, so no
+/// later announce can move a peer's send to an interface nothing listens on.
+/// One function, both call sites, so `Engine::start` and
+/// `Engine::set_display_name` cannot drift apart.
+pub(crate) fn advertise_ip(ip: IpAddr) -> Option<IpAddr> {
+    (!ip.is_unspecified()).then_some(ip)
+}
+
 impl Advertiser {
     pub fn start(name: &str, port: u16, device_id: [u8; 16]) -> Result<Self> {
-        Self::start_with_meta(name, port, device_id, "", "", 0, "online")
+        Self::start_with_meta(name, port, device_id, "", "", 0, "online", None)
     }
 
+    /// Register one advertisement.
+    ///
+    /// `bind_ip` is the address this process actually listens on. `Some(ip)`
+    /// publishes EXACTLY that address with `addr_auto` off; `None` enables
+    /// `addr_auto`, which fills the record with the host's interface addresses
+    /// (and refills it on every interface change). A wildcard bind MUST be
+    /// passed as `None`: publishing the literal `0.0.0.0` is worse than either
+    /// alternative, because a peer reads it as an address to dial and the dial
+    /// is refused. See [`Self::service_info`].
+    #[allow(clippy::too_many_arguments)]
     pub fn start_with_meta(
         name: &str,
         port: u16,
@@ -40,6 +72,7 @@ impl Advertiser {
         pk: &str,
         caps: u32,
         status: &str,
+        bind_ip: Option<IpAddr>,
     ) -> Result<Self> {
         let daemon = ServiceDaemon::new().map_err(|e| CoreError::Discovery(e.to_string()))?;
         let mut props = HashMap::new();
@@ -54,15 +87,50 @@ impl Advertiser {
         }
         props.insert("caps".to_string(), caps.to_string());
         props.insert("st".to_string(), status.to_string());
-        let host = format!("{}.local.", sanitize_host(name));
-        let info = ServiceInfo::new(SERVICE_TYPE, &sanitize_host(name), &host, "", port, props)
-            .map_err(|e| CoreError::Discovery(e.to_string()))?
-            .enable_addr_auto();
+        let info = Self::service_info(name, port, props, bind_ip)?;
         let fullname = info.get_fullname().to_string();
         daemon
             .register(info)
             .map_err(|e| CoreError::Discovery(e.to_string()))?;
         Ok(Self { daemon, fullname })
+    }
+
+    /// Build the record [`Self::start_with_meta`] registers.
+    ///
+    /// Split out from the registration so the address contract is testable
+    /// directly: `ServiceDaemon` exposes no way to read a registered record
+    /// back, so a test of this can only assert on what was built. `props` is
+    /// the TXT map the caller assembled (`id`, `name`, `v`, `fp`, `pk`, `caps`,
+    /// `st`); this adds only the address and the port.
+    ///
+    /// The `Some` arm publishes one address and leaves `addr_auto` off, so no
+    /// later interface event can move the record off it. The `None` arm is the
+    /// auto form: the record starts EMPTY and the daemon fills it with the
+    /// host's interface addresses, and refills it when an interface changes.
+    ///
+    /// A WILDCARD bind must arrive here as `None`, never as `Some(0.0.0.0)`.
+    /// `tcp::bind` reports the requested address back, and every shipped entry
+    /// point requests `0.0.0.0`; `Some` would write that literal into the A
+    /// record with auto off, so a browsing peer's `pick_addr` would hand back
+    /// `0.0.0.0:<port>` -- an address `is_local` rejects, so the send path
+    /// hard-fails with "refusing non-local address". The engine normalises the
+    /// wildcard back to `None` at every call site (see `discovery::advertise_ip`).
+    fn service_info(
+        name: &str,
+        port: u16,
+        props: HashMap<String, String>,
+        bind_ip: Option<IpAddr>,
+    ) -> Result<ServiceInfo> {
+        let host = format!("{}.local.", sanitize_host(name));
+        let info = match bind_ip {
+            Some(ip) => {
+                ServiceInfo::new(SERVICE_TYPE, &sanitize_host(name), &host, ip, port, props)
+            }
+            None => ServiceInfo::new(SERVICE_TYPE, &sanitize_host(name), &host, "", port, props)
+                .map(|i| i.enable_addr_auto()),
+        }
+        .map_err(|e| CoreError::Discovery(e.to_string()))?;
+        Ok(info)
     }
 
     pub fn stop(&self) {
@@ -82,10 +150,27 @@ impl Advertiser {
         device_id: [u8; 16],
         rng: &mut impl Rng,
     ) -> Result<(Self, String)> {
+        Self::start_resolving_on(base_name, port, device_id, rng, None)
+    }
+
+    /// [`Self::start_resolving`] with the bind IP threaded through to the
+    /// winning registration. Every registration inside the resolve loop must
+    /// advertise the same address the final record does, otherwise a rejected
+    /// candidate leaves a peer resolving to the wrong interface.
+    ///
+    /// `bind_ip` follows [`Self::service_info`]: `None` for a wildcard bind
+    /// (the production path), `Some(ip)` only for a real explicit interface.
+    pub fn start_resolving_on(
+        base_name: &str,
+        port: u16,
+        device_id: [u8; 16],
+        rng: &mut impl Rng,
+        bind_ip: Option<IpAddr>,
+    ) -> Result<(Self, String)> {
         let mut observed = browse_observed_names(BROWSE_WINDOW).unwrap_or_default();
         let mut name = resolve_name(base_name, &observed, rng);
         for _ in 0..2 {
-            let adv = Self::start(&name, port, device_id)?;
+            let adv = Self::start_with_meta(&name, port, device_id, "", "", 0, "online", bind_ip)?;
             let late = browse_observed_names(RECHECK_WINDOW).unwrap_or_default();
             if !late.iter().any(|n| n == &name) {
                 return Ok((adv, name));
@@ -94,7 +179,10 @@ impl Advertiser {
             observed.extend(late);
             name = resolve_name(base_name, &observed, rng);
         }
-        Ok((Self::start(&name, port, device_id)?, name))
+        Ok((
+            Self::start_with_meta(&name, port, device_id, "", "", 0, "online", bind_ip)?,
+            name,
+        ))
     }
 }
 
@@ -347,5 +435,97 @@ mod tests {
         let multi = "é".repeat(30);
         assert_eq!(txt_short(&multi, 20).unwrap().chars().count(), 20);
         assert_eq!(txt_short(&multi, 16).unwrap().chars().count(), 16);
+    }
+
+    // W-FW-2 regression, root cause. An engine that binds an explicit
+    // interface must advertise THAT interface. Under enable_addr_auto() the
+    // record carried every host address, so a peer on 127.0.0.1 published
+    // <lan-ip>:<port> as well; the next announce then overwrote the good
+    // loopback address in the device map with one nothing listens on, and a
+    // delivered transfer was re-pointed at a dead address mid-test.
+    #[test]
+    fn an_explicit_bind_ip_is_published_verbatim_without_addr_auto() {
+        let info = Advertiser::service_info(
+            "bind ip test",
+            40_999,
+            HashMap::new(),
+            Some("127.0.0.1".parse().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            info.get_addresses().iter().copied().collect::<Vec<_>>(),
+            vec!["127.0.0.1".parse::<IpAddr>().unwrap()],
+            "the record must carry exactly the bound address, not the host's"
+        );
+        assert!(
+            !info.is_addr_auto(),
+            "addr_auto would re-add every host interface on the next network \
+             change and silently move the record off the bound address"
+        );
+    }
+
+    #[test]
+    fn the_auto_form_still_advertises_host_interfaces() {
+        let info =
+            Advertiser::service_info("auto addr test", 40_998, HashMap::new(), None).unwrap();
+        assert!(
+            info.is_addr_auto(),
+            "None is the WILDCARD-BIND form, and every shipped entry point \
+             binds 0.0.0.0, so this is the production path: the record is left \
+             to the daemon, which fills it with the host's real interfaces"
+        );
+        assert!(
+            info.get_addresses().is_empty(),
+            "the auto form starts empty and is filled by the daemon"
+        );
+    }
+
+    // B-1. `tcp::bind` reports the REQUESTED address back, so a wildcard bind
+    // reports `0.0.0.0`. The engine's advertise_ip maps that back to None, and
+    // these two facts have to hold together: the mapping, and the fact that a
+    // record built from a wildcard bind therefore carries no unspecified
+    // address and keeps addr_auto (so the daemon, not a literal `0.0.0.0`,
+    // decides what is published). The reviewer's defect: the `Some` arm took
+    // `Some(0.0.0.0)` and published it verbatim, and a peer's pick_addr does
+    // NOT filter the unspecified address -- it handed back `0.0.0.0:<port>`,
+    // which `tcp::dial` refuses as non-local. Total loss of the send path on
+    // every real deployment.
+    #[test]
+    fn a_wildcard_bind_keeps_addr_auto_and_never_publishes_the_wildcard() {
+        assert_eq!(
+            advertise_ip(IpAddr::from([0, 0, 0, 0])),
+            None,
+            "0.0.0.0 means 'every interface', not 'this address', so it must \
+             take the auto form"
+        );
+        assert_eq!(
+            advertise_ip("::".parse().unwrap()),
+            None,
+            ":: is the same statement in v6 form and must map the same way"
+        );
+        assert_eq!(
+            advertise_ip("127.0.0.1".parse().unwrap()),
+            Some("127.0.0.1".parse().unwrap()),
+            "an EXPLICIT interface is the one case Some means, and it is kept"
+        );
+
+        let info = Advertiser::service_info(
+            "wildcard bind test",
+            40_997,
+            HashMap::new(),
+            advertise_ip(IpAddr::from([0, 0, 0, 0])),
+        )
+        .unwrap();
+        assert!(
+            !info.get_addresses().iter().any(|ip| ip.is_unspecified()),
+            "a wildcard bind must not publish the wildcard: a peer reads it as \
+             an address to dial, and dial refuses it as non-local. addresses = {:?}",
+            info.get_addresses()
+        );
+        assert!(
+            info.is_addr_auto(),
+            "and the daemon must stay free to fill in the host's real \
+             interfaces, which is what makes the record dialable"
+        );
     }
 }
