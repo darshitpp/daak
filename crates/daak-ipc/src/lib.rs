@@ -119,6 +119,10 @@ pub enum IpcRequest {
         filter: Option<TransferFilter>,
     },
     ListInbox,
+    /// This device's OWN advertised name and device id. The read half of
+    /// SetDisplayName: without it a UI can rename and never show what the LAN
+    /// actually resolved the name to.
+    SelfProfile,
     SetDisplayName {
         name: String,
     },
@@ -202,6 +206,30 @@ pub enum IpcEvent {
     /// to TS, which types it as an object. The name says so on purpose.
     InboxReceived {
         payload_json: String,
+    },
+    /// A peer this build refuses for a version reason, with BOTH real version
+    /// numbers. Same fields, same names and the same meaning as the FFI arm
+    /// (crates/daak-ffi/src/lib.rs IncompatiblePeerEvent): the UI must read one
+    /// shape whichever bridge delivered it, so a desktop and a phone on the
+    /// same LAN cannot disagree about whether an update is needed.
+    ///
+    /// THIS VARIANT ALONE owes no IPC_MINOR bump, and the exemption does not
+    /// extend to IpcRequest. It is a new EVENT variant on the externally
+    /// tagged enum: an older client's `toDaakEvent` gets an unknown name,
+    /// returns undefined and drops the event, whereas the frame itself still
+    /// decoded fine.
+    ///
+    /// A new IpcRequest variant is the OPPOSITE case and DOES owe a bump, even
+    /// though IpcRequest also lacks deny_unknown_fields: on the server side the
+    /// body decode is what fails, and daakd handles a read error with a
+    /// `tracing::warn!` and a bare `break` (crates/daakd/src/lib.rs), so the
+    /// connection is dropped SILENTLY. A newer minor on the same major is the
+    /// only thing that makes that observable instead of invisible.
+    IncompatiblePeer {
+        peer_device_id: String,
+        peer_name: String,
+        peer_version: u16,
+        our_version: u16,
     },
 }
 

@@ -34,7 +34,32 @@ export type DaakEvent =
   | { type: 'transfer.item'; transferId: string; itemIndex: number; state: ItemState; destPath?: string }
   | { type: 'transfer.done'; transferId: string }
   | { type: 'transfer.failed'; transferId: string; error: string }
-  | { type: 'inbox.received'; payload: InboxEntry };
+  | { type: 'inbox.received'; payload: InboxEntry }
+  /**
+   * A peer on this LAN speaks a protocol version this build refuses, so the
+   * engine dropped it from the device list (core's discovery task calls
+   * ensure_compatible and skips). It is reported rather than only logged so
+   * the UI can say WHY a paired-looking device is not in the list.
+   *
+   * BOTH numbers are real and BOTH are needed: peerVersion is what the device
+   * advertised in its mDNS TXT record, ourVersion is this build's manifest
+   * version. One number cannot distinguish "they need updating" from "we are
+   * the old one", and those need different advice.
+   *
+   * NOT defaulting a version is a property of each BRIDGE, not of this union.
+   * The FFI bridge cannot invent one: ffi_event_json reads the two u16s straight
+   * off the engine event. The daemon bridge COULD: toDaakEvent's num() was
+   * Number(v ?? 0), so a MISSING or non-numeric version became 0 until it was
+   * changed to drop such an event instead. Both bridges now refuse to hand the
+   * UI a version they did not read; neither substitutes a number for it.
+   */
+  | {
+      type: 'peer.incompatible';
+      peerDeviceId: string;
+      peerName: string;
+      peerVersion: number;
+      ourVersion: number;
+    };
 
 export interface SendRequest {
   peerDeviceId: string;
@@ -59,6 +84,13 @@ export interface TransferFilter {
   state?: string;
   /** 32 hex chars (16 bytes), the same shape every id in this API is. */
   peerDeviceId?: string;
+}
+
+/** This device's own advertised name and id. The READ half of setDisplayName. */
+export interface SelfProfile {
+  /** The RESOLVED name, with any LAN-collision suffix -- what peers see. */
+  name: string;
+  deviceId: string;
 }
 
 export interface DaakEngine {
@@ -103,6 +135,7 @@ export interface DaakEngine {
   retry(transferId: string): Promise<void>;
   listTransfers(filter?: TransferFilter): Promise<TransferSummary[]>;
   listInbox(): Promise<InboxEntry[]>;
+  selfProfile(): Promise<SelfProfile>;
   setDisplayName(name: string): Promise<void>;
   setPresence(state: 'online' | 'away'): Promise<void>;
   on(cb: (event: DaakEvent) => void): () => void;

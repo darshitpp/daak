@@ -130,6 +130,9 @@ class DaakModule(reactContext: ReactApplicationContext) :
     override fun listInbox(promise: Promise) = resolve(promise) { handle().listInbox() }
 
     @ReactMethod
+    override fun selfProfile(promise: Promise) = resolve(promise) { handle().selfProfile() }
+
+    @ReactMethod
     override fun setDisplayName(name: String, promise: Promise) =
         resolve(promise) { handle().setDisplayName(name); null }
 

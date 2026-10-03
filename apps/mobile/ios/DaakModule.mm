@@ -59,6 +59,9 @@ RCT_EXTERN_METHOD(listTransfers:(NSString *)filterJson
 RCT_EXTERN_METHOD(listInbox:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(selfProfile:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(setDisplayName:(NSString *)name
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)

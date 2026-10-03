@@ -274,6 +274,20 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
         EngineEvent::PairingDone { device_id } => IpcEvent::PairingDone {
             device_id: hex::encode(device_id),
         },
+        // Same four fields as the daak-ffi arm, byte for byte, so both bridges
+        // hand the UI one shape. Both versions are real: the peer's mDNS TXT
+        // `v` and this build's MANIFEST_VERSION.
+        EngineEvent::IncompatiblePeer {
+            peer_device_id,
+            peer_name,
+            peer_version,
+            our_version,
+        } => IpcEvent::IncompatiblePeer {
+            peer_device_id: hex::encode(peer_device_id),
+            peer_name,
+            peer_version,
+            our_version,
+        },
     }
 }
 
@@ -588,6 +602,16 @@ async fn dispatch(
                 )),
                 Err(e) => err(e),
             },
+        },
+        IpcRequest::SelfProfile => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => {
+                let (name, device_id) = engine.self_profile().await;
+                json(serde_json::json!({
+                    "name": name,
+                    "deviceId": hex::encode(device_id),
+                }))
+            }
         },
         IpcRequest::SetDisplayName { name } => match state.engine().await {
             Err(e) => e,

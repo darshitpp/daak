@@ -33,6 +33,8 @@ export interface Spec extends TurboModule {
   listTransfers(filterJson: string): Promise<string>;
   /** UDL: list_inbox() -> [{payloadId, transferId, ..., savedPaths}] */
   listInbox(): Promise<string>;
+  /** UDL: self_profile() -> JSON `{name, deviceId}` -- this device's own */
+  selfProfile(): Promise<string>;
   /** UDL: set_display_name(string name) */
   setDisplayName(name: string): Promise<void>;
   /** UDL: set_presence(string state) -- 'online' | 'away' */

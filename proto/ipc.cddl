@@ -62,6 +62,7 @@ ipc-request =
   / retry-request
   / list-transfers-request
   / list-inbox-request
+  / self-profile-request
   / set-display-name-request
   / set-presence-request
   / export-debug-bundle-request
@@ -82,6 +83,15 @@ retry-request            = { "Retry": transfer-ref }
 ; crates/daak-ipc/tests/schema.rs.
 list-transfers-request   = list-transfers-args
 list-inbox-request       = "ListInbox"
+; This device's OWN advertised name and device id -- the READ half of
+; SetDisplayName, sitting next to it in the Rust enum for that reason. A UI can
+; rename itself and still show a name the LAN never resolves to, so it needs to
+; ask the daemon what identity is actually being advertised rather than caching
+; the value it last sent and hoping the rename stuck. It is a unit variant: the
+; answer is everything the request is about, so there is no argument object. It
+; is pinned in crates/daak-ipc/tests/schema.rs precisely because a NEW wire key
+; with no arm here validates against nothing and fails only at runtime.
+self-profile-request     = "SelfProfile"
 set-display-name-request = { "SetDisplayName": display-name-args }
 set-presence-request     = { "SetPresence": set-presence-args }
 shutdown-request         = "Shutdown"
@@ -149,6 +159,7 @@ ipc-event =
   / transfer-done-event
   / transfer-failed-event
   / inbox-received-event
+  / incompatible-peer-event
 
 device-found-event      = { "DeviceFound": device-found-args }
 device-state-event      = { "DeviceState": device-state-args }
@@ -159,6 +170,11 @@ transfer-item-event     = { "TransferItem": transfer-item-args }
 transfer-done-event     = { "TransferDone": transfer-ref }
 transfer-failed-event   = { "TransferFailed": transfer-failed-args }
 inbox-received-event    = { "InboxReceived": inbox-received-args }
+; A peer this build refuses for a version reason. BOTH numbers are real: the
+; version the peer advertised in its mDNS TXT record and this build's
+; MANIFEST_VERSION. The UI's "update required" screen renders these two rather
+; than a hardcoded pair.
+incompatible-peer-event = { "IncompatiblePeer": incompatible-peer-args }
 
 device-found-args      = { "device_id": tstr, "name": tstr, "addr": tstr }
 device-state-args      = { "device_id": tstr, "online": bool }
@@ -170,3 +186,9 @@ transfer-failed-args   = { "transfer_id": tstr, "error": tstr }
 ; payload_json is a raw JSON STRING, not an InboxEntry: the daemon does not
 ; parse it and the client JSON.parses it before handing the event to TS.
 inbox-received-args    = { "payload_json": tstr }
+incompatible-peer-args = {
+  "peer_device_id": tstr,
+  "peer_name":      tstr,
+  "peer_version":   uint,
+  "our_version":    uint,
+}

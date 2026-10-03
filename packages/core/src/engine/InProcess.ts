@@ -5,6 +5,7 @@ import type {
   DeviceInfo,
   InboxEntry,
   SendRequest,
+  SelfProfile,
   TransferFilter,
   TransferSummary,
 } from './types';
@@ -113,6 +114,20 @@ export class InProcessEngine implements DaakEngine {
     const parsed: unknown = JSON.parse(await this.native.listInbox());
     if (!Array.isArray(parsed)) throw new Error('listInbox did not return an array');
     return parsed as InboxEntry[];
+  }
+
+  async selfProfile(): Promise<SelfProfile> {
+    const parsed: unknown = JSON.parse(await this.native.selfProfile());
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('selfProfile did not return an object');
+    }
+    const { name, deviceId } = parsed as { name?: unknown; deviceId?: unknown };
+    // Validated, not cast: Settings PREFILLS this box from this, and an empty
+    // name would silently wipe what the user had already typed.
+    if (typeof name !== 'string' || typeof deviceId !== 'string') {
+      throw new Error('selfProfile returned no name/deviceId');
+    }
+    return { name, deviceId };
   }
 
   async setDisplayName(name: string): Promise<void> {

@@ -111,6 +111,16 @@ pub struct InboxReceivedEvent {
     pub payload_json: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncompatiblePeerEvent {
+    pub peer_device_id: String,
+    pub peer_name: String,
+    /// The version the peer advertised in its mDNS TXT record.
+    pub peer_version: u16,
+    /// This build's manifest version, i.e. what the peer would need.
+    pub our_version: u16,
+}
+
 /// One tagged union for every engine signal, so the JS callback has a single
 /// shape to switch on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +134,7 @@ pub enum FfiEvent {
     TransferDone { data: DoneEvent },
     TransferFailed { data: FailedEvent },
     InboxReceived { data: InboxReceivedEvent },
+    IncompatiblePeer { data: IncompatiblePeerEvent },
 }
 
 /// The one method JS must implement to receive engine signals. The generated
@@ -623,6 +634,19 @@ impl DaakEngine {
         serde_json::to_string(&json).map_err(protocol_err)
     }
 
+    /// This device's own name and id. The READ half of set_display_name:
+    /// without it the UI can write a name and never show what the LAN actually
+    /// resolved it to.
+    pub fn self_profile(&self) -> Result<String, FfiError> {
+        let engine = self.engine()?;
+        let (name, device_id) = self.rt.block_on(engine.self_profile());
+        serde_json::to_string(&serde_json::json!({
+            "name": name,
+            "deviceId": to_hex(&device_id),
+        }))
+        .map_err(protocol_err)
+    }
+
     /// Rename this device. The engine re-resolves the name against the LAN and
     /// re-advertises, so this is NOT a local label edit: the next QR bundle
     /// carries the new name and peers browsing mDNS see it.
@@ -736,6 +760,17 @@ pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
             "payload": serde_json::from_str::<serde_json::Value>(&data.payload_json)
                 .map_err(protocol_err)?,
         }),
+        // The compatibility signal the Open Design "update required" screen
+        // needs. Both numbers are REAL (the peer's mDNS TXT `v` and this
+        // build's MANIFEST_VERSION), so the screen renders what the LAN
+        // actually advertises instead of a hardcoded pair.
+        FfiEvent::IncompatiblePeer { data } => serde_json::json!({
+            "type": "peer.incompatible",
+            "peerDeviceId": data.peer_device_id,
+            "peerName": data.peer_name,
+            "peerVersion": data.peer_version,
+            "ourVersion": data.our_version,
+        }),
     };
     serde_json::to_string(&json).map_err(protocol_err)
 }
@@ -847,6 +882,19 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 // and inventing one would change a signature four callers use.
                 payload_json: serde_json::to_string(&inbox_entry_json(&row))
                     .expect("an InboxEntry is strings, numbers and array-or-null"),
+            },
+        },
+        EngineEvent::IncompatiblePeer {
+            peer_device_id,
+            peer_name,
+            peer_version,
+            our_version,
+        } => FfiEvent::IncompatiblePeer {
+            data: IncompatiblePeerEvent {
+                peer_device_id: to_hex(&peer_device_id),
+                peer_name,
+                peer_version,
+                our_version,
             },
         },
     }

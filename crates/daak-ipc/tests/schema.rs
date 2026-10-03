@@ -201,6 +201,10 @@ fn every_request_validates_against_the_cddl() {
             }),
         }),
         IpcMessage::Request(IpcRequest::ListInbox),
+        // A unit variant, like Devices/Subscribe -- but it is a NEW wire key, so
+        // it has to be pinned here or the cddl can keep refusing the very frame
+        // DaemonClientEngine sends after every (re)start without anyone noticing.
+        IpcMessage::Request(IpcRequest::SelfProfile),
         IpcMessage::Request(IpcRequest::SetDisplayName {
             name: "renamed".into(),
         }),
@@ -362,6 +366,15 @@ fn every_event_validates_against_the_cddl() {
         // variant), so unlike the in-process EngineEvent it is pinned here too.
         IpcMessage::Event(IpcEvent::PairingDone {
             device_id: "d1".into(),
+        }),
+        // The compatibility signal. Also a WIRE struct addition, so pinned
+        // here as well -- with FOUR fields, which is the part a UI depends on:
+        // it renders both version numbers rather than inventing them.
+        IpcMessage::Event(IpcEvent::IncompatiblePeer {
+            peer_device_id: "d1".into(),
+            peer_name: "Kitchen Tablet".into(),
+            peer_version: 100,
+            our_version: 1,
         }),
     ] {
         assert_valid(&m);

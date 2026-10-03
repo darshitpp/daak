@@ -349,4 +349,66 @@ describe('DaemonClientEngine', () => {
     expect(h.written).toEqual([]);
     expect(h.sent).toEqual([]);
   });
+
+  // The daemon bridge of peer.incompatible. Both version numbers are the WHOLE
+  // point of the event: one cannot tell "they need updating" from "we are the
+  // old one". So a frame carrying a version this client cannot read must be
+  // DROPPED, not delivered with a number invented for it.
+  //
+  // The bug this pins: `num` was `Number(v ?? 0)`, so a MISSING version became
+  // 0 -- an old or malformed daemon could make the UI render "peer is on 0",
+  // which is a fabricated fact on the one screen whose job is telling the user
+  // their build is out of date. The FFI bridge never had this hole (a Rust u16
+  // cannot be absent), so the two bridges disagreed about the same event.
+  it('carries both real version numbers across the daemon bridge', () => {
+    const h = makeEngine();
+    const seen: unknown[] = [];
+    h.engine.on((e) => seen.push(e));
+    h.event({
+      IncompatiblePeer: {
+        peer_device_id: 'ab'.repeat(16),
+        peer_name: 'Kitchen Tablet',
+        peer_version: 200,
+        our_version: 100,
+      },
+    });
+    expect(seen).toEqual([
+      {
+        type: 'peer.incompatible',
+        peerDeviceId: 'ab'.repeat(16),
+        peerName: 'Kitchen Tablet',
+        peerVersion: 200,
+        ourVersion: 100,
+      },
+    ]);
+  });
+
+  it('drops an incompatible-peer frame whose version it cannot read', () => {
+    const h = makeEngine();
+    const seen: unknown[] = [];
+    h.engine.on((e) => seen.push(e));
+    // A frame that is malformed ON PURPOSE, cast rather than suppressed: the
+    // point is what such a frame does at RUNTIME, and IpcEvent's
+    // Record<string, Record<string, unknown>> cannot express a missing key or
+    // a string where a number belongs. A @ts-expect-error would sit on a line
+    // tsc does not actually flag and would rot silently.
+    const malformed = (d: Record<string, unknown>) =>
+      h.event({ IncompatiblePeer: d } as unknown as IpcEvent);
+    const id = 'ab'.repeat(16);
+    // Four shapes a mismatched daemon can really send, none of which may reach
+    // the UI as `peerVersion: 0`: a missing version, a missing OUR version, a
+    // string where a number belongs (Number('200') is 200), and NaN -- which
+    // survives CBOR and is the sneakiest of the four.
+    malformed({ peer_device_id: id, peer_name: 'x', our_version: 100 });
+    malformed({ peer_device_id: id, peer_name: 'x', peer_version: 200 });
+    malformed({ peer_device_id: id, peer_name: 'x', peer_version: '200', our_version: 100 });
+    malformed({ peer_device_id: id, peer_name: 'x', peer_version: Number.NaN, our_version: 100 });
+    malformed({
+      peer_device_id: id,
+      peer_name: 'x',
+      peer_version: Number.POSITIVE_INFINITY,
+      our_version: 100,
+    });
+    expect(seen).toEqual([]);
+  });
 });

@@ -121,6 +121,29 @@ pub enum EngineEvent {
         transfer_id: [u8; 16],
         error: String,
     },
+    /// A peer on this LAN announced a protocol version this build refuses
+    /// (ensure_compatible), so it is dropped from the device map and never
+    /// becomes a sendable peer. It used to be a `tracing::warn!` and nothing
+    /// else, which made the Open Design "update required" screen
+    /// unimplementable without inventing version numbers: the UI had no way to
+    /// learn a peer existed and was refused.
+    ///
+    /// `peer_version` and `our_version` are the two real numbers from
+    /// PeerAnnounce.proto_version and manifest::MANIFEST_VERSION. `peer_name`
+    /// and `peer_device_id` name WHO is out of step, so the screen can say
+    /// "Kitchen Tablet needs a newer Daak" instead of "something is wrong".
+    ///
+    /// Emitted once per announcing peer per announce interval, not latched:
+    /// the browser re-announces on a timer, and a UI that shows a stale
+    /// "update needed" after the peer updated is worse than one that shows
+    /// the current truth. A peer that has gone quiet simply stops being
+    /// announced, so the row goes away with the device.
+    IncompatiblePeer {
+        peer_device_id: [u8; 16],
+        peer_name: String,
+        peer_version: u16,
+        our_version: u16,
+    },
     /// An inbound payload was received AND its inbox_history row was written.
     /// Carries the whole row, not the manifest: kind, summary, itemCount,
     /// receivedAt and savedPaths are what the UI needs, and the two bridges
@@ -466,6 +489,17 @@ impl Engine {
                         tracing::warn!(
                             "peer {name} ({addr}) advertises incompatible proto version {proto_version}: {e}"
                         );
+                        // The warn! above is for the operator; this is for the
+                        // UI. Without it the peer is silently absent from the
+                        // device list and the user sees an empty screen with
+                        // no explanation, which is indistinguishable from
+                        // "nobody is home".
+                        let _ = tx.send(EngineEvent::IncompatiblePeer {
+                            peer_device_id: device_id,
+                            peer_name: name.clone(),
+                            peer_version: proto_version,
+                            our_version: crate::manifest::MANIFEST_VERSION,
+                        });
                         continue;
                     }
                     let info = DeviceInfo {
@@ -622,6 +656,21 @@ impl Engine {
 
     pub async fn display_name(&self) -> String {
         self.profile.lock().await.resolved_name.clone()
+    }
+
+    /// This device's own identity and advertised name.
+    ///
+    /// `set_display_name` existed with no reader, so a UI could WRITE a name
+    /// and never show what the device was actually called -- Settings opened on
+    /// an empty box, and first-run onboarding had nothing real to prefill.
+    /// One call answers both: the RESOLVED name (with any LAN-collision
+    /// suffix, which is the name peers see and the one a user must be able to
+    /// change) plus the device id, as hex like every other id on this API.
+    pub async fn self_profile(&self) -> (String, [u8; 16]) {
+        (
+            self.profile.lock().await.resolved_name.clone(),
+            self.identity.device_id(),
+        )
     }
 
     /// Every transfer row, newest first, narrowed by an optional state and an

@@ -49,6 +49,10 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::InboxReceivedArgs>();
     _assert_serialize::<crate::generated::InboxReceivedEvent>();
     _assert_deserialize::<crate::generated::InboxReceivedEvent>();
+    _assert_serialize::<crate::generated::IncompatiblePeerArgs>();
+    _assert_deserialize::<crate::generated::IncompatiblePeerArgs>();
+    _assert_serialize::<crate::generated::IncompatiblePeerEvent>();
+    _assert_deserialize::<crate::generated::IncompatiblePeerEvent>();
     _assert_serialize::<crate::generated::IpcEvent>();
     _assert_deserialize::<crate::generated::IpcEvent>();
     _assert_serialize::<crate::generated::IpcFrame>();
@@ -91,6 +95,8 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::ResponseArm>();
     _assert_serialize::<crate::generated::RetryRequest>();
     _assert_deserialize::<crate::generated::RetryRequest>();
+    _assert_serialize::<crate::generated::SelfProfileRequest>();
+    _assert_deserialize::<crate::generated::SelfProfileRequest>();
     _assert_serialize::<crate::generated::SendArgs>();
     _assert_deserialize::<crate::generated::SendArgs>();
     _assert_serialize::<crate::generated::SendRequest>();

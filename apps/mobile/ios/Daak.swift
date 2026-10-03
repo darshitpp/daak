@@ -151,6 +151,11 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().listInbox() }
   }
 
+  @objc func selfProfile(_ resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().selfProfile() }
+  }
+
   @objc func setDisplayName(_ name: String,
                            resolve: @escaping RCTPromiseResolveBlock,
                            reject: @escaping RCTPromiseRejectBlock) {

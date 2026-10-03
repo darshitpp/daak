@@ -10,7 +10,7 @@ import type { Spec as NativeDaakSpec } from '../src/NativeDaak';
 
 const METHODS: (keyof DaakEngine)[] = [
   'start', 'stop', 'devices', 'pair', 'send', 'cancel',
-  'retry', 'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+  'retry', 'listTransfers', 'listInbox', 'selfProfile', 'setDisplayName', 'setPresence', 'on',
   'offerPairing',
   'armHostPairing',
 ];
@@ -26,6 +26,7 @@ const EVENT_TYPES: Record<DaakEvent['type'], true> = {
   'transfer.done': true,
   'transfer.failed': true,
   'inbox.received': true,
+  'peer.incompatible': true,
 };
 
 // Compile-time only: the native modules (DaakModule.kt, Daak.swift) override
@@ -49,6 +50,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   retry: true,
   listTransfers: true,
   listInbox: true,
+  selfProfile: true,
   setDisplayName: true,
   setPresence: true,
   localPort: true,
@@ -71,17 +73,19 @@ describe('contract types', () => {
   it('pins the engine method set to spec 6.2', () => {
     const exhaustive: Record<keyof DaakEngine, true> = {
       start: true, stop: true, devices: true, pair: true, send: true, cancel: true,
-      retry: true, listTransfers: true, listInbox: true, setDisplayName: true,
+      retry: true, listTransfers: true, listInbox: true, selfProfile: true,
+      setDisplayName: true,
       setPresence: true, on: true, offerPairing: true, armHostPairing: true,
     };
-    expect(Object.keys(EVENT_TYPES).length).toBe(9);
+    // 10 = the union's 10 members, peer.incompatible included.
+    expect(Object.keys(EVENT_TYPES).length).toBe(10);
     expect(Object.keys(exhaustive).length).toBe(METHODS.length);
   });
 
   it('pins the TurboModule spec the native modules implement', () => {
-    // 19 = 18 UDL methods + armHostPairing, the bundle-less host arm. A count
+    // 20 = 19 UDL methods + armHostPairing, the bundle-less host arm. A count
     // bump here means a native method was added without a decision here.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(19);
+    expect(Object.keys(NATIVE_METHODS).length).toBe(20);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -153,6 +157,7 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
     },
     listTransfers: async () => '[]',
     listInbox: async () => '[]',
+    selfProfile: async () => JSON.stringify({ name: 'daak', deviceId: 'dd'.repeat(16) }),
     setDisplayName: async () => {},
     setPresence: async () => {},
     // The host arm (spec 3.3 Mode A). It takes no bundle, so there is nothing

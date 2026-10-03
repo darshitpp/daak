@@ -180,6 +180,41 @@ impl InboxReceivedEvent {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct IncompatiblePeerArgs {
+    pub peer_device_id: String,
+    pub peer_name: String,
+    pub peer_version: u64,
+    pub our_version: u64,
+}
+
+impl IncompatiblePeerArgs {
+    pub fn new(
+        peer_device_id: String,
+        peer_name: String,
+        peer_version: u64,
+        our_version: u64,
+    ) -> Self {
+        Self {
+            peer_device_id,
+            peer_name,
+            peer_version,
+            our_version,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct IncompatiblePeerEvent {
+    pub incompatible_peer: IncompatiblePeerArgs,
+}
+
+impl IncompatiblePeerEvent {
+    pub fn new(incompatible_peer: IncompatiblePeerArgs) -> Self {
+        Self { incompatible_peer }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub enum IpcEvent {
     DeviceFoundEvent(DeviceFoundEvent),
     DeviceStateEvent(DeviceStateEvent),
@@ -190,6 +225,7 @@ pub enum IpcEvent {
     TransferDoneEvent(TransferDoneEvent),
     TransferFailedEvent(TransferFailedEvent),
     InboxReceivedEvent(InboxReceivedEvent),
+    IncompatiblePeerEvent(IncompatiblePeerEvent),
 }
 
 impl IpcEvent {
@@ -227,6 +263,10 @@ impl IpcEvent {
 
     pub fn new_inbox_received_event(inbox_received_event: InboxReceivedEvent) -> Self {
         Self::InboxReceivedEvent(inbox_received_event)
+    }
+
+    pub fn new_incompatible_peer_event(incompatible_peer_event: IncompatiblePeerEvent) -> Self {
+        Self::IncompatiblePeerEvent(incompatible_peer_event)
     }
 }
 
@@ -274,6 +314,7 @@ pub enum IpcRequest {
     RetryRequest(RetryRequest),
     ListTransfersRequest(ListTransfersRequest),
     ListInboxRequest(ListInboxRequest),
+    SelfProfileRequest(SelfProfileRequest),
     SetDisplayNameRequest(SetDisplayNameRequest),
     SetPresenceRequest(SetPresenceRequest),
     ExportDebugBundleRequest(ExportDebugBundleRequest),
@@ -315,6 +356,10 @@ impl IpcRequest {
 
     pub fn new_list_inbox_request(list_inbox_request: ListInboxRequest) -> Self {
         Self::ListInboxRequest(list_inbox_request)
+    }
+
+    pub fn new_self_profile_request(self_profile_request: SelfProfileRequest) -> Self {
+        Self::SelfProfileRequest(self_profile_request)
     }
 
     pub fn new_set_display_name_request(set_display_name_request: SetDisplayNameRequest) -> Self {
@@ -553,6 +598,17 @@ pub struct RetryRequest {
 impl RetryRequest {
     pub fn new(retry: TransferRef) -> Self {
         Self { retry }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub enum SelfProfileRequest {
+    ValueText53656C6650726F66696C65,
+}
+
+impl SelfProfileRequest {
+    pub fn new_value_text53656_c6650726_f66696_c65() -> Self {
+        Self::ValueText53656C6650726F66696C65
     }
 }
 

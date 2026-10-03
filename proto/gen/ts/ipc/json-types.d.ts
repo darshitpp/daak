@@ -26,6 +26,9 @@ export type IpcEventJSON =
     }
   | {
       InboxReceivedEvent: InboxReceivedEventJSON;
+    }
+  | {
+      IncompatiblePeerEvent: IncompatiblePeerEventJSON;
     };
 export type IpcMessageJSON =
   | {
@@ -66,6 +69,9 @@ export type IpcRequestJSON =
       ListInboxRequest: ListInboxRequestJSON;
     }
   | {
+      SelfProfileRequest: SelfProfileRequestJSON;
+    }
+  | {
       SetDisplayNameRequest: SetDisplayNameRequestJSON;
     }
   | {
@@ -79,6 +85,7 @@ export type IpcRequestJSON =
     };
 export type SubscribeRequestJSON = "ValueText537562736372696265";
 export type ListInboxRequestJSON = "ValueText4C697374496E626F78";
+export type SelfProfileRequestJSON = "ValueText53656C6650726F66696C65";
 export type ShutdownRequestJSON = "ValueText53687574646F776E";
 export type IpcResponseJSON =
   | {
@@ -176,6 +183,15 @@ export interface InboxReceivedEventJSON {
 }
 export interface InboxReceivedArgsJSON {
   payload_json: string;
+}
+export interface IncompatiblePeerEventJSON {
+  incompatible_peer: IncompatiblePeerArgsJSON;
+}
+export interface IncompatiblePeerArgsJSON {
+  our_version: number;
+  peer_device_id: string;
+  peer_name: string;
+  peer_version: number;
 }
 export interface ExportDebugBundleArgsJSON {
   path: string;

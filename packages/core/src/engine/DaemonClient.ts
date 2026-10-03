@@ -5,6 +5,7 @@ import type {
   InboxEntry,
   ItemState,
   SendRequest,
+  SelfProfile,
   TransferFilter,
   TransferSummary,
 } from './types';
@@ -181,6 +182,18 @@ export class DaemonClientEngine implements DaakEngine {
     return parseArray<InboxEntry>(await this.json('ListInbox'), 'listInbox');
   }
 
+  async selfProfile(): Promise<SelfProfile> {
+    const parsed: unknown = JSON.parse(await this.json('SelfProfile'));
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('selfProfile did not return an object');
+    }
+    const { name, deviceId } = parsed as { name?: unknown; deviceId?: unknown };
+    if (typeof name !== 'string' || typeof deviceId !== 'string') {
+      throw new Error('selfProfile returned no name/deviceId');
+    }
+    return { name, deviceId };
+  }
+
   async setDisplayName(name: string): Promise<void> {
     await this.tx.request({ Request: { SetDisplayName: { name } } });
   }
@@ -245,6 +258,21 @@ function defaultDataDir(): string {
 const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));
 const num = (v: unknown): number => Number(v ?? 0);
 
+// STRICT reader, for the one field where a fabricated number is worse than no
+// event at all. `num` is `Number(v ?? 0)`, which turns a MISSING version into
+// 0: a malformed or older daemon's peer.incompatible would then reach the UI
+// as a real-looking "this peer is on version 0". The FFI bridge cannot do that
+// (a Rust u16 is never absent), so the two bridges disagreed about the same
+// event.
+//
+// `undefined` means "drop this event", and toDaakEvent already returns
+// undefined for an unmappable event (R20) -- the same answer, one mechanism.
+// typeof first, because `Number('200')` is 200: a STRING on this wire is a
+// malformed frame, not a number to parse. Number.isFinite then rejects NaN and
+// the infinities, all of which survive CBOR.
+const strictNum = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+
 // IpcEvent -> DaakEvent. The wire is snake_case, the union is camelCase.
 export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent | undefined {
   switch (name) {
@@ -280,6 +308,27 @@ export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent
       return { type: 'transfer.done', transferId: str(d.transfer_id) };
     case 'TransferFailed':
       return { type: 'transfer.failed', transferId: str(d.transfer_id), error: str(d.error) };
+    // The daemon bridge of peer.incompatible. Same field names and same
+    // meaning as the FFI arm (ffi_event_json in crates/daak-ffi), so the UI
+    // reads one shape on both transports -- a phone and a desktop on the same
+    // LAN must not disagree about whether an update is needed.
+    //
+    // BOTH versions are read strictly and the WHOLE event is dropped if either
+    // is unreadable. One defaulted number would be enough to make the screen
+    // lie about which side is out of date, and a screen that lies about that
+    // is worse than one that says nothing -- so this arm can return undefined.
+    case 'IncompatiblePeer': {
+      const peerVersion = strictNum(d.peer_version);
+      const ourVersion = strictNum(d.our_version);
+      if (peerVersion === undefined || ourVersion === undefined) return undefined;
+      return {
+        type: 'peer.incompatible',
+        peerDeviceId: str(d.peer_device_id),
+        peerName: str(d.peer_name),
+        peerVersion,
+        ourVersion,
+      };
+    }
     case 'InboxReceived':
       // payload_json is a raw JSON STRING on the wire but DaakEvent types the
       // payload as an InboxEntry, so the client parses it.

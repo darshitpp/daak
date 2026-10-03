@@ -1447,6 +1447,252 @@ impl Deserialize for InboxReceivedEvent {
     }
 }
 
+impl cbor_event::se::Serialize for IncompatiblePeerArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(4))?;
+        serializer.write_text("peer_name")?;
+        serializer.write_text(&self.peer_name)?;
+        serializer.write_text("our_version")?;
+        serializer.write_unsigned_integer(self.our_version)?;
+        serializer.write_text("peer_version")?;
+        serializer.write_unsigned_integer(self.peer_version)?;
+        serializer.write_text("peer_device_id")?;
+        serializer.write_text(&self.peer_device_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for IncompatiblePeerArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(4)?;
+            read_len.finish()?;
+            let mut peer_name = None;
+            let mut our_version = None;
+            let mut peer_version = None;
+            let mut peer_device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "peer_name" => {
+                            if peer_name.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "peer_name".into(),
+                                ))
+                                .into());
+                            }
+                            peer_name = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("peer_name"))?,
+                            );
+                        }
+                        "our_version" => {
+                            if our_version.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "our_version".into(),
+                                ))
+                                .into());
+                            }
+                            our_version = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("our_version"))?,
+                            );
+                        }
+                        "peer_version" => {
+                            if peer_version.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "peer_version".into(),
+                                ))
+                                .into());
+                            }
+                            peer_version = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("peer_version"))?,
+                            );
+                        }
+                        "peer_device_id" => {
+                            if peer_device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "peer_device_id".into(),
+                                ))
+                                .into());
+                            }
+                            peer_device_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("peer_device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let peer_device_id =
+                match peer_device_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("peer_device_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let peer_name =
+                match peer_name {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("peer_name"),
+                        ))
+                        .into());
+                    }
+                };
+            let peer_version =
+                match peer_version {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("peer_version"),
+                        ))
+                        .into());
+                    }
+                };
+            let our_version =
+                match our_version {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("our_version"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self {
+                peer_device_id,
+                peer_name,
+                peer_version,
+                our_version,
+            })
+        })()
+        .map_err(|e| e.annotate("IncompatiblePeerArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for IncompatiblePeerEvent {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("IncompatiblePeer")?;
+        self.incompatible_peer.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for IncompatiblePeerEvent {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut incompatible_peer = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "IncompatiblePeer" => {
+                            if incompatible_peer.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "IncompatiblePeer".into(),
+                                ))
+                                .into());
+                            }
+                            incompatible_peer =
+                                Some(IncompatiblePeerArgs::deserialize(raw).map_err(
+                                    |e: DeserializeError| e.annotate("incompatible_peer"),
+                                )?);
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let incompatible_peer =
+                match incompatible_peer {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("IncompatiblePeer"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { incompatible_peer })
+        })()
+        .map_err(|e| e.annotate("IncompatiblePeerEvent"))
+    }
+}
+
 impl cbor_event::se::Serialize for IpcEvent {
     fn serialize<'se>(
         &self,
@@ -1477,6 +1723,9 @@ impl cbor_event::se::Serialize for IpcEvent {
             }
             IpcEvent::InboxReceivedEvent(inbox_received_event) => {
                 inbox_received_event.serialize(serializer)
+            }
+            IpcEvent::IncompatiblePeerEvent(incompatible_peer_event) => {
+                incompatible_peer_event.serialize(serializer)
             }
         }
     }
@@ -1563,6 +1812,17 @@ impl Deserialize for IpcEvent {
                 }
                 Err(e) => {
                     errs.push(e.annotate("InboxReceivedEvent"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> =
+                IncompatiblePeerEvent::deserialize(raw);
+            match deser_variant {
+                Ok(incompatible_peer_event) => {
+                    return Ok(Self::IncompatiblePeerEvent(incompatible_peer_event));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("IncompatiblePeerEvent"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -1746,6 +2006,9 @@ impl cbor_event::se::Serialize for IpcRequest {
             IpcRequest::ListInboxRequest(list_inbox_request) => {
                 list_inbox_request.serialize(serializer)
             }
+            IpcRequest::SelfProfileRequest(self_profile_request) => {
+                self_profile_request.serialize(serializer)
+            }
             IpcRequest::SetDisplayNameRequest(set_display_name_request) => {
                 set_display_name_request.serialize(serializer)
             }
@@ -1836,6 +2099,16 @@ impl Deserialize for IpcRequest {
                 Ok(list_inbox_request) => return Ok(Self::ListInboxRequest(list_inbox_request)),
                 Err(e) => {
                     errs.push(e.annotate("ListInboxRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = SelfProfileRequest::deserialize(raw);
+            match deser_variant {
+                Ok(self_profile_request) => {
+                    return Ok(Self::SelfProfileRequest(self_profile_request));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("SelfProfileRequest"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -3222,6 +3495,41 @@ impl Deserialize for RetryRequest {
             Ok(Self { retry })
         })()
         .map_err(|e| e.annotate("RetryRequest"))
+    }
+}
+
+impl cbor_event::se::Serialize for SelfProfileRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        match self {
+            SelfProfileRequest::ValueText53656C6650726F66696C65 => {
+                serializer.write_text("SelfProfile")
+            }
+        }
+    }
+}
+
+impl Deserialize for SelfProfileRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            match raw.cbor_type()? {
+                cbor_event::Type::Text => {
+                    let value_text53656_c6650726_f66696_c65_value = raw.text()?;
+                    if value_text53656_c6650726_f66696_c65_value != "SelfProfile" {
+                        return Err(DeserializeFailure::FixedValueMismatch {
+                            found: Key::Str(value_text53656_c6650726_f66696_c65_value),
+                            expected: Key::Str(String::from("SelfProfile")),
+                        }
+                        .into());
+                    }
+                    Ok(SelfProfileRequest::ValueText53656C6650726F66696C65)
+                }
+                _ => Err(DeserializeFailure::NoVariantMatched.into()),
+            }
+        })()
+        .map_err(|e| e.annotate("SelfProfileRequest"))
     }
 }
 
