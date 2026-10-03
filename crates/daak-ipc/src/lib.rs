@@ -263,7 +263,7 @@ struct FrameVersion {
 /// `(v >> 8) == IPC_MAJOR`: a newer MINOR is accepted (additive fields live
 /// there), a different MAJOR is refused.
 pub const IPC_MAJOR: u16 = 1;
-pub const IPC_MINOR: u16 = 1;
+pub const IPC_MINOR: u16 = 2;
 pub const IPC_VERSION: u16 = (IPC_MAJOR << 8) | IPC_MINOR;
 
 #[derive(Debug, thiserror::Error)]
@@ -496,9 +496,9 @@ mod version_tests {
     #[test]
     fn the_version_constant_is_major_in_the_high_byte() {
         assert_eq!(IPC_MAJOR, 1);
-        assert_eq!(IPC_MINOR, 1);
+        assert_eq!(IPC_MINOR, 2);
         assert_eq!(IPC_VERSION, (IPC_MAJOR << 8) | IPC_MINOR);
-        assert_eq!(IPC_VERSION, 0x0101);
+        assert_eq!(IPC_VERSION, 0x0102);
     }
 
     #[test]
@@ -661,11 +661,11 @@ mod version_tests {
         let cases: &[(IpcMessage, &str)] = &[
             (
                 IpcMessage::Request(IpcRequest::Subscribe),
-                "4441414b0000001da26176190101636d7367a1675265717565737469537562736372696265",
+                "4441414b0000001da26176190102636d7367a1675265717565737469537562736372696265",
             ),
             (
                 IpcMessage::Response(IpcResponse::Ok),
-                "4441414b00000017a26176190101636d7367a168526573706f6e7365624f6b",
+                "4441414b00000017a26176190102636d7367a168526573706f6e7365624f6b",
             ),
         ];
         for (msg, want) in cases {
@@ -705,7 +705,7 @@ mod version_tests {
         block_on(write_message(&mut wire, &msg)).unwrap();
         assert_eq!(
             hex(&wire),
-            "4441414b0000003da26176190101636d7367a16752657175657374a16450616972a264616464726d31302e302e302e323a393030306b62756e646c655f63626f7243010203",
+            "4441414b0000003da26176190102636d7367a16752657175657374a16450616972a264616464726d31302e302e302e323a393030306b62756e646c655f63626f7243010203",
             "pair frame bytes changed"
         );
         let mut cur = std::io::Cursor::new(wire);
