@@ -105,6 +105,98 @@ impl Drop for Daemon {
     }
 }
 
+// Task 18. WHY THE DEVICES ASSERT BELOW IS AN `is_array` AND NOT AN
+// `is_empty`.
+//
+// Every `Daemon::spawn()` in this file builds a REAL `daak_core::Engine`, and a
+// real Engine registers an mDNS record on port 5353 and browses for real peers.
+// One engine_dispatch binary is therefore up to 16 live advertisers on whatever
+// LAN the box is attached to, so a test that starts an engine can legitimately
+// DISCOVER A SIBLING TEST'S ENGINE. That is not a regression: "a browsing peer
+// inserts into the device map and emits DeviceFound" is precisely what commit
+// 53ec661 fixed and it is correct. The old `is_empty` assert asked a question
+// about the ambient LAN from inside a unit test, and two of its own siblings
+// were answering it.
+//
+// The obligation these tests actually carry is SHAPE and LIVENESS, not
+// emptiness:
+//
+//   * `Devices` must answer `Json` rather than `Error` -- which is what proves
+//     the engine slot is occupied by something alive. A dead engine cannot
+//     answer, and `NOT_STARTED` is the error a pre-Start daemon gives.
+//   * the payload must be a JSON ARRAY, because `DaemonClient.devices()` runs
+//     `JSON.parse` then `parseArray<DeviceInfo>` and rejects anything else. A
+//     `Json` response carrying `{}` or `null` would sail past a bare
+//     `matches!(.., IpcResponse::Json { .. })` and break every real client, so
+//     the shape is pinned here rather than assumed.
+//
+// The LENGTH is deliberately not asserted: `[]` and `[peer, ...]` are both
+// correct answers for `Devices`, and only the first one is what a box with no
+// LAN produces. The whole point is that the test must not care which.
+fn assert_devices_is_a_json_array(resp: IpcResponse, context: &str) -> Vec<serde_json::Value> {
+    let IpcResponse::Json { value } = resp else {
+        panic!("Devices must answer Json {context}: {resp:?}");
+    };
+    let v: serde_json::Value = serde_json::from_str(&value)
+        .unwrap_or_else(|e| panic!("Devices must answer valid JSON {context}: {e}\n{value}"));
+    let arr = v.as_array().unwrap_or_else(|| {
+        panic!(
+            "Devices must answer a JSON ARRAY {context}, since \
+             DaemonClient.devices() runs parseArray on it; got {value}"
+        )
+    });
+    // Every element is a DeviceInfo the UI reads by field name, so an element
+    // missing them is a client-side crash. Discovery-filling the array makes
+    // this reachable, so it is pinned here rather than assumed empty.
+    for d in arr {
+        assert!(
+            d["deviceId"].is_string() && d["name"].is_string() && d["addr"].is_string(),
+            "every device {context} must carry deviceId, name and addr; got {d}"
+        );
+    }
+    arr.clone()
+}
+
+/// The empty-list claim, kept as a CHECK on what these tests do NOT assert:
+/// the array length is never constrained, so a discovered sibling is a legal
+/// answer and cannot fail any test in this file.
+///
+/// This is a property of the assertions above, so it is stated as a plain
+/// logical fact over the same inputs rather than as a test that would itself
+/// need the LAN. It fails if someone reintroduces a length comparison anywhere
+/// in the Devices arm of this file.
+#[test]
+fn a_devices_answer_is_valid_at_any_length() {
+    for payload in [
+        "[]",
+        r#"[{"deviceId":"07","name":"a","addr":"10.0.0.2:9000"}]"#,
+        r#"[{"deviceId":"07","name":"a","addr":"10.0.0.2:9000"},{"deviceId":"08","name":"b","addr":"10.0.0.3:9000"}]"#,
+    ] {
+        let arr = assert_devices_is_a_json_array(
+            IpcResponse::Json {
+                value: payload.into(),
+            },
+            "in the any-length control",
+        );
+        let expected = serde_json::from_str::<serde_json::Value>(payload)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len();
+        assert_eq!(
+            arr.len(),
+            expected,
+            "length must be reported, not constrained"
+        );
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "must answer a JSON ARRAY")]
+async fn the_devices_shape_check_rejects_a_non_array() {
+    assert_devices_is_a_json_array(IpcResponse::Json { value: "{}".into() }, "negative control");
+}
+
 /// The dispatch decision, not just `export()`: a bundle lands at
 /// `<data_dir>/debug-bundles/<name>`, never at a client-named location. The
 /// unit tests cover the writer and the name check in isolation, so without
@@ -441,16 +533,10 @@ async fn devices_answers_from_the_engine_and_start_is_idempotent() {
         other => panic!("a conflicting Start must be refused, got {other:?}"),
     }
 
-    match d.call(&mut s, IpcRequest::Devices).await {
-        IpcResponse::Json { value } => {
-            let v: serde_json::Value = serde_json::from_str(&value).unwrap();
-            assert!(
-                v.as_array().unwrap().is_empty(),
-                "a lone daemon sees no peers"
-            );
-        }
-        other => panic!("Devices must answer Json after Start: {other:?}"),
-    }
+    // Devices answers from the ENGINE, not from the daemon: a Json array. Its
+    // length is not asserted -- see the note above the helper -- so this arm
+    // cannot be made to fail by a peer appearing on the LAN.
+    assert_devices_is_a_json_array(d.call(&mut s, IpcRequest::Devices).await, "after Start");
 }
 
 #[tokio::test]
@@ -728,16 +814,69 @@ async fn shutdown_then_start_with_the_same_args_gets_a_live_engine() {
     .unwrap_or_else(|_| panic!("nothing is accepting on the port Start answered ({p2})"))
     .expect("connect to the fresh engine's port");
 
-    // The new engine really is serving: Devices is answered, and a request
-    // the OLD (dead) engine could not answer is refused, proving the slot is
-    // empty rather than holding a corpse.
-    match d.call(&mut second, IpcRequest::Devices).await {
-        IpcResponse::Json { value } => {
-            let v: serde_json::Value = serde_json::from_str(&value).unwrap();
-            assert!(v.as_array().unwrap().is_empty());
-        }
-        other => panic!("Devices must answer Json from the FRESH engine, got {other:?}"),
-    }
+    // The new engine really is serving: Devices is ANSWERED -- Json, and a
+    // JSON array the client can parse -- rather than refused. That is the
+    // liveness proof the slot holds a fresh engine and not the corpse of the
+    // old one: a dead engine answers nothing, and a daemon whose slot was
+    // empty answers NOT_STARTED.
+    //
+    // The array's LENGTH is not asserted, on purpose. 'A lone daemon sees no
+    // peers' was true only on a box with no LAN, and this binary puts up to 16
+    // real mDNS advertisers on whatever LAN the machine is attached to, so a
+    // sibling test's engine is a legal entry here. See the note above
+    // `assert_devices_is_a_json_array`.
+    assert_devices_is_a_json_array(
+        d.call(&mut second, IpcRequest::Devices).await,
+        "from the FRESH engine",
+    );
+
+    // NOT a freshness proof, and deliberately not read as one. A shut-down
+    // engine answers `SelfProfile` perfectly well: `Engine::shutdown`
+    // (crates/daak-core/src/engine.rs:1469-1484) only aborts the accept /
+    // discovery / presence tasks, stops the outbox worker, stops the
+    // advertiser and stops the browser. It does NOT clear `profile`, does NOT
+    // clear `identity` and does NOT drop the device map, so under the B4
+    // regression -- the corpse left in the slot, the second `Start` taking the
+    // idempotent branch -- both asserts below would still PASS. Do not add a
+    // comment here claiming otherwise.
+    //
+    // What this arm actually pins, both of which are worth pinning:
+    //
+    //   1. the SHAPE of the profile -- `deviceId` is 32 hex chars because
+    //      `hex::encode` of `[u8; 16]` is always 32 (daakd/src/lib.rs:693), and
+    //      `name` is a real string because `resolved_name` is written once at
+    //      `Engine::start` from `resolve_name` -> `unique_display_name`, which
+    //      returns the base name or a suffixed variant, never empty.
+    //   2. IDENTITY STABILITY across the shutdown/restart cycle. The second
+    //      `Start` re-imports from the same `data_dir/keys`, so the Ed25519
+    //      signing key is the same key and `device_id()` is
+    //      `blake2b256(verify)[..16]` -- deterministic in that key
+    //      (crypto/identity.rs:73-76, :115-134). That is what makes the
+    //      restarted engine recognisably the SAME DEVICE to its peers, so the
+    //      pairing rows that already point at this id keep pointing somewhere
+    //      real. A daemon that minted a fresh identity on restart would look
+    //      like a brand-new device to every paired peer, and nothing else in
+    //      this test would notice.
+    //
+    // LIVENESS -- fresh engine rather than corpse -- is proven by the TCP
+    // connect to `p2` immediately above. That is the ONLY assertion in this
+    // test a corpse cannot satisfy, and it is therefore the ONLY thing here
+    // that defends B4.
+    let IpcResponse::Json { value } = d.call(&mut second, IpcRequest::SelfProfile).await else {
+        panic!("SelfProfile must answer Json from the FRESH engine");
+    };
+    let profile: serde_json::Value = serde_json::from_str(&value).unwrap();
+    assert_eq!(
+        profile["deviceId"].as_str().map(str::len),
+        Some(32),
+        "the fresh engine must report its own 16-byte device id, got {value}"
+    );
+    assert!(
+        profile["name"]
+            .as_str()
+            .is_some_and(|n| !n.trim().is_empty()),
+        "the fresh engine must report a resolved name, got {value}"
+    );
 }
 
 #[tokio::test]
