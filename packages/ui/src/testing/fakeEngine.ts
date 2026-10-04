@@ -1,4 +1,4 @@
-import type { DaakEngine, DaakEvent, DeviceInfo } from '@daak/core';
+import type { DaakEngine, DaakEvent, DeviceInfo, QuarantineReport } from '@daak/core';
 
 export function fakeEngine(devices: DeviceInfo[] = [
   // No `online`: NO engine puts one there. daak-ffi omits it deliberately, daakd
@@ -22,6 +22,31 @@ export function fakeEngine(devices: DeviceInfo[] = [
     send: async () => ({ transferId: 'aa'.repeat(16), queued: true }),
     cancel: async () => {},
     retry: async () => {},
+    // PARKED, and nothing in the UI calls it -- the fake implements it only
+    // because DaakEngine requires it. A fake that THREW here would be a trap
+    // for the test that eventually wires it up.
+    retryItem: async () => {},
+    // The quarantine READS. Empty is the honest answer for a fake with no
+    // engine behind it, and it is the same answer a real device with nothing
+    // held gives -- which is what makes the empty state testable.
+    listQuarantineReports: async () => [] as QuarantineReport[],
+    // A real held item, so a test can drive the screen without a live engine.
+    // The two fingerprints DIFFER by one bit, which is the entire premise of
+    // the screen; a fixture where they matched would render a screen that
+    // contradicts itself.
+    quarantineReport: async (transferId: string, itemIndex: number): Promise<QuarantineReport> => ({
+      transferId,
+      itemIndex,
+      name: 'harbor-lighthouse.jpg',
+      size: 4_400_000,
+      senderName: 'Kitchen Tablet',
+      senderDeviceId: 'bb'.repeat(16),
+      receivedAt: 1_700_000_000,
+      expected: '7f3a91c204be' + '0'.repeat(52),
+      actual: '7f3a91c204c9' + '0'.repeat(52),
+      heldPath: '/tmp/daak/quarantine/harbor-lighthouse.jpg',
+    }),
+    deleteQuarantined: async () => {},
     listTransfers: async () => [],
     listInbox: async () => [],
     // A real shape, not a placeholder: Settings PREFILLS its name box from

@@ -29,6 +29,14 @@ export interface Spec extends TurboModule {
   cancel(transferId: string): Promise<void>;
   /** UDL: retry(string transfer_id) */
   retry(transferId: string): Promise<void>;
+  /** UDL: retry_item(string transfer_id, u32 item_index) */
+  retryItem(transferId: string, itemIndex: number): Promise<void>;
+  /** UDL: quarantine_report(string transfer_id, u32 item_index) -> JSON */
+  quarantineReport(transferId: string, itemIndex: number): Promise<string>;
+  /** UDL: list_quarantine_reports() -> JSON array of the same shape */
+  listQuarantineReports(): Promise<string>;
+  /** UDL: delete_quarantined(string transfer_id, u32 item_index) */
+  deleteQuarantined(transferId: string, itemIndex: number): Promise<void>;
   /** UDL: list_transfers(string filter_json) -> [{transferId, peerDeviceId, ...}] */
   listTransfers(filterJson: string): Promise<string>;
   /** UDL: list_inbox() -> [{payloadId, transferId, ..., savedPaths}] */

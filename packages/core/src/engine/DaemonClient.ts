@@ -4,6 +4,7 @@ import type {
   DeviceInfo,
   InboxEntry,
   ItemState,
+  QuarantineReport,
   SendRequest,
   SelfProfile,
   TransferFilter,
@@ -151,6 +152,41 @@ export class DaemonClientEngine implements DaakEngine {
 
   async retry(transferId: string): Promise<void> {
     await this.tx.request({ Request: { Retry: { transfer_id: transferId } } });
+  }
+
+  async retryItem(transferId: string, itemIndex: number): Promise<void> {
+    await this.tx.request({
+      Request: { RetryItem: { transfer_id: transferId, item_index: itemIndex } },
+    });
+  }
+
+  // The answer is a raw JSON STRING inside the usual Json wrapper: the daemon
+  // does not parse it and the client does, the same way InboxReceived carries
+  // payload_json. `this.json()` ALREADY unwraps Json{value} and returns that
+  // string, so this is JSON.parse on the string -- not a second `.value` read,
+  // which would find nothing and throw on every real call.
+  async quarantineReport(transferId: string, itemIndex: number): Promise<QuarantineReport> {
+    const parsed: unknown = JSON.parse(
+      await this.json({
+        Request: { QuarantineReport: { transfer_id: transferId, item_index: itemIndex } },
+      }),
+    );
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('quarantineReport did not return an object');
+    }
+    return parsed as QuarantineReport;
+  }
+
+  async listQuarantineReports(): Promise<QuarantineReport[]> {
+    const parsed: unknown = JSON.parse(await this.json('ListQuarantineReports'));
+    if (!Array.isArray(parsed)) throw new Error('listQuarantineReports did not return an array');
+    return parsed as QuarantineReport[];
+  }
+
+  async deleteQuarantined(transferId: string, itemIndex: number): Promise<void> {
+    await this.tx.request({
+      Request: { DeleteQuarantined: { transfer_id: transferId, item_index: itemIndex } },
+    });
   }
 
   async listTransfers(filter?: TransferFilter): Promise<TransferSummary[]> {

@@ -123,6 +123,24 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().retry(transferId); null }
 
     @ReactMethod
+    override fun retryItem(transferId: String, itemIndex: Double, promise: Promise) =
+        // The trailing null is load-bearing for the same reason as retry():
+        // this generated method returns Unit, and Promise.resolve(Unit) throws.
+        resolve(promise) { handle().retryItem(transferId, itemIndexArg(itemIndex)); null }
+
+    @ReactMethod
+    override fun quarantineReport(transferId: String, itemIndex: Double, promise: Promise) =
+        resolve(promise) { handle().quarantineReport(transferId, itemIndexArg(itemIndex)) }
+
+    @ReactMethod
+    override fun listQuarantineReports(promise: Promise) =
+        resolve(promise) { handle().listQuarantineReports() }
+
+    @ReactMethod
+    override fun deleteQuarantined(transferId: String, itemIndex: Double, promise: Promise) =
+        resolve(promise) { handle().deleteQuarantined(transferId, itemIndexArg(itemIndex)); null }
+
+    @ReactMethod
     override fun listTransfers(filterJson: String, promise: Promise) =
         resolve(promise) { handle().listTransfers(filterJson) }
 
@@ -172,6 +190,35 @@ class DaakModule(reactContext: ReactApplicationContext) :
 
     private fun handle(): DaakEngine = synchronized(lock) { engine }
         ?: throw IllegalStateException("engine not started; call start() first")
+
+    // The UDL's "u32 item_index" reaches Kotlin as UInt, but JS has no integers,
+    // so codegen gives this method a Double. The two hops between them are both
+    // lossy in ways that do NOT announce themselves, which is why this validates
+    // instead of casting:
+    //   Double.toInt() SATURATES. NaN -> 0, +Inf -> Int.MAX_VALUE, -Inf ->
+    //     Int.MIN_VALUE, and 4.29e9 -> Int.MAX_VALUE. Nothing throws.
+    //   Int.toUInt() REINTERPRETS, it does not range-check. -1 becomes
+    //     4294967295, a different, perfectly plausible item index.
+    // So the naive itemIndex.toInt().toUInt() silently retries, reads or deletes
+    // the WRONG quarantine item -- worse than an error, because the caller sees a
+    // success. An item index is a count, so anything that is not a non-negative
+    // whole number inside UInt's range is a caller bug and is rejected here.
+    // The throw is caught by resolve(), which rejects the promise with E_DAAK,
+    // so JS gets a normal Error instead of a Kotlin exception crossing the bridge.
+    private fun itemIndexArg(itemIndex: Double): UInt {
+        require(itemIndex.isFinite() && itemIndex >= 0.0) {
+            "itemIndex must be a finite non-negative number, got $itemIndex"
+        }
+        require(itemIndex == Math.floor(itemIndex) && itemIndex <= UINT_MAX) {
+            "itemIndex must be a whole number in 0..$UINT_MAX, got $itemIndex"
+        }
+        return itemIndex.toInt().toUInt()
+    }
+
+    // 4294967295.0. Spelled out rather than UInt.MAX_VALUE.toDouble() because
+    // the latter is the constant's own value rounded to Double, which is exact
+    // here but reads as if it were approximate.
+    private val UINT_MAX = 4294967295.0
 
     // UniFFI EventSink callback, invoked on a Rust thread. The UDL hands us an
     // FfiEvent rather than a string, so the generated ffiEventJson turns it

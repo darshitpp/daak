@@ -30,6 +30,10 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     listTransfers: async () => '[]',
     cancel: async () => {},
     retry: async () => {},
+    retryItem: async () => {},
+    quarantineReport: async () => JSON.stringify({ transferId: 'aa'.repeat(16), itemIndex: 0 }),
+    listQuarantineReports: async () => '[]',
+    deleteQuarantined: async () => {},
     setDisplayName: async () => {},
     setPresence: async () => {},
     selfProfile: async () =>

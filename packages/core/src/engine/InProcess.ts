@@ -5,6 +5,7 @@ import type {
   DeviceInfo,
   InboxEntry,
   SendRequest,
+  QuarantineReport,
   SelfProfile,
   TransferFilter,
   TransferSummary,
@@ -100,6 +101,28 @@ export class InProcessEngine implements DaakEngine {
 
   async retry(transferId: string): Promise<void> {
     await this.native.retry(transferId);
+  }
+
+  async retryItem(transferId: string, itemIndex: number): Promise<void> {
+    await this.native.retryItem(transferId, itemIndex);
+  }
+
+  async quarantineReport(transferId: string, itemIndex: number): Promise<QuarantineReport> {
+    const parsed: unknown = JSON.parse(await this.native.quarantineReport(transferId, itemIndex));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('quarantineReport did not return an object');
+    }
+    return parsed as QuarantineReport;
+  }
+
+  async deleteQuarantined(transferId: string, itemIndex: number): Promise<void> {
+    await this.native.deleteQuarantined(transferId, itemIndex);
+  }
+
+  async listQuarantineReports(): Promise<QuarantineReport[]> {
+    const parsed: unknown = JSON.parse(await this.native.listQuarantineReports());
+    if (!Array.isArray(parsed)) throw new Error('listQuarantineReports did not return an array');
+    return parsed as QuarantineReport[];
   }
 
   // The UDL has no map type, so the filter crosses as JSON. "{}" means

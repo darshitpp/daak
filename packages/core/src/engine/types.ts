@@ -8,6 +8,41 @@ export interface DeviceInfo {
 
 export type ItemState = 'pending' | 'receiving' | 'verifying' | 'done' | 'failed' | 'quarantined';
 
+/**
+ * One held-back (quarantined) item, as the "Held back" screen shows it.
+ *
+ * Every field is either measured or recorded, never defaulted. `expected` is
+ * the fingerprint the SENDER attested in the manifest; `actual` was computed
+ * from the bytes on this disk. They are returned as a PAIR and never as a
+ * verdict, because comparing them is the security decision and it belongs to
+ * the person reading the screen.
+ *
+ * The `| null` fields are null when this device never recorded them -- an
+ * unpaired sender has no stored name, and a name is never invented from an id
+ * prefix on a screen whose whole job is honesty about what is not verified.
+ * `senderDeviceId` exists for exactly that case: it is a REAL identifier, so
+ * "Device aabbccdd" is a fact and a made-up handle is not.
+ */
+export interface QuarantineReport {
+  transferId: string;
+  itemIndex: number;
+  name: string | null;
+  /** Bytes, from the item row. Null when the sender attached no size. */
+  size: number | null;
+  /** The peer's PAIRED label. Null when none was ever recorded. */
+  senderName: string | null;
+  /** The peer's device id, from the transfer row. Null only with no row. */
+  senderDeviceId: string | null;
+  /** Unix seconds, from the transfer row. Null when there is no row to read. */
+  receivedAt: number | null;
+  /** 64 hex chars: what the sender said the file should hash to. */
+  expected: string;
+  /** 64 hex chars: what the bytes on this disk actually hash to. */
+  actual: string;
+  /** Where the held bytes are. Derived from the receive root, not read back from a stored path. */
+  heldPath: string;
+}
+
 export interface InboxEntry {
   payloadId: string;
   transferId: string;
@@ -44,14 +79,7 @@ export type DaakEvent =
    * BOTH numbers are real and BOTH are needed: peerVersion is what the device
    * advertised in its mDNS TXT record, ourVersion is this build's manifest
    * version. One number cannot distinguish "they need updating" from "we are
-   * the old one", and those need different advice.
-   *
-   * NOT defaulting a version is a property of each BRIDGE, not of this union.
-   * The FFI bridge cannot invent one: ffi_event_json reads the two u16s straight
-   * off the engine event. The daemon bridge COULD: toDaakEvent's num() was
-   * Number(v ?? 0), so a MISSING or non-numeric version became 0 until it was
-   * changed to drop such an event instead. Both bridges now refuse to hand the
-   * UI a version they did not read; neither substitutes a number for it.
+   * the old one", and those need different advice. Neither is ever defaulted.
    */
   | {
       type: 'peer.incompatible';
@@ -133,6 +161,62 @@ export interface DaakEngine {
   send(req: SendRequest): Promise<{ transferId: string; queued: boolean }>;
   cancel(transferId: string): Promise<void>;
   retry(transferId: string): Promise<void>;
+  /**
+   * Re-arm ONE item of a transfer, rather than the whole transfer.
+   *
+   * PARKED, and deliberately not on any user-facing surface. It moves the
+   * item's row to 'pending' and pokes the outbox worker, and NOTHING consumes
+   * that: `due_outbox` returns OUTBOUND rows only, so a transfer that ARRIVED
+   * at this device has no row to drain, and the wire protocol has no
+   * receiver-initiated re-fetch message. So today the item goes to 'pending'
+   * and waits for a fetch loop that does not exist.
+   *
+   * It is kept because the state transition is real and pinned, and it is kept
+   * off the screens because a button labelled "Ask the sender again" wired to
+   * this would move a held-back file into a state that reads as "being
+   * fetched" while nothing fetches it. `quarantineReport` is what a user is
+   * shown instead. When the re-fetch wire message lands, this becomes the
+   * caller of it.
+   *
+   * Rejects when the transfer or the item does not exist, rather than
+   * resolving and silently doing nothing.
+   */
+  retryItem(transferId: string, itemIndex: number): Promise<void>;
+  /**
+   * Read one held-back item back: what was recorded about it, and BOTH
+   * fingerprints -- the one the sender attested and the one these bytes
+   * actually produce.
+   *
+   * A READ. It changes no state, so opening the screen is free and cannot
+   * change what is being held. There is deliberately no "recovered" answer and
+   * no "ask the sender again" here: the held bytes are the exact bytes that
+   * just failed this comparison, so re-reading them can only reproduce the
+   * same mismatch, and Daak's wire protocol is push-only -- a receiver has no
+   * message it can send a sender to request a file it already delivered.
+   *
+   * Rejects when the transfer or the item does not exist, rather than
+   * resolving and showing an empty screen.
+   */
+  quarantineReport(transferId: string, itemIndex: number): Promise<QuarantineReport>;
+  /**
+   * Discard a held-back item: removes the held file and its row, so a transfer
+   * whose last outstanding item the user gave up on stops reading as though
+   * something were still waiting.
+   *
+   * Refuses any item that is not `quarantined`. A delivered file lives at the
+   * receiver's real destination, so deleting it through this path would have
+   * to guess which file the name refers to.
+   */
+  deleteQuarantined(transferId: string, itemIndex: number): Promise<void>;
+  /**
+   * Every item this device is currently holding back, newest arrival first.
+   *
+   * The DISCOVERY half of `quarantineReport`, and the reason that method is
+   * usable at all: a screen cannot ask for a (transferId, itemIndex) pair the
+   * user has never seen, and the only way to find one by guessing is to hash
+   * every item of every transfer until something stops erroring.
+   */
+  listQuarantineReports(): Promise<QuarantineReport[]>;
   listTransfers(filter?: TransferFilter): Promise<TransferSummary[]>;
   listInbox(): Promise<InboxEntry[]>;
   selfProfile(): Promise<SelfProfile>;
