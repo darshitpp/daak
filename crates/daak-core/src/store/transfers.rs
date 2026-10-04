@@ -195,6 +195,42 @@ impl Db {
         Ok(())
     }
 
+    /// Drop an item row for good.
+    ///
+    /// `delete_quarantined_item` is a user decision to discard a held-back file
+    /// entirely, so the row that described it has to go with it: leaving a
+    /// `quarantined` row naming a file that no longer exists is a transfer that
+    /// can never settle and an item the UI would offer to check again forever.
+    ///
+    /// The caller checks the row exists first (require_item), so a missing row
+    /// is not silently reported as a successful delete here.
+    pub fn delete_item(&self, t: &[u8; 16], idx: u32) -> Result<()> {
+        self.conn().execute(
+            "DELETE FROM transfer_items WHERE transfer_id = ?1 AND item_index = ?2",
+            rusqlite::params![&t[..], idx as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Rewrite a transfer's item_count and error text together.
+    ///
+    /// Both are DERIVED facts about the item rows that still exist, so they are
+    /// written in one statement: computing the new count, then writing the count
+    /// and the error separately, would let a reader see a count from one set of
+    /// rows and an error naming a different set.
+    pub fn update_transfer_summary(
+        &self,
+        id: &[u8; 16],
+        item_count: u32,
+        error: Option<&str>,
+    ) -> Result<()> {
+        self.conn().execute(
+            "UPDATE transfers SET item_count = ?2, error = ?3, updated_at = ?4 WHERE transfer_id = ?1",
+            rusqlite::params![&id[..], item_count as i64, error, now()],
+        )?;
+        Ok(())
+    }
+
     /// R-T12-7: the UPDATE above matches zero rows for an unknown
     /// (transfer_id, item_index), so a caller cannot tell "re-armed" from
     /// "no such item". This is the read that makes the difference visible.

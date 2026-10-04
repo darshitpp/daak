@@ -119,6 +119,41 @@ interface DaakEngine {
   [Throws=FfiError] string list_devices();
   [Throws=FfiError] void cancel(string transfer_id);
   [Throws=FfiError] void retry(string transfer_id);
+  // Re-arm ONE item of a transfer. `retry` re-arms the WHOLE transfer, so the
+  // two are different operations and only this one takes an item_index.
+  // Backs Engine::retry_item, which validates BOTH the transfer and the item
+  // exist rather than returning Ok(()) and doing nothing.
+  //
+  // PARKED, and no screen calls it: it marks the item `pending` and pokes the
+  // outbox, and nothing consumes that -- the outbox holds OUTBOUND rows only,
+  // so an inbound transfer has nothing to drain, and the push-only wire
+  // protocol has no message a receiver can send to ask for a file again. A
+  // button wired to this would read as "being fetched" while nothing fetches
+  // it. quarantine_report is what the user is shown instead.
+  [Throws=FfiError] void retry_item(string transfer_id, u32 item_index);
+  // Everything the "Held back" screen shows about one quarantined item, as
+  // JSON `{name, size, senderName, receivedAt, expected, actual, heldPath}`.
+  // Backs Engine::quarantine_report, which READS: it recomputes the fingerprint
+  // from the held bytes and changes no state, so opening the screen twice is
+  // free and opening it never alters what is held. `name`, `size`,
+  // `senderName` and `receivedAt` are each ABSENT (null) when this device
+  // never recorded them, which is what the UI renders rather than a guess.
+  // There is no "recovered" answer here by design: the held bytes are the
+  // bytes that just failed this comparison, so re-reading them cannot make them
+  // match. Re-fetching from the sender is a wire-protocol feature the push-only
+  // protocol does not have.
+  [Throws=FfiError] string quarantine_report(string transfer_id, u32 item_index);
+  // Every held-back item on this device, as a JSON array of the same shape,
+  // newest arrival first. The DISCOVERY half: without it the screen would need
+  // a transfer id and an item index the user has never seen, and the only way
+  // to get those is to guess indexes -- which also means hashing every item of
+  // every transfer to find the held ones.
+  [Throws=FfiError] string list_quarantine_reports();
+  // Discard a held-back item: removes the held file and its row. Refuses any
+  // item that is NOT `quarantined`, so a delivered file cannot be deleted by
+  // resolving its name into the quarantine root. Idempotent about a file that
+  // is already gone, but never about an id that does not exist.
+  [Throws=FfiError] void delete_quarantined(string transfer_id, u32 item_index);
   // The filter crosses as a JSON string because the UDL has no map type; an
   // empty string or "{}" means no filter (list everything). Invalid JSON and a
   // malformed peerDeviceId are FfiError.Protocol, not a silent unfiltered list.
