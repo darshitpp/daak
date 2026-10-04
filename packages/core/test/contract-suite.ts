@@ -31,8 +31,9 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     const e = await factory();
     const methods: (keyof DaakEngine)[] = [
       'start', 'stop', 'devices', 'pair', 'send', 'cancel',
-      'retry', 'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
-      'armHostPairing',
+      'retry', 'quarantineReport', 'deleteQuarantined', 'listQuarantineReports',
+      'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+      'armHostPairing', 'selfProfile',
     ];
     for (const m of methods) expect(typeof e[m], `${name}.${m}`).toBe('function');
     await e.stop();
@@ -130,7 +131,46 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     await e.start();
     expect(Array.isArray(await e.listInbox())).toBe(true);
     await e.setDisplayName('renamed');
+    // The READ half, and the assertion that matters: a rename re-resolves the
+    // name against the LAN, so a prefix is all a test can demand. Reading
+    // back the exact string would be wrong -- a collision renames to
+    // "<Adjective> <Animal> · <base>" (naming::unique_display_name), so the
+    // DECIDED name can carry a PREFIX, not a suffix, and that resolved name is
+    // the one peers see and Settings must show. It is not anchored: this suite
+    // runs the in-process engine and a spawned daakd at the same time, and two
+    // engines both renamed "renamed" on one LAN collide for real, which is
+    // exactly the resolution the assertion has to tolerate.
+    const self = await e.selfProfile();
+    expect(self.name).toMatch(/renamed/);
+    // 32 hex chars, like every id on this API.
+    expect(self.deviceId).toMatch(/^[0-9a-f]{32}$/i);
+    // The id is THIS device's, so it is stable across the rename.
+    expect((await e.selfProfile()).deviceId).toBe(self.deviceId);
     await e.setPresence('away');
+    await e.stop();
+  });
+
+  // The quarantine surface, on both engines. The KEY assertion is the empty
+  // one: a fresh engine holds nothing, so `listQuarantineReports()` must answer
+  // `[]`. A bridge that returned `null`, threw, or answered an object instead
+  // all fail here, and the History screen's "nothing is held back" is decided
+  // by exactly this answer.
+  //
+  // Deliberately NOT here: the shape of a report with a REAL held file. That
+  // needs a second engine sending a manifest whose declared hash disagrees with
+  // its bytes, which is a two-machine scenario -- so it lives in
+  // crates/daak-core/tests/quarantine.rs, against the engine that really
+  // quarantines. What is pinned HERE is that both bridges agree on an empty
+  // answer and on the shape of the selector, which is what can drift.
+  it(`${name}: the quarantine surface is reachable and empty when nothing is held`, async () => {
+    const e = await factory();
+    await e.start();
+    expect(await e.listQuarantineReports()).toEqual([]);
+    // And a read of a specific item REJECTS rather than resolving to a blank
+    // report: every lookup behind it matches zero rows for an unknown id, so
+    // without the explicit check it would render a screen of invented nulls.
+    await expect(e.quarantineReport('00'.repeat(16), 0)).rejects.toThrow();
+    await expect(e.deleteQuarantined('00'.repeat(16), 0)).rejects.toThrow();
     await e.stop();
   });
 }
