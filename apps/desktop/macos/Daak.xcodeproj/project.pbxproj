@@ -21,6 +21,7 @@
 		DA0A00052C0000010000AA05 /* KeychainSecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00062C0000010000AA06 /* KeychainSecureStore.swift */; };
 		DA0A000B2C0000010000AA0B /* daak_ffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0A000C2C0000010000AA0C /* daak_ffi.swift */; };
 		DA0A000E2C0000010000AA0E /* RCTUITextFieldTypingAttributes.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0A000F2C0000010000AA0F /* RCTUITextFieldTypingAttributes.mm */; };
+		DA0A00122C0000010000AA12 /* RCTUITextViewFirstResponder.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0A00142C0000010000AA14 /* RCTUITextViewFirstResponder.mm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +72,8 @@
 		DA0A000C2C0000010000AA0C /* daak_ffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = daak_ffi.swift; path = build/generated/ffi/daak_ffi.swift; sourceTree = "<group>"; };
 		DA0A000F2C0000010000AA0F /* RCTUITextFieldTypingAttributes.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RCTUITextFieldTypingAttributes.mm; sourceTree = "<group>"; };
 		DA0A00102C0000010000AA10 /* RCTUITextFieldTypingAttributes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RCTUITextFieldTypingAttributes.h; sourceTree = "<group>"; };
+		DA0A00132C0000010000AA13 /* RCTUITextViewFirstResponder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RCTUITextViewFirstResponder.h; sourceTree = "<group>"; };
+		DA0A00142C0000010000AA14 /* RCTUITextViewFirstResponder.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RCTUITextViewFirstResponder.mm; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F3D5652021687B19DB71C4D9 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		F65E598AB1FD93F035EEEA07 /* Pods-Daak-macOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Daak-macOS.release.xcconfig"; path = "Target Support Files/Pods-Daak-macOS/Pods-Daak-macOS.release.xcconfig"; sourceTree = "<group>"; };
@@ -126,6 +129,8 @@
 				DA0A00022C0000010000AA02 /* Daak.swift */,
 				DA0A00042C0000010000AA04 /* DaakModule.mm */,
 				DA0A000F2C0000010000AA0F /* RCTUITextFieldTypingAttributes.mm */,
+				DA0A00132C0000010000AA13 /* RCTUITextViewFirstResponder.h */,
+				DA0A00142C0000010000AA14 /* RCTUITextViewFirstResponder.mm */,
 				DA0A00062C0000010000AA06 /* KeychainSecureStore.swift */,
 			);
 			path = "Daak-macOS";
@@ -436,6 +441,7 @@
 				DA0A00052C0000010000AA05 /* KeychainSecureStore.swift in Sources */,
 				DA0A000B2C0000010000AA0B /* daak_ffi.swift in Sources */,
 				DA0A000E2C0000010000AA0E /* RCTUITextFieldTypingAttributes.mm in Sources */,
+				DA0A00122C0000010000AA12 /* RCTUITextViewFirstResponder.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
