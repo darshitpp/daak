@@ -110,7 +110,8 @@ const claimEngineStart = once(async () => {
 });
 
 /**
- * Starts the engine, applies `displayName`, then primes. Once per launch.
+ * Starts the engine, applies `displayName` when one is given, then primes. Once
+ * per launch.
  *
  * runGateThenPublish RESOLVES false on a failure rather than rejecting (see
  * src/onboarding.ts), so the fault is reported from here instead of from a
@@ -122,7 +123,9 @@ const claimEngineStart = once(async () => {
  */
 function startEngineOnce(/** @type {string | undefined} */ displayName) {
   return runGateThenPublish(
-    { kind: 'ready', displayName },
+    // The name property is OMITTED rather than set to undefined when there is
+    // no name, because runOnboardingGate tests for the property's presence.
+    displayName === undefined ? { kind: 'ready' } : { kind: 'ready', displayName },
     {
       // claimEngineStart, NOT a bare engine.start(): this is the same guarded
       // slot the first-run completer starts through, so the two paths can never
@@ -279,7 +282,11 @@ void loadOnboardingGate(readOnboarding).then(
     }
     // No .catch: startEngineOnce never rejects -- it reports the fault itself,
     // where the engine's own message is still in scope.
-    void startEngineOnce(decision.displayName);
+    // NO NAME IS PASSED. The engine reads its own display name from SQLite at
+    // start, so a returning launch has nothing to apply. Replaying the
+    // keystore copy here is what made a rename in Settings revert on every
+    // relaunch. See src/onboarding.ts, loadOnboardingGate.
+    void startEngineOnce();
   },
   // loadOnboardingGate does not reject (it returns a fault decision), so this
   // is belt-and-braces for a readOnboarding that rejects synchronously.

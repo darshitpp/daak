@@ -31,7 +31,9 @@
 /** What the durable state says, and what the caller should do about it. */
 export type OnboardingDecision =
   /** Onboarded already. Start the engine and prime, with no screens shown. */
-  | { kind: 'ready'; displayName?: string }
+  | { kind: 'ready' }
+  /** A first run just finished. Start, then publish the name the user typed. */
+  | { kind: 'ready'; displayName: string }
   /** First launch. The caller shows the flow and calls back once it completes. */
   | { kind: 'onboard' }
   /** The keystore refused the read. Nothing may be started or written. */
@@ -121,10 +123,12 @@ export async function loadOnboardingGate(
     return { kind: 'fault', message: describeReadFailure(error) };
   }
   if (!stored.complete) return { kind: 'onboard' };
-  // The name is carried FORWARD only when there is one. Undefined means
-  // "keep whatever the engine already has", which is the returning-user case
-  // for anyone who ever skipped naming.
-  return { kind: 'ready', displayName: stored.name };
+  // NO NAME IS CARRIED FORWARD. This is the second copy of the display name,
+  // and the keystore is not the source of truth -- SQLite is (see AGENTS.md).
+  // The engine reads its own name back at start, so replaying the onboarding
+  // copy here would overwrite whatever the user last typed in Settings, on
+  // every relaunch. That is the defect this returns nothing for.
+  return { kind: 'ready' };
 }
 
 export interface OnboardingRunDeps {
@@ -160,6 +164,11 @@ export interface OnboardingRunDeps {
  * completion callback, which passes a `ready` decision carrying the name the
  * user just typed.
  *
+ * applyName() runs ONLY when the decision CARRIES a name, which is only the
+ * first-run completion path. A returning launch gets a bare `{kind:'ready'}`
+ * and starts, primes, and stops -- it must not replay a name, because the
+ * engine already read the real one from SQLite at start.
+ *
  * NEVER REJECTS. A failed start resolves false instead, so a caller cannot
  * both report the fault on screen and forget to handle the rejection -- two
  * different fates for one event, which is how a start failure ends up as an
@@ -172,7 +181,7 @@ export async function runOnboardingGate(
   if (decision.kind !== 'ready') return false;
   try {
     await deps.start();
-    if (decision.displayName) {
+    if ('displayName' in decision) {
       await deps.applyName?.(decision.displayName);
     }
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
@@ -331,7 +340,14 @@ export async function completeFirstRun(
   // event: reporting it as an unsaved choice would send the user back through
   // three screens on a machine that already recorded every answer. So the two
   // failures are kept distinguishable, and neither is reported as success.
-  const decision: OnboardingDecision = { kind: 'ready', displayName: answers.name };
+  // The name is carried ONLY when there is one. "Look around first" is a real
+  // exit, and a decision with `displayName: undefined` would still pass an
+  // `in` check -- so the property is OMITTED rather than set, which keeps the
+  // skip path on the same no-name branch as a returning launch.
+  const decision: OnboardingDecision =
+    answers.name === undefined
+      ? { kind: 'ready' }
+      : { kind: 'ready', displayName: answers.name };
   // runOnboardingGate deliberately swallows the start rejection (so it can
   // never reject) and with it the engine's message. That is right for its own
   // caller, which reports through a fault note, but here the note is the ONLY

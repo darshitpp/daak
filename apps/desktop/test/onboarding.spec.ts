@@ -115,9 +115,29 @@ describe('desktop onboarding gate', () => {
   it('starts once and primes once for a returning user, with no screens', async () => {
     const { calls, deps } = tracer();
     const decision = await loadOnboardingGate(async () => complete);
-    expect(decision).toEqual({ kind: 'ready', displayName: "Darshit's MacBook" });
+    expect(decision).toEqual({ kind: 'ready' });
     expect(await runOnboardingGate(decision, deps)).toBe(true);
-    expect(calls).toEqual(['start', 'setDisplayName:Darshit\'s MacBook', 'prime']);
+    // NO setDisplayName on a returning launch. The engine reads its own name
+    // from SQLite at start, and that file is the source of truth, so replaying
+    // the KEYCHAIN copy over it would undo every rename made in Settings.
+    expect(calls).toEqual(['start', 'prime']);
+  });
+
+  // The replay was the second copy. SQLite holds the name the user typed;
+  // packages/platform/src/onboarding.ts holds the name typed during FIRST-RUN
+  // onboarding, and that one is only ever right until the user renames. A
+  // returning launch replaying it is how a Settings rename reverted on every
+  // relaunch even after the database started working.
+  //
+  // This is why the decision carries NO name at all on the returning path, and
+  // why first-run completion -- which is the ONE place a name genuinely must
+  // be applied -- builds the name into its own decision instead (see the
+  // completeFirstRun tests below).
+  it('replays no name from the keystore on a returning launch', async () => {
+    const { calls, deps } = tracer();
+    const decision = await loadOnboardingGate(async () => complete);
+    await runOnboardingGate(decision, deps);
+    expect(calls.filter((c) => c.startsWith('setDisplayName'))).toEqual([]);
   });
 
   // The name can only be PUBLISHED by a started engine, so applying it first
@@ -478,12 +498,12 @@ describe('a whole launch, keystore in and windows out', () => {
     expect(events).toEqual(['publish:fault', 'openWindow']);
   });
 
-  // The SECOND launch, end to end: no screens, engine up, name applied, and NO
-  // window forced on a returning user who has an icon to click.
+  // The SECOND launch, end to end: no screens, engine up, NO name replayed, and
+  // no window forced on a returning user who has an icon to click. The engine
+  // reads the real name from SQLite at start, so there is nothing to apply.
   it('starts and primes on a second launch without opening a window', async () => {
     expect(await launch(async () => complete)).toEqual([
       'start',
-      "setDisplayName:Darshit's MacBook",
       'prime',
       'publish:ready',
     ]);

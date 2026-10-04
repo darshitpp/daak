@@ -33,6 +33,14 @@ fn accept_error_is_fatal(err: &crate::error::CoreError) -> bool {
     !matches!(err, crate::error::CoreError::Protocol(_))
 }
 
+/// The settings key the display name lives under.
+///
+/// The value stored here is the BASE name the user asked for, never the
+/// resolved one. A resolved name carries a LAN-collision suffix, so storing
+/// it would make a device accumulate a suffix on every launch and make it
+/// impossible to go back to the name that was typed.
+const DISPLAY_NAME_KEY: &str = "display_name";
+
 /// A JSON array of strings, for the one column that holds JSON: inbox
 /// saved_paths, which both bridges parse with serde_json on the way out.
 ///
@@ -222,6 +230,22 @@ pub struct Engine {
     /// publishing the old one. Presence announcements carry the name too, so
     /// they are re-sent on a rename rather than left stale.
     profile: Arc<Mutex<Profile>>,
+    /// Serialises `set_display_name` end to end.
+    ///
+    /// SEPARATE FROM `profile` on purpose. Holding the profile lock across the
+    /// collision resolve stalled every `display_name()` and
+    /// `pairing_bundle()` reader for up to ~1.3 s, which is a defect this
+    /// module already paid for once. This lock is taken by renames only, so a
+    /// reader is never behind a resolve -- it waits at most for the rename's
+    /// own short critical section.
+    ///
+    /// Without it the save-first order R42a introduced is racy: the database
+    /// write and the profile update are separate steps with a slow resolve in
+    /// between, so two concurrent renames could write "alpha" then "beta" and
+    /// publish them in the opposite order. The file and the advertisement would
+    /// then disagree, and the next launch would advertise a name no peer has
+    /// ever seen. crates/daak-core/tests/display_name_persist.rs pins it.
+    rename_lock: tokio::sync::Mutex<()>,
     identity: Arc<Identity>,
     db: Arc<Db>,
     staging: Arc<Staging>,
@@ -317,7 +341,37 @@ impl Engine {
         let identity = Arc::new(cfg.identity);
         let device_id = identity.device_id();
         let db = cfg.db;
-        let base_name = cfg.display_name.clone();
+        // A name the user set is the user's intent, so it outranks the
+        // caller's argument. Every shipped entry point passes the SAME literal
+        // (DaemonClient.ts and InProcess.ts both send "daak"), so without
+        // this read every launch silently reverted a rename.
+        //
+        // The stored value is the BASE name, never the resolved one: a
+        // resolved name carries a LAN-collision suffix, and a device that
+        // booted as "daak-2" must still be able to go back to "daak".
+        //
+        // A read failure is NOT fatal. The engine must still start with the
+        // name it was handed, which is the pre-existing behaviour, so a
+        // corrupt settings row degrades to a rename that does not survive
+        // rather than to an app that will not launch.
+        let base_name = match db.get_setting(DISPLAY_NAME_KEY) {
+            Ok(Some(v)) => match String::from_utf8(v) {
+                Ok(s) if !s.trim().is_empty() => s,
+                Ok(_) => {
+                    tracing::warn!("stored display name is blank, using the given name");
+                    cfg.display_name.clone()
+                }
+                Err(e) => {
+                    tracing::warn!("stored display name is not utf-8, using the given name: {e}");
+                    cfg.display_name.clone()
+                }
+            },
+            Ok(None) => cfg.display_name.clone(),
+            Err(e) => {
+                tracing::warn!("stored display name unreadable, using the given name: {e}");
+                cfg.display_name.clone()
+            }
+        };
         let out_dir = cfg.out_dir.clone();
 
         // Crash recovery: a previous run may have died mid-send. Both resets run
@@ -592,6 +646,7 @@ impl Engine {
             tx,
             devices,
             profile,
+            rename_lock: Mutex::new(()),
             browser,
             accept_task,
             discovery_task,
@@ -739,13 +794,61 @@ impl Engine {
     /// on one LAN do not end up advertising one name -- and the resolved name
     /// (with any suffix) is what presence and the pairing bundle report.
     ///
-    /// A resolution that fails leaves the OLD advertisement running and
-    /// returns the error: half-renamed (new name remembered, old mDNS record
-    /// still up) is the one state neither deployment can represent.
+    /// SERIALISED against other renames by `rename_lock`, and the whole body
+    /// is inside that one critical section. Two clients on two daemon
+    /// connections can call this at once, and the write and the publish are
+    /// separate steps, so an unserialised pair could leave the file and the
+    /// advertisement disagreeing. Readers are NOT blocked by the resolve: the
+    /// lock is separate from `profile` for exactly that reason.
+    ///
+    /// The base name is PERSISTED, in the settings table, before the resolve.
+    /// Before this, a rename lived only in the in-memory Profile and every
+    /// launch reverted it, because every shipped entry point passes the same
+    /// literal at start. `Engine::start` reads the stored name back and
+    /// prefers it over its argument.
+    ///
+    /// TWO FAILURES, AND THEY DO NOT LEAVE THE SAME STATE.
+    ///
+    /// A failed WRITE is the clean one: nothing has moved, so the device is
+    /// still called what it was called before AND the file still holds the old
+    /// name. The next launch resolves the old name. Nothing is lost.
+    ///
+    /// A failed RESOLUTION is the half-renamed case on purpose. The file now
+    /// holds the name the user typed, and the advertisement still runs the old
+    /// one, so peers see the old name until the next launch. That is deliberate:
+    /// the database holds the user's INTENT and the advertisement is a result
+    /// of it, so a failure to compute the result must not throw the intent
+    /// away. The old name is still what every peer sees, and the typed name is
+    /// still recoverable on the next launch.
+    ///
+    /// The other order was rejected for this reason. Advertising first and
+    /// storing second would leave the OLD name in the file with nothing to
+    /// recover from, so a user whose save failed would keep the old name for
+    /// ever and the next launch would silently overwrite their attempt.
     pub async fn set_display_name(&self, name: String) -> Result<()> {
         if name.trim().is_empty() {
             return Err(CoreError::Protocol("display name must not be empty".into()));
         }
+        // The whole rename is one critical section: write, resolve, publish.
+        // Two renames must not be able to interleave, because the write and the
+        // publish are separate steps with a slow resolve between them. Taking
+        // this lock BEFORE the write is what makes the file and the
+        // advertisement always agree. See the `rename_lock` field.
+        let _rename = self.rename_lock.lock().await;
+        // SAVE FIRST, THEN RESOLVE AND ADVERTISE.
+        //
+        // The database holds what the user asked for; the advertised name is
+        // a RESULT of it, after collision resolution. So the base name goes in
+        // first, and a failed write returns here, before the advertiser moves.
+        // That ordering is what keeps a failed save recoverable: the old name
+        // is still the advertised one AND still in the file, so the next
+        // launch resolves the name the user typed. The other order would leave
+        // the old name in the file forever with nothing to recover from.
+        //
+        // The BASE name, not the resolved one: `resolved` is computed further
+        // down and carries a LAN-collision suffix. Storing it would make a
+        // device that booted as "daak-2" unable to go back to "daak".
+        self.db.set_setting(DISPLAY_NAME_KEY, name.as_bytes())?;
         // Resolve OUTSIDE the lock. Advertiser::start_resolving does a std
         // recv_timeout on a background thread (up to ~1.3s), and the announce
         // below is a socket write; holding the profile mutex across both
