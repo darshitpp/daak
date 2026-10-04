@@ -41,6 +41,168 @@ async function waitForSocket(): Promise<void> {
   throw new Error(`daakd never bound ${sock}`);
 }
 
+/**
+ * WHY THE DEVICES ASSERTIONS BELOW ARE SHAPE-AND-LIVENESS, NOT `toEqual([])`.
+ *
+ * This suite spawns a REAL daakd, which builds a REAL `daak_core::Engine`,
+ * and a real Engine registers an mDNS record on UDP 5353 and browses for real
+ * peers. So the daemon under test can legitimately DISCOVER A SIBLING ENGINE --
+ * another test in this binary, another binary, or a running desktop app. That
+ * is not a regression: "a browsing peer is inserted into the device map" is
+ * the product behaviour. `expect(await e.devices()).toEqual([])` therefore
+ * asked a question about the AMBIENT LAN from inside a unit test, and it
+ * passes only when no other Daak engine happens to be on the LAN -- which
+ * makes it a live CI gate that is green by luck. It has failed in the wild.
+ *
+ * The LENGTH is deliberately not asserted. `[]` and `[peer, ...]` are both
+ * correct answers for `Devices`; only the first is what a box with no LAN
+ * produces. What is asserted instead is what a client can actually rely on:
+ *
+ *   * the engine is ALIVE and ANSWERED. `devices()` resolving at all is the
+ *     liveness proof: a daemon whose engine slot is empty answers
+ *     `Error{"engine not started; send Start first"}`, and a dropped or dead
+ *     daemon rejects. Both make this test fail.
+ *   * the payload is a JSON ARRAY. NOTE THE LAYER: `devices()` has already
+ *     run `parseArray<DeviceInfo>` internally
+ *     (`packages/core/src/engine/DaemonClient.ts`), which THROWS on a non-array.
+ *     So `await e.devices()` resolving IS the array check. It is re-asserted
+ *     explicitly below (`Array.isArray`) so a future refactor that swaps
+ *     `parseArray` for a cast cannot silently delete the obligation.
+ *   * every element is a DeviceInfo the UI reads BY FIELD NAME --
+ *     `deviceId`/`name`/`addr` as strings. An element missing one is a
+ *     client-side crash. `online` is deliberately NOT required: daakd's
+ *     `Devices` handler does not emit it (it arrives on the `DeviceFound`
+ *     event instead), so requiring it would be a false failure.
+ *
+ * `assertDevicesExcludeSelf` closes the hole Task 18's reviewer found; see
+ * its own doc comment.
+ */
+function assertDevicesAreClientReadable(devices: unknown, context: string): void {
+  if (!Array.isArray(devices)) {
+    throw new Error(
+      `Devices must answer an ARRAY ${context}, since DaemonClient.devices() runs parseArray on it; got ${JSON.stringify(devices)}`,
+    );
+  }
+  for (const d of devices as Record<string, unknown>[]) {
+    for (const field of ['deviceId', 'name', 'addr'] as const) {
+      if (typeof d[field] !== 'string') {
+        throw new Error(
+          `every device ${context} must carry ${field} as a string; got ${JSON.stringify(d)}`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * SELF-EXCLUSION: the daemon must never report ITSELF as a peer.
+ *
+ * The engine's discovery task drops an announce whose device id is its own:
+ *
+ *     crates/daak-core/src/engine.rs   if device_id == me { continue; }
+ *
+ * Without that line every engine on the LAN sees itself and the UI's device
+ * list offers the user their own machine to send to. The mDNS browser can
+ * deliver a box's OWN record back to it, so the guard is load-bearing.
+ *
+ * UNTIL NOW NOTHING PINNED IT. `toEqual([])` was the repo's only coverage of
+ * it, and only incidentally -- it failed whenever a SIBLING appeared, not
+ * whenever self-insertion happened. Task 18's reviewer removed those asserts
+ * and grepped the whole repo: no other test names this guard. Without this,
+ * an engine that inserted itself into its own device map would pass every
+ * test in this file. `selfProfile()` is the right source for the id because
+ * it is the SAME `identity.device_id()` the guard compares against, hex
+ * encoded -- 32 chars, unconditionally.
+ *
+ * The predicate is `me in devices` and nothing else, so it never depends on
+ * the ambient device count: any number of siblings is legal.
+ */
+function assertDevicesExcludeSelf(me: string, devices: unknown, context: string): void {
+  const self = (devices as Record<string, unknown>[]).find((d) => d.deviceId === me);
+  if (self) {
+    throw new Error(
+      `the daemon reported ITSELF as a peer ${context}: ${JSON.stringify(self)} ` +
+        `(this device is ${me}). The engine's self-exclusion guard is the only ` +
+        `thing keeping a user's own machine out of their own device list. ` +
+        `devices: ${JSON.stringify(devices)}`,
+    );
+  }
+}
+
+/**
+ * WHY THE CALLER POLLS INSTEAD OF SAMPLING ONCE.
+ *
+ * `daakd` binds `0.0.0.0`, so its `ServiceInfo` is built with `addr_auto` ON
+ * and its OWN record really is published on a real interface -- which means the
+ * browser really can deliver that record back to the same process. That is what
+ * the guard exists to swallow. It also means self-delivery is a UDP RACE: at
+ * t=0 the browser has usually not parsed the daemon's own announce yet, so
+ * sampling `devices()` once immediately after `start()` reads a list that does
+ * not yet contain self -- and reads GREEN against a daemon that has the guard
+ * deleted.
+ *
+ * That is not theoretical. Task 23's reviewer built a guard-deleted `daakd`
+ * and ran this file against it: 18/18 passed, every run, on first contact.
+ * Adding a flat 3s settle before the sample -- no production change, no
+ * assertion change -- turned the same binary red. So the immediate sample was a
+ * coin flip that read green when it should have read red.
+ *
+ * The fix is to WAIT for the property rather than sample for it:
+ *
+ *   * poll `devices()` until either `me` appears -- FAIL IMMEDIATELY, because
+ *     the moment self is in the list the guard is already broken -- or the
+ *     window elapses, which passes. "Self never appeared within the window" is
+ *     precisely and only what the guard promises.
+ *   * the window is 3s because that is the settle the reviewer measured as
+ *     sufficient: with the guard deleted, six consecutive runs at 3s were all
+ *     red, and the failure appeared by ~500ms once the socket buffers and the
+ *     mDNS responder were warm. On a cold daemon it needs the full window; that
+ *     is the trade, and 3s is the number the evidence supports.
+ *   * every poll re-asserts shape as well as self-exclusion, so the poll cannot
+ *     quietly stop checking what the single sample used to check.
+ *   * `devices()` is a real round trip over the Unix socket on every poll, so
+ *     the loop also keeps proving the daemon is ALIVE for the whole window --
+ *     a daemon that dies mid-poll rejects and fails the test.
+ *
+ * Cost of the trade, stated plainly: a healthy daemon pays the window, because
+ * "nothing arrived" is exactly the passing case here and there is no earlier
+ * signal that proves it. That is the price of converting a race into a gate;
+ * the alternative was a check that passes the mutant.
+ */
+const SELF_EXCLUSION_WINDOW_MS = 3000;
+const SELF_EXCLUSION_POLL_MS = 100;
+
+/**
+ * Poll `sample` for `windowMs` and fail the moment the daemon reports itself
+ * as a peer. Resolves to the last list observed, so the caller can keep
+ * asserting on it without a second round trip.
+ *
+ * `sample` is a parameter rather than a `devices()` call inside the loop, for
+ * one reason: it lets the negative control below drive the loop with a scripted
+ * sequence and NO daemon. That is the only way to prove the loop really
+ * re-samples -- which is the entire claim B2 turns on. A function that took the
+ * client directly could only be exercised against a bound socket, so its
+ * "keeps polling" behaviour would be unfalsifiable in the suite that most needs
+ * it pinned.
+ */
+async function pollDevicesUntilSelfExcluded(
+  sample: () => Promise<unknown[]>,
+  me: string,
+  context: string,
+  windowMs: number = SELF_EXCLUSION_WINDOW_MS,
+): Promise<unknown[]> {
+  const deadline = Date.now() + windowMs;
+  for (;;) {
+    const devices = await sample();
+    assertDevicesAreClientReadable(devices, context);
+    // Count-independent: this is "is ME in the list", never "is the list
+    // small". A sibling appearing cannot change the verdict.
+    assertDevicesExcludeSelf(me, devices, context);
+    if (Date.now() >= deadline) return devices;
+    await new Promise((r) => setTimeout(r, SELF_EXCLUSION_POLL_MS));
+  }
+}
+
 if (existsSync(BIN)) {
   // B4: a SHARED daemon is no longer honest. Once Shutdown really stops the
   // engine (it used to leave a dead one in the slot), the contract suite's
@@ -85,10 +247,21 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
   it('daemon: answers Devices with the JSON string the client parses', async () => {
     const e = await DaemonClientEngine.connect(sock);
     await e.start();
-    // The engine's real device table. A lone daemon on the LAN sees no peers,
-    // so the honest answer is an empty array, and the shape is the client's
-    // DeviceInfo[].
-    expect(await e.devices()).toEqual([]);
+    // Self-exclusion, over the daemon's own report of its identity.
+    const me = (await e.selfProfile()).deviceId;
+    expect(me).toMatch(/^[0-9a-f]{32}$/);
+    // The engine's real device table. Its LENGTH is a property of the LAN, not
+    // of the daemon -- see the note above `assertDevicesAreClientReadable` --
+    // so what is asserted is that the engine answered, that the answer is the
+    // shape the client parses, and that the daemon does not advertise ITSELF.
+    //
+    // The self-exclusion half is POLLED, not sampled once: `daakd` publishes
+    // its own record (0.0.0.0 bind, addr_auto on), so self-delivery is a UDP
+    // race and a single immediate sample reads green against a guard-deleted
+    // daemon. See `pollDevicesUntilSelfExcluded`. The predicate stays
+    // `me in devices`, so a busy LAN changes nothing here.
+    const devices = await pollDevicesUntilSelfExcluded(() => e.devices(), me, 'after start');
+    expect(Array.isArray(devices)).toBe(true);
   });
 
   it('daemon: fans an event out to a subscribed client only', async () => {
@@ -113,7 +286,20 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
     await e.start();
     const a = e.devices();
     await expect(e.devices()).rejects.toThrow(/one request at a time/);
-    expect(await a).toEqual([]);
+    // The first request still gets a real answer, not an empty one: its
+    // LENGTH is the LAN's business (third instance of the same defect, found
+    // here rather than handed to me -- see the report), while the shape and
+    // the daemon's liveness are its own.
+    const first = await a;
+    assertDevicesAreClientReadable(first, 'from the request that was not refused');
+    // Same polling discipline as the test above, for the same reason: this
+    // sample is otherwise a single point in the self-delivery race and would
+    // miss the guard-deleted daemon on a cold start. The refused request above
+    // has already proven the serialization behaviour, so nothing here depends
+    // on issuing a second concurrent call.
+    const me = (await e.selfProfile()).deviceId;
+    expect(me).toMatch(/^[0-9a-f]{32}$/);
+    await pollDevicesUntilSelfExcluded(() => e.devices(), me, 'after a refused second request');
   });
 
   it('daemon: rejects a request after the daemon drops the connection', async () => {
@@ -166,4 +352,160 @@ describeDaemon('DaemonClientEngine over a real daakd socket', () => {
     await expect(e.cancel('00'.repeat(16))).rejects.toThrow();
   });
 
+});
+
+// THE negative controls for both Devices helpers, and the reason the
+// assertions above are not checks that read green when the property is
+// broken: these prove the helpers actually REJECT what they claim to.
+//
+// Deliberately a TOP-LEVEL describe, not inside `describeDaemon`: these need
+// no daemon, and `describeDaemon` becomes `describe.skip` whenever DAAKD_BIN
+// is absent -- which would silently skip the only tests here that can run
+// without a socket. A control that can be skipped is not a control.
+describe('the Devices assertions are not vacuous', () => {
+  it('rejects a non-array payload', () => {
+    // A Json response carrying an object instead of an array is exactly what
+    // `parseArray` rejects in production, so it must be rejected here too.
+    expect(() => assertDevicesAreClientReadable({}, 'in the negative control')).toThrow(
+      /must answer an ARRAY/,
+    );
+    expect(() => assertDevicesAreClientReadable(null, 'in the negative control')).toThrow(
+      /must answer an ARRAY/,
+    );
+  });
+
+  it('rejects an element the UI cannot read', () => {
+    // An element missing `addr` is a client-side crash the moment a peer is
+    // discovered -- which is exactly when the array stops being empty, so this
+    // is the branch the old `toEqual([])` never reached.
+    expect(() =>
+      assertDevicesAreClientReadable([{ deviceId: '07', name: 'a' }], 'in the negative control'),
+    ).toThrow(/must carry addr as a string/);
+    expect(() =>
+      assertDevicesAreClientReadable([{ deviceId: 7, name: 'a', addr: '10.0.0.2:9000' }], 'in the negative control'),
+    ).toThrow(/must carry deviceId as a string/);
+  });
+
+  it('accepts every legal answer, INCLUDING one a busy LAN produces', () => {
+    // The accept half: without it the rejects above would also pass for a
+    // helper that rejects unconditionally.
+    expect(() =>
+      assertDevicesAreClientReadable([], 'in the negative control'),
+    ).not.toThrow();
+    expect(() =>
+      assertDevicesAreClientReadable(
+        [
+          { deviceId: '07', name: 'a', addr: '10.0.0.2:9000' },
+          { deviceId: '08', name: 'b', addr: '10.0.0.3:9000' },
+        ],
+        'in the negative control',
+      ),
+    ).not.toThrow();
+    // `online` is OPTIONAL (types.ts declares it `online?`) and daakd's
+    // Devices handler does not emit it, so an element without it is legal.
+    // Requiring it would fail the suite the moment a peer was discovered.
+    expect(() =>
+      assertDevicesAreClientReadable(
+        [{ deviceId: '07', name: 'a', addr: '10.0.0.2:9000' }],
+        'in the negative control',
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects a device list carrying the engine\'s OWN id', () => {
+    const me = '09'.repeat(16);
+    const sibling = { deviceId: '08'.repeat(16), name: 'b', addr: '10.0.0.3:9000' };
+
+    // Accept half: siblings are legal, an empty list is legal.
+    expect(() =>
+      assertDevicesExcludeSelf(me, [sibling], 'in the negative control'),
+    ).not.toThrow();
+    expect(() => assertDevicesExcludeSelf(me, [], 'in the negative control')).not.toThrow();
+
+    // Reject half: the self-exclusion regression this closes.
+    expect(() =>
+      assertDevicesExcludeSelf(
+        me,
+        [sibling, { deviceId: me, name: 'me', addr: '10.0.0.9:9000' }],
+        'in the negative control',
+      ),
+    ).toThrow(/reported ITSELF as a peer/);
+    expect(() =>
+      assertDevicesExcludeSelf(
+        me,
+        [{ deviceId: me, name: 'me', addr: '10.0.0.9:9000' }],
+        'in the negative control',
+      ),
+    ).toThrow(/reported ITSELF as a peer/);
+  });
+
+  // B2's control, and the only part of the self-exclusion gate that runs
+  // socket-free. The bug it pins is TIMING, not the predicate: the pre-fix code
+  // sampled devices() once and passed a guard-deleted daakd 18/18. So the
+  // property to prove is that the loop RE-SAMPLES until the window closes, and
+  // that a self-carrying sample turns it red no matter how late it arrives.
+  //
+  // Deliberately in this top-level describe, for the same reason the four
+  // controls above are: inside describeDaemon it would be skipped whenever
+  // DAAKD_BIN is absent, and a control that can be skipped is not a control.
+  it('keeps re-sampling until the window, and goes red on a late self', async () => {
+    const me = '09'.repeat(16);
+    const sibling = { deviceId: '08'.repeat(16), name: 'b', addr: '10.0.0.3:9000' };
+    const selfEntry = { deviceId: me, name: 'me', addr: '10.0.0.9:9000' };
+
+    // The accept half, which is also the LOOP half: self never appears, the
+    // window closes, and the daemon is re-read throughout. A loop that sampled
+    // once would return the same verdict -- so this alone cannot distinguish
+    // polling from sampling. The reject half below is what does.
+    let reads = 0;
+    const quiet = await pollDevicesUntilSelfExcluded(
+      async () => {
+        reads++;
+        return reads === 1 ? [] : [sibling];
+      },
+      me,
+      'in the polling control',
+      250,
+    );
+    expect(reads).toBeGreaterThan(1);
+    expect(quiet).toEqual([sibling]);
+
+    // The reject half, and the shape of the mutation that defeated the old
+    // single sample: an empty list for the first N reads, then self. A
+    // single-sample loop stops at read 1 and returns green; this one must go
+    // red. The generous window guarantees the late sample lands before the
+    // deadline, so this control cannot flake -- it fails only if the loop
+    // stops sampling.
+    let late = 0;
+    await expect(
+      pollDevicesUntilSelfExcluded(
+        async () => {
+          late++;
+          // Late enough to be well past the point an immediate sample would
+          // have read, early enough to be inside the window below.
+          return late >= 4 ? [sibling, selfEntry] : [];
+        },
+        me,
+        'in the polling control',
+        3000,
+      ),
+    ).rejects.toThrow(/reported ITSELF as a peer/);
+    expect(late).toBeGreaterThanOrEqual(4);
+
+    // And the same list with no self in it is accepted at any length, so the
+    // reject above cannot be a helper that throws on everything. This is the
+    // busy-LAN immunity: adding peers must not change the verdict.
+    await expect(
+      pollDevicesUntilSelfExcluded(
+        async () => [
+          sibling,
+          { deviceId: '07'.repeat(16), name: 'c', addr: '10.0.0.4:9000' },
+          { deviceId: '06'.repeat(16), name: 'd', addr: '10.0.0.5:9000' },
+        ],
+        me,
+        'in the polling control',
+        250,
+      ),
+    ).resolves.toHaveLength(3);
+  });
 });
