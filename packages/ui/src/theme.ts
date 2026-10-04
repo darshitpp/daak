@@ -321,14 +321,25 @@ export const ui = StyleSheet.create({
    */
   onbScreen: { flexDirection: 'column' },
   /**
-   * `onb-actions { margin-top:auto }` in CSS. React Native has no `auto`
-   * margin, and the actions are already the LAST child of the scroll content
-   * (see OnboardingScreen), so `flexGrow` on the content is what pushes them
-   * down: `onb` centres its children and this block claims the slack below
-   * them. A pin-to-bottom that overlapped the keyboard instead would make the
-   * Name Device screen unusable, which is why it is not one.
+   * The scroll area of an onboarding screen. It is a flex child that grows,
+   * so it takes the height left by the appbar and the pinned action bar. With
+   * `flexGrow: 1` it never collapses, and the action bar stays inside the
+   * window at any content height.
    */
-  onbActionsPinned: { flexGrow: 1, justifyContent: 'flex-end', marginTop: spacing.xl },
+  onbScroll: { flexGrow: 1 },
+  /**
+   * `onb-actions { margin-top:auto }` in CSS, as a bottom bar OUTSIDE the
+   * scroll view (see OnboardingScreen).
+   *
+   * React Native has no `auto` margin. This block must NOT use `flexGrow`:
+   * inside the scroll content, a growing pinned block is what pushed the
+   * action buttons below the visible area, so their presses never reached the
+   * button. Outside the scroll view it is the last flex child of the column,
+   * so it takes only its natural height. `justifyContent: 'flex-end'` keeps
+   * the buttons at the top of the bar rather than stretched, and the padding
+   * separates the bar from the scrolling content.
+   */
+  onbActionsPinned: { justifyContent: 'flex-end', paddingVertical: spacing.lg, paddingHorizontal: spacing.lg },
   /** The appbar back chevron, as a character: this package has no SVG. */
   appbarGlyph: { fontSize: 28, lineHeight: 30, fontWeight: '400' },
   /**

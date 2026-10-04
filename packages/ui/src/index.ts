@@ -18,21 +18,6 @@ export { TransferProgressScreen } from './screens/TransferProgressScreen';
 export { TransfersScreen } from './screens/TransfersScreen';
 export { HistoryScreen, type InboxActions } from './screens/HistoryScreen';
 export { SettingsScreen } from './screens/SettingsScreen';
-export { WelcomeScreen } from './screens/WelcomeScreen';
-export { NameDeviceScreen, MAX_NAME } from './screens/NameDeviceScreen';
-export { PermissionsScreen, type PermissionRowSpec } from './screens/PermissionsScreen';
-export {
-  Accordion,
-  AppBar,
-  Bullets,
-  Hero,
-  KvCard,
-  ONB_GLYPHS,
-  OnboardingScreen,
-  SwitchFace,
-  SwitchRow,
-  type SwitchState,
-} from './components/Onboarding';
 export { fakeEngine } from './testing/fakeEngine';
 export { DaakUiApp } from './App';
 export { Popover } from './modes/Popover';

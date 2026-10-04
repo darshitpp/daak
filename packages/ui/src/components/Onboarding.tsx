@@ -16,13 +16,21 @@ import { Wordmark } from './ds';
 
 /**
  * `screen-fit` + `onb`: one scrollable, vertically-centred column with the
- * actions after the content rather than floating over it.
+ * actions pinned OUTSIDE the scroll view, at the bottom of the screen.
  *
- * The prototype's `fit` class exists because these screens have a KEYBOARD
- * (Name Device). Actions absolutely positioned at the bottom of a plain
- * ScrollView would sit UNDER the keyboard and the screen would be unusable, so
- * the actions are simply the last thing in the scroll content: always
- * reachable, never covered.
+ * The actions must not be inside the scroll content. Inside it, the pinned
+ * block claimed slack with `flexGrow`, and when the content was taller than
+ * the viewport the block grew past the bottom of the visible area. The button
+ * was drawn below the scroll hit area, so it never received a press: on macOS
+ * the Next button did nothing. Outside the scroll view, the action bar is the
+ * last flex child of the screen column and stays inside the window at any
+ * content height, so every button is always reachable.
+ *
+ * The keyboard is why the actions cannot merely be absolutely positioned over
+ * the screen: a screen-level overlay sits UNDER the software keyboard on iOS
+ * and Android. This layout avoids both problems. The scroll view takes the
+ * remaining height above the action bar, so the keyboard shrinks the scroll
+ * area and the content scrolls, and the action bar is never covered.
  */
 export function OnboardingScreen({
   title,
@@ -50,10 +58,11 @@ export function OnboardingScreen({
         contentContainerStyle={ui.onb}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        style={ui.onbScroll}
       >
         {children}
-        {actions === undefined ? null : <View style={[ui.onbActions, ui.onbActionsPinned]}>{actions}</View>}
       </ScrollView>
+      {actions === undefined ? null : <View style={[ui.onbActions, ui.onbActionsPinned]}>{actions}</View>}
     </View>
   );
 }
