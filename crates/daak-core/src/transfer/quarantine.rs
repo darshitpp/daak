@@ -38,15 +38,6 @@ impl Quarantine {
         std::fs::rename(tmp, &dest)?;
         Ok(dest)
     }
-
-    /// Put a quarantined file back so the item can be re-fetched into place.
-    pub fn release(&self, held: &Path, dest: &Path) -> Result<()> {
-        if let Some(dir) = dest.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::rename(held, dest)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -54,7 +45,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quarantine_moves_temp_file_then_retry_restores_it() {
+    fn quarantine_moves_a_hash_failed_file_into_its_slot() {
         let root = tempfile::tempdir().unwrap();
         let tmp = root.path().join("part.tmp");
         std::fs::write(&tmp, b"partial").unwrap();
@@ -69,13 +60,7 @@ mod tests {
             held.starts_with(root.path().join("quarantine")),
             "held path must sit under the quarantine root, got {held:?}"
         );
-
-        // Quarantine::release has no production caller yet (the retry loop is
-        // parked), so the release half of this is a contract test, not a
-        // reachable path. store::Db pins the state transition itself.
-        q.release(&held, &tmp).unwrap();
-        assert!(tmp.exists());
-        assert_eq!(std::fs::read(&tmp).unwrap(), b"partial");
+        assert_eq!(std::fs::read(&held).unwrap(), b"partial");
     }
 
     /// I-1: `name` is a pub parameter and the receiver stores the RAW wire name

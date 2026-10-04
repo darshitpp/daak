@@ -613,6 +613,86 @@ impl DaakEngine {
         self.engine()?.retry(id).map_err(engine_err)
     }
 
+    /// Re-arm ONE item of a transfer. The per-item half of `retry`: that item's
+    /// hash did not match on arrival, so re-running the whole transfer would
+    /// restart every file to fix one.
+    ///
+    /// PARKED. Nothing on a screen calls it, because it marks the item `pending`
+    /// and pokes an outbox that holds OUTBOUND rows only -- an inbound transfer
+    /// has nothing to drain -- and the push-only wire protocol has no message a
+    /// receiver can send to ask for a file again.
+    pub fn retry_item(&self, transfer_id: String, item_index: u32) -> Result<(), FfiError> {
+        // Parse before the engine check, exactly as cancel/retry do: a
+        // malformed id is a caller bug whether or not the engine is running.
+        let id = parse_id(&transfer_id)?;
+        self.engine()?
+            .retry_item(id, item_index)
+            .map_err(engine_err)
+    }
+
+    /// What the "Held back" screen shows, as JSON. A free projection so both
+    /// bridges can share it (see the note on daakd's copy) and so the shape is
+    /// testable without a live engine.
+    ///
+    /// The two fingerprints are hex strings because the UI renders them in
+    /// groups for a person to compare by eye. Everything optional is emitted
+    /// as an explicit `null` rather than omitted: the field's ABSENCE would be
+    /// indistinguishable from a bridge that forgot it, while a null is the
+    /// honest "this device never recorded that".
+    pub fn quarantine_report_json(
+        report: &daak_core::engine::QuarantineReport,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "transferId": to_hex(&report.transfer_id),
+            "itemIndex": report.item_index,
+            "name": report.name,
+            "size": report.size,
+            "senderName": report.sender_name,
+            // The REAL id, so a screen can say "Device aabbccdd" when no
+            // paired label was ever recorded. An identifier, not an invented
+            // name -- which is exactly why it may stand in for one.
+            "senderDeviceId": report.sender_device_id.map(|d| to_hex(&d)),
+            "receivedAt": report.received_at,
+            "expected": to_hex(&report.expected),
+            "actual": to_hex(&report.actual),
+            "heldPath": report.held_path,
+        })
+    }
+
+    pub fn quarantine_report(
+        &self,
+        transfer_id: String,
+        item_index: u32,
+    ) -> Result<String, FfiError> {
+        let id = parse_id(&transfer_id)?;
+        let report = self
+            .engine()?
+            .quarantine_report(id, item_index)
+            .map_err(engine_err)?;
+        serde_json::to_string(&Self::quarantine_report_json(&report)).map_err(protocol_err)
+    }
+
+    /// Every held-back item, as a JSON array of the same shape
+    /// `quarantine_report` returns one of.
+    pub fn list_quarantine_reports(&self) -> Result<String, FfiError> {
+        let reports = self
+            .engine()?
+            .list_quarantine_reports()
+            .map_err(engine_err)?;
+        let json = reports
+            .iter()
+            .map(Self::quarantine_report_json)
+            .collect::<Vec<_>>();
+        serde_json::to_string(&json).map_err(protocol_err)
+    }
+
+    pub fn delete_quarantined(&self, transfer_id: String, item_index: u32) -> Result<(), FfiError> {
+        let id = parse_id(&transfer_id)?;
+        self.engine()?
+            .delete_quarantined_item(id, item_index)
+            .map_err(engine_err)
+    }
+
     /// The optional listTransfers filter, parsed from the JSON string the UDL
     /// method takes. `None` for "" and "{}" -- both mean list everything, and
     /// a filter object with no fields set is the same request.

@@ -178,6 +178,32 @@ fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> serd
     })
 }
 
+/// One held-back item as the TS `QuarantineReport`. Mirrors daak-ffi's
+/// quarantine_report_json for the same reason as transfer_summary_json above.
+///
+/// The two fingerprints are hex STRINGS because the screen renders them in
+/// groups for a person to compare by eye. Every optional is an explicit `null`
+/// rather than an omitted key: an absent field would be indistinguishable from
+/// a bridge that forgot it, and `null` is the honest "this device never
+/// recorded that".
+fn quarantine_report_json(report: &daak_core::engine::QuarantineReport) -> serde_json::Value {
+    serde_json::json!({
+        "transferId": hex::encode(report.transfer_id),
+        "itemIndex": report.item_index,
+        "name": report.name,
+        "size": report.size,
+        "senderName": report.sender_name,
+        // The REAL device id, so a screen can say "Device aabbccdd" when no
+        // paired label was ever recorded. An identifier, not an invented name
+        // -- which is exactly why it may stand in for one.
+        "senderDeviceId": report.sender_device_id.map(hex::encode),
+        "receivedAt": report.received_at,
+        "expected": hex::encode(report.expected),
+        "actual": hex::encode(report.actual),
+        "heldPath": report.held_path,
+    })
+}
+
 /// One inbox_history row as the TS `InboxEntry`. saved_paths is a JSON string
 /// in SQLite and a string[] in TS. A value that will not parse becomes `null`,
 /// NOT `[]`: `[]` is a real answer ("this payload saved no files") and a
@@ -565,6 +591,61 @@ async fn dispatch(
             Ok(engine) => match parse_id(&transfer_id).and_then(|id| match engine.retry(id) {
                 Ok(()) => Ok(()),
                 Err(e) => Err(err(e)),
+            }) {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => e,
+            },
+        },
+        IpcRequest::RetryItem {
+            transfer_id,
+            item_index,
+        } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&transfer_id).and_then(|id| {
+                match engine.retry_item(id, item_index) {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(err(e)),
+                }
+            }) {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => e,
+            },
+        },
+        IpcRequest::QuarantineReport {
+            transfer_id,
+            item_index,
+        } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&transfer_id) {
+                Err(e) => e,
+                Ok(id) => match engine.quarantine_report(id, item_index) {
+                    Ok(report) => json(quarantine_report_json(&report)),
+                    Err(e) => err(e),
+                },
+            },
+        },
+        // The DISCOVERY half. Same projection, one per held item, so a screen
+        // can list what is held without a caller having to guess a
+        // (transfer_id, item_index) pair the user has never seen.
+        IpcRequest::ListQuarantineReports => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match engine.list_quarantine_reports() {
+                Ok(reports) => json(serde_json::Value::Array(
+                    reports.iter().map(quarantine_report_json).collect(),
+                )),
+                Err(e) => err(e),
+            },
+        },
+        IpcRequest::DeleteQuarantined {
+            transfer_id,
+            item_index,
+        } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&transfer_id).and_then(|id| {
+                match engine.delete_quarantined_item(id, item_index) {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(err(e)),
+                }
             }) {
                 Ok(()) => IpcResponse::Ok,
                 Err(e) => e,

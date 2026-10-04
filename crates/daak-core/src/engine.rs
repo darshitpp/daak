@@ -26,6 +26,7 @@ use crate::store::outbox::OutboxRow;
 use crate::store::pairings::Pairing;
 use crate::store::transfers::TransferRow;
 use crate::store::Db;
+use crate::transfer::Quarantine;
 
 /// A rejected peer is a per-connection event; anything else is a listener fault.
 fn accept_error_is_fatal(err: &crate::error::CoreError) -> bool {
@@ -224,6 +225,12 @@ pub struct Engine {
     identity: Arc<Identity>,
     db: Arc<Db>,
     staging: Arc<Staging>,
+    /// The receive root the accept loop materialises inbound files under. Held
+    /// here, not just in the accept closure, because the quarantine operations
+    /// (`recheck_quarantined_item` / `delete_quarantined_item`) have to reach
+    /// the SAME tree the receiver quarantined into -- `<out_dir>/quarantine` is
+    /// derived from it, so a second copy of out_dir could name a different one.
+    out_dir: PathBuf,
     outbox: Arc<OutboxWorker>,
     /// R-T11-3/R-T11-11: behind a Mutex because the Engine is only ever held by
     /// &self, and the per-row outbox drain drives sends through the same Arc.
@@ -243,6 +250,42 @@ pub(crate) struct Profile {
     presence: Option<Arc<PresenceSocket>>,
     session_id: [u8; 16],
     presence_state: PresenceState,
+}
+
+/// Everything the "Held back" screen shows about one quarantined item.
+///
+/// A REPORT and not a verdict. The prototype's screen pairs "Fingerprint it
+/// should have" with "Fingerprint it has" and leaves the comparison to the
+/// person reading it, so both travel together and neither is decided here.
+/// They are the REAL hashes: `expected` is the one the sender attested in the
+/// manifest, `actual` was computed from the bytes on this disk just now.
+///
+/// `name`, `size` and `received_at` are Option/`None`-able because they are
+/// read from what was actually persisted. `sender_name` is the peer's PAIRED
+/// label -- the only name this device ever durably recorded for it. `None`
+/// means "not recorded", and the UI must not fill it in: a device id prefix
+/// dressed up as a display name is a fabricated fact on a security screen.
+///
+/// `sender_device_id` is present precisely because `sender_name` can be `None`:
+/// it is the REAL id from the transfer row, so the UI can show an honest
+/// "Device aabbccdd" when no paired label exists. That is an identifier, not an
+/// invented name, and it is why the fallback is allowed where a name is not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantineReport {
+    pub transfer_id: [u8; 16],
+    pub item_index: u32,
+    pub name: Option<String>,
+    pub size: Option<u64>,
+    pub sender_name: Option<String>,
+    /// The sending peer's device id, from the transfer row. `None` only when
+    /// the transfer row itself is gone, which `require_item` makes impossible.
+    pub sender_device_id: Option<[u8; 16]>,
+    pub received_at: Option<i64>,
+    pub expected: [u8; 32],
+    pub actual: [u8; 32],
+    /// Where the bytes actually are, derived from out_dir rather than read back
+    /// from the row, so a corrupt dest_path cannot redirect a reader.
+    pub held_path: String,
 }
 
 impl Engine {
@@ -556,6 +599,7 @@ impl Engine {
             identity,
             db,
             staging,
+            out_dir,
             outbox,
             sessions,
             pending_pairing,
@@ -968,10 +1012,196 @@ impl Engine {
         Ok(())
     }
 
+    /// Read one held-back item back and report what this device actually has.
+    ///
+    /// WHY A LOCAL RE-CHECK AND NOT A RE-FETCH. The prototype's button reads
+    /// "Ask the sender again", which implies a receiver-initiated re-request.
+    /// Daak's wire protocol cannot express that, and pretending it can is the
+    /// one thing this method must not do. The protocol is PUSH-ONLY:
+    /// `send_transfer` writes a manifest plus chunks and then reads exactly one
+    /// Ack; `handle_inbound` only ever calls `receive_transfer`. No message lets
+    /// a receiver name a payload and an item to a sender, and no path lets a
+    /// sender serve one. `due_outbox` returns OUTBOUND rows only, so an inbound
+    /// transfer has no outbox row to re-pend either. A real re-fetch is a new
+    /// control message plus a new serve path on the sender -- Phase 7 wire work,
+    /// not a screen.
+    ///
+    /// So this reports instead of re-requesting: it reads the held file,
+    /// recomputes its BLAKE2b-256, and hands back BOTH fingerprints alongside
+    /// what was really recorded about the item. It MUTATES NOTHING -- no state
+    /// change, no move, no delete. There is deliberately no "recovered" branch,
+    /// because there cannot be one: the held bytes are the exact bytes that
+    /// just failed this comparison, so re-reading them can only reproduce the
+    /// same hash and the same mismatch. The only way to make that branch fire
+    /// would be to overwrite the sender's attested hash, which forges the one
+    /// attestation that makes quarantine worth having.
+    pub fn quarantine_report(
+        &self,
+        transfer_id: [u8; 16],
+        item_index: u32,
+    ) -> Result<QuarantineReport> {
+        let item = require_item(&self.db, transfer_id, item_index)?;
+        // The receiver recorded dest_path as the HELD path for a quarantined
+        // item, so that is the file to read. Only its LEAF identifies the slot:
+        // the full stored string is never joined onto the root, because a
+        // persisted path is data and reading one back verbatim would turn a
+        // corrupt row into a path-traversal primitive.
+        let quarantine = Quarantine::new(self.out_dir.join("quarantine"));
+        let held = quarantine.slot(&transfer_id, &held_leaf(&item)?);
+        let expected = item.hash.ok_or_else(|| {
+            CoreError::Protocol(format!(
+                "item {item_index} of transfer {} has no fingerprint to check against",
+                hex::encode(transfer_id)
+            ))
+        })?;
+        let f = std::fs::File::open(&held).map_err(|e| {
+            CoreError::Transfer(format!(
+                "held-back file {} is unreadable: {e}",
+                held.display()
+            ))
+        })?;
+        let actual = crate::hash::blake2b256_reader(f)?;
+        let transfer = self.db.get_transfer(&transfer_id)?;
+        // The peer's PAIRED label. It is the only name this device ever wrote
+        // down for that sender, so it is the only one that can be shown -- and
+        // `None` (never recorded, pairing since revoked) stays `None` rather
+        // than becoming an id prefix dressed up as a name.
+        let sender_name = transfer
+            .as_ref()
+            .and_then(|t| self.db.get_pairing(&t.peer_device_id).ok().flatten())
+            .and_then(|p| p.label);
+        Ok(QuarantineReport {
+            transfer_id,
+            item_index,
+            name: item.name.clone(),
+            size: item.size,
+            sender_name,
+            sender_device_id: transfer.as_ref().map(|t| t.peer_device_id),
+            received_at: transfer.as_ref().map(|t| t.updated_at),
+            expected,
+            actual,
+            held_path: held.to_string_lossy().into_owned(),
+        })
+    }
+
+    /// Every item this device is currently holding back, newest arrival first.
+    ///
+    /// The DISCOVERY half of `quarantine_report`. Without it the "Held back"
+    /// screen would need the user to supply a transfer id and an item index they
+    /// have never seen, and the only way to get those is to guess indexes until
+    /// one stops erroring -- which would also mean hashing every item of every
+    /// transfer to find the held ones. This walks the transfer rows, keeps the
+    /// `quarantined` item rows and reads each one.
+    ///
+    /// One held item whose file has gone missing is an ERROR, not a silent
+    /// skip: the row says bytes are being held, so a report that quietly omits
+    /// it would leave a permanently-ignored item the screen can never offer to
+    /// delete. `quarantine_report` is the authority on whether the file is
+    /// readable, and this surfaces its verdict instead of hiding it.
+    pub fn list_quarantine_reports(&self) -> Result<Vec<QuarantineReport>> {
+        let mut out = Vec::new();
+        for t in self.db.list_transfers(None, None)? {
+            for item in self.db.list_items(&t.transfer_id)? {
+                if item.state != "quarantined" {
+                    continue;
+                }
+                out.push(self.quarantine_report(t.transfer_id, item.item_index)?);
+            }
+        }
+        // Newest arrival first, matching the Inbox's own ordering, so the row a
+        // user recognises is the first one they see. Stable on a tie because
+        // `received_at` is a whole second.
+        out.sort_by(|a, b| {
+            b.received_at
+                .cmp(&a.received_at)
+                .then(b.item_index.cmp(&a.item_index))
+        });
+        Ok(out)
+    }
+
+    /// Discard a held-back item for good.
+    ///
+    /// Removes the held file and the item row, then recomputes the transfer's
+    /// summary so a transfer whose last outstanding item the user gave up on
+    /// stops reading as if something were still outstanding.
+    ///
+    /// The file goes first: a leftover row is a visible inconsistency the user
+    /// could act on, whereas a leftover file that no row can find is not. A file
+    /// that is ALREADY gone is success -- deleting it again is what the user
+    /// asked for -- and require_item has already established that the row
+    /// exists, so this cannot turn a bogus id into a silent no-op.
+    pub fn delete_quarantined_item(&self, transfer_id: [u8; 16], item_index: u32) -> Result<()> {
+        let item = require_item(&self.db, transfer_id, item_index)?;
+        // ONLY a held-back item. `require_item` proves the row exists, which is
+        // not enough: a `done` item's file lives at the receiver's final path,
+        // and `held_leaf` would resolve that path's leaf into the QUARANTINE
+        // root. For most items that names a file that is not there (the delete
+        // then removes nothing and drops the row, silently orphaning a real
+        // delivered file), and for a name a peer chose to collide with a held
+        // one it would delete a DIFFERENT item's bytes. Refusing is the only
+        // answer that cannot destroy the wrong file.
+        if item.state != "quarantined" {
+            return Err(CoreError::Protocol(format!(
+                "item {item_index} of transfer {} is {:?}, not held back, so it is not held-back's file to delete",
+                hex::encode(transfer_id),
+                item.state
+            )));
+        }
+        let held =
+            Quarantine::new(self.out_dir.join("quarantine")).slot(&transfer_id, &held_leaf(&item)?);
+        if let Err(e) = std::fs::remove_file(&held) {
+            // NotFound means the goal is already met. Anything else is a real
+            // failure the user has to hear about, because reporting a delete
+            // that did not happen is the worst possible answer here.
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(CoreError::Transfer(format!(
+                    "held-back file {} could not be deleted: {e}",
+                    held.display()
+                )));
+            }
+        }
+        // Prune the per-payload directory so a long tail of deleted files leaves
+        // no empty tree behind. Best effort: an empty directory is harmless and
+        // must not fail the delete the user asked for.
+        if let Some(dir) = held.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+        self.db.delete_item(&transfer_id, item_index)?;
+        self.refresh_held_summary(&transfer_id)?;
+        let _ = self.tx.send(EngineEvent::TransferItem {
+            transfer_id,
+            item_index,
+            state: "failed".into(),
+            dest_path: None,
+        });
+        Ok(())
+    }
+
+    /// Recompute a transfer's item_count and error text from the item rows that
+    /// still exist, so recovering or deleting the last held-back item cannot
+    /// leave a summary naming a file the user no longer has.
+    fn refresh_held_summary(&self, transfer_id: &[u8; 16]) -> Result<()> {
+        if self.db.get_transfer(transfer_id)?.is_none() {
+            return Ok(());
+        }
+        let items = self.db.list_items(transfer_id)?;
+        let held = items.iter().filter(|i| i.state == "quarantined").count();
+        let error = (held > 0).then(|| format!("{held} item(s) quarantined after hash mismatch"));
+        self.db
+            .update_transfer_summary(transfer_id, items.len() as u32, error.as_deref())
+    }
+
     /// R-T12-7: re-fetch one quarantined item without restarting the transfer.
-    /// Nothing consumes the "pending" state yet: the outbox worker has no row for
-    /// an INBOUND transfer, so the re-fetch itself is the parked resume wiring
-    /// and calling this today only marks the item.
+    ///
+    /// PARKED, and kept only so the state transition it performs stays pinned.
+    /// It marks the item `pending` and pokes the outbox, and NOTHING consumes
+    /// that: `due_outbox` returns outbound rows only, so an inbound transfer has
+    /// no row to drain, and the wire protocol has no receiver-initiated
+    /// re-fetch message (see `recheck_quarantined_item` for the full
+    /// reasoning). A UI button wired to this would move a held-back file into a
+    /// state that reads as "being fetched" while nothing fetches it, so no
+    /// surface calls it. The user-facing operation is
+    /// `recheck_quarantined_item`.
     pub fn retry_item(&self, transfer_id: [u8; 16], item_index: u32) -> Result<()> {
         if let Some(peer) = retry_item_with(&self.db, transfer_id, item_index)? {
             self.outbox.notify_peer_online(peer);
@@ -1443,6 +1673,59 @@ pub fn retry_item_with(
     // enum (see retry_with) and is deliberately NOT touched here.
     db.set_item_state(&transfer_id, item_index, "pending")?;
     Ok(Some(row.peer_device_id))
+}
+
+/// The item row a quarantine action names, or an error naming what is missing.
+///
+/// Both the UPDATEs these actions follow match ZERO rows for an unknown
+/// (transfer_id, item_index), so without this guard "Check it again" on a
+/// transfer the user no longer has would report success and do nothing. Same
+/// reasoning as `require_outbox`, and the reason this reads the row first
+/// rather than trusting the write's affected-row count.
+pub fn require_item(
+    db: &Db,
+    transfer_id: [u8; 16],
+    item_index: u32,
+) -> Result<crate::store::transfers::ItemRow> {
+    db.get_transfer(&transfer_id)?.ok_or_else(|| {
+        CoreError::Protocol(format!(
+            "no transfer {} to act on an item of",
+            hex::encode(transfer_id)
+        ))
+    })?;
+    db.get_item(&transfer_id, item_index)?.ok_or_else(|| {
+        CoreError::Protocol(format!(
+            "no item {item_index} on transfer {}",
+            hex::encode(transfer_id)
+        ))
+    })
+}
+
+/// The name that identifies an item's quarantine slot.
+///
+/// A quarantined item's `dest_path` is the HELD path, and `Quarantine::slot`
+/// takes a NAME and appends it under `<root>/<hex payload_id>/`. So the leaf has
+/// to be recovered from whichever of the two recorded strings is present:
+/// `dest_path` first, because that is what the receiver wrote for this exact
+/// outcome, and `name` as the fallback for a row persisted before dest_path
+/// was recorded. Only the LAST component is ever used, so a stored path with a
+/// traversal prefix cannot escape the quarantine root. `slot` applies the same
+/// reduction independently; this one keeps the caller honest about passing a
+/// name rather than a path.
+fn held_leaf(item: &crate::store::transfers::ItemRow) -> Result<String> {
+    let from_path = item
+        .dest_path
+        .as_deref()
+        .and_then(|p| Path::new(p).file_name())
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty());
+    match from_path.or(item.name.as_deref()) {
+        Some(n) => Ok(n.to_owned()),
+        None => Err(CoreError::Protocol(format!(
+            "item {} has no recorded name to look it up by",
+            item.item_index
+        ))),
+    }
 }
 
 /// Back off and retry, or give up. The one decision the retry path makes.
