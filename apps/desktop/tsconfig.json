@@ -27,5 +27,8 @@
   // package boundary. tsc only type-checks files reachable from the program, so
   // without the explicit path that import is an untyped hole -- and it is exactly
   // that import which keeps the two apps' daak:// contract from drifting.
-  "include": ["src", "test", "index.js", "../../apps/mobile/src/deeplink.ts"]
+  // "types" holds this package's own module declarations (react-test-renderer,
+  // which ships none and whose @types package is not in this offline
+  // workspace). Narrow include means nothing else in the repo picks them up.
+  "include": ["src", "test", "types", "index.js", "../../apps/mobile/src/deeplink.ts"]
 }

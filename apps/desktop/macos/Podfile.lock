@@ -2,6 +2,8 @@ PODS:
   - boost (1.84.0)
   - DaakNotify (0.1.0):
     - React-Core
+  - DaakSecureStore (0.1.0):
+    - React-Core
   - DaakShare (0.1.0):
     - React-Core
   - DaakTray (0.1.0):
@@ -1476,6 +1478,7 @@ PODS:
 DEPENDENCIES:
   - boost (from `../node_modules/react-native-macos/third-party-podspecs/boost.podspec`)
   - "DaakNotify (from `../node_modules/@daak/rn-notify`)"
+  - DaakSecureStore (from `../../../modules/rn-securestore`)
   - "DaakShare (from `../node_modules/@daak/rn-share`)"
   - "DaakTray (from `../node_modules/@daak/rn-tray`)"
   - DoubleConversion (from `../node_modules/react-native-macos/third-party-podspecs/DoubleConversion.podspec`)
@@ -1548,6 +1551,8 @@ EXTERNAL SOURCES:
     :podspec: "../node_modules/react-native-macos/third-party-podspecs/boost.podspec"
   DaakNotify:
     :path: "../node_modules/@daak/rn-notify"
+  DaakSecureStore:
+    :path: "../../../modules/rn-securestore"
   DaakShare:
     :path: "../node_modules/@daak/rn-share"
   DaakTray:
@@ -1678,6 +1683,7 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   boost: 4c384cc67784d4b15fd14e25b3877c442c1d8064
   DaakNotify: f0f3d1bce19bb2c39e3f5f266d9cf42171e518d9
+  DaakSecureStore: 3ca0a8f459c894614648ee986de5529c98d4ab44
   DaakShare: 525b18d8e61a00891c2b9ae2f3894b6b96e11495
   DaakTray: 7dfd22ae65c6793ecad18724917ccea10c9d26b1
   DoubleConversion: c914223d2d29c914635ef1b0721d8a77cca6a732

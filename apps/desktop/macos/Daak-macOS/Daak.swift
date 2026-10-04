@@ -210,6 +210,40 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().retry(transferId: transferId); return nil as Void? }
   }
 
+  @objc func retryItem(_ transferId: String,
+                       itemIndex: Double,
+                       resolve: @escaping RCTPromiseResolveBlock,
+                       reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().retryItem(transferId: transferId, itemIndex: UInt32(itemIndex))
+      return nil as Void?
+    }
+  }
+
+  @objc func quarantineReport(_ transferId: String,
+                              itemIndex: Double,
+                              resolve: @escaping RCTPromiseResolveBlock,
+                              reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().quarantineReport(transferId: transferId, itemIndex: UInt32(itemIndex))
+    }
+  }
+
+  @objc func listQuarantineReports(_ resolve: @escaping RCTPromiseResolveBlock,
+                                   reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().listQuarantineReports() }
+  }
+
+  @objc func deleteQuarantined(_ transferId: String,
+                               itemIndex: Double,
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().deleteQuarantined(transferId: transferId, itemIndex: UInt32(itemIndex))
+      return nil as Void?
+    }
+  }
+
   @objc func listTransfers(_ filterJson: String,
                            resolve: @escaping RCTPromiseResolveBlock,
                            reject: @escaping RCTPromiseRejectBlock) {

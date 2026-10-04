@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
-import { DaakUiApp, Note } from '@daak/ui';
+import { DaakUiApp } from '@daak/ui';
 import type { UiRuntime } from '@daak/ui';
 // The @daak/core barrel re-exports NativeDaak, which calls
 // TurboModuleRegistry.getEnforcing('Daak') at module-eval time and throws in
@@ -14,42 +14,8 @@ import { applyTrayAction } from './tray-action';
 import { getDirectSharePeer, publishDevices, subscribeDirectSharePeer } from './direct-share';
 import { desktopPickFiles } from './picker';
 import { desktopInboxActions } from './inbox-actions';
-
-// A dead engine says nothing on screen: no peers, no transfers, no inbox, and
-// no error -- the same reason apps/mobile/src/App.tsx shows a note for it. A
-// module-level store rather than state because the roots are registered with
-// AppRegistry and cannot be handed a prop when start() rejects later.
-let startFault: string | null = null;
-const faultListeners = new Set<() => void>();
-
-export function startFaultMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function reportStartFault(error: unknown): void {
-  startFault = startFaultMessage(error);
-  faultListeners.forEach((listener) => listener());
-}
-
-function StartFaultNote() {
-  const fault = useSyncExternalStore(
-    useCallback((onChange: () => void) => {
-      faultListeners.add(onChange);
-      return () => faultListeners.delete(onChange);
-    }, []),
-    () => startFault,
-  );
-  if (fault === null) return null;
-  return (
-    <View style={{ padding: 16, paddingBottom: 0 }}>
-      <Note
-        tone="err"
-        title="Daak's engine did not start"
-        body={`Nothing can be sent or received until this is fixed: ${fault}`}
-      />
-    </View>
-  );
-}
+import { DesktopOnboardingGate } from './onboarding-gate';
+import { StartFaultNote } from './start-fault';
 
 function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {
@@ -69,23 +35,35 @@ function onTrayAction(action: TrayAction): void {
 // is what install() is called from. A hook in the popover root is a deadlock.
 // Exactly one root may own it, or install() runs twice and both copies
 // subscribe to the same DaakTraySelect event.
+//
+// "Owns" means the DASHBOARD ROOT, which is why <DaakTrayOverlay/> sits beside
+// the gate there rather than inside it: ownership is per-root, and a root that
+// drops the overlay on a fault has dropped the only way back into a hidden
+// window. See the comment at the mount site below.
 export function DaakPopoverShell({ engine, runtime }: {
   engine: DaakEngine;
   runtime: UiRuntime;
 }) {
+  // BOTH roots go through the gate, not just the dashboard. The popover is
+  // reachable only after install() runs, which is after the tray exists, and a
+  // first launch has no tray content worth opening -- but if it IS reachable,
+  // rendering the dashboard against an unstarted engine would show an empty
+  // device list with nothing explaining why.
   return (
     <View style={{ flex: 1 }}>
-      <StartFaultNote />
-      <DaakUiApp
-        mode="popover"
-        engine={engine}
-        runtime={runtime}
-        onPickFiles={desktopPickFiles}
-        onExpand={() => {
-          closePopover();
-          openDashboard();
-        }}
-      />
+      <DesktopOnboardingGate>
+        <StartFaultNote />
+        <DaakUiApp
+          mode="popover"
+          engine={engine}
+          runtime={runtime}
+          onPickFiles={desktopPickFiles}
+          onExpand={() => {
+            closePopover();
+            openDashboard();
+          }}
+        />
+      </DesktopOnboardingGate>
     </View>
   );
 }
@@ -95,7 +73,7 @@ export function DaakDashboardShell({ engine, runtime }: {
   runtime: UiRuntime;
 }) {
   // The dashboard window is built at launch and only orderOut afterwards
-  // (AppDelegate.mm), so a daak:// link arrives at a tree that is ALREADY
+  // (AppDelegate.mm), so a daak:// link arrives to a tree that is ALREADY
   // mounted. useState here would be seeded long before the event, and the link
   // would be retained but never applied -- precisely the failure the reviewer
   // called out. An external store read through useSyncExternalStore is what
@@ -105,18 +83,45 @@ export function DaakDashboardShell({ engine, runtime }: {
     [],
   );
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
+  // The gate is a CONDITIONAL wrapper, not a boundary: both hooks above run
+  // whether or not the dashboard is currently shown, and both read MODULE-level
+  // stores rather than the engine. That is what lets the picker stay in this
+  // component, where test/picker.spec.ts looks for it, instead of being pushed
+  // into a child that only mounts once onboarding is done.
+  //
+  // The overlay is OUTSIDE the gate, and that is load-bearing rather than
+  // tidiness. DesktopOnboardingGate REPLACES its children on every non-shell
+  // phase -- a start fault swaps the dashboard for a fault note -- so an overlay
+  // inside them unmounts with it, and NativeDaakTray.install()'s status item goes
+  // with it. On a menu-bar app that is not a cosmetic loss: no Dock icon (LSUI
+  // Element), no status item, and AppDelegate's orderOut window still hidden
+  // leaves a dead engine with NO visible surface at all and no way back in.
+  //
+  // BEHAVIOUR CHANGE, accepted deliberately: the menu-bar item now exists during
+  // first-run onboarding too. Its menu is built from runtime.getState(), which
+  // during onboarding is the empty initial state, so it renders only 'Open
+  // Dashboard' and 'Quit Daak' -- both safe, neither touching an unstarted
+  // engine. That is also the only route back into a hidden window while the
+  // engine is dead, which is the case this move exists for.
+  //
+  // STILL THE DASHBOARD ROOT ONLY. The popover root mounts only when the status
+  // item is clicked, which cannot happen until install() has run; a second
+  // install() would put two copies on the same DaakTraySelect subscription. See
+  // the note above DaakPopoverShell.
   return (
     <>
-      <StartFaultNote />
       <DaakTrayOverlay runtime={runtime} />
-      <DaakUiApp
-        mode="dashboard"
-        engine={engine}
-        runtime={runtime}
-        peerDeviceId={peerDeviceId ?? undefined}
-      onPickFiles={desktopPickFiles}
-      inboxActions={desktopInboxActions}
-      />
+      <DesktopOnboardingGate>
+        <StartFaultNote />
+        <DaakUiApp
+          mode="dashboard"
+          engine={engine}
+          runtime={runtime}
+          peerDeviceId={peerDeviceId ?? undefined}
+          onPickFiles={desktopPickFiles}
+          inboxActions={desktopInboxActions}
+        />
+      </DesktopOnboardingGate>
     </>
   );
 }
@@ -130,7 +135,7 @@ export function DaakDashboardShell({ engine, runtime }: {
 // this subscriber re-renders on an engine event. DaakUiApp has its own
 // useSyncExternalStore; a second one in the shell would re-render the whole
 // dashboard on every transfer.item in addition to the one that already does.
-function DaakTrayOverlay({ runtime }: { runtime: UiRuntime }) {
+export function DaakTrayOverlay({ runtime }: { runtime: UiRuntime }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore would resubscribe on every event it just delivered.
   const subscribe = useCallback(

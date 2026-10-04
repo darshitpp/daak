@@ -14,7 +14,13 @@ import Security
 //
 // kSecUseDataProtectionKeychain is the iOS-13-and-later default and is stated
 // so the store does not silently fall back to the legacy file-based keychain on
-// an unusual configuration.
+// an unusual configuration. It has NO macOS equivalent, so it is stated only
+// where it exists -- see baseQuery below.
+//
+// This file is the iOS AND macOS implementation, unchanged between them: the
+// generic-password item, the service string and the accessibility class are all
+// the same on both, and macOS reaches the login keychain the same way. The one
+// difference is the data-protection flag below.
 @objc(DaakSecureStore)
 class DaakSecureStore: NSObject {
   private static let service = "dev.darshit.daak.identity"
@@ -95,11 +101,21 @@ class DaakSecureStore: NSObject {
   }
 
   private static func baseQuery(_ key: String) -> [String: Any] {
-    [
+    var query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
       kSecAttrAccount as String: key,
-      kSecUseDataProtectionKeychain as String: true,
     ]
+    // kSecUseDataProtectionKeychain, and ONLY where it exists. The constant is
+    // iOS 13+ with no macOS equivalent: the data-protection keychain is a device
+    // concept, and a macOS keychain item is already scoped to the login keychain
+    // and encrypted with the login key. Stating it unconditionally is exactly
+    // what this guard prevents -- the same source file compiles for both
+    // platforms (modules/rn-securestore/DaakSecureStore.podspec), and without the
+    // guard the macOS build fails on an unrecognised selector.
+    #if os(iOS)
+    query[kSecUseDataProtectionKeychain as String] = true
+    #endif
+    return query
   }
 }

@@ -253,4 +253,101 @@ export const ui = StyleSheet.create({
   pressed: { opacity: 0.8 },
   noteDot: { marginTop: 6 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+
+  // ── Onboarding + error screens ──────────────────────────────────────────
+  // The prototype's `onb` column: one centred stack, hero at the top, actions
+  // pinned at the bottom. Every onboarding screen shares it, so it is one
+  // style rather than five near-identical layouts.
+  onb: { flexGrow: 1, gap: spacing.xl, justifyContent: 'center', paddingVertical: spacing.xxl },
+  heroMark: { gap: spacing.lg, alignItems: 'flex-start' },
+  /** The big circular icon well above the onboarding headline. */
+  heroBadge: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  heroGlyph: { fontSize: 30, lineHeight: 36, color: colors.fg2 },
+  bullets: { gap: spacing.sm },
+  bullet: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
+  bulletMark: { width: 20, fontSize: type.sm, lineHeight: 19, color: colors.fg2 },
+  /** `err-msg`: the inline validation under a field. */
+  errMsg: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' },
+  errMark: { fontSize: type.sm, lineHeight: 19, color: colors.err },
+  errTxt: { flex: 1, fontSize: type.sm, lineHeight: 19, color: colors.err },
+  /** `choice-list`: the two full-width pairing choices, primary then quiet. */
+  choiceList: { gap: spacing.md },
+  /** The Permissions screen's switch rows. `on` tints the row. */
+  switchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md },
+  switchRowFirst: { borderTopWidth: 0 },
+  switchRowOn: { backgroundColor: colors.hover, borderRadius: radius.sm },
+  /** A real iOS/Android switch face; RN's `Switch` is the platform control. */
+  switchTrack: { width: 48, height: 28, borderRadius: radius.pill, backgroundColor: colors.border, padding: 3, justifyContent: 'center' },
+  switchTrackOn: { backgroundColor: colors.fg },
+  switchKnob: { width: 22, height: 22, borderRadius: radius.pill, backgroundColor: colors.surface },
+  switchKnobOn: { alignSelf: 'flex-end' },
+  /** `prog-meta` + track, for the update progress row. */
+  progMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  /** `nowrap` on a `kv-v`: a version string must not wrap mid-number. */
+  nowrap: { flexShrink: 0 },
+  /**
+   * The prototype's `.mono`: a fingerprint or a hash on a `kv-v`. React Native
+   * has no font-family token for a bundled monospace face in this pass, so the
+   * platform default for the code is the honest choice -- a wrapper is still
+   * needed so `mono` has exactly one definition when a face is added.
+   */
+  mono: { fontVariant: ['tabular-nums'] },
+  /** The prototype's `iconbtn`: the appbar's back chevron. Square, 44px. */
+  iconbtn: {
+    width: control.minHeight,
+    height: control.minHeight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.sm,
+  },
+  /** `onb-actions`: the buttons pinned to the bottom of an onboarding screen. */
+  onbActions: { gap: spacing.sm },
+  /**
+   * `screen-fit` is a flex COLUMN (display:flex, flex-direction:column,
+   * flex:1 1 auto) so the appbar sits above the scroll area and the actions
+   * can be pushed to the bottom by the content. It is not a style in CSS -- it
+   * only exists to override `.screen`, which is a grid -- so the one property
+   * that matters here is the column: `ui.appbar` is a row and the ScrollView
+   * must be the flex child that grows.
+   */
+  onbScreen: { flexDirection: 'column' },
+  /**
+   * `onb-actions { margin-top:auto }` in CSS. React Native has no `auto`
+   * margin, and the actions are already the LAST child of the scroll content
+   * (see OnboardingScreen), so `flexGrow` on the content is what pushes them
+   * down: `onb` centres its children and this block claims the slack below
+   * them. A pin-to-bottom that overlapped the keyboard instead would make the
+   * Name Device screen unusable, which is why it is not one.
+   */
+  onbActionsPinned: { flexGrow: 1, justifyContent: 'flex-end', marginTop: spacing.xl },
+  /** The appbar back chevron, as a character: this package has no SVG. */
+  appbarGlyph: { fontSize: 28, lineHeight: 30, fontWeight: '400' },
+  /**
+   * The prototype centres the appbar title with `text-align:center` on the
+   * flex-1 filler (`od-fill`). React Native centres with `textAlign`, and only
+   * when the title itself takes the slack -- which is why it is a modifier on
+   * the title rather than a second filler view.
+   */
+  appbarTitleCentred: { textAlign: 'center' },
+  /** A `bullets li`: the list is bare text in the prototype, with padding only. */
+  bulletText: { fontSize: type.sm, lineHeight: 20, color: colors.fg2 },
+  /**
+   * A switch row for something this build cannot grant. Visibly inert: the
+   * track goes to the muted token so it cannot read as an enabled control, and
+   * it is paired with a subtitle that says why (see SwitchRow).
+   */
+  switchDisabled: { backgroundColor: colors.border, borderColor: colors.border, opacity: 0.6 },
+  /** `mt-sm`: a small gap between two stacked blocks, in one place. */
+  mtSm: { marginTop: spacing.sm },
+  /** `row-main`: the stacked title+sub column every switch/choice row uses. */
+  rowMain: { flex: 1, minWidth: 0, gap: 2 },
 });

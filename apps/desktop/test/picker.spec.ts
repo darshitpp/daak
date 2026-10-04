@@ -139,8 +139,25 @@ describe('the desktop shell hands native actions to the Inbox rows', () => {
   // An engine that never started leaves every list empty with nothing on
   // screen saying why -- the menu says "nothing paired" and looks healthy.
   // Mobile got this in apps/mobile/src/App.tsx; desktop must not be the odd one.
+  //
+  // The REPORTING is pinned here; the RENDERING is not, because this used to
+  // be a source pin for both and a reviewer proved the rendering half
+  // meaningless: deleting both <StartFaultNote /> calls left this file at 8/8
+  // passing. A name appearing in a source file is not a component on screen.
+  // test/gate-render.spec.ts now mounts the gate and asserts the dashboard is
+  // absent when the engine is recorded dead, which is the assertion that can
+  // actually fail.
   it('reports a failed start on screen, not only in the log', () => {
     expect(index).toMatch(/reportStartFault\(/);
-    expect(shells).toMatch(/StartFaultNote/);
+    // Still worth pinning that the shells no longer keep a SECOND, private copy
+  });
+
+  // ...and that the note the gate renders is the one the shells would have
+  // rendered. Two stores for one fact is two things that can disagree, and the
+  // gate has to read the SAME store index.js writes, or the fault is reported
+  // into a place nothing draws from.
+  it('keeps ONE start-fault store, shared by the gate and the shells', () => {
+    expect(shells).toMatch(/from '\.\/start-fault'/);
+    expect(shells).not.toMatch(/reportStartFault\s*=|let startFault/);
   });
 });
