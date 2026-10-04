@@ -60,6 +60,10 @@ ipc-request =
   / send-request
   / cancel-request
   / retry-request
+  / retry-item-request
+  / quarantine-report-request
+  / list-quarantine-reports-request
+  / delete-quarantined-request
   / list-transfers-request
   / list-inbox-request
   / self-profile-request
@@ -75,6 +79,39 @@ pair-request             = { "Pair": pair-args }
 send-request             = { "Send": send-args }
 cancel-request           = { "Cancel": transfer-ref }
 retry-request            = { "Retry": transfer-ref }
+; A DISTINCT request from Retry, not a field on it: Retry re-arms the whole
+; transfer, while this re-arms ONE item. PARKED -- no screen calls it, because
+; an inbound transfer has no outbox row to re-pend and the push-only protocol
+; has no message a receiver can send to ask for a file again. A separate
+; variant is what keeps the additive space for a MINOR bump honest (see the
+; TransferFilter note above).
+retry-item-request        = { "RetryItem": retry-item-args }
+retry-item-args = {
+  "transfer_id": tstr,
+  "item_index":  uint,
+}
+; The READ half of the "Held back" screen. The answer is a JSON STRING (the
+; daemon does not parse it and the client JSON.parses it), because the shape
+; carries nullable fields -- name/size/senderName/receivedAt are each absent
+; when this device never recorded them -- and that shape belongs in one place
+; rather than in a CDDL arm per optional field.
+quarantine-report-request  = { "QuarantineReport": item-ref }
+; The DISCOVERY half, and a unit variant for the same reason ListInbox is: the
+; answer is everything the request is about, so there is no argument object.
+; Without it a caller would have to guess (transfer_id, item_index) pairs --
+; which also means hashing every item of every transfer to find the held ones.
+; The answer is a JSON array of the same shape QuarantineReport returns one of.
+list-quarantine-reports-request = "ListQuarantineReports"
+; The DESTRUCTIVE half, and deliberately its OWN request rather than a field on
+; QuarantineReport: reading a held file and discarding it are different
+; decisions, and a caller must name the one it means.
+delete-quarantined-request = { "DeleteQuarantined": item-ref }
+; ONE (transfer, item) selector shared by both, so the two quarantine requests
+; cannot drift apart in how they name an item.
+item-ref = {
+  "transfer_id": tstr,
+  "item_index":  uint,
+}
 ; filter is OPTIONAL and its two fields are independently OPTIONAL, so
 ; {"ListTransfers": {}} (list everything) is a DIFFERENT frame from
 ; {"ListTransfers": "ListTransfers"}. daak-ipc's TransferFilter uses

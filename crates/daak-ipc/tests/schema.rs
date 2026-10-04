@@ -187,6 +187,27 @@ fn every_request_validates_against_the_cddl() {
         IpcMessage::Request(IpcRequest::Retry {
             transfer_id: "t1".into(),
         }),
+        IpcMessage::Request(IpcRequest::RetryItem {
+            transfer_id: "t1".into(),
+            item_index: 2,
+        }),
+        // NEW wire keys, so pinned here for the same reason as SelfProfile
+        // below: an arm the cddl does not name validates against nothing and
+        // fails only at runtime, on the frame a user triggers by tapping a
+        // held-back file. Both take the same (transfer, item) selector, which
+        // is what makes the read and the delete name an item identically.
+        IpcMessage::Request(IpcRequest::QuarantineReport {
+            transfer_id: "t1".into(),
+            item_index: 2,
+        }),
+        // The DISCOVERY half, and a NEW wire key like the two above, so it is
+        // pinned for the same reason: a frame the cddl does not name validates
+        // against nothing and fails only at runtime.
+        IpcMessage::Request(IpcRequest::ListQuarantineReports),
+        IpcMessage::Request(IpcRequest::DeleteQuarantined {
+            transfer_id: "t1".into(),
+            item_index: 2,
+        }),
         IpcMessage::Request(IpcRequest::ListTransfers { filter: None }),
         IpcMessage::Request(IpcRequest::ListTransfers {
             filter: Some(daak_ipc::TransferFilter {

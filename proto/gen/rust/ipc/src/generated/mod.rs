@@ -28,6 +28,17 @@ impl CancelRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct DeleteQuarantinedRequest {
+    pub delete_quarantined: ItemRef,
+}
+
+impl DeleteQuarantinedRequest {
+    pub fn new(delete_quarantined: ItemRef) -> Self {
+        Self { delete_quarantined }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct DeviceFoundArgs {
     pub device_id: String,
     pub name: String,
@@ -312,6 +323,10 @@ pub enum IpcRequest {
     SendRequest(SendRequest),
     CancelRequest(CancelRequest),
     RetryRequest(RetryRequest),
+    RetryItemRequest(RetryItemRequest),
+    QuarantineReportRequest(QuarantineReportRequest),
+    ListQuarantineReportsRequest(ListQuarantineReportsRequest),
+    DeleteQuarantinedRequest(DeleteQuarantinedRequest),
     ListTransfersRequest(ListTransfersRequest),
     ListInboxRequest(ListInboxRequest),
     SelfProfileRequest(SelfProfileRequest),
@@ -348,6 +363,28 @@ impl IpcRequest {
 
     pub fn new_retry_request(retry_request: RetryRequest) -> Self {
         Self::RetryRequest(retry_request)
+    }
+
+    pub fn new_retry_item_request(retry_item_request: RetryItemRequest) -> Self {
+        Self::RetryItemRequest(retry_item_request)
+    }
+
+    pub fn new_quarantine_report_request(
+        quarantine_report_request: QuarantineReportRequest,
+    ) -> Self {
+        Self::QuarantineReportRequest(quarantine_report_request)
+    }
+
+    pub fn new_list_quarantine_reports_request(
+        list_quarantine_reports_request: ListQuarantineReportsRequest,
+    ) -> Self {
+        Self::ListQuarantineReportsRequest(list_quarantine_reports_request)
+    }
+
+    pub fn new_delete_quarantined_request(
+        delete_quarantined_request: DeleteQuarantinedRequest,
+    ) -> Self {
+        Self::DeleteQuarantinedRequest(delete_quarantined_request)
     }
 
     pub fn new_list_transfers_request(list_transfers_request: ListTransfersRequest) -> Self {
@@ -413,6 +450,21 @@ impl IpcResponse {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ItemRef {
+    pub transfer_id: String,
+    pub item_index: u64,
+}
+
+impl ItemRef {
+    pub fn new(transfer_id: String, item_index: u64) -> Self {
+        Self {
+            transfer_id,
+            item_index,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct JsonArgs {
     pub value: String,
 }
@@ -442,6 +494,17 @@ pub enum ListInboxRequest {
 impl ListInboxRequest {
     pub fn new_value_text4_c697374496_e626_f78() -> Self {
         Self::ValueText4C697374496E626F78
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub enum ListQuarantineReportsRequest {
+    ValueText4C69737451756172616E74696E655265706F727473,
+}
+
+impl ListQuarantineReportsRequest {
+    pub fn new_value_text4_c69737451756172616_e74696_e655265706_f727473() -> Self {
+        Self::ValueText4C69737451756172616E74696E655265706F727473
     }
 }
 
@@ -569,6 +632,17 @@ impl PortResponse {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct QuarantineReportRequest {
+    pub quarantine_report: ItemRef,
+}
+
+impl QuarantineReportRequest {
+    pub fn new(quarantine_report: ItemRef) -> Self {
+        Self { quarantine_report }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct RequestArm {
     pub request: IpcRequest,
 }
@@ -587,6 +661,32 @@ pub struct ResponseArm {
 impl ResponseArm {
     pub fn new(response: IpcResponse) -> Self {
         Self { response }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct RetryItemArgs {
+    pub transfer_id: String,
+    pub item_index: u64,
+}
+
+impl RetryItemArgs {
+    pub fn new(transfer_id: String, item_index: u64) -> Self {
+        Self {
+            transfer_id,
+            item_index,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct RetryItemRequest {
+    pub retry_item: RetryItemArgs,
+}
+
+impl RetryItemRequest {
+    pub fn new(retry_item: RetryItemArgs) -> Self {
+        Self { retry_item }
     }
 }
 

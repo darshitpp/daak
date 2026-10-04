@@ -344,6 +344,89 @@ impl Deserialize for CancelRequest {
     }
 }
 
+impl cbor_event::se::Serialize for DeleteQuarantinedRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("DeleteQuarantined")?;
+        self.delete_quarantined.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for DeleteQuarantinedRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut delete_quarantined = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "DeleteQuarantined" => {
+                            if delete_quarantined.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "DeleteQuarantined".into(),
+                                ))
+                                .into());
+                            }
+                            delete_quarantined =
+                                Some(ItemRef::deserialize(raw).map_err(
+                                    |e: DeserializeError| e.annotate("delete_quarantined"),
+                                )?);
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let delete_quarantined =
+                match delete_quarantined {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("DeleteQuarantined"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { delete_quarantined })
+        })()
+        .map_err(|e| e.annotate("DeleteQuarantinedRequest"))
+    }
+}
+
 impl cbor_event::se::Serialize for DeviceFoundArgs {
     fn serialize<'se>(
         &self,
@@ -2000,6 +2083,18 @@ impl cbor_event::se::Serialize for IpcRequest {
             IpcRequest::SendRequest(send_request) => send_request.serialize(serializer),
             IpcRequest::CancelRequest(cancel_request) => cancel_request.serialize(serializer),
             IpcRequest::RetryRequest(retry_request) => retry_request.serialize(serializer),
+            IpcRequest::RetryItemRequest(retry_item_request) => {
+                retry_item_request.serialize(serializer)
+            }
+            IpcRequest::QuarantineReportRequest(quarantine_report_request) => {
+                quarantine_report_request.serialize(serializer)
+            }
+            IpcRequest::ListQuarantineReportsRequest(list_quarantine_reports_request) => {
+                list_quarantine_reports_request.serialize(serializer)
+            }
+            IpcRequest::DeleteQuarantinedRequest(delete_quarantined_request) => {
+                delete_quarantined_request.serialize(serializer)
+            }
             IpcRequest::ListTransfersRequest(list_transfers_request) => {
                 list_transfers_request.serialize(serializer)
             }
@@ -2081,6 +2176,49 @@ impl Deserialize for IpcRequest {
                 Ok(retry_request) => return Ok(Self::RetryRequest(retry_request)),
                 Err(e) => {
                     errs.push(e.annotate("RetryRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = RetryItemRequest::deserialize(raw);
+            match deser_variant {
+                Ok(retry_item_request) => return Ok(Self::RetryItemRequest(retry_item_request)),
+                Err(e) => {
+                    errs.push(e.annotate("RetryItemRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> =
+                QuarantineReportRequest::deserialize(raw);
+            match deser_variant {
+                Ok(quarantine_report_request) => {
+                    return Ok(Self::QuarantineReportRequest(quarantine_report_request));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("QuarantineReportRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> =
+                ListQuarantineReportsRequest::deserialize(raw);
+            match deser_variant {
+                Ok(list_quarantine_reports_request) => {
+                    return Ok(Self::ListQuarantineReportsRequest(
+                        list_quarantine_reports_request,
+                    ));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("ListQuarantineReportsRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> =
+                DeleteQuarantinedRequest::deserialize(raw);
+            match deser_variant {
+                Ok(delete_quarantined_request) => {
+                    return Ok(Self::DeleteQuarantinedRequest(delete_quarantined_request));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("DeleteQuarantinedRequest"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -2226,6 +2364,117 @@ impl Deserialize for IpcResponse {
             Err(DeserializeFailure::NoVariantMatchedWithCauses(errs).into())
         })()
         .map_err(|e| e.annotate("IpcResponse"))
+    }
+}
+
+impl cbor_event::se::Serialize for ItemRef {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(2))?;
+        serializer.write_text("item_index")?;
+        serializer.write_unsigned_integer(self.item_index)?;
+        serializer.write_text("transfer_id")?;
+        serializer.write_text(&self.transfer_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for ItemRef {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(2)?;
+            read_len.finish()?;
+            let mut item_index = None;
+            let mut transfer_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "item_index" => {
+                            if item_index.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "item_index".into(),
+                                ))
+                                .into());
+                            }
+                            item_index = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("item_index"))?,
+                            );
+                        }
+                        "transfer_id" => {
+                            if transfer_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "transfer_id".into(),
+                                ))
+                                .into());
+                            }
+                            transfer_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("transfer_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let transfer_id =
+                match transfer_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("transfer_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let item_index =
+                match item_index {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("item_index"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self {
+                transfer_id,
+                item_index,
+            })
+        })()
+        .map_err(|e| e.annotate("ItemRef"))
     }
 }
 
@@ -2423,6 +2672,36 @@ impl Deserialize for ListInboxRequest {
             }
         })()
         .map_err(|e| e.annotate("ListInboxRequest"))
+    }
+}
+
+impl cbor_event::se::Serialize for ListQuarantineReportsRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        match self {
+            ListQuarantineReportsRequest::ValueText4C69737451756172616E74696E655265706F727473 => {
+                serializer.write_text("ListQuarantineReports")
+            }
+        }
+    }
+}
+
+impl Deserialize for ListQuarantineReportsRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            match raw.cbor_type()? {
+                cbor_event::Type::Text => {
+                    let value_text4_c69737451756172616_e74696_e655265706_f727473_value = raw.text()?;
+                    if value_text4_c69737451756172616_e74696_e655265706_f727473_value != "ListQuarantineReports" {
+                        return Err(DeserializeFailure::FixedValueMismatch{ found: Key::Str(value_text4_c69737451756172616_e74696_e655265706_f727473_value), expected: Key::Str(String::from("ListQuarantineReports")) }.into());
+                    }
+                    Ok(ListQuarantineReportsRequest::ValueText4C69737451756172616E74696E655265706F727473)
+                }
+                _ => Err(DeserializeFailure::NoVariantMatched.into()),
+            }
+        })().map_err(|e| e.annotate("ListQuarantineReportsRequest"))
     }
 }
 
@@ -3250,6 +3529,89 @@ impl Deserialize for PortResponse {
     }
 }
 
+impl cbor_event::se::Serialize for QuarantineReportRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("QuarantineReport")?;
+        self.quarantine_report.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for QuarantineReportRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut quarantine_report = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "QuarantineReport" => {
+                            if quarantine_report.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "QuarantineReport".into(),
+                                ))
+                                .into());
+                            }
+                            quarantine_report =
+                                Some(ItemRef::deserialize(raw).map_err(
+                                    |e: DeserializeError| e.annotate("quarantine_report"),
+                                )?);
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let quarantine_report =
+                match quarantine_report {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("QuarantineReport"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { quarantine_report })
+        })()
+        .map_err(|e| e.annotate("QuarantineReportRequest"))
+    }
+}
+
 impl cbor_event::se::Serialize for RequestArm {
     fn serialize<'se>(
         &self,
@@ -3413,6 +3775,200 @@ impl Deserialize for ResponseArm {
             Ok(Self { response })
         })()
         .map_err(|e| e.annotate("ResponseArm"))
+    }
+}
+
+impl cbor_event::se::Serialize for RetryItemArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(2))?;
+        serializer.write_text("item_index")?;
+        serializer.write_unsigned_integer(self.item_index)?;
+        serializer.write_text("transfer_id")?;
+        serializer.write_text(&self.transfer_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for RetryItemArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(2)?;
+            read_len.finish()?;
+            let mut item_index = None;
+            let mut transfer_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "item_index" => {
+                            if item_index.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "item_index".into(),
+                                ))
+                                .into());
+                            }
+                            item_index = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("item_index"))?,
+                            );
+                        }
+                        "transfer_id" => {
+                            if transfer_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "transfer_id".into(),
+                                ))
+                                .into());
+                            }
+                            transfer_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("transfer_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let transfer_id =
+                match transfer_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("transfer_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let item_index =
+                match item_index {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("item_index"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self {
+                transfer_id,
+                item_index,
+            })
+        })()
+        .map_err(|e| e.annotate("RetryItemArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for RetryItemRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("RetryItem")?;
+        self.retry_item.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for RetryItemRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut retry_item = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "RetryItem" => {
+                            if retry_item.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "RetryItem".into(),
+                                ))
+                                .into());
+                            }
+                            retry_item = Some(
+                                RetryItemArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("retry_item"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let retry_item =
+                match retry_item {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("RetryItem"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { retry_item })
+        })()
+        .map_err(|e| e.annotate("RetryItemRequest"))
     }
 }
 

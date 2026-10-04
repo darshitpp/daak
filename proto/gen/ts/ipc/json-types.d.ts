@@ -63,6 +63,18 @@ export type IpcRequestJSON =
       RetryRequest: RetryRequestJSON;
     }
   | {
+      RetryItemRequest: RetryItemRequestJSON;
+    }
+  | {
+      QuarantineReportRequest: QuarantineReportRequestJSON;
+    }
+  | {
+      ListQuarantineReportsRequest: ListQuarantineReportsRequestJSON;
+    }
+  | {
+      DeleteQuarantinedRequest: DeleteQuarantinedRequestJSON;
+    }
+  | {
       ListTransfersRequest: ListTransfersArgsJSON;
     }
   | {
@@ -84,6 +96,7 @@ export type IpcRequestJSON =
       ShutdownRequest: ShutdownRequestJSON;
     };
 export type SubscribeRequestJSON = "ValueText537562736372696265";
+export type ListQuarantineReportsRequestJSON = "ValueText4C69737451756172616E74696E655265706F727473";
 export type ListInboxRequestJSON = "ValueText4C697374496E626F78";
 export type SelfProfileRequestJSON = "ValueText53656C6650726F66696C65";
 export type ShutdownRequestJSON = "ValueText53687574646F776E";
@@ -109,6 +122,13 @@ export interface CancelRequestJSON {
   cancel: TransferRefJSON;
 }
 export interface TransferRefJSON {
+  transfer_id: string;
+}
+export interface DeleteQuarantinedRequestJSON {
+  delete_quarantined: ItemRefJSON;
+}
+export interface ItemRefJSON {
+  item_index: number;
   transfer_id: string;
 }
 export interface DeviceFoundArgsJSON {
@@ -231,6 +251,16 @@ export interface SendArgsJSON {
 }
 export interface RetryRequestJSON {
   retry: TransferRefJSON;
+}
+export interface RetryItemRequestJSON {
+  retry_item: RetryItemArgsJSON;
+}
+export interface RetryItemArgsJSON {
+  item_index: number;
+  transfer_id: string;
+}
+export interface QuarantineReportRequestJSON {
+  quarantine_report: ItemRefJSON;
 }
 export interface ListTransfersArgsJSON {
   filter?: TransferFilterJSON | null;

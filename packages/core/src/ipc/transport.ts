@@ -29,7 +29,7 @@ export const MAX_FRAME = 4 * 1024 * 1024;
 
 /** daak_ipc::IPC_MAJOR / IPC_MINOR. High byte major, low byte minor. */
 export const IPC_MAJOR = 1;
-export const IPC_MINOR = 2;
+export const IPC_MINOR = 3;
 export const IPC_VERSION = (IPC_MAJOR << 8) | IPC_MINOR;
 
 // Measured against real Rust ciborium, not assumed:
