@@ -19,7 +19,20 @@
 
 @implementation RNWindowHost {
   __weak RCTRootViewFactory *_factory;
-  __weak NSWindow *_dashboard;
+  // STRONG. Measured, not assumed. RCTAppDelegate creates this window in CODE
+  // (react-native-macos 0.76, RCTAppDelegate.mm loadReactNativeWindow:, the
+  // TARGET_OS_OSX branch) and AppDelegate.mm hands it here and then orderOuts it.
+  // RCTAppDelegate.h also declares @property(strong) window, so the delegate
+  // keeps it alive and __weak was NOT the cause of the lost focus on 2026-10-04.
+  // A probe in this file showed the adopted window non-nil, and
+  // makeKeyAndOrderFront left it visible=1 onscreen=1. The window was never
+  // missing. The app was never frontmost.
+  //
+  // Kept strong anyway, because the delegate is the only other owner and a
+  // second weak link would make this object's behaviour depend on a property
+  // declared in another header. RNTray.mm holds _statusItem and _popover as
+  // strong ivars for the same reason.
+  NSWindow *_dashboard;
 }
 
 + (instancetype)shared {
@@ -120,10 +133,52 @@ RCT_EXPORT_MODULE(DaakWindowHost)
   if (window == nil) {
     return;
   }
-  [window makeKeyAndOrderFront:nil];
-  // An LSUIElement app has no Dock icon, so nothing brings it forward on its
-  // own; without this the dashboard opens BEHIND whatever the user is in.
+  // THE POLICY IS THE FIX. Under Prohibited an app may not create windows and
+  // may not be activated, so -activateIgnoringOtherApps: is refused and
+  // makeKeyAndOrderFront leaves the window behind every other window.
+  // CoreGraphics reported the window on screen the whole time (layer 0,
+  // onscreen=1, alpha=1, 1280x748). That is why the defect looked like a dead
+  // menu item instead of a focus bug.
+  //
+  // BOTH CALLS EXISTED BEFORE THIS CHANGE, so the line order was NOT the
+  // defect. -activateIgnoringOtherApps: was already called at the old HEAD, on
+  // the line AFTER makeKeyAndOrderFront. It was refused under Prohibited in
+  // BOTH orders, because the policy, not the order, decides. The order below is
+  // activate-then-order only because activating first is the conventional
+  // sequence. Apple documents NO ordering requirement between the two calls,
+  // and none is claimed here.
+  //
+  // DISCREPANCY, RECORDED, NOT RESOLVED. Info.plist sets LSUIElement=1, and
+  // NSRunningApplication.h maps LSUIElement=1 to NSApplicationActivationPolicyAccessory
+  // and maps Prohibited to LSBackgroundOnly=1. The live process still measured
+  // activationPolicy=2 with LSUIElement=1 set and no LSBackgroundOnly present.
+  // The measured value and the documented value disagree. The measurement is
+  // the fact here. The documented cause does not explain it, and no code change
+  // follows from this comment.
+  //
+  // AppDelegate.mm sets Accessory on the next main-queue turn after launch, and
+  // a clean relaunch then measured activationPolicy=1. So the guard below is
+  // FALSE on the normal path. It is defence, not the live path: it repairs the
+  // policy if AppKit ever reinstalls Prohibited, and it costs one comparison.
+  //
+  // Accessory, not Regular: Accessory keeps this out of the Dock and keeps the
+  // status item, which is what a menu-bar app is. Regular would add a Dock
+  // icon that LSUIElement was there to remove. The enum runs Regular 0,
+  // Accessory 1, Prohibited 2, so Accessory is the lowest by privilege. It is
+  // the lowest that still lets a window be activated on demand.
+  if (NSApp.activationPolicy == NSApplicationActivationPolicyProhibited) {
+    // -setActivationPolicy: returns BOOL and the value is discarded on purpose.
+    // A refused change reports NO here, and the activation call below then
+    // refuses too. No error handling belongs in this method.
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  }
+  // CORRECT TODAY. -activateIgnoringOtherApps: carries API_DEPRECATED with
+  // API_TO_BE_DEPRECATED, and the header names -activate as its replacement.
+  // -activate needs macOS 14 and the Podfile floor here is macOS 11.0, so
+  // -activate is not callable without raising the floor. Until that happens,
+  // -activateIgnoringOtherApps: is the correct call.
   [NSApp activateIgnoringOtherApps:YES];
+  [window makeKeyAndOrderFront:nil];
 }
 
 - (void)closePopover {

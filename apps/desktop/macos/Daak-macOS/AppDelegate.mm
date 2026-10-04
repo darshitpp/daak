@@ -26,6 +26,47 @@
   self.window.title = @"Daak";
   [self.window orderOut:nil];
 
+  // ACTIVATION AFTER LAUNCH, not on the first click. The live process measured
+  // NSApplicationActivationPolicyProhibited (value 2) on 2026-10-04. Under
+  // Prohibited an app may not create windows and may not be activated, so
+  // -activateIgnoringOtherApps: is refused and the dashboard opens BEHIND every
+  // other window. The window was on screen the whole time, so the failure
+  // looked like a dead tray item.
+  //
+  // WHY THE PROCESS SITS ON 2 IS NOT DOCUMENTED, AND NO CLAIM IS MADE HERE.
+  // NSRunningApplication.h maps LSUIElement=1 to Accessory and maps
+  // LSBackgroundOnly=1 to Prohibited. Info.plist sets LSUIElement and does NOT
+  // set LSBackgroundOnly, so the documented value for this Info.plist is
+  // Accessory, not Prohibited. The measured value and the documented value
+  // disagree, and the reason is recorded as unknown. What is measured is the
+  // value 2 and the window that will not come forward while it holds.
+  //
+  // Not on the first click: the click that reaches openDashboard comes from the
+  // status item, and the status item exists because the app is already running.
+  // Measured: the policy was still 2 at that moment, the switch to Accessory
+  // did run, and the app still ended up frontmost=false.
+  //
+  // Not in the body of this method either. A direct call in the launch method
+  // measured as lost: the value read back as 1 on the line right after the
+  // call, and the value read back as 2 from a later attach. So something overwrote
+  // it AFTER the delegate line ran. dispatch_async moves the call to a later
+  // main-queue turn, and a clean relaunch then measured activationPolicy=1.
+  //
+  // HONEST LIMIT. dispatch_async is a queue, not a barrier. It proves the block
+  // runs later on the main thread. It does NOT prove the block runs after every
+  // AppKit setup step, because AppKit is closed source and no header declares
+  // when it installs Prohibited. So "the next main-queue turn is late enough"
+  // is a MEASURED FACT on this host and an ASSUMPTION everywhere else. If a
+  // future macOS moves the overwrite later, this call loses and the fallback in
+  // RNWindowHost openDashboard repairs the policy on the next click.
+  //
+  // Accessory, not Regular. Accessory keeps this out of the Dock and keeps the
+  // status item, which is what a menu-bar app is. Regular would add the Dock
+  // icon that LSUIElement is there to remove.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  });
+
   // The dashboard root above was created by this delegate's rootViewFactory.
   // Hand the SAME factory AND the SAME window to the window host: the popover
   // root comes out of the same bridge, and openDashboard just orders in the
