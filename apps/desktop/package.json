@@ -5,7 +5,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "macos": "react-native run-macos",
+    "start": "react-native start --port 8082",
+    "macos": "react-native run-macos --port 8082",
     "pods": "pod install --project-directory=macos"
   },
   "dependencies": {

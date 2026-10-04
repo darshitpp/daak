@@ -67,7 +67,31 @@
 - (NSURL *)bundleURL
 {
 #if DEBUG
-  return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@"index"];
+  // The port has to be written HERE, because the provider will not supply it.
+  // RCTBundleURLProvider appends its own default (RCT_METRO_PORT) to any
+  // location that has no colon in it, so leaving jsLocation unset silently
+  // yields the shared default port -- the one apps/mobile uses. A leftover
+  // desktop packager on that port can then serve the desktop bundle to a
+  // phone or an emulator, which dies on TurboModuleRegistry.getEnforcing(
+  // 'DaakSystemNotify') -- an error naming a module rather than the port.
+  //
+  // Set ONLY when unset: an unconditional write would clobber a location a
+  // developer configured by other means, and would rewrite NSUserDefaults and
+  // post the provider-updated notification on every bundleURL call, i.e. a
+  // packager reconnect on every reload.
+  //
+  // The host stays localhost on purpose -- nothing here may hardcode a LAN
+  // address. The colon is load-bearing: it is what marks the port as already
+  // present, so the provider stops appending its default.
+  //
+  // The literal below must equal the --port in BOTH npm scripts; those are the
+  // only two places the number is written, and test/metro-port.spec.ts reads
+  // the digits back out of package.json and fails if they drift.
+  RCTBundleURLProvider *provider = [RCTBundleURLProvider sharedSettings];
+  if (provider.jsLocation == nil) {
+    provider.jsLocation = @"localhost:8082";
+  }
+  return [provider jsBundleURLForBundleRoot:@"index"];
 #else
   return [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #endif
