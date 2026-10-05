@@ -1,5 +1,5 @@
 {
-  "extends": "@react-native/typescript-config/tsconfig.json",
+  "extends": "@react-native/typescript-config",
   // "node" is not in the RN preset's `types` (it is exactly
   // ["react-native","jest"]), and the include below pulls in
   // ../../packages/core/src, whose DaemonClient half is a Node daemon client

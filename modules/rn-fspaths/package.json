@@ -10,5 +10,5 @@
     "jsSrcsDir": "js",
     "android": { "javaPackageName": "dev.darshit.daak.fspaths" }
   },
-  "peerDependencies": { "react-native": ">=0.76" }
+  "peerDependencies": { "react-native": ">=0.83" }
 }

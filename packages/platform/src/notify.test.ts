@@ -107,6 +107,31 @@ describe('initNotifications', () => {
     expect(DAK_REGISTERED_ACTIONS).toEqual(['daak.open', 'daak.share']);
     expect(DAK_RECEIVED_ACTIONS).toContain('daak.folder');
   });
+
+  // A first launch would otherwise ask twice -- the Permissions screen's row,
+  // then startup -- and POST_NOTIFICATIONS shows a system prompt on every ask
+  // on Android. Reusing the recorded answer is what makes it one ask.
+  it('does not ask the OS again when the answer is already known', async () => {
+    await expect(initNotifications(true)).resolves.toBe(true);
+    expect(native.requestPermission).not.toHaveBeenCalled();
+    // The category is not the permission: it still has to exist before any
+    // banner is posted, even when the answer arrived earlier.
+    expect(native.registerCategories).toHaveBeenCalledTimes(1);
+  });
+
+  // A recorded DENIAL is an answer too, and is the one that must not turn into
+  // a second prompt: the user already said no.
+  it('honours a recorded denial without re-asking', async () => {
+    await expect(initNotifications(false)).resolves.toBe(false);
+    expect(native.requestPermission).not.toHaveBeenCalled();
+  });
+
+  // undefined is "not answered yet", which is the first-launch truth and the
+  // only state in which asking is correct.
+  it('asks when nothing is known yet', async () => {
+    await initNotifications(undefined);
+    expect(native.requestPermission).toHaveBeenCalledTimes(1);
+  });
 });
 
 // R36 from the other end: with the permission denied the native post is a

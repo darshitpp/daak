@@ -77,6 +77,10 @@ const methodBody = (selector: string): string => {
 // no object file and no link step, so this stays a ~1.3s test.
 const SDK = execFileSync('/usr/bin/xcrun', ['--show-sdk-path'], { encoding: 'utf8' }).trim();
 const PODS_PUBLIC_REACT_CORE = join(MACOS, 'Pods', 'Headers', 'Public', 'React-Core');
+// R61: on 0.83, React/RCTUIKit.h re-exports RCTUIKit/RCTUIKit.h, which the
+// React-RCTUIKit pod publishes. Without this include the syntax check dies in
+// React-Core's own header.
+const PODS_PUBLIC_REACT_UIKIT = join(MACOS, 'Pods', 'Headers', 'Public', 'React-RCTUIKit');
 const CLANG_ARGS = [
   '-fsyntax-only',
   '-fobjc-arc',
@@ -86,9 +90,11 @@ const CLANG_ARGS = [
   '-isysroot',
   SDK,
   '-target',
-  'arm64-apple-macos11.0',
+  'arm64-apple-macos14.0',
   '-I',
   PODS_PUBLIC_REACT_CORE,
+  '-I',
+  PODS_PUBLIC_REACT_UIKIT,
   IMPL_PATH,
 ];
 

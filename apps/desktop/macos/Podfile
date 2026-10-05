@@ -9,7 +9,9 @@ require Pod::Executable.execute_command('node', ['-p',
 prepare_react_native_project!
 
 target 'Daak-macOS' do
-  platform :macos, '11.0'
+  # react-native-macos 0.83.0 needs macOS 14.0. Its own macos template Podfile
+  # sets 14.0, and ReactAppDependencyProvider refuses a lower deployment target.
+  platform :macos, '14.0'
 
   # Two deviations from the generated template, both forced by this being a
   # pnpm workspace, both proven by running the original and reading the error:

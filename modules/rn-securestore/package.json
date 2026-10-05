@@ -11,5 +11,5 @@
     "jsSrcsDir": "js",
     "android": { "javaPackageName": "dev.darshit.daak.securestore" }
   },
-  "peerDependencies": { "react-native": ">=0.76" }
+  "peerDependencies": { "react-native": ">=0.83" }
 }

@@ -2,6 +2,7 @@ import React from 'react';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { mockPlatformHost } from '../testPlatformMock';
 import App from '../App';
 
 // The Send tab's picker is INJECTED, and the injection point is
@@ -12,9 +13,9 @@ import App from '../App';
 // packages/platform/src/share.test.ts's, and sendAndTransfersRoute.test.tsx
 // covers the shell's use of an injected function with a local stub -- neither
 // drives the real injection point, which is what this does.
-jest.mock('@daak/platform', () => ({
-  pickFiles: jest.fn(async () => ['/Users/d/Documents/a.pdf']),
-}));
+jest.mock('@daak/platform', () =>
+  mockPlatformHost({ pickFiles: jest.fn(async () => ['/Users/d/Documents/a.pdf']) }),
+);
 
 jest.mock('../BackgroundSyncNotice', () => ({
   BackgroundSyncNotice: () => null,
@@ -27,8 +28,15 @@ jest.mock('../bootstrap', () => ({
   startEngine: async () => {},
   startEngineOnce: jest.fn(async () => {}),
   drainInbound: jest.fn(async () => {}),
+  wireNotificationActions: jest.fn(() => () => {}),
   sendIntentItems: jest.fn(async () => {}),
+  // The peer.incompatible fan-out off the ONE engine subscription. Every file
+  // that renders App needs it: the import is undefined without it, and the
+  // mount effect throws before the shell renders at all.
+  onIncompatiblePeer: jest.fn(() => () => {}),
   postReceiveNotifications: jest.fn(async () => true),
+  notificationGrant: jest.fn(() => true),
+  recordNotificationGrant: jest.fn(),
 }));
 
 const { engine } = jest.requireMock('../bootstrap');

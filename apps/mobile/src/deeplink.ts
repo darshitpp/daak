@@ -73,7 +73,25 @@ export function onDeepLink(cb: (link: DeepLink) => void): () => void {
   // The second .then argument (not .catch) handles the rejection inline:
   // getInitialURL() rejects on a device with no handler, and an unhandled
   // rejection here would take the app down for a link that was optional.
-  void Linking.getInitialURL().then((u) => cb(parseDeepLink(u)), () => cb({ kind: 'none' }));
-  const sub = Linking.addEventListener('url', ({ url }) => cb(parseDeepLink(url)));
+  //
+  // LAST WRITER WINS IS A BUG HERE, and this used to have it. getInitialURL() is
+  // the cold-launch read and the 'url' event is a link into a running app, but
+  // the two are not ordered: a warm start delivers the event first and settles
+  // the initial read a tick later. Whichever resolved last overwrote the other,
+  // so a real pairing link could be replaced by the empty answer -- the app
+  // opened the pair route with NO bundle and the join silently did nothing.
+  //
+  // A `none` is therefore only ever reported when nothing real has been seen.
+  // One line, and it is the difference between a link that works and one that
+  // silently does not.
+  let settled = false;
+  const deliver = (url: string | null) => {
+    const link = parseDeepLink(url);
+    if (settled && link.kind === 'none') return;
+    if (link.kind !== 'none') settled = true;
+    cb(link);
+  };
+  void Linking.getInitialURL().then(deliver, () => deliver(null));
+  const sub = Linking.addEventListener('url', ({ url }) => deliver(url));
   return () => sub.remove();
 }

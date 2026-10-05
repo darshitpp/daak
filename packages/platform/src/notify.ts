@@ -34,9 +34,23 @@ const EVENT = 'DaakNotifyEvent';
  * permission costs the user a banner, never a transfer. A module that cannot
  * ask at all (no foreground activity to prompt from) rejects, which is also
  * just `false` here -- startup must not die on it.
+ *
+ * `known` is an answer this process has ALREADY been given. Passing it skips
+ * the ask and installs the categories anyway. That exists because a first
+ * launch asks twice otherwise: the Permissions screen's alerts row calls this
+ * when the user taps it, and startup calls it again moments later -- and on
+ * Android POST_NOTIFICATIONS is a runtime permission that shows a system
+ * prompt on every ask, so the user gets two prompts for one decision. iOS
+ * would silently no-op the second, which is worse in a different way: the
+ * screen's re-ask would then be unable to show anything at all.
+ *
+ * Categories are still installed on the known path: the category is not the
+ * permission, and it has to exist before any banner is posted even when the
+ * answer arrived earlier.
  */
-export async function initNotifications(): Promise<boolean> {
-  const granted = await NativeDaakNotify.requestPermission().catch(() => false);
+export async function initNotifications(known?: boolean): Promise<boolean> {
+  const granted =
+    known ?? (await NativeDaakNotify.requestPermission().catch(() => false));
   // Registered even when denied: the category is not the permission, and a
   // user who grants later must not need a reinstall to get working actions.
   // Also caught, for the same reason: a category install that rejects would

@@ -1,14 +1,13 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { mockPlatformHost } from '../testPlatformMock';
 import App from '../App';
 
 // The Send tab's picker is INJECTED, so the app supplies it and the real barrel
 // pulls the `Daak` TurboModule through @daak/core at module-eval time -- which
 // throws under Jest with no bridge. Same reason the two module mocks below exist.
 // The picker's own behaviour is packages/platform/src/share.test.ts's.
-jest.mock('@daak/platform', () => ({
-  pickFiles: jest.fn(async () => []),
-}));
+jest.mock('@daak/platform', () => mockPlatformHost());
 // App now imports BackgroundSyncNotice, which reaches @daak/platform for the
 // battery call. The real platform barrel pulls cbor-x (ESM) in through
 // @daak/core and jest cannot parse it. The notice is a Pressable, so mocking it
@@ -32,11 +31,23 @@ jest.mock('../bootstrap', () => ({
   startEngine: async () => {},
   startEngineOnce: jest.fn(async () => {}),
   drainInbound: jest.fn(async () => {}),
+  // App.tsx mounts the tapped-notification handlers. Returning a real
+  // unsubscribe keeps the effect's cleanup honest; this file's subject is the
+  // ROUTE the tap produces, and bootstrap's own dispatch is pinned in
+  // notifications.test.ts.
+  wireNotificationActions: jest.fn(() => () => {}),
   sendIntentItems: jest.fn(async () => {}),
+  // The peer.incompatible fan-out off the ONE engine subscription. Every file
+  // that renders App needs it: the import is undefined without it, and the
+  // mount effect throws before the shell renders at all.
+  onIncompatiblePeer: jest.fn(() => () => {}),
   postReceiveNotifications: jest.fn(async () => true),
+  notificationGrant: jest.fn(() => true),
+  recordNotificationGrant: jest.fn(),
 }));
 
-const { drainInbound, sendIntentItems, startEngineOnce, engine } = jest.requireMock('../bootstrap');
+const { drainInbound, sendIntentItems, startEngineOnce, wireNotificationActions, engine } =
+  jest.requireMock('../bootstrap');
 
 let warn: jest.SpyInstance;
 
@@ -48,8 +59,13 @@ beforeEach(() => {
 afterEach(() => warn.mockRestore());
 
 describe('App', () => {
-  it('boots and renders the tab shell', () => {
+  // ASYNC, deliberately. App now reads the durable onboarding state BEFORE it
+  // renders anything -- a first launch is decided by that read -- so a
+  // synchronous assertion here races it and sees the loading view. The shell
+  // assertion itself is unchanged; what it waits for is the keystore.
+  it('boots and renders the tab shell', async () => {
     render(<App />);
+    await waitFor(() => expect(screen.getAllByText('Send').length).toBeGreaterThan(0));
     expect(screen.getAllByText('Send').length).toBeGreaterThan(0);
     expect(screen.getByText('Devices')).toBeTruthy();
     expect(screen.getByText('Inbox')).toBeTruthy();
@@ -80,9 +96,32 @@ describe('App', () => {
   // engine, which would be two identities and two discovery stacks on the LAN.
   // Note the contrast with the test above: the owner may START the engine, it
   // may not SEND through it, and it may not drain the share inbox.
-  it('starts the engine once through the idempotent owner', () => {
+  // Same reason: the start is gated on the durable read, not on mount. The
+  // owner still may not start the engine TWICE, and that is what this claims.
+  it('starts the engine once through the idempotent owner', async () => {
     render(<App />);
-    expect(startEngineOnce).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
+  });
+
+  // R42: A RETURNING launch must not replay the onboarding name.
+  //
+  // The keystore keeps the name typed during FIRST-RUN onboarding. SQLite keeps
+  // the name the user last typed anywhere, including in Settings. The engine
+  // reads its own name from SQLite at start, so replaying the keystore copy
+  // after that overwrites the newer name -- which is exactly the defect: a
+  // rename made in Settings reverted on every relaunch.
+  //
+  // The mock's readOnboarding returns `name: 'Seawood Otter'`, so a replay
+  // would call setDisplayName with that value and fail this assertion.
+  it('does not replay the onboarding name on a returning launch', async () => {
+    const rename = jest.spyOn(engine, 'setDisplayName');
+    render(<App />);
+    await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
+    // One more tick, so a rename fired AFTER the start had settled would still
+    // be caught. The replay was chained onto the start promise.
+    await act(async () => {});
+    expect(rename).not.toHaveBeenCalled();
+    rename.mockRestore();
   });
 
   // An engine that never started shows a Dashboard with no devices, no banner
@@ -131,6 +170,31 @@ describe('App', () => {
     );
     // The intent-send arm is bootstrap's, not a draft: no 'sent already' note.
     expect(screen.queryByDisplayValue('sent already')).toBeNull();
+  });
+
+  // [Open] and [Share] were INSTALLED by initNotifications with nothing behind
+  // them, so a tap was silently dropped. This drives the real App: the tap has
+  // to reach the shell's Inbox route, not merely be dispatched in bootstrap.
+  it('routes a tapped [Open] notification to the Inbox', async () => {
+    let open: ((payload: string) => void) | undefined;
+    wireNotificationActions.mockImplementationOnce(
+      (_reveal: (p: string) => void, o: (p: string) => void) => {
+        open = o;
+        return () => {};
+      },
+    );
+    render(<App />);
+    await act(async () => {});
+
+    // Away from the Inbox, so arriving there is the assertion.
+    fireEvent.press(screen.getByText('Transfers'));
+    expect(await screen.findByText('No transfers yet')).toBeTruthy();
+
+    expect(open).toBeDefined();
+    await act(async () => {
+      open!(JSON.stringify({ transferId: 'aa'.repeat(16) }));
+    });
+    expect(screen.getByText('Search what arrived')).toBeTruthy();
   });
 
 });

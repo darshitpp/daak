@@ -23,7 +23,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, alert, alertRouteToken, settingsRouteToken, onCheckConnection }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -31,6 +31,16 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
+  /* The two BLOCKING screens, plus the tokens that route to them. They are
+     threaded rather than built here for the reason `pair` is a slot in
+     AppShell: the facts live on the host, which owns the engine, and
+     packages/ui takes no engine. The desktop shell was the one host that
+     passed none of these, so the macOS prototype lost `Can't Reach` and
+     `Update Required` while iOS and Android kept them. */
+  alert?: React.ReactNode;
+  alertRouteToken?: string;
+  settingsRouteToken?: string;
+  onCheckConnection?: () => void;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -45,8 +55,25 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   return (
     <View style={{ flex: 1 }}>
       {mode === 'popover'
-        ? <Popover state={state} engine={engine} onExpand={onExpand} onPickFiles={onPickFiles} />
-        : <Dashboard state={state} engine={engine} peerDeviceId={peerDeviceId} onPickFiles={onPickFiles} inboxActions={inboxActions} />}
+        ? <Popover
+            state={state}
+            engine={engine}
+            onExpand={onExpand}
+            onPickFiles={onPickFiles}
+            alert={alert}
+            alertRouteToken={alertRouteToken}
+          />
+        : <Dashboard
+            state={state}
+            engine={engine}
+            peerDeviceId={peerDeviceId}
+            onPickFiles={onPickFiles}
+            inboxActions={inboxActions}
+            alert={alert}
+            alertRouteToken={alertRouteToken}
+            settingsRouteToken={settingsRouteToken}
+            onCheckConnection={onCheckConnection}
+          />}
     </View>
   );
 }

@@ -1,7 +1,7 @@
 import type { DaakEngine, InboxEntry } from '@daak/core';
 import { presentShare } from '@daak/platform';
 
-import { startEngine, wireNotificationActions } from '../bootstrap';
+import { recordNotificationGrant, startEngine, wireNotificationActions } from '../bootstrap';
 
 // @daak/rn-notify only reaches this file through the real notify.ts below, and
 // getEnforcing throws under Jest. Nothing calls it: onNotificationAction is
@@ -59,7 +59,14 @@ function tapped(): (e: { action: string; payload: string }) => void {
   return platform.onNotificationAction.mock.calls[0][0];
 }
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  // The recorded answer is MODULE state on purpose -- it has to outlive a
+  // single call for startup to reuse it. So it has to be cleared explicitly,
+  // or the two tests below would pass or fail depending on their order.
+  // undefined is the first-launch truth: the user has answered nothing yet.
+  recordNotificationGrant(undefined);
+});
 
 describe('startEngine notifications', () => {
   it('asks for the notification permission on start', async () => {
@@ -88,6 +95,26 @@ describe('startEngine notifications', () => {
     platform.initNotifications.mockResolvedValueOnce(false);
     on.mockReturnValue(jest.fn());
     await expect(startEngine()).resolves.toBeUndefined();
+  });
+
+  // A first launch asks twice otherwise: the Permissions screen's alerts row
+  // asks when tapped, and startup asks again moments later. On Android
+  // POST_NOTIFICATIONS shows a system prompt on EVERY ask, so the user gets two
+  // prompts for one decision. Recording the answer and passing it back is what
+  // makes the ask happen exactly once.
+  it('reuses an answer already recorded instead of asking the OS again', async () => {
+    on.mockReturnValue(jest.fn());
+    recordNotificationGrant(true);
+    await startEngine();
+    expect(platform.initNotifications).toHaveBeenCalledWith(true);
+  });
+
+  // undefined means "the user has not answered yet", so startup still asks.
+  // Collapsing the two would strand every first launch with no banner.
+  it('asks when no answer has been recorded yet', async () => {
+    on.mockReturnValue(jest.fn());
+    await startEngine();
+    expect(platform.initNotifications).toHaveBeenCalledWith(undefined);
   });
 });
 

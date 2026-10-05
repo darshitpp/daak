@@ -117,4 +117,36 @@ describe('onDeepLink', () => {
     expect(seen).toEqual([{ kind: 'send', deviceId: 'x' }]);
     expect(listeners).toHaveLength(0);
   });
+
+  // REGRESSION, and a silent one. getInitialURL() and the 'url' event are NOT
+  // ordered: on a warm start the event arrives first and the initial read
+  // settles a tick later with no URL. Last-writer-wins therefore replaced a
+  // real pairing link with `none` -- the app opened the pair route with no
+  // bundle and the join did nothing at all, with no error to show for it.
+  it('does not let a late empty initial read discard a link already delivered', async () => {
+    // Never settles until the test releases it, which is the shape of the race:
+    // the event lands first, the read lands second.
+    let release!: (u: string | null) => void;
+    initial = new Promise<string | null>((r) => {
+      release = r;
+    });
+    const seen: DeepLink[] = [];
+    onDeepLink((l) => seen.push(l));
+    for (const emit of listeners) emit({ url: 'daak://pair?bundle=beef' });
+    release(null);
+    await initial;
+    await Promise.resolve();
+    expect(seen).toEqual([{ kind: 'pair', bundle: 'beef' }]);
+  });
+
+  // The empty answer is still delivered when NOTHING real ever arrived -- the
+  // guard is against an overwrite, not against reporting the ordinary state.
+  it('still reports none when no link ever arrives', async () => {
+    initial = Promise.resolve(null);
+    const seen: DeepLink[] = [];
+    onDeepLink((l) => seen.push(l));
+    await initial;
+    await Promise.resolve();
+    expect(seen).toEqual([{ kind: 'none' }]);
+  });
 });

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
-import { Btn, Note, PairingScreen, Section, useEngine } from '@daak/ui';
+import { Text, View } from 'react-native';
+import { Btn, Note, PairingScreen, Section, ui, useEngine } from '@daak/ui';
 import { armHostPairing, hostPairingQr, joinWithScan, parsePairingPayload } from './pairing';
 import { onPairingSas } from './bootstrap';
 
@@ -25,7 +25,7 @@ const pad = { padding: 16, gap: 24 } as const;
  * is a fan-out from the ONE subscription inside bootstrap.startEngine
  * (R42/R91). The joiner's SAS comes back synchronously from engine.pair.
  */
-export function PairingFlow({ bundle }: { bundle?: string } = {}) {
+export function PairingFlow({ bundle, embedded = false }: { bundle?: string; embedded?: boolean } = {}) {
   const engine = useEngine();
   const [phase, setPhase] = useState<Phase>({ kind: 'choose' });
   const [sas, setSas] = useState('');
@@ -105,9 +105,15 @@ export function PairingFlow({ bundle }: { bundle?: string } = {}) {
     setPhase({ kind: 'choose' });
   };
 
+  // EMBEDDED is the onboarding case. PairFirstDeviceScreen already supplies an
+  // appbar, a step counter and a scrolling column, so PairingScreen's own
+  // frame -- its second appbar and its own ScrollView -- would nest one whole
+  // screen inside another. Only the FRAME is suppressed; every control is the
+  // same real one, which is the property that matters, because the alternative
+  // would have been decorative QR data.
   if (phase.kind === 'choose') {
     return (
-      <ScrollView contentContainerStyle={pad}>
+      <View style={embedded ? ui.stack : undefined}>
         <Section title="Pair with another Daak device">
           <Btn variant="primary" block testID="host" label="Show QR" onPress={startHost} />
           <Btn variant="quiet" block testID="join" label="Scan" onPress={startJoin} />
@@ -117,7 +123,7 @@ export function PairingFlow({ bundle }: { bundle?: string } = {}) {
             body="Pairing shows a code and reads one back. No account, no server."
           />
         </Section>
-      </ScrollView>
+      </View>
     );
   }
   return (
@@ -127,6 +133,7 @@ export function PairingFlow({ bundle }: { bundle?: string } = {}) {
         qrUri={phase.kind === 'host' ? phase.qrUri : ''}
         onScan={startJoin}
         sas={sas}
+        embedded={embedded}
       />
       {/* The arm is ONE-SHOT: the engine takes it for the first joiner, and a
           stray LAN connection can fail a pairing without consuming the user

@@ -7,6 +7,7 @@ import { SendScreen } from '../screens/SendScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { TransfersScreen } from '../screens/TransfersScreen';
 import { TransferProgressScreen } from '../screens/TransferProgressScreen';
+import { QuarantineScreen } from '../screens/QuarantineScreen';
 import { TabBar, type Tab } from './TabBar';
 import { Btn } from './ds';
 import { spacing, ui } from '../theme';
@@ -29,17 +30,65 @@ export function AppShell({
   background,
   pair,
   transfers,
+  alert,
+  alertRouteToken,
+  settingsRouteToken,
+  onCheckConnection,
   onPickFiles,
   inboxActions,
   initialPeerDeviceId,
   initialText,
   initialFiles,
   pairBundle,
+  inboxRouteToken,
   layout = 'mobile',
 }: {
   background?: React.ReactNode;
   pair?: React.ReactNode;
   transfers?: React.ReactNode;
+  /**
+   * A BLOCKING screen that replaces the tab content entirely: the prototype's
+   * update-required and can't-reach screens.
+   *
+   * A slot, not a screen the shell imports, for the same reason `pair` is one --
+   * the facts (which peers, which versions, which outbox rows, what the last
+   * engine.devices() rejection said) live on the host, and packages/ui takes no
+   * @daak/core runtime and no engine. The shell routes to it; the host decides
+   * whether it is warranted.
+   *
+   * Rendered ABOVE the tab bar and the sidebar rather than inside them: both
+   * screens are about the app being unable to proceed, and leaving a working
+   * Send tab tappable beside them would contradict that.
+   */
+  alert?: React.ReactNode;
+  /**
+   * Bumped by the host to open (or re-open) the `alert` slot. A TOKEN, not a
+   * boolean, for the same reason inboxRouteToken is: the same peer re-announces
+   * on a timer, and a boolean would put a screen the user already dismissed
+   * back in front of them forever.
+   */
+  alertRouteToken?: string;
+  /**
+   * Bumped by the host to land the user ON Settings.
+   *
+   * Both blocking screens offer "Open Settings" -- and a button that only
+   * dismisses the screen it is on is a dead button, because the user is told to
+   * go somewhere and stays where they were. The host clears its alert token in
+   * the same render it bumps this one, so the tab switch and the dismissal
+   * cannot disagree.
+   *
+   * A TOKEN for the same reason inboxRouteToken is one: "go to Settings" has to
+   * work every time it is asked for, including twice in a row, and a boolean
+   * would only fire on the change.
+   */
+  settingsRouteToken?: string;
+  /**
+   * The prototype's "...isn't showing? See what to check" affordances, on
+   * Devices and on Settings. Injected because the decision belongs to the host:
+   * it owns the engine and is the only thing that can ask whether anybody is
+   * actually there.
+   */
+  onCheckConnection?: () => void;
   onPickFiles?: () => Promise<string[]>;
   /** The host's native "show in folder" / share-sheet calls for Inbox rows. */
   inboxActions?: InboxActions;
@@ -51,6 +100,13 @@ export function AppShell({
   initialFiles?: string[];
   /** A daak://pair?bundle=... payload. Opens the pair route; the host's `pair` node owns the flow. */
   pairBundle?: string;
+  /**
+   * Bumped by the host when a tapped [Open] notification should land on the
+   * Inbox. The payload itself is the notification's, not a screen's -- the
+   * Inbox already lists the entry -- so the shell only needs the ROUTE, and a
+   * repeated tap of the same value is a repeated tap of the same screen.
+   */
+  inboxRouteToken?: string;
   layout?: 'mobile' | 'desktop';
 }) {
   const [tab, setTab] = useState<Tab>('send');
@@ -72,6 +128,22 @@ export function AppShell({
   // a desktop sidebar there is nothing to click back to. One button, rendered
   // only while the pair route is open.
   const back = tab === 'pair' ? () => setTab('devices') : undefined;
+  // The "Held back" detail is a ROUTE like transfer detail and pairing, not a
+  // modal over the Inbox: the prototype's screen is full-bleed with its own
+  // appbar and a back chevron, and it is where the delete confirmation lives.
+  // Owned HERE so it works identically on the phone and on the desktop sidebar.
+  const [held, setHeld] = useState<{ transferId: string; itemIndex: number } | null>(null);
+  const openHeld = (r: { transferId: string; itemIndex: number }) => {
+    setHeld(r);
+    setTab('history');
+  };
+  // Two exits, deliberately. Back CLOSES the route; deletion does NOT, because
+  // the screen's post-delete "Deleted" state is the only confirmation the user
+  // gets that an irreversible thing really happened. Closing on delete would
+  // yank them to the Inbox with no acknowledgement at all. The list behind is
+  // stale for as long as the route is up, and it re-reads held items on mount
+  // (see HistoryScreen), so the row is already gone by the time it is seen.
+  const closeHeld = () => setHeld(null);
 
   // ponytail: keyed on the string values, so an OS re-delivery of the SAME
   // link does not re-route. Upgrade to a link counter if the platform is ever
@@ -85,6 +157,43 @@ export function AppShell({
     else if (initialFiles !== undefined || initialText !== undefined) setTab('send');
   }, [initialPeerDeviceId, pairBundle, initialFiles, initialText]);
 
+  useEffect(() => {
+    if (inboxRouteToken !== undefined) setTab('history');
+  }, [inboxRouteToken]);
+
+  // "Open Settings" on a blocking screen. NOT folded into the alert token
+  // above: that one OPENS the blocking screen, this one CLOSES it and routes,
+  // and one flag cannot mean two opposite things.
+  useEffect(() => {
+    if (settingsRouteToken !== undefined) setTab('settings');
+  }, [settingsRouteToken]);
+
+  // The blocking screens are NOT a tab: they take over the whole content area
+  // and the tab bar goes away, because both mean "Daak cannot send right now".
+  //
+  // The token is the WHOLE decision and the host owns it. It opens the screen
+  // only for a peer it has not shown one for before, so a peer re-announcing on
+  // a timer cannot re-open a screen the user dismissed -- which a boolean here
+  // could not express, and which a second dismissal copy inside the shell would
+  // only risk disagreeing with.
+  const blocking = alert !== undefined && alertRouteToken !== undefined;
+
+  // A held-back item was NOT delivered, so it is deliberately absent from the
+  // inbox list the shell fetches. The screen resolves it from the ENGINE by id
+  // instead, which is what makes the navigation real rather than a re-display
+  // of something the host already had.
+  if (held !== null) {
+    return (
+      <View style={ui.screen} testID="quarantine-route">
+        <QuarantineScreen
+          transferId={held.transferId}
+          itemIndex={held.itemIndex}
+          onBack={closeHeld}
+        />
+      </View>
+    );
+  }
+
   const screen =
     tab === 'send' ? (
       <SendScreen
@@ -96,7 +205,12 @@ export function AppShell({
         onPeerChange={setPeer}
       />
     ) : tab === 'devices' ? (
-      <DashboardScreen onSend={routeSend} onPair={openPair} />
+      <DashboardScreen
+        onSend={routeSend}
+        onPair={openPair}
+        onCompose={() => setTab('send')}
+        onCheckConnection={onCheckConnection}
+      />
     ) : tab === 'transfers' ? (
       // A host MAY pass its own transfers view; the default is the real one,
       // so a shell that passes nothing still shows every transfer instead of a
@@ -115,9 +229,9 @@ export function AppShell({
         </View>
       )
     ) : tab === 'history' ? (
-      <HistoryScreen actions={inboxActions} />
+      <HistoryScreen actions={inboxActions} onOpenHeld={openHeld} />
     ) : tab === 'settings' ? (
-      <SettingsScreen background={background} />
+      <SettingsScreen background={background} onCheckConnection={onCheckConnection} />
     ) : (
       <View style={ui.screen}>
         {pair}
@@ -127,7 +241,13 @@ export function AppShell({
 
   return (
     <View style={ui.screen}>
-      {layout === 'desktop' ? (
+      {blocking ? (
+        // No tab bar and no sidebar: both screens say Daak cannot proceed, and
+        // a tappable Send tab beside that claim is a lie about what works.
+        <View style={{ flex: 1 }} testID="alert-route">
+          {alert}
+        </View>
+      ) : layout === 'desktop' ? (
         <View style={ui.desk}>
           <View style={ui.sidebar}>
             <TabBar tab={tab} onChange={setTab} layout="desktop" />

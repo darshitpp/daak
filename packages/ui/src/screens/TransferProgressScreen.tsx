@@ -48,10 +48,12 @@ export function TransferProgressScreen({ transferId }: { transferId: string }) {
         />
       ) : null}
       {/*
-        NO onRetry: `Engine::retry_item` is real in Rust (engine.rs:720) but is
-        bound in neither the UDL nor the IpcRequest enum, so there is no call to
-        make. ReceivedItemRow hides Retry when no callback is supplied, which is
-        the honest rendering of "retry is not reachable yet" (R115(b)).
+        NO onRetry, and not as a gap: `retry_item` IS bound now, but it is not a
+        rescue on a RECEIVED item. It re-arms a transfer this device is SENDING.
+        For an arriving file the held bytes are the exact bytes that failed the
+        fingerprint check, and the protocol is push-only -- there is nothing to
+        ask a sender with. Offering a per-item retry here would be a button
+        that cannot do what its label implies.
 
         NO ProgressRow either: it takes byte counts, and `transfer.item` carries
         none, so it would render a permanent "0%" on every moving file (R16).

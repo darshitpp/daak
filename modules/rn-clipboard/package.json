@@ -10,5 +10,5 @@
     "jsSrcsDir": "js",
     "android": { "javaPackageName": "dev.darshit.daak.clipboard" }
   },
-  "peerDependencies": { "react-native": ">=0.76" }
+  "peerDependencies": { "react-native": ">=0.83" }
 }

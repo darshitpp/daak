@@ -6,7 +6,6 @@
     "lib": ["ES2022"],
     "types": [],
     "strict": true,
-    "skipLibCheck": true,
     "noEmit": true
   },
   "include": ["../../proto/gen/ts/**/*.d.ts"]

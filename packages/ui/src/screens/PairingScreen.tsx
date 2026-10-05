@@ -4,18 +4,25 @@ import { QrView } from '../components/QrView';
 import { Btn, Note, Section } from '../components/ds';
 import { ui } from '../theme';
 
-export function PairingScreen({ role, qrUri, onScan, sas }: {
+export function PairingScreen({ role, qrUri, onScan, sas, embedded = false }: {
   role: 'host' | 'join';
   qrUri: string;
   onScan: () => void;
   sas: string;
+  /**
+   * Drop this screen's own appbar and scroll container, because a host is
+   * already drawing both. Onboarding's Pair First Device step supplies the
+   * appbar, the step counter and the column, and rendering a second appbar
+   * inside it produces a screen nested in a screen.
+   *
+   * The CONTENT is untouched either way: same real QR, same real scan control,
+   * same real SAS, same notes. Only the frame is suppressed, because the frame
+   * is the half the host already owns.
+   */
+  embedded?: boolean;
 }) {
-  return (
-    <View style={ui.screen}>
-      <View style={ui.appbar}>
-        <Text style={ui.appbarTitle}>Pair a device</Text>
-      </View>
-      <ScrollView contentContainerStyle={ui.pad}>
+  const body = (
+    <>
         {role === 'host' ? (
           <Section title="Show this to the other device">
             <QrView uri={qrUri} label="Point their camera at this square." />
@@ -39,7 +46,15 @@ export function PairingScreen({ role, qrUri, onScan, sas }: {
         <Text style={ui.hint}>
           That number is derived from both devices' keys. If it does not match, stop and pair again.
         </Text>
-      </ScrollView>
+    </>
+  );
+  if (embedded) return <View style={ui.stack}>{body}</View>;
+  return (
+    <View style={ui.screen}>
+      <View style={ui.appbar}>
+        <Text style={ui.appbarTitle}>Pair a device</Text>
+      </View>
+      <ScrollView contentContainerStyle={ui.pad}>{body}</ScrollView>
     </View>
   );
 }

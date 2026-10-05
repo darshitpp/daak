@@ -35,4 +35,33 @@ describe('PairingScreen', () => {
     render(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
     expect(screen.getByText(SAS)).toBeTruthy();
   });
+
+  // EMBEDDED is what onboarding's Pair First Device step uses, because it
+  // already draws an appbar and a scrolling column. Rendering the standalone
+  // frame inside it produced two appbars and two nested scroll views.
+  it('drops its own appbar when a host is already drawing one', () => {
+    render(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
+    expect(screen.getByText('Pair a device')).toBeTruthy();
+
+    const { unmount } = render(
+      <PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} embedded />,
+    );
+    expect(screen.queryByText('Pair a device')).toBeNull();
+    unmount();
+  });
+
+  // The frame is the ONLY thing embedded suppresses. Suppressing content would
+  // mean the onboarding step showed a heading and nothing to pair with, which
+  // is the placeholder the screen exists to avoid.
+  it('keeps every control when embedded', () => {
+    const onScan = jest.fn();
+    render(<PairingScreen role="host" qrUri="data:image/png;base64,QUJD" onScan={onScan} sas={SAS} embedded />);
+    expect(screen.getByLabelText('pairing-qr')).toBeTruthy();
+    expect(screen.getByText(SAS)).toBeTruthy();
+
+    const join = render(<PairingScreen role="join" qrUri="" onScan={onScan} sas={SAS} embedded />);
+    fireEvent.press(screen.getAllByLabelText('scan')[0]);
+    expect(onScan).toHaveBeenCalledTimes(1);
+    join.unmount();
+  });
 });

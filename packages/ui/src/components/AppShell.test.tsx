@@ -130,6 +130,10 @@ it('routes a send link to Send with its peer and note', async () => {
   );
   // Still the default tab (send) but seeded: the proof is what the engine got.
   expect(await screen.findByDisplayValue('from a link')).toBeTruthy();
+  // React 19: the target comes from the devices() promise, and SendScreen
+  // returns early while target is null. Await the ENABLED label, not just the
+  // seeded text, or the press lands on a disabled button.
+  await screen.findByText('Send to Pixel 9');
   fireEvent.press(screen.getByLabelText('send'));
   await waitFor(() =>
     expect(sent).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, text: 'from a link', files: [] }),
@@ -210,6 +214,9 @@ it('routes an inbound share into the Send composer', async () => {
   );
   expect(await screen.findByDisplayValue('shared note')).toBeTruthy();
   expect(screen.getByText('photo.png')).toBeTruthy();
+  // Same as above: the peer list resolves asynchronously and the button stays
+  // disabled until it does.
+  await screen.findByText('Send to Pixel 9');
   fireEvent.press(screen.getByLabelText('send'));
   await waitFor(() =>
     expect(sent).toHaveBeenCalledWith({
@@ -218,4 +225,37 @@ it('routes an inbound share into the Send composer', async () => {
       files: ['/Documents/photo.png'],
     }),
   );
+});
+
+// A tapped [Open] notification has to land ON the Inbox. The notification is
+// posted with the InboxRow as its payload and the Inbox already lists that row,
+// so the shell needs only the route -- and it has to be a CHANGING token, or
+// the same row tapped twice lands once.
+it('routes a tapped notification to the Inbox, and again on a repeat tap', async () => {
+  const engine = fakeEngine();
+  const { rerender } = render(
+    <EngineProvider engine={engine}>
+      <AppShell />
+    </EngineProvider>,
+  );
+  fireEvent.press(screen.getByText('Transfers'));
+  expect(await screen.findByText('No transfers yet')).toBeTruthy();
+
+  rerender(
+    <EngineProvider engine={engine}>
+      <AppShell inboxRouteToken="1" />
+    </EngineProvider>,
+  );
+  expect(screen.getByText('Search what arrived')).toBeTruthy();
+
+  // Leave, then tap the SAME row again: a token the shell ignores after the
+  // first delivery would strand the user wherever they navigated to.
+  fireEvent.press(screen.getByText('Transfers'));
+  expect(await screen.findByText('No transfers yet')).toBeTruthy();
+  rerender(
+    <EngineProvider engine={engine}>
+      <AppShell inboxRouteToken="2" />
+    </EngineProvider>,
+  );
+  expect(screen.getByText('Search what arrived')).toBeTruthy();
 });

@@ -12,7 +12,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
-    "react-native": "^0.76",
+    "react-native": "^0.83.0",
     "typescript": "^5",
     "vitest": "^2"
   }

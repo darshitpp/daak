@@ -20,10 +20,16 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, alert, alertRouteToken, settingsRouteToken, onCheckConnection }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
+  /* See DaakUiApp. These four reach AppShell unchanged; this layer only adds
+     the EngineProvider the screens read from. */
+  alert?: React.ReactNode;
+  alertRouteToken?: string;
+  settingsRouteToken?: string;
+  onCheckConnection?: () => void;
 }) {
   void state;
   return (
@@ -34,6 +40,10 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           initialPeerDeviceId={peerDeviceId}
           onPickFiles={onPickFiles}
           inboxActions={inboxActions}
+          alert={alert}
+          alertRouteToken={alertRouteToken}
+          settingsRouteToken={settingsRouteToken}
+          onCheckConnection={onCheckConnection}
         />
       </View>
     </EngineProvider>

@@ -32,6 +32,30 @@ export function onPairingSas(cb: (sas: string) => void): () => void {
   };
 }
 
+// peer.incompatible fan-out, same shape and same single-subscription rule as
+// the SAS above (R42/R91). The engine emits this whenever a peer advertises a
+// protocol version this build refuses; without a listener it reached the store
+// and nowhere else, so UpdateRequiredScreen had no way to be shown.
+//
+// A peer re-announces on a timer, so this fires repeatedly for a peer that is
+// still out of step. The route is therefore opened by App only when the list
+// GROWS past what it already showed, not on every tick.
+const incompatibleListeners = new Set<(peer: IncompatiblePeer) => void>();
+
+export interface IncompatiblePeer {
+  peerDeviceId: string;
+  peerName: string;
+  peerVersion: number;
+  ourVersion: number;
+}
+
+export function onIncompatiblePeer(cb: (peer: IncompatiblePeer) => void): () => void {
+  incompatibleListeners.add(cb);
+  return () => {
+    incompatibleListeners.delete(cb);
+  };
+}
+
 // Re-entry handle for the pairing.done subscription. startEngine is *meant* to
 // be called once, but a comment is not an invariant -- a remount or a hot
 // reload would otherwise leave every earlier subscription live and republish
@@ -47,6 +71,42 @@ let unsubscribeEngine: (() => void) | undefined;
 // reason it has since Task 6.
 let started: Promise<void> | undefined;
 
+/**
+ * The REAL answer initNotifications() gave the last time startup ran, kept so
+ * the Permissions screen can render a fact instead of guessing.
+ *
+ * startEngine calls initNotifications and threw the result away; the prototype's
+ * Permissions screen needs to know whether alerts are actually granted. Rather
+ * than ask twice (an iOS prompt is not re-shown, and a second ask would be a
+ * request whose answer nobody can change), the value is recorded here and
+ * exposed. Undefined before startup and after a rejected ask -- which is
+ * indistinguishable from never having asked, and is rendered as such.
+ */
+let notificationsGranted: boolean | undefined;
+
+export function notificationGrant(): boolean | undefined {
+  return notificationsGranted;
+}
+
+/**
+ * Records the OS's answer without asking.
+ *
+ * The Permissions screen is the ONE place a first launch is meant to ask:
+ * asking there is a deliberate tap on a row that names what is being asked
+ * for. startup then runs initNotifications again, and on Android that is a
+ * SECOND system prompt for the same decision. Passing the recorded answer
+ * back in makes startup reuse it, so the ask happens exactly once per launch
+ * no matter which step ran first.
+ *
+ * undefined deliberately means "not answered yet", so the first real caller
+ * still asks. Passing a value is a claim that the OS already gave it, which is
+ * only ever true here -- it comes from this module's own initNotifications
+ * call, not from a guess.
+ */
+export function recordNotificationGrant(granted: boolean | undefined): void {
+  notificationsGranted = granted;
+}
+
 export function startEngineOnce(): Promise<void> {
   // Idempotent for the process lifetime, not merely per call: two engines in
   // one process means two identities and two discovery stacks on the LAN.
@@ -57,8 +117,9 @@ export function startEngineOnce(): Promise<void> {
 export async function startEngine(): Promise<void> {
   await engine.start();
   // R36: a denied permission is an ordinary answer, not a startup failure. The
-  // banner is lost; the transfer is not.
-  await initNotifications();
+  // banner is lost; the transfer is not. The RESULT is recorded rather than
+  // discarded, so the Permissions screen reports the OS's own answer.
+  notificationsGranted = await initNotifications(notificationsGranted);
   // R26: the peer list has to reach the App Group pairedDevices key, because
   // DaakIntentBridge.devices() is what answers Siri's entity query and it has no
   // other way to learn it. syncShortcutTargets is the only writer on both
@@ -98,6 +159,15 @@ export async function startEngine(): Promise<void> {
   // notification and not a lost send (the outbox retries).
   const inFlight = new Set<string>();
   unsubscribeEngine = engine.on((e) => {
+    // The compatibility signal, on the ONE subscription like every other
+    // event. A peer that is out of step is otherwise INVISIBLE: the engine
+    // skips it, so it never appears in devices() and the user sees an empty
+    // network with no explanation -- which is exactly what the update-required
+    // screen exists to explain.
+    if (e.type === 'peer.incompatible') {
+      for (const cb of [...incompatibleListeners]) cb(e);
+      return;
+    }
     // R91 (host half of QR pairing): the SAS for an INBOUND pairing arrives
     // here, on the ONE subscription, and is fanned out to PairingFlow. The
     // joiner's SAS comes back from engine.pair, so only the host reads this.
@@ -220,13 +290,12 @@ export async function drainIntentSends(engine: DaakEngine): Promise<void> {
  * notification action is not one. `present` is the ONLY outbound capability
  * the handler can reach.
  *
- * DELIBERATELY NOT CALLED YET, same reason as drainInbound: `reveal` has no
- * implementation on either platform (iOS needs a QuickLook preview, Android a
- * ACTION_VIEW intent on a FileProvider URI), so every caller today would have to
- * pass a no-op and a tapped "Show in folder" would silently do nothing. That is
- * also why R37 withholds daak.folder from the INSTALLED category on both native
- * sides: the button is not shown, so the missing reveal is unreachable. Wire
- * this when the UI owns reveal, and re-register the button in the same commit.
+ * Wired by App.tsx, because the INSTALLED category -- [Open] and [Share] --
+ * had no call site at all and a tap was silently dropped. `reveal` is the real
+ * revealInFileManager rather than a no-op even though daak.folder is still
+ * withheld from the installed set on both native sides (R37): iOS resolves
+ * false by design (R41) and Android opens a FileProvider viewer, so the handler
+ * is already honest and nothing changes if the button is re-registered.
  */
 export function wireNotificationActions(
   reveal: (path: string) => void,

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, Text, TextInput, View } from 'react-native';
-import type { InboxEntry } from '@daak/core';
+import type { InboxEntry, QuarantineReport } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { Avatar, Btn, Empty, Note, Section } from '../components/ds';
 import { colors, ui } from '../theme';
+import { humanBytes, senderLabel } from './quarantine-facts';
 
 const when = (ms: number): string => (ms > 0 ? new Date(ms).toLocaleString() : 'just now');
 
@@ -23,9 +24,21 @@ export interface InboxActions {
   share?: (paths: string[]) => void;
 }
 
-export function HistoryScreen({ actions }: { actions?: InboxActions } = {}) {
+export function HistoryScreen({
+  actions,
+  onOpenHeld,
+}: {
+  actions?: InboxActions;
+  /**
+   * Opens one held-back item. A CALLBACK, not a route inside this screen: the
+   * detail is full-screen with no tab bar, which is the shell's decision and
+   * the same one it makes for a transfer detail and for pairing.
+   */
+  onOpenHeld?: (r: QuarantineReport) => void;
+} = {}) {
   const engine = useEngine();
   const [inbox, setInbox] = useState<InboxEntry[]>([]);
+  const [held, setHeld] = useState<QuarantineReport[]>([]);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
   const [noReveal, setNoReveal] = useState(false);
@@ -36,6 +49,21 @@ export function HistoryScreen({ actions }: { actions?: InboxActions } = {}) {
     void actions?.open?.(path).then((opened) => setNoReveal(!opened), () => setNoReveal(true));
 
   useEffect(() => {
+    // Held-back items are listed SEPARATELY from the inbox, and deliberately
+    // not merged into it: an inbox row is a delivered payload, and a held item
+    // was NOT delivered. Folding them together would show a file the user never
+    // received as though it had arrived.
+    //
+    // The held list REFRESHES on any transfer.item event, because that is what
+    // the engine emits when a held item is deleted or newly quarantined -- and a
+    // stale row here would offer to open a file that is gone.
+    const refreshHeld = () =>
+      void engine.listQuarantineReports().then(
+        (list) => setHeld(list),
+        // A daemon that refuses this read must NOT take the inbox down with it:
+        // the inbox is the primary surface and still works.
+        () => setHeld([]),
+      );
     const refresh = () =>
       void engine.listInbox().then(
         (list) => {
@@ -45,9 +73,12 @@ export function HistoryScreen({ actions }: { actions?: InboxActions } = {}) {
         (e: unknown) => setError(e instanceof Error ? e.message : 'the engine did not answer with an inbox'),
       );
     refresh();
-    return engine.on((e) => {
+    refreshHeld();
+    const off = engine.on((e) => {
       if (e.type === 'inbox.received') setInbox((prev) => [e.payload, ...prev]);
+      if (e.type === 'transfer.item') refreshHeld();
     });
+    return off;
   }, [engine]);
 
   // The search box filters what the engine already gave us. There is no
@@ -115,6 +146,36 @@ export function HistoryScreen({ actions }: { actions?: InboxActions } = {}) {
             </View>
           )}
         </Section>
+        {held.length === 0 ? null : (
+          <Section title={'Held back (' + held.length + ')'}>
+            <Text style={ui.hint}>
+              These arrived but did not pass their fingerprint check, so Daak never
+              opened them. They are not in the list above.
+            </Text>
+            <View style={ui.list}>
+              {held.map((r) => (
+                <View key={r.transferId + ':' + r.itemIndex} style={ui.listRow}>
+                  <Avatar letter={r.name ?? '?'} />
+                  <View style={ui.fill}>
+                    <Text style={ui.rowTitle} numberOfLines={1}>
+                      {r.name ?? 'Held-back file'}
+                    </Text>
+                    <Text style={ui.rowSub} numberOfLines={1}>
+                      {senderLabel(r) + (r.size === null ? '' : ' · ' + humanBytes(r.size))}
+                    </Text>
+                  </View>
+                  {onOpenHeld ? (
+                    <Btn
+                      label="See why"
+                      onPress={() => onOpenHeld(r)}
+                      testID={'held-' + r.transferId + '-' + r.itemIndex}
+                    />
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          </Section>
+        )}
         <Note
           title="Arrived on this device only"
           body="Only one device reads what you send. Nothing here was opened anywhere else."

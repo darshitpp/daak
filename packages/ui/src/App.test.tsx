@@ -1,4 +1,5 @@
 import React from 'react';
+import { Text } from 'react-native';
 import { act, render, screen } from '@testing-library/react-native';
 import { DaakUiApp } from './App';
 import { createUiRuntime } from './headless';
@@ -44,5 +45,62 @@ describe('DaakUiApp', () => {
       });
     }
     expect(subscribes).toBe(1);
+  });
+
+  // R43. The popover is a whole window the user sees from the menu bar, and it
+  // DROPPED the blocking screens: DaakUiApp forwarded `alert` and
+  // `alertRouteToken` to Dashboard only, so a peer on another protocol version
+  // reached the dashboard window and never reached the menu-bar panel. The
+  // dashboard branch had the pair and the popover branch did not, which is the
+  // whole defect.
+  //
+  // BEHAVIOURAL, not a source pin: the reviewer found that the desktop's
+  // blocking-screen suite is source-shape only, so a shell could satisfy every
+  // source pin and still drop the node on the way into Popover. This mounts the
+  // real tree with the real host props and asserts on what is drawn.
+  it('renders the blocking alert in the popover when the host opens it', () => {
+    const engine = fakeEngine();
+    const runtime = createUiRuntime(engine);
+    render(
+      <DaakUiApp
+        mode="popover"
+        engine={engine}
+        runtime={runtime}
+        alert={<Text testID="blocking-alert">Update Required</Text>}
+        alertRouteToken="peer-1"
+      />,
+    );
+    expect(screen.getByTestId('blocking-alert')).toBeTruthy();
+    // The panel must be GONE, not merely covered: a Send button beside a
+    // claim that Daak cannot proceed is a lie about what works. The dashboard
+    // branch drops the tab bar for the same reason.
+    expect(screen.queryByLabelText('open-dashboard')).toBeNull();
+    // R43e: the wordmark row STAYS above the alert, and this pins it. Without
+    // the assertion a later edit that drops the mark while blocked passes every
+    // other case here.
+    //
+    // Queried by label, NOT by text. The wordmark draws the letter `D` and then
+    // `aak` as two separate Text nodes, so a text query for "Daak" finds
+    // nothing at all. The label on the wrapping View is the real handle.
+    expect(screen.getAllByLabelText('Daak').length).toBeGreaterThan(0);
+  });
+
+  // The negative half. Without it, a shell that renders the alert over the
+  // panel, or renders the alert unconditionally, passes the case above and
+  // still drops the panel on every ordinary launch. An alert with NO token is
+  // the resting state of every healthy launch, so the panel must be there.
+  it('renders the normal popover panel when no alert is routed', () => {
+    const engine = fakeEngine();
+    const runtime = createUiRuntime(engine);
+    render(
+      <DaakUiApp
+        mode="popover"
+        engine={engine}
+        runtime={runtime}
+        alert={<Text testID="blocking-alert">Update Required</Text>}
+      />,
+    );
+    expect(screen.queryByTestId('blocking-alert')).toBeNull();
+    expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
   });
 });

@@ -3,6 +3,52 @@ import { initialUiState, reduceUiState, type UiAction } from './store';
 const device = (deviceId: string, name: string) => ({ deviceId, name, addr: '1.2.3.4:40001', online: true });
 const entry = (payloadId: string) => ({ payloadId, transferId: 't', peerDeviceId: 'p', kind: 'text' as const, itemCount: 1, summary: 'msg', receivedAt: 0, savedPaths: [] });
 
+describe('incompatible peers', () => {
+  const event = {
+    type: 'peer.incompatible' as const,
+    peerDeviceId: 'aa'.repeat(16),
+    peerName: "Darshit's Pixel",
+    peerVersion: 5,
+    ourVersion: 3,
+  };
+
+  // The engine re-announces on a timer, so the same peer fires repeatedly. If
+  // each event appended, the update screen would list one phone several times.
+  it('keeps one row per peer however often it re-announces', () => {
+    const once = reduceUiState(initialUiState, event);
+    const twice = reduceUiState(once, event);
+    expect(once.incompatible).toHaveLength(1);
+    expect(twice.incompatible).toHaveLength(1);
+    // An event that changes nothing must return the SAME state object, or the
+    // runtime notifies every subscriber on a timer tick.
+    expect(twice).toBe(once);
+  });
+
+  // Two out-of-step devices are two separate facts; a latest-wins store would
+  // hide the first.
+  it('lists every out-of-step peer', () => {
+    const one = reduceUiState(initialUiState, event);
+    const two = reduceUiState(one, { ...event, peerDeviceId: 'bb'.repeat(16), peerName: 'Study Pi' });
+    // Newest first, matching the inbox convention: the screen headlines the
+    // first entry and lists the rest under "Also out of step".
+    expect(two.incompatible.map((p) => p.peerName)).toEqual(['Study Pi', "Darshit's Pixel"]);
+  });
+
+  // Both versions are real and both are needed: one number cannot tell "they
+  // need updating" from "we are the old one".
+  it('keeps both version numbers intact rather than reducing either to its major', () => {
+    const state = reduceUiState(initialUiState, { ...event, peerVersion: 1244, ourVersion: 1180 });
+    expect(state.incompatible[0]).toMatchObject({ peerVersion: 1244, ourVersion: 1180 });
+  });
+
+  it('carries the peer name and id through untouched', () => {
+    expect(reduceUiState(initialUiState, event).incompatible[0]).toMatchObject({
+      peerName: "Darshit's Pixel",
+      peerDeviceId: 'aa'.repeat(16),
+    });
+  });
+});
+
 describe('reduceUiState', () => {
   it('upserts a device without duplicating it', () => {
     const once = reduceUiState(initialUiState, { type: 'device.discovered', device: device('a', 'A') });

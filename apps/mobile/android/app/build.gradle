@@ -128,7 +128,9 @@ dependencies {
     implementation("com.facebook.react:react-android")
 
     if (hermesEnabled.toBoolean()) {
-        implementation("com.facebook.react:hermes-android")
+        // R61: react-native 0.83 no longer publishes com.facebook.react:hermes-android
+        // (newest on Maven is 0.82.1). Hermes ships inside react-android, and the
+        // gradle plugin still reads hermesEnabled for codegen.
     } else {
         implementation jscFlavor
     }

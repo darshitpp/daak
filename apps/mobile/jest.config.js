@@ -12,6 +12,6 @@ module.exports = {
   // pattern matches none of those, so RN's Flow-annotated polyfills are left
   // untransformed and jest dies on a type annotation.
   transformIgnorePatterns: [
-    'node_modules/(?!(.pnpm/)?(react-native|@react-native|@daak|react)([/+@]))',
+    'node_modules/(?!(.pnpm/)?(react-native|@react-native|@daak|react|yaml)([/+@]))',
   ],
 };

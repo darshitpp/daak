@@ -19,7 +19,7 @@
     "@daak/rn-share": "workspace:*"
   },
   "peerDependencies": {
-    "react-native": "^0.76"
+    "react-native": "^0.83.0"
   },
   "devDependencies": {
     "@daak/core": "workspace:*",
@@ -29,7 +29,7 @@
     "@daak/rn-notify": "workspace:*",
     "@daak/rn-qrscanner": "workspace:*",
     "@daak/rn-securestore": "workspace:*",
-    "react-native": "0.76.5",
+    "react-native": "0.83.10",
     "typescript": "^5.6.0",
     "vitest": "^2"
   }

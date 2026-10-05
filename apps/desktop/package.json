@@ -17,18 +17,19 @@
     "@daak/rn-share": "workspace:*",
     "@daak/rn-tray": "workspace:*",
     "@daak/ui": "workspace:*",
-    "react": "18.3.1",
-    "react-native": "0.76.5",
-    "react-native-macos": "0.76.5"
+    "react": "19.3.0",
+    "react-native": "0.83.10",
+    "react-native-macos": "0.83.0"
   },
   "devDependencies": {
-    "@react-native-community/cli": "^15.0.1",
-    "@react-native/babel-preset": "0.76.5",
-    "@react-native/metro-config": "0.76.5",
-    "@react-native/typescript-config": "0.76.5",
+    "@react-native-community/cli": "^19.1.2",
+    "@react-native-community/cli-platform-ios": "19.1.2",
+    "@react-native/babel-preset": "0.83.10",
+    "@react-native/metro-config": "0.83.10",
+    "@react-native/typescript-config": "0.83.10",
     "@types/node": "^26.6.3",
-    "@types/react": "^18.2.6",
-    "react-test-renderer": "18.3.1",
+    "@types/react": "^19.1.1",
+    "react-test-renderer": "19.3.0",
     "typescript": "^5.6.0",
     "vitest": "^2"
   },

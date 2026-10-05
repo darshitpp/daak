@@ -7,6 +7,7 @@ export * from './inbound';
 export * from './notify';
 export * from './onboarding';
 export * from './onboarding-copy';
+export * from './permission-rows';
 export * from './pairing';
 export * from './qr';
 export * from './receive';

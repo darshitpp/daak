@@ -27,14 +27,23 @@ const tail = (p: string): string => p.split('/').pop() || p;
  * exactly as the dashboard gets it. Without one the file step is not rendered:
  * a picker button that opens nothing is a dead control.
  */
-export function Popover({ state, engine, onExpand, onPickFiles }: {
+export function Popover({ state, engine, onExpand, onPickFiles, alert, alertRouteToken }: {
   state: UiState;
   engine: {
     send(req: { peerDeviceId: string; files?: string[] }): Promise<{ transferId: string; queued: boolean }>;
   };
   onExpand: () => void;
   onPickFiles?: () => Promise<string[]>;
+  /* See DaakUiApp. R43: the popover is a WINDOW the user opens from the menu
+     bar, and it dropped both props while the dashboard branch kept them, so a
+     peer on another protocol version reached the dashboard and never reached
+     the panel. Both halves are needed: AppShell treats the pair as the whole
+     decision, because an `alert` with no token is the resting state of every
+     healthy launch and must render nothing. */
+  alert?: React.ReactNode;
+  alertRouteToken?: string;
 }) {
+  const blocking = alertRouteToken !== undefined && alert;
   const devices = state.devices.slice(0, 3);
   const transfer = state.transfers.find((t: TransferRow) => t.state === 'active');
   const [target, setTarget] = useState<DeviceInfo | null>(null);
@@ -86,67 +95,83 @@ export function Popover({ state, engine, onExpand, onPickFiles }: {
 
   return (
     <View style={{ width: 320, padding: 16, gap: 12, backgroundColor: colors.bg }}>
-      <View style={ui.row}>
-        <Wordmark size="sm" />
-        <View style={ui.fill}>
-          <Status tone={transfer ? 'warn' : 'ok'} label={transfer ? 'Sending right now' : 'Ready to send'} />
-        </View>
-      </View>
-
-      {target === null ? (
-        <View style={ui.stackSm}>
-          <Text style={ui.sectionT}>Send to</Text>
-          {devices.map((d) => (
-            <DeviceCard key={d.deviceId} device={d} onSend={choose} />
-          ))}
-          {devices.length === 0 ? (
-            <Text style={ui.muted}>No devices nearby. Both devices need the same Wi-Fi.</Text>
-          ) : null}
-        </View>
+      {/* REPLACES the panel, not a layer over it. The dashboard branch drops the
+          tab bar and the sidebar for the same reason: both blocking screens say
+          Daak cannot proceed, and a tappable Send control beside that claim is a
+          lie about what works. The wordmark is kept so the panel still reads as
+          Daak rather than as a foreign dialog. */}
+      {blocking ? (
+        <>
+          <View style={ui.row}>
+            <Wordmark size="sm" />
+          </View>
+          {alert}
+        </>
       ) : (
-        <View style={ui.stackSm}>
-          <Btn label="All devices" variant="ghost" block testID="popover-back" onPress={back} />
-          <Text style={ui.sectionT}>What should go to {target.name}?</Text>
-          {files.map((p) => (
-            <View key={p} style={[ui.row, { minHeight: control.minHeight }]}>
-              <Text style={[ui.rowTitle, ui.fill]} numberOfLines={1}>{tail(p)}</Text>
-              <Btn
-                label="Remove"
-                variant="ghost"
-                testID={'popover-remove-' + tail(p)}
-                onPress={() => setFiles((f) => f.filter((x) => x !== p))}
-              />
+        <>
+          <View style={ui.row}>
+            <Wordmark size="sm" />
+            <View style={ui.fill}>
+              <Status tone={transfer ? 'warn' : 'ok'} label={transfer ? 'Sending right now' : 'Ready to send'} />
             </View>
-          ))}
-          {onPickFiles ? (
-            <Btn
-              label={files.length === 0 ? 'Choose a file' : 'Add another'}
-              variant="quiet"
-              block
-              testID="popover-pick"
-              onPress={pick}
-            />
+          </View>
+
+          {target === null ? (
+            <View style={ui.stackSm}>
+              <Text style={ui.sectionT}>Send to</Text>
+              {devices.map((d) => (
+                <DeviceCard key={d.deviceId} device={d} onSend={choose} />
+              ))}
+              {devices.length === 0 ? (
+                <Text style={ui.muted}>No devices nearby. Both devices need the same Wi-Fi.</Text>
+              ) : null}
+            </View>
+          ) : (
+            <View style={ui.stackSm}>
+              <Btn label="All devices" variant="ghost" block testID="popover-back" onPress={back} />
+              <Text style={ui.sectionT}>What should go to {target.name}?</Text>
+              {files.map((p) => (
+                <View key={p} style={[ui.row, { minHeight: control.minHeight }]}>
+                  <Text style={[ui.rowTitle, ui.fill]} numberOfLines={1}>{tail(p)}</Text>
+                  <Btn
+                    label="Remove"
+                    variant="ghost"
+                    testID={'popover-remove-' + tail(p)}
+                    onPress={() => setFiles((f) => f.filter((x) => x !== p))}
+                  />
+                </View>
+              ))}
+              {onPickFiles ? (
+                <Btn
+                  label={files.length === 0 ? 'Choose a file' : 'Add another'}
+                  variant="quiet"
+                  block
+                  testID="popover-pick"
+                  onPress={pick}
+                />
+              ) : null}
+              {files.length > 0 ? (
+                <Btn
+                  variant="primary"
+                  block
+                  testID="popover-send"
+                  disabled={sending}
+                  onPress={send}
+                  label={sending ? 'Queueing' : 'Send'}
+                />
+              ) : null}
+              {result ? <Note tone={result.tone} title={result.title} body={result.body} testID="popover-result" /> : null}
+            </View>
+          )}
+
+          {transfer ? (
+            <ProgressRow name={transfer.transferId} bytesDone={transfer.bytesDone}
+              bytesTotal={transfer.bytesTotal} state={transfer.state} />
           ) : null}
-          {files.length > 0 ? (
-            <Btn
-              variant="primary"
-              block
-              testID="popover-send"
-              disabled={sending}
-              onPress={send}
-              label={sending ? 'Queueing' : 'Send'}
-            />
-          ) : null}
-          {result ? <Note tone={result.tone} title={result.title} body={result.body} testID="popover-result" /> : null}
-        </View>
+
+          <Btn variant="ghost" block testID="open-dashboard" label="Open the full app" onPress={onExpand} />
+        </>
       )}
-
-      {transfer ? (
-        <ProgressRow name={transfer.transferId} bytesDone={transfer.bytesDone}
-          bytesTotal={transfer.bytesTotal} state={transfer.state} />
-      ) : null}
-
-      <Btn variant="ghost" block testID="open-dashboard" label="Open the full app" onPress={onExpand} />
     </View>
   );
 }

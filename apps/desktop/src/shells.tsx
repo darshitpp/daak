@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
-import { DaakUiApp } from '@daak/ui';
-import type { UiRuntime } from '@daak/ui';
+import { DaakUiApp, useBlockers } from '@daak/ui';
+import type { IncompatiblePeer, UiRuntime } from '@daak/ui';
 // The @daak/core barrel re-exports NativeDaak, which calls
 // TurboModuleRegistry.getEnforcing('Daak') at module-eval time and throws in
 // Node. This specifier is a TYPE-only annotation, so it is erased at compile
@@ -16,6 +16,32 @@ import { desktopPickFiles } from './picker';
 import { desktopInboxActions } from './inbox-actions';
 import { DesktopOnboardingGate } from './onboarding-gate';
 import { StartFaultNote } from './start-fault';
+
+// The peers the daemon reduced to "out of step", read off the SAME UiState the
+// shell already subscribes to. A bare runtime.getState().incompatible would be
+// a snapshot taken once: a peer that announces a bad version later would never
+// reach the blocking hook. useSyncExternalStore is what re-renders on the next
+// engine event, and it is the runtime's own subscription rather than a second
+// engine.on (R43a).
+//
+// The fallback is a MODULE constant and never an inline []. useSyncExternalStore
+// compares snapshots with Object.is, so an inline [] would hand back a new
+// identity on every read and spin the tree forever -- the exact defect
+// test/tray-survival.spec.ts records for the tray overlay. The real runtime
+// (packages/ui/src/headless.ts) closes over initialUiState and always carries
+// the field, so the fallback only serves a host that hands a narrower snapshot.
+const NO_INCOMPATIBLE: IncompatiblePeer[] = [];
+
+function useIncompatible(runtime: UiRuntime) {
+  const subscribe = useCallback(
+    (onChange: () => void) => runtime.subscribe(onChange),
+    [runtime],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () => runtime.getState().incompatible ?? NO_INCOMPATIBLE,
+  );
+}
 
 function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {
@@ -45,6 +71,8 @@ export function DaakPopoverShell({ engine, runtime }: {
   engine: DaakEngine;
   runtime: UiRuntime;
 }) {
+  const incompatible = useIncompatible(runtime);
+  const blockers = useBlockers(engine, incompatible);
   // BOTH roots go through the gate, not just the dashboard. The popover is
   // reachable only after install() runs, which is after the tray exists, and a
   // first launch has no tray content worth opening -- but if it IS reachable,
@@ -59,6 +87,10 @@ export function DaakPopoverShell({ engine, runtime }: {
           engine={engine}
           runtime={runtime}
           onPickFiles={desktopPickFiles}
+          alert={blockers.alert}
+          alertRouteToken={blockers.alertRouteToken}
+          settingsRouteToken={blockers.settingsRouteToken}
+          onCheckConnection={blockers.onCheckConnection}
           onExpand={() => {
             closePopover();
             openDashboard();
@@ -84,6 +116,8 @@ export function DaakDashboardShell({ engine, runtime }: {
     [],
   );
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
+  const incompatible = useIncompatible(runtime);
+  const blockers = useBlockers(engine, incompatible);
   // The gate is a CONDITIONAL wrapper, not a boundary: both hooks above run
   // whether or not the dashboard is currently shown, and both read MODULE-level
   // stores rather than the engine. That is what lets the picker stay in this
@@ -121,6 +155,10 @@ export function DaakDashboardShell({ engine, runtime }: {
           peerDeviceId={peerDeviceId ?? undefined}
           onPickFiles={desktopPickFiles}
           inboxActions={desktopInboxActions}
+          alert={blockers.alert}
+          alertRouteToken={blockers.alertRouteToken}
+          settingsRouteToken={blockers.settingsRouteToken}
+          onCheckConnection={blockers.onCheckConnection}
         />
       </DesktopOnboardingGate>
     </>

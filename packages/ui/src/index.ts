@@ -18,9 +18,13 @@ export { TransferProgressScreen } from './screens/TransferProgressScreen';
 export { TransfersScreen } from './screens/TransfersScreen';
 export { HistoryScreen, type InboxActions } from './screens/HistoryScreen';
 export { SettingsScreen } from './screens/SettingsScreen';
+export { QuarantineScreen } from './screens/QuarantineScreen';
 export { WelcomeScreen } from './screens/WelcomeScreen';
 export { NameDeviceScreen, MAX_NAME } from './screens/NameDeviceScreen';
 export { PermissionsScreen, type PermissionRowSpec } from './screens/PermissionsScreen';
+export { PairFirstDeviceScreen } from './screens/PairFirstDeviceScreen';
+export { CantReachScreen, type QueuedTransfer } from './screens/CantReachScreen';
+export { UpdateRequiredScreen } from './screens/UpdateRequiredScreen';
 export {
   Accordion,
   AppBar,
@@ -33,7 +37,6 @@ export {
   SwitchRow,
   type SwitchState,
 } from './components/Onboarding';
-
 export { fakeEngine } from './testing/fakeEngine';
 export { DaakUiApp } from './App';
 export { Popover } from './modes/Popover';
@@ -41,5 +44,6 @@ export { Dashboard } from './modes/Dashboard';
 export { createUiRuntime, initialUiState, reduceUiState } from './headless';
 export { colors, control, radius, spacing, type, ui } from './theme';
 export type { DaakEngine, DaakEvent, DeviceInfo, InboxEntry, SendRequest } from '@daak/core';
-export type { AppMode, TransferRow, UiAction, UiState } from './state/store';
+export type { AppMode, IncompatiblePeer, TransferRow, UiAction, UiState } from './state/store';
 export type { UiRuntime } from './headless';
+export { useBlockers } from './state/useBlockers';

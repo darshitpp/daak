@@ -14,9 +14,30 @@ export interface UiState {
   devices: DeviceInfo[];
   transfers: TransferRow[];
   inbox: InboxEntry[];
+  /**
+   * Peers currently announcing a protocol version this build refuses.
+   *
+   * A LIST, not a single slot, because two out-of-step devices are two separate
+   * facts and a "latest event wins" store would hide the first. The engine
+   * re-announces on a timer, so the same peer re-fires; the entry is REPLACED
+   * by device id rather than appended, or the screen would list one phone three
+   * times. Nothing REMOVES an entry here: a peer that updates or leaves stops
+   * announcing, but "stopped announcing" is not an event the engine sends, and
+   * inventing a removal would be guessing. The host re-reads devices() and
+   * drops the peer from this list when the peer is genuinely gone -- see
+   * apps/mobile/src/App.tsx.
+   */
+  incompatible: IncompatiblePeer[];
 }
 
-export const initialUiState: UiState = { devices: [], transfers: [], inbox: [] };
+export interface IncompatiblePeer {
+  peerDeviceId: string;
+  peerName: string;
+  peerVersion: number;
+  ourVersion: number;
+}
+
+export const initialUiState: UiState = { devices: [], transfers: [], inbox: [], incompatible: [] };
 
 /**
  * Not a DaakEvent: the engine never emits it, so it is the store's own input.
@@ -103,6 +124,31 @@ export function reduceUiState(state: UiState, event: UiAction): UiState {
       };
     case 'inbox.received':
       return { ...state, inbox: [event.payload, ...state.inbox] };
+    case 'peer.incompatible': {
+      const peer: IncompatiblePeer = {
+        peerDeviceId: event.peerDeviceId,
+        peerName: event.peerName,
+        peerVersion: event.peerVersion,
+        ourVersion: event.ourVersion,
+      };
+      // Re-announcing replaces, so a peer that fires on a timer occupies ONE
+      // row rather than growing the list on every tick. The identity check has
+      // to come BEFORE the rebuild: filtering first allocates a new array even
+      // when the outcome is identical, and returning a fresh object for an
+      // event that changed nothing re-renders every subscriber on a timer.
+      const existing = state.incompatible.find((p) => p.peerDeviceId === event.peerDeviceId);
+      if (
+        state.incompatible.length === 1 &&
+        existing !== undefined &&
+        existing.peerName === peer.peerName &&
+        existing.peerVersion === peer.peerVersion &&
+        existing.ourVersion === peer.ourVersion
+      ) {
+        return state;
+      }
+      const rest = state.incompatible.filter((p) => p.peerDeviceId !== event.peerDeviceId);
+      return { ...state, incompatible: [peer, ...rest] };
+    }
     // `transfer.item` and `pairing.*` carry nothing this store renders, and an
     // event type added to DaakEvent later must not throw here.
     default:

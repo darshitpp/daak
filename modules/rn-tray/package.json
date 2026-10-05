@@ -11,6 +11,6 @@
   },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": { "@daak/core": "workspace:*", "@daak/ui": "workspace:*" },
-  "peerDependencies": { "react": "^18", "react-native": ">=0.76" },
-  "devDependencies": { "typescript": "^5.6.0", "vitest": "^2", "@types/react": "^18.2.6" }
+  "peerDependencies": { "react": "^19", "react-native": ">=0.83" },
+  "devDependencies": { "typescript": "^5.6.0", "vitest": "^2", "@types/react": "^19.1.1" }
 }

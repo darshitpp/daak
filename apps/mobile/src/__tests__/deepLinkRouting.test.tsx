@@ -1,7 +1,8 @@
 import React from 'react';
 import { Linking } from 'react-native';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine } from '@daak/core';
+import { mockPlatformHost } from '../testPlatformMock';
 import App from '../App';
 
 // The deep link was a parser with no caller: parseDeepLink handled daak://send
@@ -17,8 +18,19 @@ jest.mock('../bootstrap', () => ({
   startEngine: async () => {},
   startEngineOnce: jest.fn(async () => {}),
   drainInbound: jest.fn(async () => {}),
+  wireNotificationActions: jest.fn(() => () => {}),
   sendIntentItems: jest.fn(async () => {}),
   onPairingSas: () => () => {},
+  // The peer.incompatible fan-out off the ONE engine subscription. Every file
+  // that renders App needs it: the import is undefined without it and the mount
+  // effect throws before the shell renders at all.
+  onIncompatiblePeer: jest.fn(() => () => {}),
+  postReceiveNotifications: jest.fn(async () => true),
+  notificationGrant: jest.fn(() => true),
+  // OnboardingFlow records the OS's answer here so startup reuses it instead of
+  // asking a second time. Absent, the import is undefined and the Permissions
+  // step throws -- which is what took these two pair-link tests down.
+  recordNotificationGrant: jest.fn(),
 }));
 
 // App reaches @daak/platform through SendFlow's picker, PairingFlow's QR and
@@ -26,17 +38,15 @@ jest.mock('../bootstrap', () => ({
 // jest cannot parse it. Only the four things PairingFlow touches are stubbed --
 // the flow itself is the real one, because a stubbed flow would pass this file
 // while proving nothing about a link.
-jest.mock('@daak/platform', () => ({
-  pickFiles: jest.fn(async () => []),
-  revealInFileManager: jest.fn(async () => true),
-  presentShare: jest.fn(async () => true),
-  pairingBundle: jest.fn(async () => JSON.stringify({ cbor: 'aabb', name: 'me', device_id: 'bb'.repeat(16) })),
-  generateQr: jest.fn(async () => 'data:image/png;base64,QUJD'),
-  PAIRING_QR_SIZE: 512,
-  scanQr: jest.fn(async () =>
-    JSON.stringify({ cbor: 'aabbcc', name: 'Pixel 9', device_id: 'aa'.repeat(16) }),
-  ),
-}));
+jest.mock('@daak/platform', () =>
+  mockPlatformHost({
+    pairingBundle: jest.fn(async () => JSON.stringify({ cbor: 'aabb', name: 'me', device_id: 'bb'.repeat(16) })),
+    generateQr: jest.fn(async () => 'data:image/png;base64,QUJD'),
+    scanQr: jest.fn(async () =>
+      JSON.stringify({ cbor: 'aabbcc', name: 'Pixel 9', device_id: 'aa'.repeat(16) }),
+    ),
+  }),
+);
 
 jest.mock('../BackgroundSyncNotice', () => ({ BackgroundSyncNotice: () => null }));
 
@@ -78,7 +88,9 @@ it('routes a send link to the composer, prefilled and pointed at that peer', asy
 // Devices actually moves them to the composer.
 it('pulls the Devices tab to Send', async () => {
   render(<App />);
-  fireEvent.press(screen.getByText('Devices'));
+    // The shell replaces the onboarding flow only once App's durable read has
+    // resolved, so the tab that navigates cannot be pressed synchronously.
+    fireEvent.press(await screen.findByText('Devices'));
   expect(screen.getByLabelText('pair-a-device')).toBeTruthy();
   emit('daak://send?deviceId=' + PEER);
   expect(await screen.findByPlaceholderText('Message')).toBeTruthy();
@@ -108,7 +120,7 @@ it('says so when a pair link is not a bundle', async () => {
 it('does not join when the pair route is opened by hand', async () => {
   const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: 'x' });
   render(<App />);
-  fireEvent.press(screen.getByText('Devices'));
+  fireEvent.press(await screen.findByText('Devices'));
   fireEvent.press(screen.getByLabelText('pair-a-device'));
   expect(screen.getByText('Show QR')).toBeTruthy();
   expect(pair).not.toHaveBeenCalled();
@@ -129,7 +141,12 @@ it('does not fight a hand-typed note on a plain mount', async () => {
 it('does not carry an earlier note to a later send link with no text', async () => {
   render(<App />);
   fireEvent.changeText(await screen.findByPlaceholderText('Message'), 'for the old peer');
-  emit('daak://send?deviceId=' + PEER);
+  // React 19: an update driven from the Linking listener is outside act, so it
+  // is not flushed by the time the assertions run. Wrap it, like the other
+  // tests in this file already do.
+  await act(async () => {
+    emit('daak://send?deviceId=' + PEER);
+  });
   expect(await screen.findByText('Send to Pixel 9')).toBeTruthy();
-  expect(screen.queryByDisplayValue('for the old peer')).toBeNull();
+  await waitFor(() => expect(screen.queryByDisplayValue('for the old peer')).toBeNull());
 });

@@ -7,9 +7,22 @@ import { DeviceCard } from '../components/DeviceCard';
 import { Btn, Empty, Note, Section } from '../components/ds';
 import { ui } from '../theme';
 
-export function DashboardScreen({ onSend, onPair }: {
+export function DashboardScreen({ onSend, onPair, onCompose, onCheckConnection }: {
   onSend?: (d: DeviceInfo) => void;
   onPair?: () => void;
+  /**
+   * The prototype's "Send to a device" primary action. Optional, and null by
+   * default: a shell that cannot route to its own Send tab has no business
+   * rendering a button that says Send and does nothing.
+   */
+  onCompose?: () => void;
+  /**
+   * The prototype's "A device you paired isn't showing? See what to check"
+   * button, below the primary action (prototypes/index.html:988). Injected:
+   * the screen does not know whether anybody is reachable, only the host that
+   * owns the engine does.
+   */
+  onCheckConnection?: () => void;
 } = {}) {
   const engine = useEngine();
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -56,6 +69,21 @@ export function DashboardScreen({ onSend, onPair }: {
             </View>
           )}
         </Section>
+        {/* The prototype's primary action, in its own block ABOVE the list
+            (prototypes/index.html:987). Routed by the host rather than set here:
+            this screen is handed devices, not the tab state. */}
+        {onCompose ? (
+          <Btn label="Send to a device" variant="primary" block onPress={onCompose} testID="devices-send" />
+        ) : null}
+        {onCheckConnection ? (
+          <Btn
+            variant="quiet"
+            block
+            label="A device you paired isn't showing? See what to check"
+            testID="devices-check-connection"
+            onPress={onCheckConnection}
+          />
+        ) : null}
         <Note
           title="Everyone here is on the same Wi-Fi"
           body="Tap Send on a device to put something in its Inbox. Nothing leaves the network."
