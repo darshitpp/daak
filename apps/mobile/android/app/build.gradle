@@ -128,9 +128,24 @@ dependencies {
     implementation("com.facebook.react:react-android")
 
     if (hermesEnabled.toBoolean()) {
-        // R61: react-native 0.83 no longer publishes com.facebook.react:hermes-android
-        // (newest on Maven is 0.82.1). Hermes ships inside react-android, and the
-        // gradle plugin still reads hermesEnabled for codegen.
+        // R65: react-android deliberately EXCLUDES libhermesvm.so from its own
+        // AAR, so the VM must come from a separate artifact. An empty branch here
+        // ships an APK with libhermestooling.so and no VM beside it, and the app
+        // dies in Activity.onCreate with
+        // SoLoaderDSONotFoundError: couldn't find DSO to load: libhermesvm.so
+        // before React renders anything. Measured on an arm64 emulator, API 36.
+        //
+        // The GROUP is the load-bearing part. react-native 0.83 moved this
+        // artifact to com.facebook.hermes; com.facebook.react:hermes-android
+        // stops at 0.82.1 and com.facebook.react:hermes-android:0.83.10 is a 404.
+        // The plugin reads the same group out of
+        // react-native/ReactAndroid/gradle.properties (react.internal.hermesPublishingGroup)
+        // and the same version out of sdks/hermes-engine/version.properties, so
+        // 0.14.1 below is HERMES_VERSION_NAME from that file, not the RN version.
+        // The plugin also FORCES the same coordinate to that version, so an RN
+        // upgrade cannot leave this stale.
+        // Pinned by src/__tests__/androidJsEngine.test.ts.
+        implementation("com.facebook.hermes:hermes-android:0.14.1")
     } else {
         implementation jscFlavor
     }
