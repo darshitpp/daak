@@ -26,7 +26,18 @@ function TabButton({ tab, on, onChange, layout }: {
   const desktop = layout === 'desktop';
   return (
     <Pressable
-      accessibilityRole="tab"
+      // `button`, NOT `tab`. React Native maps `tab` to UIAccessibilityTraitNone
+      // on iOS (RCTViewManager.m), exactly like `none`: a trait of None is not
+      // an accessibility element, so the destination never reaches VoiceOver
+      // or any automation surface. A tab IS a control the user activates, and
+      // accessibilityState.selected carries the tab meaning on top of it.
+      accessibilityRole="button"
+      // A role alone is not a name. Without the label the control is announced
+      // as an unlabelled button.
+      accessibilityLabel={tab.label}
+      // The Inbox destination is the `history` SLOT, so the id comes from the
+      // label. `tab-history` would name a destination the user never sees.
+      testID={`tab-${tab.label.toLowerCase()}`}
       accessibilityState={{ selected: on }}
       onPress={() => onChange(tab.id)}
       style={({ pressed }) => [
@@ -50,7 +61,7 @@ export function TabBar({ tab, onChange, layout = 'mobile' }: {
 }) {
   if (layout === 'desktop') {
     return (
-      <View style={ui.sidenav} accessibilityRole="tablist">
+      <View style={ui.sidenav} accessibilityRole="tabbar">
         {TABS.map((t) => (
           <TabButton key={t.id} tab={t} on={tab === t.id} onChange={onChange} layout="desktop" />
         ))}
@@ -58,7 +69,7 @@ export function TabBar({ tab, onChange, layout = 'mobile' }: {
     );
   }
   return (
-    <View style={ui.tabbar} accessibilityRole="tablist">
+    <View style={ui.tabbar} accessibilityRole="tabbar">
       {TABS.map((t) => (
         <TabButton key={t.id} tab={t} on={tab === t.id} onChange={onChange} layout="mobile" />
       ))}
