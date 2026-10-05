@@ -42,3 +42,19 @@ subtle = "2"
 argon2 = "0.5"
 getrandom = "0.2"
 base64 = "0.22"
+
+# mdns-sd 0.11.5 computes get_expiration_time as created + (ttl * percent * 10)
+# in u32 (mdns-sd-0.11.5/src/dns_parser.rs:1641). A peer record with a large TTL
+# overflows, and a DEBUG build panics on overflow. That panic leaves the Rust
+# FFI boundary and aborts the macOS app (crash report
+# Daak-2026-10-05-195011.ips, abort through __rust_foreign_exception).
+#
+# Overload wrap IS the defined behaviour of u32 multiply; the result is only a
+# cache expiry. So this override keeps the panic out of a debug build, and it is
+# scoped to mdns-sd alone so the rest of the workspace keeps its overflow
+# checks. A release build already has overflow-checks off.
+#
+# Cost if wrong: mdns-sd's expiry math still wraps for a pathological TTL. That
+# is a wrong cache expiry, not a crash. R59 records this trade.
+[profile.dev.package.mdns-sd]
+overflow-checks = false
