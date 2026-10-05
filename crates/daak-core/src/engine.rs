@@ -772,6 +772,19 @@ impl Engine {
         )
     }
 
+    /// The name the user last asked for, BEFORE LAN collision resolution.
+    ///
+    /// `self_profile` answers the RESOLVED name, which carries an
+    /// adjective/animal prefix when a peer already holds the base name
+    /// (`naming::unique_display_name`). That prefix is a LAN artifact and not a
+    /// name the user typed, so a rename box that prefills from it shows a
+    /// string nobody typed and cannot be typed back. A caller that needs the
+    /// user's own words reads THIS; the resolved name stays the peer-visible
+    /// one and is what `display_name` and `self_profile` report.
+    pub async fn base_display_name(&self) -> String {
+        self.profile.lock().await.base_name.clone()
+    }
+
     /// Every transfer row, newest first, narrowed by an optional state and an
     /// optional peer. This is the ONLY reader listTransfers() needs: both the
     /// FFI and daakd go through the Engine so the two deployments cannot

@@ -150,6 +150,52 @@ async fn the_stored_name_is_the_base_name_and_not_the_resolved_name() {
     squatter.stop();
 }
 
+/// R57: the engine keeps the RESOLVED name as the advertised one and reports it
+/// from `self_profile`, while the FILE holds the BASE name the user typed.
+///
+/// Settings prefill reads `self_profile`, so the two must stay separate: the
+/// box shows the base name and never the adjective/animal prefix, which is a
+/// LAN artifact a user did not type. This test pins BOTH halves for a stored
+/// base name of `D2Dp` -- the file holds `D2Dp`, and `self_profile` reports
+/// the resolved `<Adjective> <Animal> · D2Dp`. A later change that stores the
+/// resolved name, or reports the base name from `self_profile`, breaks this on
+/// purpose so the change is deliberate.
+#[tokio::test]
+async fn a_stored_base_name_resolves_to_a_prefixed_name_and_self_profile_reports_it() {
+    let d = tempfile::tempdir().unwrap();
+    let (e, db) = engine_on(d.path(), "daak").await;
+
+    // A peer already holds the base name, so the rename below cannot keep it
+    // and a real collision resolves.
+    let squatter = daak_core::discovery::Advertiser::start("D2Dp", 9_999, [3u8; 16])
+        .expect("could not register the second advertiser");
+
+    e.set_display_name("D2Dp".into()).await.unwrap();
+
+    let stored = db.get_setting(DISPLAY_NAME_KEY).unwrap();
+    assert_eq!(
+        String::from_utf8(stored.expect("no display name row")).unwrap(),
+        "D2Dp",
+        "the file took the resolved name, so the user can never type it back"
+    );
+
+    let advertised = e.self_profile().await.0;
+    assert_ne!(advertised, "D2Dp", "the squatter did not force a collision");
+    // unique_display_name's wordlist form is "<Adjective> <Animal> . <base>".
+    // A numeric fallback needs 64 lost tries, so with one squatter the first
+    // candidate wins and the separator is this one.
+    assert!(
+        advertised.ends_with(" · D2Dp"),
+        "the resolved name lost the base or used the numeric form: {advertised}"
+    );
+    // The resolved name IS what self_profile reports. That is the contract the
+    // Settings box must not read: it reads baseName instead.
+    assert_eq!(e.self_profile().await.0, advertised);
+
+    e.shutdown().await.unwrap();
+    squatter.stop();
+}
+
 /// A first launch has nothing stored, so the caller's argument must be used.
 /// Without this an empty settings row would advertise an empty name, which
 /// is a different and worse failure than the one being fixed here.

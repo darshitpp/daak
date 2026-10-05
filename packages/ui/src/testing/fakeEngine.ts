@@ -52,7 +52,13 @@ export function fakeEngine(devices: DeviceInfo[] = [
     // A real shape, not a placeholder: Settings PREFILLS its name box from
     // this, and onboarding needs the device id. A test that must prove the
     // prefills spy on this.
-    selfProfile: async () => ({ name: 'Test Device', deviceId: 'dd'.repeat(16) }),
+    selfProfile: async () => ({
+      name: 'Test Device',
+      // The fake has no LAN, so no collision resolves and the base name equals
+      // the advertised one. A test that needs a prefix overrides this pair.
+      baseName: 'Test Device',
+      deviceId: 'dd'.repeat(16),
+    }),
     setDisplayName: async () => {},
     setPresence: async () => {},
     on: (cb: (e: DaakEvent) => void) => {

@@ -229,7 +229,10 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
     deleteQuarantined: async () => { throw new Error('no quarantined item'); },
     setDisplayName: async (next: string) => { name = next; },
     setPresence: async () => {},
-    selfProfile: async () => JSON.stringify({ name, deviceId: 'dd'.repeat(16) }),
+    // baseName tracks the same state. The fake has no LAN, so no collision
+    // resolves and the base name equals the advertised one.
+    selfProfile: async () =>
+      JSON.stringify({ name, baseName: name, deviceId: 'dd'.repeat(16) }),
     // The host arm (spec 3.3 Mode A). It takes no bundle, so there is nothing
     // for the fake to validate -- and a missing method here is a TypeError in
     // the shared suite rather than a silent pass, which is the point of the

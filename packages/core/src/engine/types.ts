@@ -118,6 +118,13 @@ export interface TransferFilter {
 export interface SelfProfile {
   /** The RESOLVED name, with any LAN-collision suffix -- what peers see. */
   name: string;
+  /**
+   * The name the user last typed, BEFORE LAN collision resolution. This is
+   * what the settings file holds and what a rename box must show. A collision
+   * prefixes `name` with "<Adjective> <Animal> · ", which is a LAN artifact a
+   * user never typed -- so the box reads THIS field and not `name`.
+   */
+  baseName: string;
   deviceId: string;
 }
 

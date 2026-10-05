@@ -25,12 +25,15 @@ export function SettingsScreen({ background }: { background?: React.ReactNode })
   // empty, which made an existing name look unset and invited a user to save
   // a blank over a real one -- the engine then re-resolves and may pick a
   // different LAN-unique suffix for the same input. `selfProfile` is the read
-  // half of setDisplayName and returns the RESOLVED name, suffix included.
+  // half of setDisplayName. It returns BOTH names: name is the RESOLVED
+  // name (the peer-visible one, which carries a LAN-collision prefix), and
+  // baseName is the name the user typed. The box shows baseName, because
+  // "Rustic Otter . D2Dp" is unreadable to a user who typed "D2Dp".
   //
   // A rejected read is NOT shown: an empty box plus a working Save is the
   // pre-existing behaviour and is usable. The Save reports its own failure.
   useEffect(() => {
-    void engine.selfProfile().then((p) => setName(p.name), () => {});
+    void engine.selfProfile().then((p) => setName(p.baseName), () => {});
   }, [engine]);
 
   // Every engine call here is awaited and reported. The old screen fired and
@@ -43,7 +46,7 @@ export function SettingsScreen({ background }: { background?: React.ReactNode })
       // Re-read rather than trusting the local state: a rename re-resolves
       // against the LAN, so what the device is called afterwards can differ
       // from what was typed (a collision adds a suffix).
-      await engine.selfProfile().then((p) => setName(p.name), () => {});
+      await engine.selfProfile().then((p) => setName(p.baseName), () => {});
       setNote({ tone: 'ok', title: what, body: 'Saved on this device.' });
     } catch (e) {
       setNote({

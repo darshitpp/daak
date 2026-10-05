@@ -131,17 +131,22 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     await e.start();
     expect(Array.isArray(await e.listInbox())).toBe(true);
     await e.setDisplayName('renamed');
-    // The READ half, and the assertion that matters: a rename re-resolves the
-    // name against the LAN, so a prefix is all a test can demand. Reading
-    // back the exact string would be wrong -- a collision renames to
-    // "<Adjective> <Animal> · <base>" (naming::unique_display_name), so the
-    // DECIDED name can carry a PREFIX, not a suffix, and that resolved name is
-    // the one peers see and Settings must show. It is not anchored: this suite
-    // runs the in-process engine and a spawned daakd at the same time, and two
-    // engines both renamed "renamed" on one LAN collide for real, which is
-    // exactly the resolution the assertion has to tolerate.
+    // The READ half, and the two names it must keep separate. A rename
+    // re-resolves the name against the LAN, so a prefix is all a test can
+    // demand of `name`: a collision renames to "<Adjective> <Animal> · <base>"
+    // (naming::unique_display_name), so the DECIDED name can carry a PREFIX,
+    // not a suffix. That resolved name is the one peers see. It is not
+    // anchored: this suite runs the in-process engine and a spawned daakd at
+    // the same time, and two engines both renamed "renamed" on one LAN collide
+    // for real, which is exactly the resolution the assertion has to tolerate.
+    //
+    // `baseName` is the OTHER half of the same read: the name the user typed
+    // and the settings file holds, never prefixed. A Settings box shows THIS,
+    // so it is asserted exactly -- a collision changes `name` and leaves
+    // `baseName` alone.
     const self = await e.selfProfile();
     expect(self.name).toMatch(/renamed/);
+    expect(self.baseName).toBe('renamed');
     // 32 hex chars, like every id on this API.
     expect(self.deviceId).toMatch(/^[0-9a-f]{32}$/i);
     // The id is THIS device's, so it is stable across the rename.

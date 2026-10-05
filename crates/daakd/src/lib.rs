@@ -688,8 +688,13 @@ async fn dispatch(
             Err(e) => e,
             Ok(engine) => {
                 let (name, device_id) = engine.self_profile().await;
+                // baseName is the user's own name, before LAN collision
+                // resolution. A Settings box prefills from it, so a device
+                // that resolved to "Rustic Otter · D2Dp" still shows "D2Dp".
+                let base_name = engine.base_display_name().await;
                 json(serde_json::json!({
                     "name": name,
+                    "baseName": base_name,
                     "deviceId": hex::encode(device_id),
                 }))
             }

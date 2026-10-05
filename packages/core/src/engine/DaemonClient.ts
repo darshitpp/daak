@@ -223,11 +223,15 @@ export class DaemonClientEngine implements DaakEngine {
     if (typeof parsed !== 'object' || parsed === null) {
       throw new Error('selfProfile did not return an object');
     }
-    const { name, deviceId } = parsed as { name?: unknown; deviceId?: unknown };
-    if (typeof name !== 'string' || typeof deviceId !== 'string') {
-      throw new Error('selfProfile returned no name/deviceId');
+    const { name, baseName, deviceId } = parsed as {
+      name?: unknown;
+      baseName?: unknown;
+      deviceId?: unknown;
+    };
+    if (typeof name !== 'string' || typeof baseName !== 'string' || typeof deviceId !== 'string') {
+      throw new Error('selfProfile returned no name/baseName/deviceId');
     }
-    return { name, deviceId };
+    return { name, baseName, deviceId };
   }
 
   async setDisplayName(name: string): Promise<void> {

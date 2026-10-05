@@ -144,13 +144,21 @@ export class InProcessEngine implements DaakEngine {
     if (typeof parsed !== 'object' || parsed === null) {
       throw new Error('selfProfile did not return an object');
     }
-    const { name, deviceId } = parsed as { name?: unknown; deviceId?: unknown };
+    const { name, baseName, deviceId } = parsed as {
+      name?: unknown;
+      baseName?: unknown;
+      deviceId?: unknown;
+    };
     // Validated, not cast: Settings PREFILLS this box from this, and an empty
     // name would silently wipe what the user had already typed.
-    if (typeof name !== 'string' || typeof deviceId !== 'string') {
-      throw new Error('selfProfile returned no name/deviceId');
+    //
+    // baseName is validated for the same reason and with the same rule: the box
+    // shows the BASE name (the prefix on `name` is a LAN artifact), so a bridge
+    // that dropped the field would leave the box blank rather than fail loudly.
+    if (typeof name !== 'string' || typeof baseName !== 'string' || typeof deviceId !== 'string') {
+      throw new Error('selfProfile returned no name/baseName/deviceId');
     }
-    return { name, deviceId };
+    return { name, baseName, deviceId };
   }
 
   async setDisplayName(name: string): Promise<void> {

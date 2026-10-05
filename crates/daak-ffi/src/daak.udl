@@ -160,9 +160,11 @@ interface DaakEngine {
   [Throws=FfiError] string list_transfers(string filter_json);
   [Throws=FfiError] string list_inbox();
   // This device's OWN advertised name and device id, as JSON
-  // `{name, deviceId}`. set_display_name existed with no reader, so the UI
-  // could write a name it could never show back. `name` is the RESOLVED name
-  // (with any LAN-collision suffix), which is what peers see.
+  // `{name, baseName, deviceId}`. set_display_name existed with no reader, so
+  // the UI could write a name it could never show back. `name` is the RESOLVED
+  // name (with any LAN-collision suffix), which is what peers see. `baseName`
+  // is the name the user typed and the settings file holds, so a rename box
+  // prefills from it and never shows the collision prefix.
   [Throws=FfiError] string self_profile();
   [Throws=FfiError] void set_display_name(string name);
   // 'online' or 'away' only; 'offline' is a peer's claim about us, not a state

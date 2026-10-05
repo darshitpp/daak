@@ -37,7 +37,7 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     setDisplayName: async () => {},
     setPresence: async () => {},
     selfProfile: async () =>
-      JSON.stringify({ name: 'Test Device', deviceId: 'dd'.repeat(16) }),
+      JSON.stringify({ name: 'Test Device', baseName: 'Test Device', deviceId: 'dd'.repeat(16) }),
     localPort: async () => 40001,
     addListener: () => {},
     removeListeners: () => {},

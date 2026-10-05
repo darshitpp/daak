@@ -714,14 +714,23 @@ impl DaakEngine {
         serde_json::to_string(&json).map_err(protocol_err)
     }
 
-    /// This device's own name and id. The READ half of set_display_name:
-    /// without it the UI can write a name and never show what the LAN actually
-    /// resolved it to.
+    /// This device's own name and id, as JSON `{name, baseName, deviceId}`.
+    /// The READ half of set_display_name: without it the UI can write a name
+    /// and never show what the LAN actually resolved it to. `name` is the
+    /// RESOLVED name (peers see it); `baseName` is the name the user typed and
+    /// the one the settings file holds, which is what a rename box must show.
     pub fn self_profile(&self) -> Result<String, FfiError> {
         let engine = self.engine()?;
         let (name, device_id) = self.rt.block_on(engine.self_profile());
+        // The RESOLVED name carries a LAN-collision prefix that a peer holding
+        // the base name forces. That prefix is not a name the user typed, so
+        // the payload also carries the BASE name: a Settings box prefills from
+        // baseName, while peers keep showing name. See SelfProfile in
+        // packages/core/src/engine/types.ts.
+        let base_name = self.rt.block_on(engine.base_display_name());
         serde_json::to_string(&serde_json::json!({
             "name": name,
+            "baseName": base_name,
             "deviceId": to_hex(&device_id),
         }))
         .map_err(protocol_err)
