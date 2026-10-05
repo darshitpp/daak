@@ -167,11 +167,17 @@ impl Advertiser {
         rng: &mut impl Rng,
         bind_ip: Option<IpAddr>,
     ) -> Result<(Self, String)> {
-        let mut observed = browse_observed_names(BROWSE_WINDOW).unwrap_or_default();
+        let mut observed =
+            browse_observed_names(BROWSE_WINDOW, Some(device_id)).unwrap_or_default();
         let mut name = resolve_name(base_name, &observed, rng);
         for _ in 0..2 {
             let adv = Self::start_with_meta(&name, port, device_id, "", "", 0, "online", bind_ip)?;
-            let late = browse_observed_names(RECHECK_WINDOW).unwrap_or_default();
+            // R45c. Some(device_id), not None. A browse on this host DOES see our
+            // own freshly registered record, so an unfiltered recheck always found
+            // the chosen name, the guard was always false, and every free name came
+            // back as Adjective Animal. A real peer keeps a DIFFERENT device id, so
+            // the filter removes a self-match and keeps the guard against a peer.
+            let late = browse_observed_names(RECHECK_WINDOW, Some(device_id)).unwrap_or_default();
             if !late.iter().any(|n| n == &name) {
                 return Ok((adv, name));
             }
@@ -193,29 +199,91 @@ pub const RECHECK_WINDOW: std::time::Duration = std::time::Duration::from_millis
 /// How long to browse for a same-named peer before committing to a name.
 pub const BROWSE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Peer names seen on the LAN in `window`, excluding our own service. Best
-/// effort: a browse that cannot start yields an empty list, so a machine with no
-/// working mDNS keeps its base name instead of failing to start.
-fn browse_observed_names(window: std::time::Duration) -> Result<Vec<String>> {
+/// Peer names seen on the LAN in `window`, minus our own service. Best effort: a
+/// browse that cannot start yields an empty list, so a machine with no working
+/// mDNS keeps its base name instead of failing to start.
+///
+/// R45c. This collects records and hands them to [`observed_names_from_records`],
+/// the ONE collision-set function. The tests call that function too, so there is
+/// one implementation and no copy that can drift.
+fn browse_observed_names(
+    window: std::time::Duration,
+    local_device_id: Option<[u8; 16]>,
+) -> Result<Vec<String>> {
     let browser = Browser::start()?;
     let deadline = std::time::Instant::now() + window;
-    let mut names = Vec::new();
+    let mut records = Vec::new();
     while std::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         match browser.rx.recv_timeout(remaining) {
-            Ok(ServiceEvent::ServiceResolved(info)) => {
-                if let Ok(a) = announce_from_service(&info) {
-                    if !names.contains(&a.name) {
-                        names.push(a.name);
-                    }
-                }
-            }
+            Ok(ServiceEvent::ServiceResolved(info)) => records.push(info),
             Ok(_) => {}
             Err(_) => break,
         }
     }
     browser.stop();
-    Ok(names)
+    Ok(observed_names_from_records(&records, local_device_id))
+}
+
+/// The collision set from resolved records, minus our own record. THE ONE place
+/// a name is added to a collision set. [`browse_observed_names`] calls it and the
+/// tests call it, so the filter cannot be changed on one path only.
+///
+/// R45c. A rename replaces our own registration, but the OLD record stays on the
+/// LAN for the length of the window. Before this filter the browse read that old
+/// record as a collision with itself, and the recheck read our own FRESH record
+/// the same way, so the name the user typed never appeared.
+///
+/// `local_device_id` is `Some` at both call sites in [`Advertiser::start_resolving_on`].
+/// `None` is kept for a caller that wants no filtering at all.
+fn observed_names_from_records(
+    records: &[ServiceInfo],
+    local_device_id: Option<[u8; 16]>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for info in records {
+        if is_own_advertisement(announced_device_id(info), local_device_id) {
+            continue;
+        }
+        let name = announced_name(info);
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// The 16 byte device id a resolved record announces, or None when the record
+/// carries no usable id. A record with no id is not provably ours, so the filter
+/// below keeps it.
+fn announced_device_id(info: &ServiceInfo) -> Option<[u8; 16]> {
+    let hex_id = info.get_properties().get_property_val_str("id")?;
+    let bytes = hex::decode(hex_id).ok()?;
+    bytes.try_into().ok()
+}
+
+/// The advertised name of a resolved record, falling back to the hostname.
+fn announced_name(info: &ServiceInfo) -> String {
+    let props = info.get_properties();
+    props
+        .get_property_val_str("name")
+        .unwrap_or_else(|| info.get_hostname())
+        .to_string()
+}
+
+/// Must this announcement be dropped from the collision set?
+///
+/// R45c. Both browse call sites pass `Some(local_device_id)`. The filter removes a
+/// SELF-MATCH. It does not remove the guard against a real peer, because a real
+/// peer announces a DIFFERENT device id.
+///
+/// A record that announces no id is kept. Dropping it would let an unnamed
+/// service claim our name unchecked, which is the worse failure.
+fn is_own_advertisement(announced: Option<[u8; 16]>, local_device_id: Option<[u8; 16]>) -> bool {
+    match (announced, local_device_id) {
+        (Some(announced_id), Some(local_id)) => announced_id == local_id,
+        _ => false,
+    }
 }
 
 pub struct Browser {
@@ -326,6 +394,277 @@ fn txt_short(value: &str, max_chars: usize) -> Option<String> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    const LOCAL_ID_HEX: &str = "aabbccddeeff00112233445566778899";
+    const PEER_ID_HEX: &str = "11111111111122222222333344445555";
+
+    fn local_device_id() -> [u8; 16] {
+        let mut id = [0u8; 16];
+        hex::decode_to_slice(LOCAL_ID_HEX, &mut id).unwrap();
+        id
+    }
+
+    /// Assert the real suffix form, the one naming.rs builds for a collision.
+    /// An ends_with check also accepts the numeric fallback in naming.rs, so
+    /// this pins the two wordlist words instead.
+    fn assert_adjective_animal_suffix(got: &str, base: &str, context: &str) {
+        let marker = format!(" · {base}");
+        let prefix = got.strip_suffix(&marker).unwrap_or_else(|| {
+            panic!("{context}: got {got}, which does not end with the marker {marker}")
+        });
+        let parts: Vec<&str> = prefix.split(' ').collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "{context}: {got} must be an adjective and an animal before the marker"
+        );
+        assert!(
+            crate::wordlist::ADJECTIVES.contains(&parts[0]),
+            "{context}: {} is not a wordlist adjective, in {got}",
+            parts[0]
+        );
+        assert!(
+            crate::wordlist::ANIMALS.contains(&parts[1]),
+            "{context}: {} is not a wordlist animal, in {got}",
+            parts[1]
+        );
+    }
+
+    /// Build a resolved service record the way start_with_meta builds one.
+    fn service_record(id_hex: &str, name: &str) -> mdns_sd::ServiceInfo {
+        let mut props = HashMap::new();
+        props.insert("id".to_string(), id_hex.to_string());
+        props.insert("name".to_string(), name.to_string());
+        props.insert("v".to_string(), PROTO_VERSION.to_string());
+        let host = name.replace(' ', "-");
+        mdns_sd::ServiceInfo::new(
+            SERVICE_TYPE,
+            &host,
+            &format!("{}.local.", host),
+            "192.168.1.44",
+            40_001,
+            props,
+        )
+        .unwrap()
+    }
+
+    // R45. A rename replaces our own mDNS registration, but the OLD record is
+    // still on the LAN for the length of the browse window. The resolver read
+    // that old record as a collision with itself, so the name the user typed
+    // never appeared. The decision is pulled into a pure function so it is
+    // testable without a socket.
+    #[test]
+    fn an_announcement_from_our_own_device_is_skipped_but_a_peer_is_kept() {
+        let ours = Some(local_device_id());
+        assert!(
+            is_own_advertisement(Some(local_device_id()), ours),
+            "our own advertisement must be skipped: it is the record we are replacing, not a peer"
+        );
+        assert!(
+            !is_own_advertisement(Some([0x11u8; 16]), ours),
+            "a different device id is a real peer and must be kept"
+        );
+        assert!(
+            !is_own_advertisement(None, ours),
+            "an announcement with no usable id is not provably ours, so it must be kept"
+        );
+        assert!(
+            !is_own_advertisement(Some(local_device_id()), None),
+            "a record with no device id cannot match our own id, so the filter keeps it"
+        );
+    }
+
+    // R45. The end to end shape of the defect, without a socket: the initial
+    // collision browse sees our own previous record plus a real peer, and the
+    // resolved name is the name the user typed.
+    #[test]
+    fn a_rename_does_not_count_our_own_advertisement_as_a_collision() {
+        use rand::SeedableRng;
+
+        let typed = "ZZPROBE-NAME";
+        let old_own_record = service_record(LOCAL_ID_HEX, typed);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+
+        let collisions = observed_names_from_records(
+            std::slice::from_ref(&old_own_record),
+            Some(local_device_id()),
+        );
+        assert_eq!(
+            collisions,
+            Vec::<String>::new(),
+            "our own previous record must not be a collision with ourselves"
+        );
+        assert_eq!(
+            crate::discovery::naming::resolve_name(typed, &collisions, &mut rng),
+            typed,
+            "a rename must keep the exact name the user typed"
+        );
+
+        let peer_record = service_record("11111111111122222222333344445555", typed);
+        let mixed =
+            observed_names_from_records(&[old_own_record, peer_record], Some(local_device_id()));
+        assert_eq!(
+            mixed,
+            vec![typed.to_string()],
+            "a real peer claiming the same name must still be a collision"
+        );
+        let mut rng2 = rand::rngs::StdRng::seed_from_u64(7);
+        let resolved = crate::discovery::naming::resolve_name(typed, &mixed, &mut rng2);
+        assert_adjective_animal_suffix(&resolved, typed, "a real peer must get the suffix");
+    }
+
+    // R45c. The ONE collision-set function. The browse loop buffers its resolved
+    // records and calls this. The tests call this. There is no second copy, so a
+    // change to the filter must break a test.
+    #[test]
+    fn our_own_record_is_not_a_collision_but_a_peer_with_another_id_is() {
+        let typed = "Shared Name";
+        let ours = service_record(LOCAL_ID_HEX, typed);
+        let peer = service_record(PEER_ID_HEX, typed);
+
+        assert_eq!(
+            observed_names_from_records(std::slice::from_ref(&ours), Some(local_device_id())),
+            Vec::<String>::new(),
+            "our own record is not a collision with ourselves"
+        );
+        assert_eq!(
+            observed_names_from_records(std::slice::from_ref(&peer), Some(local_device_id())),
+            vec![typed.to_string()],
+            "a real peer keeps a DIFFERENT device id, so it must still collide"
+        );
+    }
+
+    // R45c. The recheck must keep a real peer that already holds the chosen
+    // name. That guard is the whole point of the recheck browse. This test
+    // reaches the DECISION. The call site is pinned by the two tests below.
+    #[test]
+    fn the_recheck_filter_still_keeps_a_real_peer_holding_the_chosen_name() {
+        let chosen = "Taken";
+        let ours = service_record(LOCAL_ID_HEX, chosen);
+        let peer = service_record(PEER_ID_HEX, chosen);
+        let late = observed_names_from_records(&[ours, peer], Some(local_device_id()));
+        assert_eq!(
+            late,
+            vec![chosen.to_string()],
+            "the recheck must still report a real peer holding the chosen name"
+        );
+        assert!(
+            late.iter().any(|n| n == chosen),
+            "and the guard in the recheck loop reads exactly this list"
+        );
+    }
+
+    // R45c. The two call sites. A reviewer's mutation proved that no test reached
+    // them: one token at either line restores or removes the fix, and every test
+    // stayed green. The tests above reach the DECISION, not the ARGUMENT. This
+    // one reaches the argument by reading the source, because this host denies
+    // socket(2) to the process that runs it.
+    //
+    // What this proves: both browse call sites pass Some(device_id).
+    // What this does NOT prove: that a real socket browse finds the records the
+    // shared function is handed. The two tests above cover that half, with
+    // synthetic records. The two socket tests after it cover it for real.
+    #[test]
+    fn both_browse_call_sites_pass_our_own_device_id() {
+        let src = include_str!("mdns.rs");
+        for (label, window) in [
+            ("initial browse", "BROWSE_WINDOW"),
+            ("recheck browse", "RECHECK_WINDOW"),
+        ] {
+            let wanted = format!("browse_observed_names({window}, Some(device_id))");
+            assert!(
+                src.contains(&wanted),
+                "the {label} must pass Some(device_id), or our own record is a \
+                 collision with itself. Expected this source: {wanted}"
+            );
+            let forbidden = format!("browse_observed_names({window}, None)");
+            assert!(
+                !src.contains(&forbidden),
+                "the {label} must not pass None. With None the recheck sees our own \
+                 fresh record, so its guard is always false and every free name \
+                 comes back suffixed. Rejected this source: {forbidden}"
+            );
+        }
+    }
+
+    // R45c. The INITIAL call site. This test keeps an OLD registration of our
+    // OWN device alive across the browse, because that is the real rename: the
+    // previous record is still on the wire for the length of the window. With
+    // Some(device_id) the old record is a self-match and is filtered, so the
+    // typed name survives. With None the old record is a collision with
+    // ourselves and the name comes back as Adjective Animal.
+    //
+    // This test drives the REAL resolve path over a REAL socket. It is one of
+    // only two tests that reach the browse call sites through production code.
+    // THE CONTROLLER MUST RUN IT outside a sandbox, because this host denies
+    // socket(2) to a sandboxed process.
+    #[test]
+    fn the_initial_browse_resolves_a_free_name_to_the_typed_name() {
+        let typed = format!("R45C-INITIAL-{}", local_device_id()[0]);
+        let old = Advertiser::start(&typed, 41_001, local_device_id()).expect(
+            "the old registration must start, so the initial browse has a \
+             self-match to filter",
+        );
+        let adv =
+            Advertiser::start_resolving(&typed, 41_001, local_device_id(), &mut rand::thread_rng())
+                .expect("a browse that cannot start must not fail the resolve");
+        assert_eq!(
+            adv.1, typed,
+            "the initial browse must not read our own previous record as a \
+             collision, so a free name stays exactly as typed"
+        );
+        adv.0.stop();
+        old.stop();
+    }
+
+    // R45c. The RECHECK call site. No old registration here, so the only record
+    // on the LAN with this name is the one start_resolving has just made. With
+    // Some(device_id) the recheck filters that fresh self-match, the guard sees
+    // no peer, and the first candidate is returned. With None the fresh record is
+    // in the list, the guard is always false, and the name comes back as
+    // Adjective Animal. This is the defect the reviewer measured.
+    #[test]
+    fn the_recheck_browse_does_not_suffix_a_free_name() {
+        let typed = format!("R45C-RECHECK-{}", local_device_id()[0]);
+        let adv =
+            Advertiser::start_resolving(&typed, 41_002, local_device_id(), &mut rand::thread_rng())
+                .expect("a browse that cannot start must not fail the resolve");
+        assert_eq!(
+            adv.1, typed,
+            "the recheck must filter our own fresh record, or its guard is \
+             always false and a free name comes back as Adjective Animal"
+        );
+        adv.0.stop();
+    }
+
+    // R45e. `assert_adjective_animal_suffix` is the only assertion that pins the
+    // suffix FORM. naming.rs has two suffix forms: the wordlist form
+    // `{adj} {animal} · {base}` and the numeric fallback `{base} {n}` after 64
+    // tries. The helper must reject the fallback, or it would accept a numeric
+    // suffix as a pass and the wordlist pin would be worthless. No test measured
+    // the rejection, so it rested on a comment. This one measures it.
+    #[test]
+    fn the_suffix_assertion_rejects_the_numeric_fallback_form() {
+        let base = "Fallback Base";
+
+        let wordlist_form = format!("Seawood Otter · {base}");
+        assert_adjective_animal_suffix(&wordlist_form, base, "the wordlist form must pass");
+
+        // The fallback form is `{base} {n}`, with a SPACE and no marker.
+        let numeric_form = format!("{base} 2");
+        let verdict = std::panic::catch_unwind(|| {
+            assert_adjective_animal_suffix(
+                &numeric_form,
+                base,
+                "the numeric form must be rejected",
+            );
+        });
+        assert!(
+            verdict.is_err(),
+            "the helper accepted the numeric fallback form {numeric_form}, so a numeric \
+             suffix would pass the wordlist pin"
+        );
+    }
 
     #[test]
     fn maps_service_info_to_peer_announce() {
