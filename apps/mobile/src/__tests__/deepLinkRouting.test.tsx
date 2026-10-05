@@ -148,5 +148,9 @@ it('does not carry an earlier note to a later send link with no text', async () 
     emit('daak://send?deviceId=' + PEER);
   });
   expect(await screen.findByText('Send to Pixel 9')).toBeTruthy();
-  await waitFor(() => expect(screen.queryByDisplayValue('for the old peer')).toBeNull());
+  // React 19 flushes the link's state update on a later tick, and this file
+  // runs beside 30 others in the gate. 1s was not enough there.
+  await waitFor(() => expect(screen.queryByDisplayValue('for the old peer')).toBeNull(), {
+    timeout: 5000,
+  });
 });
