@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { SafeAreaView, View } from 'react-native';
+import { Platform, SafeAreaView, View } from 'react-native';
 import { AppShell, BackgroundHint, EngineProvider, Note } from '@daak/ui';
 import { drainInbound, engine, startEngineOnce } from './bootstrap';
 import { PairingFlow } from './PairingFlow';
@@ -7,6 +7,14 @@ import { BackgroundSyncNotice } from './BackgroundSyncNotice';
 import { pickAttachedFiles } from './SendFlow';
 import { mobileInboxActions } from './inbox-actions';
 import { onDeepLink, type DeepLink } from './deeplink';
+
+// R44: one bundle ships iOS and Android, and each system decides background
+// work through a different mechanism, so the admission sentence differs. The
+// choice lives in the host app. packages/ui holds no Platform.OS read.
+const backgroundHintBody =
+  Platform.OS === 'android'
+    ? 'Android decides when background sync runs, through its battery optimisation allowlist.'
+    : 'iOS decides when background sync runs.';
 
 export default function App() {
   // A start failure must be VISIBLE, not only logged: with the engine dead
@@ -114,10 +122,13 @@ export default function App() {
         {/* R98: pairing is reachable from Devices, not from a sixth tab. PairingFlow
             is app-side (R100): the shell stays presentational. */}
         {/* BackgroundHint JOINS BackgroundSyncNotice rather than replacing it.
-            Same slot, same truth told twice by two audiences: the notice is the
-            Android-shaped action (allow background sync), the hint is the
-            iOS-shaped admission (iOS decides when it runs). One of the two is
-            always a no-op on the other platform, and both are honest about it.
+            Same slot, two audiences: the notice is the action (allow
+            background sync), the hint is the sentence that says which system
+            decides when background work runs. That sentence differs per
+            platform, so it is chosen HERE, in the app layer, and passed in as
+            `body`; packages/ui keeps its default platform-neutral and has no
+            platform conditional (R44). The old fixed sentence named iOS and
+            was a falsehood on Android.
             No onOpen is passed: engine.backgroundWake() does not exist until
             Phase 7 Task 3 (R61), and a Pressable wired to nothing is a dead
             button (R128). No AppState listener for the same reason -- the
@@ -127,7 +138,7 @@ export default function App() {
           layout="mobile"
           background={
             <>
-              <BackgroundHint />
+              <BackgroundHint body={backgroundHintBody} />
               <BackgroundSyncNotice />
             </>
           }
