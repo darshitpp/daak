@@ -83,7 +83,9 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun offerPairing(bundleCbor: ReadableArray, promise: Promise) {
         val bytes = List(bundleCbor.size()) { bundleCbor.getInt(it).toUByte() }
-        resolve(promise) { handle().offerPairing(bytes) }
+        // The trailing null is load-bearing: this generated method returns
+        // Unit, and PromiseImpl.resolve(Unit) throws inside RN's fromJavaArgs.
+        resolve(promise) { handle().offerPairing(bytes); null }
     }
 
     // C2, second review: the host arm spec 3.3 Mode A actually needs. The QR
@@ -94,7 +96,9 @@ class DaakModule(reactContext: ReactApplicationContext) :
     // human. See PendingArm::Open in crates/daak-core.
     @ReactMethod
     override fun armHostPairing(promise: Promise) =
-        resolve(promise) { handle().armHostPairing() }
+        // The trailing null is load-bearing for the same reason as
+        // offerPairing(): this generated method returns Unit.
+        resolve(promise) { handle().armHostPairing(); null }
 
     @ReactMethod
     override fun acceptPairing(promise: Promise) = resolve(promise) { handle().acceptPairing() }
@@ -115,7 +119,7 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun cancel(transferId: String, promise: Promise) =
         // The trailing null is load-bearing: these generated methods return
-        // Unit, and Promise.resolve(Unit) throws inside RN's PromiseImpl.
+        // Unit, and PromiseImpl.resolve(Unit) throws inside RN's fromJavaArgs.
         resolve(promise) { handle().cancel(transferId); null }
 
     @ReactMethod
@@ -125,7 +129,7 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun retryItem(transferId: String, itemIndex: Double, promise: Promise) =
         // The trailing null is load-bearing for the same reason as retry():
-        // this generated method returns Unit, and Promise.resolve(Unit) throws.
+        // this generated method returns Unit, and PromiseImpl.resolve throws.
         resolve(promise) { handle().retryItem(transferId, itemIndexArg(itemIndex)); null }
 
     @ReactMethod
