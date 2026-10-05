@@ -61,7 +61,12 @@ export function TabBar({ tab, onChange, layout = 'mobile' }: {
 }) {
   if (layout === 'desktop') {
     return (
-      <View style={ui.sidenav} accessibilityRole="tabbar">
+      // The rail carries NO accessibilityRole. `tabbar` is an iOS-only trait
+      // (RCTViewManager.m). The Android AccessibilityRole enum has no TABBAR
+      // member, so fromValue throws IllegalArgumentException and Android shows
+      // a redbox. No container role both groups on iOS and survives Android,
+      // and this package must hold no platform conditional.
+      <View style={ui.sidenav}>
         {TABS.map((t) => (
           <TabButton key={t.id} tab={t} on={tab === t.id} onChange={onChange} layout="desktop" />
         ))}
@@ -69,7 +74,9 @@ export function TabBar({ tab, onChange, layout = 'mobile' }: {
     );
   }
   return (
-    <View style={ui.tabbar} accessibilityRole="tabbar">
+    // The rail carries NO accessibilityRole, for the same reason as the
+    // desktop rail above.
+    <View style={ui.tabbar}>
       {TABS.map((t) => (
         <TabButton key={t.id} tab={t} on={tab === t.id} onChange={onChange} layout="mobile" />
       ))}

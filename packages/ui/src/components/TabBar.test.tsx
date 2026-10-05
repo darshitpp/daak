@@ -36,20 +36,6 @@ it('gives every desktop rail item an accessible name', () => {
   }
 });
 
-// iOS maps `tablist` to UIAccessibilityTraitNone -- not an element at all. The
-// role that IS a real iOS trait is `tabbar`. A bar that names a role iOS does
-// not implement is a bar VoiceOver never reaches, so the role is asserted.
-it.each(['mobile', 'desktop'] as const)('uses the tabbar role the %s rail actually implements on iOS', (layout) => {
-  // The testing library has no `tabbar` role in its query table, so the tree is
-  // walked and the CONTAINER is found by position: it is the only node in
-  // TabBar's own output that is not one of the five tabs.
-  render(<TabBar tab="send" onChange={() => {}} layout={layout} />);
-  type Node = { type: unknown; props: Record<string, unknown> };
-  const roles = screen.UNSAFE_root.findAll((n: Node) => n.type === 'View');
-  const container = roles.find((n: Node) => n.props.accessibilityRole === 'tabbar');
-  expect(container).toBeTruthy();
-});
-
 // React Native maps `tab` to UIAccessibilityTraitNone on iOS (RCTViewManager.m),
 // the same as `none`. A trait of None is not an accessibility element, so a tab
 // with that role is invisible to VoiceOver and to XCUITest even with a label.
