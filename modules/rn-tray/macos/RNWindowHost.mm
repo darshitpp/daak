@@ -186,6 +186,32 @@ RCT_EXPORT_MODULE(DaakWindowHost)
   [[RNTray sharedInstance] dismissPopover];
 }
 
+// [NSApp terminate:nil] and nothing else. The app menu's Quit Daak item in
+// Main.storyboard already sends this exact selector to the First Responder, so
+// this is the SAME termination the user gets from the app menu -- it is not a
+// second mechanism that could behave differently, and it is not a new Quit menu
+// item. terminate: is not restricted by the activation policy: the SDK header
+// (NSApplication.h) declares it with no API_AVAILABLE note and no policy note,
+// and AppDelegate.mm sets NSApplicationActivationPolicyAccessory on the next
+// main-queue turn after launch, so the process runs under Accessory. Whether the
+// app menu Quit has been clicked in this process is NOT measured here; the brief
+// reported that it works. Nothing in this file depends on that report.
+//
+// The policy is NOT repaired here. Accessory is what keeps the app out of the
+// Dock while it terminates, and openDashboard's repair is about activation, not
+// about quitting: a process under Prohibited cannot show a window, but it can
+// still exit. Setting the policy from here would put one more AppKit call in
+// the last moments of the process and could only make the termination less
+// like the one the app menu already performs.
+//
+// No -applicationShouldTerminate: hook is implemented, in this file or in
+// AppDelegate.mm, so nothing in the chain can answer NSTerminateCancel and
+// terminate: exits the run loop.
+- (void)quitApp {
+  RCTAssertMainQueue();
+  [NSApp terminate:nil];
+}
+
 RCT_EXPORT_METHOD(openDashboard : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
   // [RNWindowHost shared], not self: RCT_EXPORT_MODULE registers the CLASS, so
   // this method body runs on the BRIDGE's own instance, whose _dashboard/
@@ -198,6 +224,14 @@ RCT_EXPORT_METHOD(openDashboard : (RCTPromiseResolveBlock)resolve reject : (RCTP
 
 RCT_EXPORT_METHOD(closePopover : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
   [[RNWindowHost shared] closePopover];
+  resolve(nil);
+}
+
+RCT_EXPORT_METHOD(quitApp : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
+  [[RNWindowHost shared] quitApp];
+  // resolve(nil) runs only if terminate: is refused, because the process is
+  // gone otherwise. That is fine: the promise exists so the JS wrapper has the
+  // same shape as openDashboard and closePopover, not so it can report anything.
   resolve(nil);
 }
 

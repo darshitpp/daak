@@ -9,7 +9,7 @@ import type { UiRuntime } from '@daak/ui';
 import type { DaakEngine } from '@daak/core/src/engine/types';
 import { useTrayOverlay } from '@daak/rn-tray';
 import type { TrayAction } from '@daak/rn-tray';
-import { closePopover, openDashboard } from './window-host';
+import { closePopover, openDashboard, quitApp } from './window-host';
 import { applyTrayAction } from './tray-action';
 import { getDirectSharePeer, publishDevices, subscribeDirectSharePeer } from './direct-share';
 import { desktopPickFiles } from './picker';
@@ -21,10 +21,11 @@ function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {
     closePopover,
     openDashboard,
-    // ponytail: no plan gives quitting this menu-bar app an owner, and the
-    // engine's stop() would shut DAEMOND down instead. One line, in one place,
-    // so the assignment is a change to a value and not a new code path.
-    quit: () => {},
+    // The tray Quit reaches [NSApp terminate:nil] through RNWindowHost. The
+    // engine's stop() is the wrong verb: it shuts DAEMOND down, and daakd is a
+    // launchd service, so the app would stay in the menu bar with a dead
+    // daemon. One value, one native verb, one place to change.
+    quit: quitApp,
   });
 }
 

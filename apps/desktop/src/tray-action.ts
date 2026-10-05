@@ -34,9 +34,10 @@ export function applyTrayAction(action: TrayAction, host: TrayHost): void {
   if (plan.kind === 'quit') {
     // There is no Quit verb on the engine, and DaemonClientEngine.stop() sends
     // IpcRequest::Shutdown, which shuts DAEMOND down -- not this menu-bar app.
-    // ponytail: the host's quit is a no-op until a phase assigns quit an owner;
-    // it is still CALLED, so the branch is not silently dropped the way an
-    // early `return` in the caller was.
+    // The owner is the window host: RNWindowHost's quitApp calls
+    // [NSApp terminate:nil], which is the same selector the app menu's Quit
+    // Daak item already sends. This layer still calls the host and names no
+    // effect of its own, so the decision and the effect stay separable.
     host.quit();
     return;
   }

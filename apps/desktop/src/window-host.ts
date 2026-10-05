@@ -11,6 +11,7 @@ import { NativeModules } from 'react-native';
 interface WindowHostModule {
   openDashboard(): Promise<void>;
   closePopover(): Promise<void>;
+  quitApp(): Promise<void>;
 }
 
 // Read inside each call, not captured at module-eval time. This file is
@@ -29,4 +30,14 @@ export function openDashboard(): Promise<void> {
 
 export function closePopover(): Promise<void> {
   return native()?.closePopover() ?? Promise.resolve();
+}
+
+// Ends the PROCESS, not the daemon. The engine's own stop verb sends
+// IpcRequest::Shutdown, which stops the launchd-managed daakd and leaves this
+// app sitting in the menu bar with no working daemon -- the same visible symptom
+// as the no-op this replaced. The app menu's own Quit Daak item (Main.storyboard
+// binds it to terminate:) already worked before this wrapper existed, so this
+// is the tray route catching up, not a repair of the app menu route.
+export function quitApp(): Promise<void> {
+  return native()?.quitApp() ?? Promise.resolve();
 }

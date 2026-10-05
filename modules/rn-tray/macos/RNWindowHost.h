@@ -40,6 +40,21 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)openDashboard;
 - (void)closePopover;
 
+/**
+ * Ends the PROCESS, for the tray menu's Quit Daak item.
+ *
+ * One native quit verb, and the tray route is its only caller. The macOS app
+ * menu already owns a working Quit (Main.storyboard binds it to terminate: on
+ * the First Responder), so there is deliberately no second menu item here: a
+ * second one would put two Quit entries in the menu bar.
+ *
+ * It is NOT the engine's stop verb. DaemonClientEngine.stop() sends
+ * IpcRequest::Shutdown, which shuts daakd down; daakd is a launchd service, so
+ * it comes straight back and the app is left in the menu bar with a dead
+ * daemon. Quitting the app and stopping the daemon are two different actions.
+ */
+- (void)quitApp;
+
 @end
 
 NS_ASSUME_NONNULL_END
