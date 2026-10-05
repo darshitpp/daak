@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseDirectShareRoute } from '../src/routes';
 
 // The deep link the macOS Share menu builds and the .desktop Actions build:
@@ -91,5 +91,141 @@ describe('parseDirectShareRoute', () => {
   it('passes an oddly shaped id through for the engine to reject', () => {
     const long = 'z'.repeat(40);
     expect(parseDirectShareRoute(`daak://send?deviceId=${long}`)).toEqual({ deviceId: long });
+  });
+});
+
+// ---- the react-native-macos URL shim ----
+//
+// apps/desktop runs react-native-macos, which replaces the global URL with
+// Libraries/Blob/URL.js from that package. That class is Blob-only: the
+// constructor stores the string and throws on the first accessor.
+//
+//   node_modules/.pnpm/react-native-macos@0.76.5_*/node_modules/
+//     react-native-macos/Libraries/Blob/URL.js:142
+//   get protocol(): string {
+//     throw new Error('URL.protocol is not implemented');
+//
+// The user saw that text. The vitest suite stayed green because vitest runs on
+// Node, where URL is the real WHATWG class, so this suite could never see the
+// defect.
+//
+// This is a LOCAL copy of the shim on purpose. The real file is Flow source
+// that imports a native module, so it cannot load under vitest. The copy keeps
+// the constructor permissive and every accessor throwing, which is the part
+// of the real class that matters here.
+class RNBlobURLSearchParams {
+  get(): string {
+    throw new Error('URLSearchParams.get is not implemented');
+  }
+  getAll(): string[] {
+    throw new Error('URLSearchParams.getAll is not implemented');
+  }
+}
+
+class RNBlobURL {
+  private readonly _url: string;
+  constructor(url: string) {
+    this._url = url;
+  }
+  get hash(): string {
+    throw new Error('URL.hash is not implemented');
+  }
+  get host(): string {
+    throw new Error('URL.host is not implemented');
+  }
+  get hostname(): string {
+    throw new Error('URL.hostname is not implemented');
+  }
+  get origin(): string {
+    throw new Error('URL.origin is not implemented');
+  }
+  get password(): string {
+    throw new Error('URL.password is not implemented');
+  }
+  get pathname(): string {
+    throw new Error('URL.pathname not implemented');
+  }
+  get port(): string {
+    throw new Error('URL.port is not implemented');
+  }
+  get protocol(): string {
+    throw new Error('URL.protocol is not implemented');
+  }
+  get search(): string {
+    throw new Error('URL.search is not implemented');
+  }
+  get searchParams(): RNBlobURLSearchParams {
+    return new RNBlobURLSearchParams();
+  }
+  get username(): string {
+    throw new Error('URL.username is not implemented');
+  }
+  toString(): string {
+    return this._url;
+  }
+}
+
+describe('parseDirectShareRoute under the react-native-macos URL shim', () => {
+  // react-native's types declare a global `URL` CLASS but no `var URL`, so
+  // `globalThis.URL` does not typecheck under this package's tsconfig (types:
+  // ["react-native", "node"]). The swap goes through one narrow record so the
+  // cast appears once instead of on every assignment.
+  const globalSlot = globalThis as unknown as { URL: typeof URL };
+  const realURL = globalSlot.URL;
+
+  beforeEach(() => {
+    globalSlot.URL = RNBlobURL as unknown as typeof URL;
+  });
+
+  afterEach(() => {
+    globalSlot.URL = realURL;
+  });
+
+  // Non-vacuity check. Without it a future edit that stopped installing the
+  // shim would turn every case below into a duplicate of the block above and
+  // this suite would be green for the wrong reason again.
+  it('installs a global URL whose accessors throw', () => {
+    expect(() => new URL('daak://send?deviceId=abc').protocol).toThrow(
+      'URL.protocol is not implemented',
+    );
+  });
+
+  it('reads a real direct-share link', () => {
+    expect(parseDirectShareRoute('daak://send?deviceId=abc123')).toEqual({ deviceId: 'abc123' });
+  });
+
+  it('decodes the device parameter', () => {
+    expect(parseDirectShareRoute('daak://send?deviceId=%61bc')).toEqual({ deviceId: 'abc' });
+  });
+
+  it('accepts a case-insensitive scheme and host', () => {
+    expect(parseDirectShareRoute('DAAK://SEND?deviceId=abc123')).toEqual({ deviceId: 'abc123' });
+  });
+
+  it('keeps every rejection a null, not a thrown shim error', () => {
+    const rejected = [
+      'https://send?deviceId=abc',
+      'daak://open?deviceId=abc',
+      'daak://send',
+      'daak://send:1234?deviceId=abc',
+      'daak://send?deviceId=aaa&deviceId=bbb',
+      'not a url',
+      '',
+    ];
+    for (const url of rejected) {
+      expect(parseDirectShareRoute(url)).toBeNull();
+    }
+  });
+
+  // The malformed-escape rule, pinned. Deleting the try/catch in
+  // percentDecode makes the parser throw URIError on these three, and no other
+  // case in this file covers it: the file's other decode case is a WELL-FORMED
+  // escape (%61bc). Mobile pins the same rule with `deviceId=%%` at
+  // apps/mobile/src/__tests__/deeplink.test.ts:29.
+  it('fails closed on a malformed escape instead of throwing', () => {
+    for (const bad of ['%zz', '%', '%2']) {
+      expect(() => parseDirectShareRoute(`daak://send?deviceId=${bad}`)).not.toThrow();
+      expect(parseDirectShareRoute(`daak://send?deviceId=${bad}`)).toBeNull();
+    }
   });
 });
