@@ -191,3 +191,24 @@ dependencies {
     // Pinned by src/__tests__/androidFfiWiring.test.ts.
     implementation("net.java.dev.jna:jna:5.14.0@aar") { transitive = false }
 }
+
+// R42s: THE RELEASE JAVASCRIPT BUNDLE MUST BE INVALIDATED BY A WORKSPACE CHANGE.
+//
+// react-native's Gradle plugin declares the bundle task's inputs under the APP
+// alone, while the JavaScript imports from ../../../packages/* and
+// ../../../modules/*. Editing packages/ui therefore left
+// `createBundleReleaseJsAndAssets` UP-TO-DATE and the APK packaged STALE
+// JavaScript. Measured on 2026-10-06: a bundle generated at 21:06 was packaged
+// into an APK built at 21:35, and two committed fixes -- the folder row's label
+// and its path display -- were missing from the installed app. Nothing failed:
+// the build was green and the app ran the old code.
+//
+// Declared HERE because this is the only file that knows the workspace layout.
+// The directories are `optional()` so a checkout without them still configures,
+// and each gets a stable property name so Gradle can tell them apart.
+def daakWorkspaceInputs = ['packages', 'modules'].collect { file("$rootDir/../../../$it") }
+tasks.matching { it.name.toLowerCase().startsWith('createbundle') }.configureEach {
+    daakWorkspaceInputs.each { dir ->
+        inputs.dir(dir).withPropertyName("daakWorkspace_${dir.name}").optional()
+    }
+}
