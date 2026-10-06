@@ -196,8 +196,12 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().revokePairing(deviceId); null }
 
     @ReactMethod
-    override fun replaceInboxPaths(payloadId: String, paths: List<String>, promise: Promise) =
-        resolve(promise) { handle().replaceInboxPaths(payloadId, paths); null }
+    override fun replaceInboxPaths(payloadId: String, paths: ReadableArray, promise: Promise) {
+        // Same bridge shape as sendFiles above: the generated spec hands a
+        // ReadableArray in, and uniffi takes a List<String>.
+        val list = List(paths.size()) { paths.getString(it)!! }
+        resolve(promise) { handle().replaceInboxPaths(payloadId, list); null }
+    }
 
     @ReactMethod
     override fun retryItem(transferId: String, itemIndex: Double, promise: Promise) =

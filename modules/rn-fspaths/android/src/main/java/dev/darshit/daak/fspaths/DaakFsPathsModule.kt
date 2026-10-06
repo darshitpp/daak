@@ -1,16 +1,23 @@
 package dev.darshit.daak.fspaths
 
 import android.content.Intent
+import android.app.Activity
+import android.content.SharedPreferences
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ActivityEventListener
+import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.WritableNativeArray
 import com.facebook.react.module.annotations.ReactModule
 import java.io.File
 
 @ReactModule(name = DaakFsPathsModule.NAME)
 class DaakFsPathsModule(reactContext: ReactApplicationContext) :
-    NativeDaakFsPathsSpec(reactContext) {
+    NativeDaakFsPathsSpec(reactContext), ActivityEventListener {
 
   companion object {
     const val NAME = "DaakFsPaths"
@@ -24,7 +31,19 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
      * apps/mobile/src/__tests__/fspathsManifest.test.ts.
      */
     const val AUTHORITY = "dev.darshit.daak.fileprovider"
+
+    /** R42p: where the chosen destination folder lives between launches. */
+    private const val PREFS = "daak.fspaths"
+    private const val KEY_TREE = "downloadFolderTree"
+    private const val KEY_NAME = "downloadFolderName"
+    private const val REQUEST_TREE = 47011
   }
+
+  init {
+    reactApplicationContext.addActivityEventListener(this)
+  }
+
+  private var pendingChoose: Promise? = null
 
   override fun getName() = NAME
 
@@ -102,6 +121,133 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
   private inline fun resolve(promise: Promise, block: () -> Any?) {
     try { promise.resolve(block()) } catch (t: Throwable) { promise.reject("E_FSPATHS", t) }
   }
+
+  private fun prefs(): SharedPreferences =
+      reactApplicationContext.getSharedPreferences(
+          PREFS, android.content.Context.MODE_PRIVATE)
+
+  /**
+   * R42p: ask for a destination folder with ACTION_OPEN_DOCUMENT_TREE.
+   *
+   * SAF hands back a content:// TREE URI, not a filesystem path. That is why the
+   * move is done here and not by the engine: the engine writes with std::fs and
+   * a PathBuf, and a tree URI can be neither. The grant is persisted with
+   * takePersistableUriPermission, because without it the permission is gone at
+   * the next launch -- the Android spelling of the macOS bookmark.
+   */
+  @ReactMethod
+  override fun chooseDownloadFolder(promise: Promise) {
+    val activity = reactApplicationContext.currentActivity
+    if (activity == null) {
+      // No foreground activity: nothing can be shown, so nothing changed.
+      promise.resolve(null)
+      return
+    }
+    pendingChoose = promise
+    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+      addFlags(
+          Intent.FLAG_GRANT_READ_URI_PERMISSION or
+              Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+              Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+              Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+    }
+    activity.startActivityForResult(intent, REQUEST_TREE)
+  }
+
+  override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+    if (requestCode != REQUEST_TREE) return
+    val promise = pendingChoose ?: return
+    pendingChoose = null
+    val tree = if (resultCode == Activity.RESULT_OK) data?.data else null
+    if (tree == null) {
+      // A cancelled picker is an ANSWER, not an error: nothing changed.
+      promise.resolve(null)
+      return
+    }
+    try {
+      reactApplicationContext.contentResolver.takePersistableUriPermission(
+          tree,
+          Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+      val name = tree.lastPathSegment?.substringAfterLast('/')
+      prefs().edit().putString(KEY_TREE, tree.toString()).putString(KEY_NAME, name).apply()
+      promise.resolve(name)
+    } catch (t: Throwable) {
+      promise.reject("E_TREE", "could not keep that folder", t)
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {}
+
+  @ReactMethod
+  override fun downloadFolderName(promise: Promise) =
+      resolve(promise) { prefs().getString(KEY_NAME, null) }
+
+  @ReactMethod
+  override fun clearDownloadFolder(promise: Promise) = resolve(promise) {
+    prefs().edit().remove(KEY_TREE).remove(KEY_NAME).apply()
+    null
+  }
+
+  /**
+   * R42p: MOVE each received file into the tree the user chose, answering one
+   * location per input.
+   *
+   * A file that cannot be moved keeps its ORIGINAL path, so one failure never
+   * loses the locations of the others, and an unset folder answers the input
+   * unchanged -- which is what makes the feature degrade to the old behavior.
+   *
+   * The answer for a moved file is a content:// URI, not a path, because that
+   * is what the tree gives. The Inbox's open verb must accept it.
+   */
+  @ReactMethod
+  override fun moveReceivedFiles(paths: ReadableArray, promise: Promise) = resolve(promise) {
+    // The generated spec hands a ReadableArray in and takes a WritableArray
+    // back; that is the Android bridge's own shape for string[], and converting
+    // to List<String> here would not satisfy the abstract member.
+    val input = (0 until paths.size()).mapNotNull { paths.getString(it) }
+    val treeUri = prefs().getString(KEY_TREE, null)?.let(Uri::parse)
+    if (treeUri == null) return@resolve writable(input)
+    val resolver = reactApplicationContext.contentResolver
+    val root =
+        DocumentsContract.buildDocumentUriUsingTree(
+            treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+    writable(
+        input.map { path ->
+      val src = File(path)
+      if (!src.exists()) return@map path
+      try {
+        val dest = DocumentsContract.createDocument(resolver, root, guessMime(src.name), src.name)
+        if (dest == null) return@map path
+        resolver.openOutputStream(dest)?.use { out ->
+          src.inputStream().use { input -> input.copyTo(out) }
+        } ?: return@map path
+        src.delete()
+        dest.toString()
+      } catch (t: Throwable) {
+        path
+      }
+        })
+  }
+
+  private fun writable(values: List<String>): WritableNativeArray =
+      WritableNativeArray().apply { values.forEach { pushString(it) } }
+
+  /** Only enough to name a document type; application/octet-stream is legal. */
+  private fun guessMime(name: String): String =
+      when (name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "mp4" -> "video/mp4"
+        "mov" -> "video/quicktime"
+        "mp3" -> "audio/mpeg"
+        "pdf" -> "application/pdf"
+        "zip" -> "application/zip"
+        "txt" -> "text/plain"
+        "json" -> "application/json"
+        else -> "application/octet-stream"
+      }
 
   /**
    * ONE resolution of the engine's data dir, matched by CONSTRUCTION to
