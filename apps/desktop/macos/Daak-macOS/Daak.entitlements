@@ -11,7 +11,13 @@
 	<array>
 		<string>group.dev.darshit.daak</string>
 	</array>
-	<key>com.apple.security.files.user-selected.read-only</key>
+	<!-- READ-WRITE, and the R42p destination feature is why. A user-selected
+	     folder was granted read-only here, so the sandbox denied every move into
+	     the folder the user had just chosen: the app could read the folder and
+	     could not put anything in it. The failure was invisible rather than loud
+	     -- moveReceivedFiles keeps the ORIGINAL path when a move fails, by
+	     design -- so the file simply never appeared, with no error anywhere. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
