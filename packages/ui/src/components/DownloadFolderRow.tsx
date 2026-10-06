@@ -46,7 +46,7 @@ export function DownloadFolderRow({ load, choose, reset }: {
       <View style={ui.card}>
         <View style={[ui.kv, ui.kvFirst]}>
           <Text style={ui.kvK}>Folder</Text>
-          <Text style={ui.kvV} testID="download-folder-name">
+          <Text style={ui.kvV} testID="download-folder-name" numberOfLines={2}>
             {name ?? 'This app\u2019s own storage'}
           </Text>
         </View>

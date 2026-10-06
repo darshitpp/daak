@@ -197,7 +197,9 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
 
   @ReactMethod
   override fun downloadFolderName(promise: Promise) =
-      resolve(promise) { prefs().getString(KEY_NAME, null) }
+      // The TREE URI, not the display name: on Android the location of a SAF
+      // folder IS the URI, and a bare name would not say where the files go.
+      resolve(promise) { prefs().getString(KEY_TREE, null) ?: prefs().getString(KEY_NAME, null) }
 
   @ReactMethod
   override fun clearDownloadFolder(promise: Promise) = resolve(promise) {

@@ -9,6 +9,9 @@ import UIKit
 class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   private static let bookmarkKey = "daak.downloadFolder.bookmark"
   private static let nameKey = "daak.downloadFolder.name"
+  /// The location AS TEXT, for the Settings row: a folder NAME alone does not
+  /// say where the files are.
+  private static let pathKey = "daak.downloadFolder.path"
 
   /// The pending picker promise. A UIDocumentPicker is presented and answered
   /// asynchronously, so the promise is held until the delegate fires -- and
@@ -129,7 +132,8 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       let defaults = UserDefaults.standard
       defaults.set(bookmark, forKey: Self.bookmarkKey)
       defaults.set(url.lastPathComponent, forKey: Self.nameKey)
-      resolve(url.lastPathComponent)
+      defaults.set(url.path, forKey: Self.pathKey)
+      resolve(url.path)
     } catch {
       resolve(nil)
     }
@@ -143,7 +147,8 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
 
   @objc func downloadFolderName(_ resolve: @escaping RCTPromiseResolveBlock,
                                 reject: @escaping RCTPromiseRejectBlock) {
-    resolve(UserDefaults.standard.string(forKey: Self.nameKey))
+    let defaults = UserDefaults.standard
+    resolve(defaults.string(forKey: Self.pathKey) ?? defaults.string(forKey: Self.nameKey))
   }
 
   @objc func clearDownloadFolder(_ resolve: @escaping RCTPromiseResolveBlock,
@@ -151,6 +156,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     let defaults = UserDefaults.standard
     defaults.removeObject(forKey: Self.bookmarkKey)
     defaults.removeObject(forKey: Self.nameKey)
+    defaults.removeObject(forKey: Self.pathKey)
     resolve(nil)
   }
 

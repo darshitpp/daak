@@ -10,6 +10,10 @@ import React
 class DaakFsPaths: NSObject {
   private static let bookmarkKey = "daak.downloadFolder.bookmark"
   private static let nameKey = "daak.downloadFolder.name"
+  /// The location AS TEXT, for the Settings row. The bookmark is the
+  /// permission; this is what the user is shown, and a folder NAME alone does
+  /// not say where the files are.
+  private static let pathKey = "daak.downloadFolder.path"
 
   @objc static func requiresMainQueueSetup() -> Bool { false }
 
@@ -87,7 +91,8 @@ class DaakFsPaths: NSObject {
         let defaults = UserDefaults.standard
         defaults.set(bookmark, forKey: Self.bookmarkKey)
         defaults.set(url.lastPathComponent, forKey: Self.nameKey)
-        resolve(url.lastPathComponent)
+        defaults.set(url.path, forKey: Self.pathKey)
+        resolve(url.path)
       } catch {
         reject("E_BOOKMARK", "could not remember that folder: \(error.localizedDescription)", error)
       }
@@ -96,7 +101,10 @@ class DaakFsPaths: NSObject {
 
   @objc func downloadFolderName(_ resolve: @escaping RCTPromiseResolveBlock,
                                 reject: @escaping RCTPromiseRejectBlock) {
-    resolve(UserDefaults.standard.string(forKey: Self.nameKey))
+    let defaults = UserDefaults.standard
+    // The PATH when there is one, and the bare name only for a folder chosen by
+    // a build that did not record it.
+    resolve(defaults.string(forKey: Self.pathKey) ?? defaults.string(forKey: Self.nameKey))
   }
 
   @objc func clearDownloadFolder(_ resolve: @escaping RCTPromiseResolveBlock,
@@ -104,6 +112,7 @@ class DaakFsPaths: NSObject {
     let defaults = UserDefaults.standard
     defaults.removeObject(forKey: Self.bookmarkKey)
     defaults.removeObject(forKey: Self.nameKey)
+    defaults.removeObject(forKey: Self.pathKey)
     resolve(nil)
   }
 
@@ -126,6 +135,10 @@ class DaakFsPaths: NSObject {
       return
     }
     var stale = false
+    // `.withSecurityScope` on BOTH sides. A bookmark created with the option
+    // and resolved without it does not resolve, and the failure here is silent
+    // by design -- the input comes back unchanged -- so the move simply never
+    // happened and nothing said why.
     guard let folder = try? URL(
       resolvingBookmarkData: bookmark,
       options: [.withSecurityScope],
