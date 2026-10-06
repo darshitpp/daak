@@ -6,6 +6,7 @@ import {
   Note,
   PairFirstDeviceScreen,
   PermissionsScreen,
+  DownloadFolderRow,
   WelcomeScreen,
   useEngine,
   ui,
@@ -14,6 +15,9 @@ import {
 import {
   INITIAL_ONBOARDING,
   permissionRows,
+  chooseDownloadFolder,
+  clearDownloadFolder,
+  downloadFolderName,
   readOnboarding,
   welcomeCopyFor,
   withNotificationReask,
@@ -266,6 +270,18 @@ export function OnboardingFlow({ onComplete, onReady }: {
         rows={rows}
         stillNeeded={stillNeeded}
         onBack={() => setStep('name')}
+        // R42p: the SAME row Settings renders, on the step that is already "the
+        // things Daak needs before it is useful". Android only, until the iOS
+        // half of rn-fspaths picks a folder for real.
+        folder={
+          Platform.OS === 'android' ? (
+            <DownloadFolderRow
+              load={downloadFolderName}
+              choose={chooseDownloadFolder}
+              reset={clearDownloadFolder}
+            />
+          ) : undefined
+        }
         onContinue={() => {
           void (async () => {
             const next: OnboardingState = {

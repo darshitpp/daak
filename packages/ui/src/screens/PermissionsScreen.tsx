@@ -44,12 +44,20 @@ export function PermissionsScreen({
   stillNeeded,
   onContinue,
   onBack,
+  folder,
 }: {
   rows: PermissionRowSpec[];
   /** Titles of the rows that still need the user, in the order given. */
   stillNeeded: string[];
   onContinue: () => void;
   onBack?: () => void;
+  /**
+   * R42p: an optional slot for the destination-folder row. It sits on THIS step
+   * because the step is already "the things Daak needs before it can be useful",
+   * and because the row is the same component Settings renders -- one row, one
+   * set of verbs, so the two cannot disagree about where files go.
+   */
+  folder?: React.ReactNode;
 }) {
   const blocked = stillNeeded.length > 0;
   let hint: string;
@@ -105,6 +113,7 @@ export function PermissionsScreen({
       <Text style={ui.hint} testID="permissions-hint">
         {hint}
       </Text>
+      {folder}
     </OnboardingScreen>
   );
 }

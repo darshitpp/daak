@@ -22,6 +22,7 @@ export { QuarantineScreen } from './screens/QuarantineScreen';
 export { WelcomeScreen } from './screens/WelcomeScreen';
 export { NameDeviceScreen, MAX_NAME } from './screens/NameDeviceScreen';
 export { PermissionsScreen, type PermissionRowSpec } from './screens/PermissionsScreen';
+export { DownloadFolderRow } from './components/DownloadFolderRow';
 export { PairFirstDeviceScreen } from './screens/PairFirstDeviceScreen';
 export { CantReachScreen, type QueuedTransfer } from './screens/CantReachScreen';
 export { UpdateRequiredScreen } from './screens/UpdateRequiredScreen';
