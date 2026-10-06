@@ -723,6 +723,23 @@ impl DaakEngine {
         serde_json::to_string(&json).map_err(protocol_err)
     }
 
+    /// R42p: record where the platform MOVED this payload's files.
+    ///
+    /// The engine writes the paths it was told; it does not check them. The
+    /// platform performed the move, so it is the only side that knows the new
+    /// locations, and inventing a check here would only reject a SAF URI that is
+    /// a perfectly good answer on Android.
+    pub fn replace_inbox_paths(
+        &self,
+        payload_id: String,
+        paths: Vec<String>,
+    ) -> Result<(), FfiError> {
+        let id = parse_id(&payload_id)?;
+        self.engine()?
+            .replace_inbox_paths(id, paths)
+            .map_err(engine_err)
+    }
+
     pub fn list_inbox(&self) -> Result<String, FfiError> {
         let rows = self.engine()?.list_inbox().map_err(engine_err)?;
         let json: Vec<serde_json::Value> = rows.iter().map(inbox_entry_json).collect();

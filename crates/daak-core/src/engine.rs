@@ -49,7 +49,7 @@ const DISPLAY_NAME_KEY: &str = "display_name";
 /// the backslash and the C0 controls. A control byte is emitted as \u00XX
 /// rather than passed through, because serde_json correctly rejects a raw
 /// control inside a string and a row that will not parse bridges as `null`.
-fn json_string_array(items: &[String]) -> String {
+pub(crate) fn json_string_array(items: &[String]) -> String {
     let mut out = String::from("[");
     for (i, s) in items.iter().enumerate() {
         if i > 0 {
@@ -963,6 +963,16 @@ impl Engine {
     /// Every received payload, newest first.
     pub fn list_inbox(&self) -> Result<Vec<InboxRow>> {
         self.db.list_inbox()
+    }
+
+    /// R42p: record where the platform MOVED this payload's files.
+    ///
+    /// SQLite is the source of truth for a saved path, and the move happens
+    /// outside the engine (a SAF tree on Android has no path the engine can
+    /// write to). So the platform reports the new locations back, and the row
+    /// keeps pointing at the files the user actually has.
+    pub fn replace_inbox_paths(&self, payload_id: [u8; 16], paths: Vec<String>) -> Result<()> {
+        self.db.replace_inbox_paths(&payload_id, &paths)
     }
 
     /// Rename this device and re-advertise. The new base name goes through the

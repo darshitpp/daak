@@ -163,6 +163,11 @@ interface DaakEngine {
   // malformed peerDeviceId are FfiError.Protocol, not a silent unfiltered list.
   [Throws=FfiError] string list_transfers(string filter_json);
   [Throws=FfiError] string list_inbox();
+  // R42p: record where the platform MOVED this payload's files. The move
+  // happens outside the engine (an Android SAF tree has no path the engine can
+  // write to), so the platform reports the new locations back and the row keeps
+  // pointing at files the user actually has.
+  [Throws=FfiError] void replace_inbox_paths(string payload_id, sequence<string> paths);
   // This device's OWN advertised name and device id, as JSON
   // `{name, baseName, deviceId}`. set_display_name existed with no reader, so
   // the UI could write a name it could never show back. `name` is the RESOLVED
