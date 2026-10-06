@@ -31,5 +31,10 @@ module.exports = {
     // reason as rn-securestore above: a dependency of @daak/platform rather
     // than of this app, named by PATH because pnpm links only direct deps.
     '@daak/rn-qrscanner': { root: join(__dirname, '..', '..', 'modules', 'rn-qrscanner') },
+    // R42p: the download folder and the move. The module also owns `reveal`,
+    // which macOS does for real (activateFileViewerSelecting) -- the desktop
+    // had no fspaths pod at all, which is why a received file could not be
+    // opened from the Inbox.
+    '@daak/rn-fspaths': { root: join(__dirname, '..', '..', 'modules', 'rn-fspaths') },
   },
 };

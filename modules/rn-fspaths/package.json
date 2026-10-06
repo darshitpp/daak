@@ -4,6 +4,7 @@
   "private": true,
   "main": "js/index.ts",
   "react-native": "js/index.ts",
+  "react-native-macos": "js/index.ts",
   "codegenConfig": {
     "name": "DaakFsPathsSpec",
     "type": "modules",

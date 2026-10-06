@@ -19,6 +19,24 @@ export interface Spec extends TurboModule {
    * die on an unhandled rejection.
    */
   exists(path: string): Promise<boolean>;
+  /**
+   * R42p: ask the OS for a folder to keep received files in, and REMEMBER it.
+   * Resolves the folder's display name, or `null` when the user cancelled.
+   */
+  chooseDownloadFolder(): Promise<string | null>;
+  /** The remembered folder's display name, or `null` when none was chosen. */
+  downloadFolderName(): Promise<string | null>;
+  /** Forget the folder. Later receives stay in the app's own storage. */
+  clearDownloadFolder(): Promise<void>;
+  /**
+   * MOVE each received file into the remembered folder, answering the new
+   * location for each, in the same order.
+   *
+   * With no folder remembered, or when a move fails, the ORIGINAL path comes
+   * back for that entry: the file is still where the engine put it, and one
+   * failure must not lose the location of the others.
+   */
+  moveReceivedFiles(paths: string[]): Promise<string[]>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('DaakFsPaths');

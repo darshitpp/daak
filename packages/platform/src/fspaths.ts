@@ -36,6 +36,31 @@ export async function revealInFileManager(path: string): Promise<boolean> {
 }
 
 /**
+ * R42p: where received files should end up, and the move that puts them there.
+ *
+ * The engine writes into its own app-storage folder and the platform moves the
+ * files afterwards, because an Android SAF tree has no path the engine can
+ * write to. `moveReceivedFiles` with no folder remembered returns the input
+ * unchanged, so the whole feature degrades to the old behavior until the user
+ * chooses one.
+ */
+export async function chooseDownloadFolder(): Promise<string | null> {
+  return NativeDaakFsPaths.chooseDownloadFolder();
+}
+
+export async function downloadFolderName(): Promise<string | null> {
+  return NativeDaakFsPaths.downloadFolderName();
+}
+
+export async function clearDownloadFolder(): Promise<void> {
+  return NativeDaakFsPaths.clearDownloadFolder();
+}
+
+export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
+  return NativeDaakFsPaths.moveReceivedFiles(paths);
+}
+
+/**
  * Whether a path exists. Resolves false rather than rejecting for a path that
  * is not there, on both platforms, so a reveal action never has to catch. Not
  * called anywhere yet -- the UI that needs it is a later task -- but the plan
