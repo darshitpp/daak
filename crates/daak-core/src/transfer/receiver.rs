@@ -30,9 +30,56 @@ const MAX_PATH_LEN: usize = 4096;
 fn safe_item_name(item: &Item) -> String {
     let raw = item.name.as_deref().unwrap_or("");
     match Path::new(raw).file_name().and_then(|n| n.to_str()) {
-        Some(n) if !n.is_empty() && !is_reserved(n) => n.to_owned(),
+        Some(n) if !n.is_empty() && !is_reserved(n) => with_mime_extension(n, item.mime.as_deref()),
         _ => format!("item_{}", item.index),
     }
+}
+
+/// R42o: a sender that cannot resolve a display name sends one with no
+/// extension, and the receiver stored an unopenable file. Measured: an Android
+/// content-URI pick produced `image:1000196782`. The sender is fixed, and this
+/// is the second line of defence -- the item's own `mime` names the type, so
+/// the extension is derived from it when the name has none.
+///
+/// It only ADDS. A name that already carries an extension keeps it, even when
+/// the mime disagrees: the name is the user's, and the mime is a hint from a
+/// device that may have guessed it.
+fn with_mime_extension(name: &str, mime: Option<&str>) -> String {
+    if Path::new(name).extension().is_some() {
+        return name.to_owned();
+    }
+    match mime.and_then(extension_for_mime) {
+        Some(ext) => format!("{name}.{ext}"),
+        None => name.to_owned(),
+    }
+}
+
+/// The common types, by their registered extension. An unlisted or malformed
+/// mime yields nothing rather than a made-up extension: `.bin` on a JPEG is a
+/// worse lie than no extension at all.
+fn extension_for_mime(mime: &str) -> Option<&'static str> {
+    let m = mime.split(';').next()?.trim().to_ascii_lowercase();
+    Some(match m.as_str() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "image/heif" => "heif",
+        "video/mp4" => "mp4",
+        "video/quicktime" => "mov",
+        "video/webm" => "webm",
+        "audio/mpeg" => "mp3",
+        "audio/mp4" => "m4a",
+        "audio/wav" => "wav",
+        "audio/ogg" => "ogg",
+        "application/pdf" => "pdf",
+        "application/zip" => "zip",
+        "text/plain" => "txt",
+        "text/csv" => "csv",
+        "application/json" => "json",
+        _ => return None,
+    })
 }
 
 /// Names the receiver owns inside out_dir. `quarantine` holds items whose hash
@@ -1365,6 +1412,32 @@ mod tests {
     // ---- FIX PASS: the folder tree is a peer-controlled write path ----
 
     /// A hand-built item, so a path/caps test needs no real file on disk.
+    // R42o: a sender that cannot resolve a display name sends one with no
+    // extension, and the receiver stored a file the OS cannot open. The item's
+    // own mime names the type, so the extension is derived from it.
+    #[test]
+    fn a_name_without_an_extension_takes_one_from_the_mime() {
+        let mut item = peer_item(0, "x");
+        item.name = Some("image:1000196782".into());
+        item.mime = Some("image/jpeg".into());
+        assert_eq!(safe_item_name(&item), "image:1000196782.jpg");
+    }
+
+    // The name is the user's and the mime is a hint from another device, so a
+    // name that already carries an extension keeps it, and an unlisted mime
+    // adds nothing rather than inventing one.
+    #[test]
+    fn an_existing_extension_and_an_unknown_mime_are_left_alone() {
+        let mut item = peer_item(0, "x");
+        item.name = Some("holiday.png".into());
+        item.mime = Some("image/jpeg".into());
+        assert_eq!(safe_item_name(&item), "holiday.png");
+
+        item.name = Some("notes".into());
+        item.mime = Some("application/x-made-up".into());
+        assert_eq!(safe_item_name(&item), "notes");
+    }
+
     fn peer_item(index: u32, rel: &str) -> Item {
         let mut item = Item {
             index,
