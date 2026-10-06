@@ -72,7 +72,10 @@ export function DownloadFolderRow({ load, choose, reset }: {
         <Btn
           variant="ghost"
           block
-          label="Use the app\u2019s own storage"
+          // A JS EXPRESSION, not a bare attribute: JSX attribute text is not a
+          // JavaScript string, so \u2019 in `label="..."` renders the six
+          // characters literally. Same words, evaluated.
+          label={'Use the app\u2019s own storage'}
           testID="download-folder-reset"
           onPress={() => {
             void reset().then(() => setName(null), () => {});
