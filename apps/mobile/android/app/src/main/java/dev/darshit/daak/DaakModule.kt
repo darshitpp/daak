@@ -196,6 +196,10 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().revokePairing(deviceId); null }
 
     @ReactMethod
+    override fun replaceInboxPaths(payloadId: String, paths: List<String>, promise: Promise) =
+        resolve(promise) { handle().replaceInboxPaths(payloadId, paths); null }
+
+    @ReactMethod
     override fun retryItem(transferId: String, itemIndex: Double, promise: Promise) =
         // The trailing null is load-bearing for the same reason as retry():
         // this generated method returns Unit, and PromiseImpl.resolve throws.

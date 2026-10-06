@@ -145,6 +145,14 @@ export interface DaakEngine {
    */
   revokePairing(deviceId: string): Promise<void>;
   /**
+   * R42p: record where the platform MOVED a received payload's files.
+   *
+   * The move happens outside the engine, because an Android SAF tree has no
+   * path the engine can write to. `savedPaths` is what the Inbox opens, so
+   * without this the row names a file that is no longer there.
+   */
+  replaceInboxPaths(payloadId: string, paths: string[]): Promise<void>;
+  /**
    * `addr` is an OPTIONAL `host:port` for the peer. Given one, it is dialed
    * directly; omitted, the address is resolved from discovery as before.
    *

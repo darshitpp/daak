@@ -106,6 +106,10 @@ export class InProcessEngine implements DaakEngine {
     await this.native.revokePairing(deviceId);
   }
 
+  async replaceInboxPaths(payloadId: string, paths: string[]): Promise<void> {
+    await this.native.replaceInboxPaths(payloadId, paths);
+  }
+
   async retry(transferId: string): Promise<void> {
     await this.native.retry(transferId);
   }

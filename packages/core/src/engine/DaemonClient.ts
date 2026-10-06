@@ -134,6 +134,13 @@ export class DaemonClientEngine implements DaakEngine {
     throw new Error('unpairing is mobile-only: no IpcRequest revokes a pairing');
   }
 
+  // The daemon owns its own receive directory, and no IpcRequest reports a
+  // moved file. Loud, not silent: a no-op here would leave the Inbox opening a
+  // path the file no longer occupies.
+  async replaceInboxPaths(_payloadId: string, _paths: string[]): Promise<void> {
+    throw new Error('repointing a received file is mobile-only: no IpcRequest carries it');
+  }
+
   // Same ruling as offerPairing above, and for the same reason: the arm is
   // in-process engine state. There is no IpcRequest that arms a pairing, the
   // C2 brief forbids adding one, and adding one is exactly what would owe an

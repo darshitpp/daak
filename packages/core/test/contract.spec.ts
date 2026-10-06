@@ -23,6 +23,9 @@ const METHODS: (keyof DaakEngine)[] = [
   // never re-pair, because an open-armed host refuses a device that already has
   // a row.
   'revokePairing',
+  // R42p: where a moved received file went. The Inbox opens this field, so a
+  // move without it leaves the row pointing at a path that is gone.
+  'replaceInboxPaths',
 ];
 
 // Compile-time only: adding, removing or renaming a DaakEvent member breaks tsc.
@@ -57,6 +60,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   sendFiles: true,
   listDevices: true,
   revokePairing: true,
+  replaceInboxPaths: true,
   cancel: true,
   retry: true,
   retryItem: true,
@@ -89,6 +93,7 @@ describe('contract types', () => {
     const exhaustive: Record<keyof DaakEngine, true> = {
       start: true, stop: true, devices: true, pair: true, send: true, cancel: true,
       revokePairing: true,
+      replaceInboxPaths: true,
       retry: true, quarantineReport: true, deleteQuarantined: true,
       listQuarantineReports: true,
       listTransfers: true, listInbox: true, selfProfile: true, setDisplayName: true,
@@ -132,7 +137,7 @@ describe('contract types', () => {
     // method was added without a decision here.
     // 25: the 24 above plus revoke_pairing (R42f), which is a UDL method AND a
     // TurboModule override on all three native modules.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(25);
+    expect(Object.keys(NATIVE_METHODS).length).toBe(26);
   });
 
   it('models a device without fabricating liveness (R11)', () => {

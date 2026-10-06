@@ -185,6 +185,8 @@ describe('a void UniFFI method must not resolve its promise with Unit', () => {
       'cancel',
       'deleteQuarantined',
       'offerPairing',
+      // R42p: void in the UDL, and overridden on all three native modules.
+      'replaceInboxPaths',
       'retry',
       'retryItem',
       // R42f: revoke_pairing is void in the UDL and overridden on the native

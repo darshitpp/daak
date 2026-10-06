@@ -59,6 +59,12 @@ RCT_EXTERN_METHOD(revokePairing:(NSString *)deviceId
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+// R42p: the platform moved a received payload's files and reports where.
+RCT_EXTERN_METHOD(replaceInboxPaths:(NSString *)payloadId
+                  paths:(NSArray<NSString *> *)paths
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(retryItem:(NSString *)transferId
                   itemIndex:(double)itemIndex
                   resolve:(RCTPromiseResolveBlock)resolve

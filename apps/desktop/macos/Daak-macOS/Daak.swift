@@ -219,6 +219,16 @@ final class Daak: RCTEventEmitter, EventSink {
     }
   }
 
+  @objc func replaceInboxPaths(_ payloadId: String,
+                               paths: [String],
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().replaceInboxPaths(payloadId: payloadId, paths: paths)
+      return nil as Void?
+    }
+  }
+
   @objc func retryItem(_ transferId: String,
                        itemIndex: Double,
                        resolve: @escaping RCTPromiseResolveBlock,
