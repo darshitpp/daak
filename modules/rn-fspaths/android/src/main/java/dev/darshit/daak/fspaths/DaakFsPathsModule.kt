@@ -92,6 +92,23 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    */
   @ReactMethod
   override fun reveal(path: String, promise: Promise) = resolve(promise) {
+    // R42p: a file the user asked to keep elsewhere was MOVED into a SAF tree,
+    // and its recorded location is a content:// URI -- there is no File behind
+    // it, so FileProvider.getUriForFile can do nothing with it. Open the tree
+    // document directly. Without this the Inbox's Show verb stops working on
+    // exactly the files the destination feature produced.
+    if (path.startsWith("content://")) {
+      val uri = Uri.parse(path)
+      val open = Intent(Intent.ACTION_VIEW).apply {
+        setData(uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      if (open.resolveActivity(reactApplicationContext.packageManager) == null) {
+        return@resolve false
+      }
+      reactApplicationContext.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      return@resolve true
+    }
     val file = File(path)
     if (!file.exists()) return@resolve false
     val uri = FileProvider.getUriForFile(reactApplicationContext, AUTHORITY, file)

@@ -1,11 +1,19 @@
 import Foundation
 import React
+import UIKit
 
 /// Every path this module hands out is an APP-SANDBOX path. The engine's data
 /// dir and every saved file live here, so a caller can never steer the engine
 /// outside the sandbox by passing a dir in.
 @objc(DaakFsPaths)
-class DaakFsPaths: NSObject {
+class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
+  private static let bookmarkKey = "daak.downloadFolder.bookmark"
+  private static let nameKey = "daak.downloadFolder.name"
+
+  /// The pending picker promise. A UIDocumentPicker is presented and answered
+  /// asynchronously, so the promise is held until the delegate fires -- and
+  /// released on BOTH paths, or a cancelled picker leaves JS waiting forever.
+  private var pendingChoose: RCTPromiseResolveBlock?
   @objc static func requiresMainQueueSetup() -> Bool { false }
 
   @objc func documentsDir(_ resolve: @escaping RCTPromiseResolveBlock,
@@ -82,32 +90,116 @@ class DaakFsPaths: NSObject {
     documents().appendingPathComponent("daak", isDirectory: true)
   }
 
-  // R42p, slice 3 for macOS only so far. iOS picks a folder through
-  // UIDocumentPickerViewController in folder mode plus its own security-scoped
-  // bookmark, which needs the presenting view controller; that is the next
-  // slice. Until then these answer exactly what an UNSET folder answers, so the
-  // engine's own storage stays the destination and nothing fails -- and the iOS
-  // host does not render the row, so no user can reach them.
+  /// R42p: ask for a destination folder with a document picker in FOLDER mode.
+  ///
+  /// The picker gives a URL outside the sandbox, so the BOOKMARK is what is
+  /// stored: a bare path to a folder this app does not own stops resolving, the
+  /// same rule the macOS half records. The name is kept beside it only so the
+  /// Settings row can show the choice without resolving anything.
   @objc func chooseDownloadFolder(_ resolve: @escaping RCTPromiseResolveBlock,
                                    reject: @escaping RCTPromiseRejectBlock) {
-    resolve(nil)
+    DispatchQueue.main.async {
+      guard let root = UIApplication.shared.connectedScenes
+        .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
+        .first?.rootViewController
+      else {
+        // No window to present from: nothing can be shown, so nothing changed.
+        resolve(nil)
+        return
+      }
+      self.pendingChoose = resolve
+      let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+      picker.delegate = self
+      picker.allowsMultipleSelection = false
+      root.present(picker, animated: true)
+    }
+  }
+
+  func documentPicker(_ controller: UIDocumentPickerViewController,
+                      didPickDocumentsAt urls: [URL]) {
+    guard let resolve = pendingChoose, let url = urls.first else {
+      pendingChoose?(nil)
+      pendingChoose = nil
+      return
+    }
+    pendingChoose = nil
+    do {
+      let bookmark = try url.bookmarkData(
+        options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+      let defaults = UserDefaults.standard
+      defaults.set(bookmark, forKey: Self.bookmarkKey)
+      defaults.set(url.lastPathComponent, forKey: Self.nameKey)
+      resolve(url.lastPathComponent)
+    } catch {
+      resolve(nil)
+    }
+  }
+
+  func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+    // A cancelled picker is an ANSWER, not an error: nothing changed.
+    pendingChoose?(nil)
+    pendingChoose = nil
   }
 
   @objc func downloadFolderName(_ resolve: @escaping RCTPromiseResolveBlock,
                                 reject: @escaping RCTPromiseRejectBlock) {
-    resolve(nil)
+    resolve(UserDefaults.standard.string(forKey: Self.nameKey))
   }
 
   @objc func clearDownloadFolder(_ resolve: @escaping RCTPromiseResolveBlock,
                                  reject: @escaping RCTPromiseRejectBlock) {
+    let defaults = UserDefaults.standard
+    defaults.removeObject(forKey: Self.bookmarkKey)
+    defaults.removeObject(forKey: Self.nameKey)
     resolve(nil)
   }
 
-  /// The input, unchanged: the same answer the macOS half gives when no folder
-  /// has been chosen. A move that cannot happen must never lose a path.
+  /// MOVE each received file into the remembered folder, one answer per input.
+  ///
+  /// A MOVE, not a copy: the engine's copy is the same bytes, so keeping it
+  /// would store every file twice with one of the two invisible. A file that
+  /// cannot be moved keeps its ORIGINAL path, and an unset folder returns the
+  /// input unchanged -- which is what makes the feature degrade to the old
+  /// behavior rather than failing.
   @objc func moveReceivedFiles(_ paths: [String],
                                resolve: @escaping RCTPromiseResolveBlock,
                                reject: @escaping RCTPromiseRejectBlock) {
-    resolve(paths)
+    guard let bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey) else {
+      resolve(paths)
+      return
+    }
+    var stale = false
+    guard let folder = try? URL(
+      resolvingBookmarkData: bookmark, options: [], relativeTo: nil,
+      bookmarkDataIsStale: &stale)
+    else {
+      resolve(paths)
+      return
+    }
+    let scoped = folder.startAccessingSecurityScopedResource()
+    defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+
+    let fm = FileManager.default
+    var out: [String] = []
+    for path in paths {
+      let src = URL(fileURLWithPath: path)
+      var dest = folder.appendingPathComponent(src.lastPathComponent)
+      // Never overwrite: two files called photo.jpg are two files.
+      var n = 1
+      while fm.fileExists(atPath: dest.path) {
+        let base = src.deletingPathExtension().lastPathComponent
+        let ext = src.pathExtension
+        let name = ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)"
+        dest = folder.appendingPathComponent(name)
+        n += 1
+      }
+      do {
+        try fm.moveItem(at: src, to: dest)
+        out.append(dest.path)
+      } catch {
+        out.append(path)
+      }
+    }
+    resolve(out)
   }
 }

@@ -271,16 +271,15 @@ export function OnboardingFlow({ onComplete, onReady }: {
         stillNeeded={stillNeeded}
         onBack={() => setStep('name')}
         // R42p: the SAME row Settings renders, on the step that is already "the
-        // things Daak needs before it is useful". Android only, until the iOS
-        // half of rn-fspaths picks a folder for real.
+        // things Daak needs before it is useful". Both platforms now pick a
+        // real folder -- a SAF tree on Android, a document picker in folder mode
+        // on iOS -- so this is no longer gated on the platform.
         folder={
-          Platform.OS === 'android' ? (
-            <DownloadFolderRow
-              load={downloadFolderName}
-              choose={chooseDownloadFolder}
-              reset={clearDownloadFolder}
-            />
-          ) : undefined
+          <DownloadFolderRow
+            load={downloadFolderName}
+            choose={chooseDownloadFolder}
+            reset={clearDownloadFolder}
+          />
         }
         onContinue={() => {
           void (async () => {

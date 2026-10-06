@@ -383,10 +383,7 @@ export default function App() {
           // R42g: unpair is local trust, so the app reaches the engine
           // directly. packages/ui takes no engine and cannot call it.
           onUnpair={(d) => void engine.revokePairing(d.deviceId)}
-          // Android only until slice 3 for iOS lands: the iOS half of
-          // rn-fspaths answers `null`/unchanged by design, so rendering the row
-          // there would be a button that does nothing when tapped.
-          downloadFolder={Platform.OS === 'android' ? downloadFolder : undefined}
+          downloadFolder={downloadFolder}
           initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
           // ?? '' and not `link.text`: a send link with NO text is an
           // instruction to send nothing, and undefined here would leave the
