@@ -50,6 +50,14 @@ jest.mock('@daak/platform', () => ({
   // this file assert a surface it is not testing. The iOS branch itself is
   // pinned by packages/platform/src/onboarding-copy.test.ts.
   welcomeCopyFor: jest.fn(() => ({})),
+  // R42p: the download folder. An unset folder answers null, and the move
+  // returns its input unchanged -- which is the real no-op path, not a stub
+  // that hides a difference.
+  chooseDownloadFolder: jest.fn(async () => null),
+  downloadFolderName: jest.fn(async () => null),
+  clearDownloadFolder: jest.fn(async () => undefined),
+  moveReceivedFiles: jest.fn(async (paths: string[]) => paths),
+  relocateReceivedFiles: jest.fn(async () => undefined),
   // The re-ask wrapper returns the SAME rows with a real handler bound to the
   // alerts one. Two earlier versions of this mock broke the flow in ways that
   // looked like product bugs: returning [] rendered an empty permission list,

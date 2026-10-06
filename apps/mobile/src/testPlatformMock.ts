@@ -56,6 +56,15 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     generateQr: jest.fn(async () => ''),
     PAIRING_QR_SIZE: 512,
     scanQr: jest.fn(async () => ''),
+    // R42p: the download folder and the move that fills it. `moveReceivedFiles`
+    // returns the input unchanged, which is what the native side does when no
+    // folder has been chosen -- so every test that does not care about the
+    // feature exercises the real no-op path rather than a stub that lies.
+    chooseDownloadFolder: jest.fn(async () => null),
+    downloadFolderName: jest.fn(async () => null),
+    clearDownloadFolder: jest.fn(async () => undefined),
+    moveReceivedFiles: jest.fn(async (paths: string[]) => paths),
+    relocateReceivedFiles: jest.fn(async () => undefined),
     ...overrides,
   };
 }

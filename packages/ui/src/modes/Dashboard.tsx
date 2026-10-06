@@ -20,7 +20,7 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
@@ -34,6 +34,11 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   settingsRouteToken?: string;
   onCheckConnection?: () => void;
   onUnpair?: (d: DeviceInfo) => void;
+  downloadFolder?: {
+    load: () => Promise<string | null>;
+    choose: () => Promise<string | null>;
+    reset?: () => Promise<void>;
+  };
 }) {
   void state;
   return (
@@ -50,6 +55,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           settingsRouteToken={settingsRouteToken}
           onCheckConnection={onCheckConnection}
           onUnpair={onUnpair}
+          downloadFolder={downloadFolder}
         />
       </View>
     </EngineProvider>

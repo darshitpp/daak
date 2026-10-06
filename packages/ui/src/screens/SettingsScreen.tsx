@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useEngine } from '../EngineContext';
 import { Btn, Note, Section } from '../components/ds';
+import { DownloadFolderRow } from '../components/DownloadFolderRow';
 import { colors, ui } from '../theme';
 
 type Feedback = { tone: 'ok' | 'err'; title: string; body: string } | null;
@@ -27,8 +28,19 @@ const NAME_READ_RETRY_MS = 1000;
  * time -- importing it here would invert the dependency direction and break
  * every ui test that renders this screen.
  */
-export function SettingsScreen({ background, onCheckConnection }: {
+export function SettingsScreen({ background, onCheckConnection, downloadFolder }: {
   background?: React.ReactNode;
+  /**
+   * R42p: where received files go. Injected for the same reason `background`
+   * is a slot -- the folder picker is a platform call, and packages/ui reaches
+   * no TurboModule. `name` is null until the user chooses one, and the default
+   * then is the app's own storage, which is what the copy below says.
+   */
+  downloadFolder?: {
+    load: () => Promise<string | null>;
+    choose: () => Promise<string | null>;
+    reset?: () => Promise<void>;
+  };
   /**
    * The prototype's "Something not working? See what to check" button, in the
    * Connection section (prototypes/index.html:1237). Injected for the same
@@ -265,6 +277,13 @@ export function SettingsScreen({ background, onCheckConnection }: {
         </Section>
 
         {note ? <Note tone={note.tone} title={note.title} body={note.body} testID="settings-result" /> : null}
+        {downloadFolder ? (
+          <DownloadFolderRow
+            load={downloadFolder.load}
+            choose={downloadFolder.choose}
+            reset={downloadFolder.reset}
+          />
+        ) : null}
         {background}
       </ScrollView>
     </View>

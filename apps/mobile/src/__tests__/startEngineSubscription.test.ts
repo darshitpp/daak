@@ -24,6 +24,9 @@ jest.mock('@daak/platform', () => {
     initBackgroundSync: jest.fn(async () => {}),
     notifyReceived: jest.fn(async () => {}),
     routeInboxEntry: jest.fn(async () => {}),
+    // R42p: the move runs on the same inbox.received branch. Undefined here
+    // would throw before the router under test ever ran.
+    relocateReceivedFiles: jest.fn(async () => undefined),
     realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
   };
 });

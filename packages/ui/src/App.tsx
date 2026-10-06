@@ -23,7 +23,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -51,6 +51,11 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   settingsRouteToken?: string;
   onCheckConnection?: () => void;
   onUnpair?: (d: DeviceInfo) => void;
+  downloadFolder?: {
+    load: () => Promise<string | null>;
+    choose: () => Promise<string | null>;
+    reset?: () => Promise<void>;
+  };
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -85,6 +90,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             settingsRouteToken={settingsRouteToken}
             onCheckConnection={onCheckConnection}
             onUnpair={onUnpair}
+            downloadFolder={downloadFolder}
           />}
     </View>
   );

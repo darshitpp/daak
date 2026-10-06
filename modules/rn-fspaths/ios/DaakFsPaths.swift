@@ -81,4 +81,33 @@ class DaakFsPaths: NSObject {
   private static func dataDir() -> URL {
     documents().appendingPathComponent("daak", isDirectory: true)
   }
+
+  // R42p, slice 3 for macOS only so far. iOS picks a folder through
+  // UIDocumentPickerViewController in folder mode plus its own security-scoped
+  // bookmark, which needs the presenting view controller; that is the next
+  // slice. Until then these answer exactly what an UNSET folder answers, so the
+  // engine's own storage stays the destination and nothing fails -- and the iOS
+  // host does not render the row, so no user can reach them.
+  @objc func chooseDownloadFolder(_ resolve: @escaping RCTPromiseResolveBlock,
+                                   reject: @escaping RCTPromiseRejectBlock) {
+    resolve(nil)
+  }
+
+  @objc func downloadFolderName(_ resolve: @escaping RCTPromiseResolveBlock,
+                                reject: @escaping RCTPromiseRejectBlock) {
+    resolve(nil)
+  }
+
+  @objc func clearDownloadFolder(_ resolve: @escaping RCTPromiseResolveBlock,
+                                 reject: @escaping RCTPromiseRejectBlock) {
+    resolve(nil)
+  }
+
+  /// The input, unchanged: the same answer the macOS half gives when no folder
+  /// has been chosen. A move that cannot happen must never lose a path.
+  @objc func moveReceivedFiles(_ paths: [String],
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    resolve(paths)
+  }
 }

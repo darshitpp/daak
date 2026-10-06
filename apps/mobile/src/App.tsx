@@ -8,7 +8,12 @@ import {
   type IncompatiblePeer,
   useBlockers,
 } from '@daak/ui';
-import { readOnboarding } from '@daak/platform';
+import {
+  chooseDownloadFolder,
+  clearDownloadFolder,
+  downloadFolderName,
+  readOnboarding,
+} from '@daak/platform';
 import {
   drainInbound,
   engine,
@@ -62,6 +67,12 @@ export default function App() {
   // the pair slot, so re-implementing either here would be a second route
   // table.
   const [link, setLink] = useState<DeepLink>({ kind: 'none' });
+  // R42p: the download folder. VERBS only -- the row owns the state.
+  const downloadFolder = {
+    load: downloadFolderName,
+    choose: chooseDownloadFolder,
+    reset: clearDownloadFolder,
+  };
   // An OS share-sheet import. Held as state and handed to the shell, which
   // SEEDS it into Send -- the same route a daak://send link takes, because
   // from the app's side a shared file and a shared link are one instruction.
@@ -372,6 +383,10 @@ export default function App() {
           // R42g: unpair is local trust, so the app reaches the engine
           // directly. packages/ui takes no engine and cannot call it.
           onUnpair={(d) => void engine.revokePairing(d.deviceId)}
+          // Android only until slice 3 for iOS lands: the iOS half of
+          // rn-fspaths answers `null`/unchanged by design, so rendering the row
+          // there would be a button that does nothing when tapped.
+          downloadFolder={Platform.OS === 'android' ? downloadFolder : undefined}
           initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
           // ?? '' and not `link.text`: a send link with NO text is an
           // instruction to send nothing, and undefined here would leave the

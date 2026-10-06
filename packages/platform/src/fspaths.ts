@@ -61,6 +61,43 @@ export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
 }
 
 /**
+ * R42p: put a received payload's files where the user asked for them, and tell
+ * the engine where they went.
+ *
+ * NEVER throws. It runs inside the app's ONE engine event handler, where an
+ * unhandled rejection would kill the subscription and with it every later
+ * notification and pairing publish -- the same reason routeInboxEntry has that
+ * shape. A move that fails leaves the engine's own path untouched, which is the
+ * honest resting state: the file is still where the engine put it.
+ *
+ * The engine is told ONLY when something moved. A payload with no saved paths,
+ * or one whose files all stayed put, needs no write, and a write per receive
+ * for nothing is a row rewritten on every arrival.
+ */
+export async function relocateReceivedFiles(
+  engine: { replaceInboxPaths(payloadId: string, paths: string[]): Promise<void> },
+  payload: { payloadId: string; savedPaths: string[] | null },
+): Promise<void> {
+  const before = payload.savedPaths;
+  if (!before || before.length === 0) return;
+  let after: string[];
+  try {
+    after = await moveReceivedFiles(before);
+  } catch {
+    return;
+  }
+  if (after.length !== before.length) return;
+  if (after.every((p, i) => p === before[i])) return;
+  try {
+    await engine.replaceInboxPaths(payload.payloadId, after);
+  } catch {
+    // The files moved and the row still names the old place. Nothing else is
+    // safe to do from here: the next receive rewrites the row it cares about,
+    // and a retry loop in an event handler is worse than a stale path.
+  }
+}
+
+/**
  * Whether a path exists. Resolves false rather than rejecting for a path that
  * is not there, on both platforms, so a reveal action never has to catch. Not
  * called anywhere yet -- the UI that needs it is a later task -- but the plan

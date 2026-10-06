@@ -30,6 +30,7 @@ import {
 import { publishOnboardingDecision, registerOnboardingCompleter } from './src/onboarding-store';
 import { onDirectShareUrl } from './src/direct-share';
 import { attachNotifyEngine, attachNotifyHost, onDesktopNotify } from './src/notify';
+import { relocateInboxFiles } from './src/relocate';
 import { attachPicker, nativeDesktopPickFiles } from './src/picker';
 import { openDashboard } from './src/window-host';
 
@@ -235,6 +236,8 @@ onDirectShareUrl();
 attachNotifyEngine(engine);
 attachNotifyHost(openDashboard);
 onDesktopNotify();
+// R42p: the download folder. Attached here, with the other one-time wiring.
+relocateInboxFiles(engine);
 
 // The composer's file picker (NSOpenPanel in RNShare.mm). Attached HERE, above
 // both roots, for the same reason as onDirectShareUrl(): the dashboard window is

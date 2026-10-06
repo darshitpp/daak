@@ -9,6 +9,7 @@ import {
   onNotificationAction,
   presentShare,
   realReceiveDeps,
+  relocateReceivedFiles,
   routeInboxEntry,
   startTransferForeground,
   stopTransferForeground,
@@ -183,6 +184,10 @@ export async function startEngine(): Promise<void> {
     if (e.type === 'inbox.received') {
       void routeInboxEntry(e.payload, realReceiveDeps);
       void notifyReceived(e.payload);
+      // R42p: a file the user asked to keep somewhere else is MOVED there now,
+      // and the row is told where. Here, on the ONE subscription, for the same
+      // reason every other branch is here.
+      void relocateReceivedFiles(engine, e.payload);
     }
     // R42/GAP 3: the plan's wireBackground opens a SECOND engine.on to do this.
     // It lives here, on the ONE subscription, for the reason every other branch

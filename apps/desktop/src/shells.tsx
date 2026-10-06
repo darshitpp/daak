@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 import { DaakUiApp, useBlockers } from '@daak/ui';
 import type { IncompatiblePeer, UiRuntime } from '@daak/ui';
@@ -17,6 +17,14 @@ import { desktopInboxActions } from './inbox-actions';
 import { DesktopOnboardingGate } from './onboarding-gate';
 import { StartFaultNote } from './start-fault';
 import { DesktopPairing } from './pairing';
+// R42p: the download folder. Deep imports, not the @daak/platform barrel: that
+// barrel re-exports every platform module and each resolves a TurboModule at
+// module-eval time, which is the trap index.js:14-22 records.
+import {
+  chooseDownloadFolder,
+  clearDownloadFolder,
+  downloadFolderName,
+} from '@daak/platform/src/fspaths';
 
 // The peers the daemon reduced to "out of step", read off the SAME UiState the
 // shell already subscribes to. A bare runtime.getState().incompatible would be
@@ -117,6 +125,14 @@ export function DaakDashboardShell({ engine, runtime }: {
     [],
   );
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
+  // R42p: the download folder. VERBS only -- the row in packages/ui owns the
+  // state, because a state update here would re-run the tray overlay hook and
+  // this shell is the tray's owner.
+  const downloadFolder = {
+    load: downloadFolderName,
+    choose: chooseDownloadFolder,
+    reset: clearDownloadFolder,
+  };
   const incompatible = useIncompatible(runtime);
   const blockers = useBlockers(engine, incompatible);
   // The gate is a CONDITIONAL wrapper, not a boundary: both hooks above run
@@ -169,6 +185,7 @@ export function DaakDashboardShell({ engine, runtime }: {
           // R42g: unpair is local trust, so the host reaches the engine
           // directly. packages/ui takes no engine and cannot call it.
           onUnpair={(d) => void engine.revokePairing(d.deviceId)}
+          downloadFolder={downloadFolder}
         />
       </DesktopOnboardingGate>
     </>

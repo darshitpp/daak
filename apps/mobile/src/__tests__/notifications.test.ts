@@ -33,6 +33,8 @@ jest.mock('@daak/platform', () => {
     // R42: the inbox route is reached from the SAME subscription as
     // notifyReceived, so this mock has to answer it or the handler dies.
     routeInboxEntry: jest.fn(async () => {}),
+    // R42p: the move runs on the same inbox.received branch.
+    relocateReceivedFiles: jest.fn(async () => undefined),
     realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
     onNotificationAction: jest.fn(() => () => {}),
     handleNotificationAction: real.handleNotificationAction,

@@ -35,6 +35,7 @@ export function AppShell({
   settingsRouteToken,
   onCheckConnection,
   onUnpair,
+  downloadFolder,
   onPickFiles,
   inboxActions,
   initialPeerDeviceId,
@@ -95,6 +96,12 @@ export function AppShell({
    * packages/ui has no engine, and only the host can reach revokePairing.
    */
   onUnpair?: (d: DeviceInfo) => void;
+  /** R42p: the download-folder row. Injected: the picker is a platform call. */
+  downloadFolder?: {
+    load: () => Promise<string | null>;
+    choose: () => Promise<string | null>;
+    reset?: () => Promise<void>;
+  };
   onPickFiles?: () => Promise<string[]>;
   /** The host's native "show in folder" / share-sheet calls for Inbox rows. */
   inboxActions?: InboxActions;
@@ -238,7 +245,7 @@ export function AppShell({
     ) : tab === 'history' ? (
       <HistoryScreen actions={inboxActions} onOpenHeld={openHeld} />
     ) : tab === 'settings' ? (
-      <SettingsScreen background={background} onCheckConnection={onCheckConnection} />
+      <SettingsScreen background={background} onCheckConnection={onCheckConnection} downloadFolder={downloadFolder} />
     ) : (
       <View style={ui.screen}>
         {pair}
