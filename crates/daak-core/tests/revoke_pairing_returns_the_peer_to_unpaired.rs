@@ -1,0 +1,111 @@
+// R42f: EITHER SIDE MAY UNPAIR, AND UNPAIR MUST STICK.
+//
+// Nothing was able to revoke a pairing. `Engine::revoke_pairing` did not
+// exist, so a peer that had ever paired with this device could never be
+// removed: it stayed in the device map for the life of the launch, and
+// `Engine::start` seeded it again on every later launch because
+// `paired_addrs` still returned it. A host also refused to re-pair a peer that
+// already had a row, which is what the desktop hit as
+// "protocol: noise read: decrypt error".
+//
+// Binds sockets, so it needs an unsandboxed run.
+
+use daak_core::crypto::identity::import_from_store;
+use daak_core::crypto::secret_store::MemorySecretStore;
+use daak_core::engine::{Engine, EngineConfig};
+use daak_core::pairing::PairMode;
+use daak_core::store::Db;
+use std::path::Path;
+use std::sync::Arc;
+
+async fn engine_on(dir: &Path, name: &str, db: Arc<Db>, store: Arc<MemorySecretStore>) -> Engine {
+    Engine::start(EngineConfig {
+        display_name: name.into(),
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+        out_dir: dir.to_path_buf(),
+        identity: import_from_store(store.as_ref()).unwrap(),
+        db,
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_revoked_peer_leaves_the_map_and_stays_gone_after_a_restart() {
+    let joiner_dir = tempfile::tempdir().unwrap();
+    let host_dir = tempfile::tempdir().unwrap();
+
+    let joiner_db = Arc::new(Db::open(&joiner_dir.path().join("daak.db")).unwrap());
+    joiner_db.migrate().unwrap();
+    let joiner = engine_on(
+        joiner_dir.path(),
+        "joiner",
+        joiner_db,
+        Arc::new(MemorySecretStore::default()),
+    )
+    .await;
+    // The host DB is file-backed so the restart below reads the same file.
+    let host_db = Arc::new(Db::open(&host_dir.path().join("daak.db")).unwrap());
+    host_db.migrate().unwrap();
+    let host_store = Arc::new(MemorySecretStore::default());
+    let host =
+        Arc::new(engine_on(host_dir.path(), "host", host_db.clone(), host_store.clone()).await);
+
+    let joiner_id = joiner.pairing_bundle().await.identity.device_id;
+    let host_addr = host.local_addr();
+    host.offer_inbound_pairing(PairMode::Qr).await.unwrap();
+    let accepted = tokio::spawn({
+        let host = host.clone();
+        async move { host.accept_pairing_once().await.unwrap() }
+    });
+    joiner
+        .pair_with(host_addr, host.pairing_bundle().await)
+        .await
+        .unwrap();
+    accepted.await.unwrap();
+
+    assert!(
+        host.devices()
+            .await
+            .iter()
+            .any(|d| d.device_id == joiner_id),
+        "the pairing must put the peer in the map to begin with"
+    );
+
+    host.revoke_pairing(joiner_id).await.unwrap();
+
+    assert!(
+        !host
+            .devices()
+            .await
+            .iter()
+            .any(|d| d.device_id == joiner_id),
+        "a revoked peer must leave the live map"
+    );
+    assert_eq!(
+        host_db.get_pairing(&joiner_id).unwrap().unwrap().state,
+        "revoked",
+        "the row is marked, not deleted, and the state is what records it"
+    );
+    assert!(
+        host_db
+            .paired_addrs()
+            .unwrap()
+            .iter()
+            .all(|(id, _, _)| *id != joiner_id),
+        "a revoked pairing must not be seeded again"
+    );
+
+    host.shutdown().await.unwrap();
+    drop(host);
+
+    let restarted = engine_on(host_dir.path(), "host", host_db.clone(), host_store).await;
+    assert!(
+        !restarted
+            .devices()
+            .await
+            .iter()
+            .any(|d| d.device_id == joiner_id),
+        "a revoked peer must not come back on the next launch"
+    );
+}

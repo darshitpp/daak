@@ -29,7 +29,10 @@ describe('joinWithScan', () => {
     mockedScan.mockResolvedValue(SCANNED);
 
     await expect(joinWithScan(engine)).resolves.toEqual({ sas: '123456' });
-    expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc');
+    // The fourth argument is the bundle's optional address. SCANNED has none,
+    // so the joiner falls back to discovery. A host on loopback only and an
+    // older link both land here.
+    expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc', undefined);
   });
 
   it('rejects a non-JSON scan without calling pair', async () => {
@@ -107,5 +110,30 @@ describe('parsePairingPayload', () => {
     expect(() => parsePairingPayload('[1]')).toThrow();
     expect(() => parsePairingPayload('42')).toThrow();
     expect(() => parsePairingPayload('null')).toThrow();
+  });
+
+  // R42c: the host puts its own address in the bundle, and the joiner must
+  // pass it through. Without it the joiner resolves the host from discovery,
+  // which fails on any network mDNS does not cross -- measured on a NAT-ed
+  // Android emulator that saw zero peers while unicast reached the host.
+  it('carries the host address through to the engine', async () => {
+    const engine = fakeEngine();
+    const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: '123456' });
+    mockedScan.mockResolvedValue(
+      JSON.stringify({ cbor: 'aabbcc', name: 'Pixel 9', device_id: PEER, addr: '192.168.0.226:5199' }),
+    );
+
+    await joinWithScan(engine);
+    expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc', '192.168.0.226:5199');
+  });
+
+  // A malformed address must not reach the dialer as a string the engine
+  // cannot parse. Failing here beats an error the user cannot act on.
+  it('rejects a malformed address rather than passing it to the dialer', () => {
+    expect(() =>
+      parsePairingPayload(
+        JSON.stringify({ cbor: 'aabbcc', name: 'x', device_id: PEER, addr: 'not-an-addr' }),
+      ),
+    ).toThrow();
   });
 });

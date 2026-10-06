@@ -187,6 +187,9 @@ describe('a void UniFFI method must not resolve its promise with Unit', () => {
       'offerPairing',
       'retry',
       'retryItem',
+      // R42f: revoke_pairing is void in the UDL and overridden on the native
+      // modules, so it belongs in the same pin as the other void engine verbs.
+      'revokePairing',
       'setDisplayName',
       'setPresence',
       'shutdown',

@@ -34,6 +34,7 @@ export function AppShell({
   alertRouteToken,
   settingsRouteToken,
   onCheckConnection,
+  onUnpair,
   onPickFiles,
   inboxActions,
   initialPeerDeviceId,
@@ -89,6 +90,11 @@ export function AppShell({
    * actually there.
    */
   onCheckConnection?: () => void;
+  /**
+   * R42g: drop a pairing. Injected for the same reason as onCheckConnection --
+   * packages/ui has no engine, and only the host can reach revokePairing.
+   */
+  onUnpair?: (d: DeviceInfo) => void;
   onPickFiles?: () => Promise<string[]>;
   /** The host's native "show in folder" / share-sheet calls for Inbox rows. */
   inboxActions?: InboxActions;
@@ -208,6 +214,7 @@ export function AppShell({
       <DashboardScreen
         onSend={routeSend}
         onPair={openPair}
+        onUnpair={onUnpair}
         onCompose={() => setTab('send')}
         onCheckConnection={onCheckConnection}
       />

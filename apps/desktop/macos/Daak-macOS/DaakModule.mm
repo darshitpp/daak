@@ -52,6 +52,13 @@ RCT_EXTERN_METHOD(retry:(NSString *)transferId
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+// R42f: unpair. The method table is declared BY HAND, so a Swift method with no
+// entry here is invisible to JS -- the symptom is "revokePairing is not a
+// function" while the selector is present in the binary.
+RCT_EXTERN_METHOD(revokePairing:(NSString *)deviceId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(retryItem:(NSString *)transferId
                   itemIndex:(double)itemIndex
                   resolve:(RCTPromiseResolveBlock)resolve

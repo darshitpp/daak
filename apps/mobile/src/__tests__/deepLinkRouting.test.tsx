@@ -102,7 +102,9 @@ it('opens pairing from a pair link and joins with its bundle, no camera', async 
   emit('daak://pair?bundle=' + encodeURIComponent(BUNDLE));
   // Route reached, and the bundle handed to the engine as PARSED cbor -- never
   // the raw link value, which is the R88 rule for a scanned QR too.
-  await waitFor(() => expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc'));
+  // The link's bundle names no address, so the fourth argument is `undefined`
+  // and the joiner falls back to discovery (R42c/R42d).
+  await waitFor(() => expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc', undefined));
   expect(await screen.findByText('555666')).toBeTruthy();
   expect(jest.requireMock('@daak/platform').scanQr).not.toHaveBeenCalled();
 });

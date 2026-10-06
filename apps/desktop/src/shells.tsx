@@ -16,6 +16,7 @@ import { desktopPickFiles } from './picker';
 import { desktopInboxActions } from './inbox-actions';
 import { DesktopOnboardingGate } from './onboarding-gate';
 import { StartFaultNote } from './start-fault';
+import { DesktopPairing } from './pairing';
 
 // The peers the daemon reduced to "out of step", read off the SAME UiState the
 // shell already subscribes to. A bare runtime.getState().incompatible would be
@@ -155,10 +156,19 @@ export function DaakDashboardShell({ engine, runtime }: {
           peerDeviceId={peerDeviceId ?? undefined}
           onPickFiles={desktopPickFiles}
           inboxActions={desktopInboxActions}
+          // ONLY the dashboard branch gets this, and deliberately. The popover
+          // is three peers and a file box; pairing is a one-time setup step a
+          // user reaches from Devices, and the popover has no route that could
+          // carry one. Supplied on BOTH would render a second live engine.on
+          // subscription for a screen nobody opens.
+          pair={<DesktopPairing engine={engine} />}
           alert={blockers.alert}
           alertRouteToken={blockers.alertRouteToken}
           settingsRouteToken={blockers.settingsRouteToken}
           onCheckConnection={blockers.onCheckConnection}
+          // R42g: unpair is local trust, so the host reaches the engine
+          // directly. packages/ui takes no engine and cannot call it.
+          onUnpair={(d) => void engine.revokePairing(d.deviceId)}
         />
       </DesktopOnboardingGate>
     </>

@@ -1,5 +1,7 @@
 package dev.darshit.daak
 
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -9,6 +11,7 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import uniffi.daak_ffi.DaakEngine
 import uniffi.daak_ffi.EventSink
 import uniffi.daak_ffi.FfiEvent
@@ -40,13 +43,60 @@ class DaakModule(reactContext: ReactApplicationContext) :
 
     private val lock = Any()
     private var engine: DaakEngine? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+    // start() runs on its own Thread and takes seconds on a cold process, while
+    // every screen calls devices() on mount. This latch is how a call that
+    // arrives mid-start waits for the engine instead of being told it does not
+    // exist. It counts down in a finally, so a FAILED start releases the wait
+    // too and the waiter gets the engine's own error rather than a hang.
+    private val startedLatch = CountDownLatch(1)
+    private var startAttempted = false
+    // `engine = e` happens BEFORE e.start(), so a non-null field does NOT mean
+    // the Rust engine is up: crates/daak-ffi assigns its own slot at the END of
+    // DaakEngine.start(). A call in that window used to call straight through and
+    // get 'engine not started' back from Rust for an engine that was merely
+    // still starting. This flag is the real readiness signal.
+    private var startComplete = false
+
+    // Android filters multicast packets out of Wi-Fi RX to save power, so an app
+    // that holds no MulticastLock receives ZERO bytes on 224.0.0.251:5353 (the
+    // mDNS browse) or on the presence group 239.255.67.68:53535. The engine does
+    // exactly that, so without this lock the peer list is permanently empty and
+    // every send dies at the "peer is not paired" gate in crates/daak-core/src/engine.rs.
+    // CHANGE_WIFI_MULTICAST_STATE is already declared in AndroidManifest.xml.
+    //
+    // Reference counting is OFF so this is a plain on/off switch: a second start()
+    // must not stack a count that no code path knows how to release.
+    private fun acquireMulticastLock() {
+        val wifi = reactApplicationContext.applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as WifiManager
+        synchronized(lock) {
+            if (multicastLock?.isHeld == true) return
+            multicastLock = wifi.createMulticastLock("$NAME.mdns").also {
+                it.setReferenceCounted(false)
+                it.acquire()
+            }
+        }
+    }
+
+    private fun releaseMulticastLock() {
+        synchronized(lock) {
+            multicastLock?.takeIf { it.isHeld }?.release()
+            multicastLock = null
+        }
+    }
 
     override fun getName() = NAME
 
     @ReactMethod
     override fun start(dataDir: String, displayName: String, listenPort: Double, promise: Promise) {
         Thread {
+            synchronized(lock) { startAttempted = true }
             try {
+                // BEFORE the engine binds its sockets: the browse starts inside
+                // e.start(), and a packet dropped before the lock is held is a
+                // peer the device never learns about.
+                acquireMulticastLock()
                 // R43: dataDir is IGNORED, not honoured-when-non-empty.
                 // InProcessEngine.start() takes no arguments and hardcodes '',
                 // so the "use the incoming dir when it is set" branch would be
@@ -60,11 +110,25 @@ class DaakModule(reactContext: ReactApplicationContext) :
                 // regenerates the Ed25519 identity and re-pairs the device as
                 // a new one, with no error anywhere the user can see.
                 val e = DaakEngine.newWithStore(KeystoreSecureStore(reactApplicationContext), this)
-                e.start(dir.absolutePath, displayName, listenPort.toInt().toUShort())
+                // BEFORE e.start(), which blocks. A caller that wakes during
+                // startup now reaches a real engine object, and it waits on
+                // startedLatch inside its own call rather than being told the
+                // engine is missing.
                 synchronized(lock) { engine = e }
+                e.start(dir.absolutePath, displayName, listenPort.toInt().toUShort())
+                synchronized(lock) { startComplete = true }
+                Log.i(NAME, "engine start returned; port=${e.localPort()}")
                 promise.resolve(null)
             } catch (t: Throwable) {
+                // A start failure used to be invisible: the engine field was
+                // only cleared by shutdown, so the waiter woke, saw a null,
+                // and reported the generic "engine not started" -- which names
+                // the wrong problem entirely. The real cause is here.
+                Log.e(NAME, "engine start failed", t)
+                synchronized(lock) { if (engine?.let { true } == true) engine = null }
                 promise.reject("E_ENGINE", t)
+            } finally {
+                startedLatch.countDown()
             }
         }.start()
     }
@@ -127,6 +191,11 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().retry(transferId); null }
 
     @ReactMethod
+    override fun revokePairing(deviceId: String, promise: Promise) =
+        // The trailing null is load-bearing, the same as cancel()/retry().
+        resolve(promise) { handle().revokePairing(deviceId); null }
+
+    @ReactMethod
     override fun retryItem(transferId: String, itemIndex: Double, promise: Promise) =
         // The trailing null is load-bearing for the same reason as retry():
         // this generated method returns Unit, and PromiseImpl.resolve throws.
@@ -169,6 +238,7 @@ class DaakModule(reactContext: ReactApplicationContext) :
     override fun shutdown(promise: Promise) = resolve(promise) {
         val e = synchronized(lock) { engine.also { engine = null } }
         e?.shutdown()
+        releaseMulticastLock()
         null
     }
 
@@ -192,8 +262,22 @@ class DaakModule(reactContext: ReactApplicationContext) :
         }.start()
     }
 
-    private fun handle(): DaakEngine = synchronized(lock) { engine }
-        ?: throw IllegalStateException("engine not started; call start() first")
+    // Waits for an in-flight start. startAttempted distinguishes "not ready
+    // yet" (wait) from "never asked" (throw): without it the first render of
+    // any screen would block forever on a latch nobody counts down.
+    private fun handle(): DaakEngine {
+        val waiting = synchronized(lock) { startAttempted && !startComplete }
+        if (waiting) {
+            try {
+                startedLatch.await()
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException("interrupted waiting for the engine to start", e)
+            }
+        }
+        return synchronized(lock) { engine }
+            ?: throw IllegalStateException("engine not started; call start() first")
+    }
 
     // The UDL's "u32 item_index" reaches Kotlin as UInt, but JS has no integers,
     // so codegen gives this method a Double. The two hops between them are both

@@ -14,3 +14,9 @@ tokio.workspace = true
 anyhow = "1"
 rand.workspace = true
 hex.workspace = true
+# Installs the tracing subscriber the engine has always logged into. Without it
+# every `tracing::warn!` in daak-core is a no-op, so an inbound pairing that is
+# REFUSED prints nothing at all and the joiner only sees "connection closed
+# during handshake" on its own side.
+tracing-subscriber = "0.3"
+tracing.workspace = true

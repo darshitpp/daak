@@ -7,9 +7,15 @@ import { DeviceCard } from '../components/DeviceCard';
 import { Btn, Empty, Note, Section } from '../components/ds';
 import { ui } from '../theme';
 
-export function DashboardScreen({ onSend, onPair, onCompose, onCheckConnection }: {
+export function DashboardScreen({ onSend, onPair, onUnpair, onCompose, onCheckConnection }: {
   onSend?: (d: DeviceInfo) => void;
   onPair?: () => void;
+  /**
+   * R42g: drop a pairing. Shown on a PAIRED device only; a discovered peer
+   * offers Pair instead, because the engine refuses a send to a peer that has
+   * no pairing row.
+   */
+  onUnpair?: (d: DeviceInfo) => void;
   /**
    * The prototype's "Send to a device" primary action. Optional, and null by
    * default: a shell that cannot route to its own Send tab has no business
@@ -64,7 +70,13 @@ export function DashboardScreen({ onSend, onPair, onCompose, onCheckConnection }
           ) : (
             <View style={ui.list}>
               {devices.map((d) => (
-                <DeviceCard key={d.deviceId} device={d} onSend={onSend} />
+                <DeviceCard
+                  key={d.deviceId}
+                  device={d}
+                  onSend={onSend}
+                  onPair={onPair}
+                  onUnpair={onUnpair}
+                />
               ))}
             </View>
           )}

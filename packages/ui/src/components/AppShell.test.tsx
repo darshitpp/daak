@@ -5,8 +5,10 @@ import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
 import { AppShell } from './AppShell';
 
-const peer = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true };
-const second = { deviceId: 'cc'.repeat(16), name: 'ThinkPad', addr: '192.168.1.4:40001', online: true };
+// `paired: true`: R42g hides Send on an unpaired peer, so the fixtures the
+// Send route is asserted against must be paired.
+const peer = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true, paired: true };
+const second = { deviceId: 'cc'.repeat(16), name: 'ThinkPad', addr: '192.168.1.4:40001', online: true, paired: true };
 
 // The background control has to be REACHABLE, not merely renderable: an app
 // that injects it into SettingsScreen but forgets to thread it through AppShell

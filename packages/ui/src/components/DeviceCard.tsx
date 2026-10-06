@@ -13,17 +13,39 @@ import { ui } from '../theme';
  * on a cold daemon, and printing "offline" there is a reachability claim the
  * engine never makes (a send to an unknown-liveness peer queues and succeeds).
  */
-export function DeviceCard({ device, onSend }: { device: DeviceInfo; onSend?: (d: DeviceInfo) => void }) {
+export function DeviceCard({ device, onSend, onPair, onUnpair }: {
+  device: DeviceInfo;
+  onSend?: (d: DeviceInfo) => void;
+  /** Open the pairing route. A discovered peer is not trusted yet. */
+  onPair?: () => void;
+  /** R42g: drop the pairing. Shown only for a paired peer. */
+  onUnpair?: (d: DeviceInfo) => void;
+}) {
   const presence = devicePresence(device.online);
+  // Undefined means an engine that predates the flag, and the safe reading is
+  // "not paired": the engine refuses a send to an unpaired peer, so offering
+  // Send would be the dead button this component already avoids.
+  const paired = device.paired === true;
   return (
     <View style={ui.listRow}>
       <Avatar letter={device.name} />
       <View style={ui.fill}>
         <Text style={ui.rowTitle} numberOfLines={1}>{device.name}</Text>
-        <Status tone={presence.tone} label={presence.label} />
+        <Status tone={paired ? presence.tone : 'off'} label={paired ? presence.label : 'Not paired'} />
       </View>
-      {onSend ? (
+      {paired && onSend ? (
         <Btn label="Send" onPress={() => onSend(device)} testID={`send-to-${device.deviceId}`} />
+      ) : null}
+      {!paired && onPair ? (
+        <Btn label="Pair" onPress={onPair} testID={`pair-with-${device.deviceId}`} />
+      ) : null}
+      {paired && onUnpair ? (
+        <Btn
+          label="Unpair"
+          variant="ghost"
+          onPress={() => onUnpair(device)}
+          testID={`unpair-${device.deviceId}`}
+        />
       ) : null}
     </View>
   );

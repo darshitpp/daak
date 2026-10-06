@@ -16,7 +16,16 @@ export function ProgressRow({ name, bytesDone, bytesTotal, state, error, onCance
   /** Route into the per-transfer detail. A row with no detail to show omits it. */
   onOpen?: () => void;
 }) {
-  const pct = bytesTotal > 0 ? Math.floor((bytesDone / bytesTotal) * 100) : 0;
+  // R42h: a text item is ZERO bytes, so `bytesDone / bytesTotal` is 0/0 and the
+  // bar sat at 0% next to the word "done". A transfer in the done state is
+  // finished whatever it carried, so the state decides before the byte ratio
+  // does. `canceled` is NOT done and keeps its real ratio.
+  const pct =
+    state === 'done'
+      ? 100
+      : bytesTotal > 0
+        ? Math.floor((bytesDone / bytesTotal) * 100)
+        : 0;
   const failed = state === 'failed';
   return (
     <View style={ui.card} accessibilityRole="summary">

@@ -55,6 +55,13 @@ enum Command {
     PairAccept {
         #[arg(long, default_value = "0")]
         port: u16,
+        /// Arm the accept slot for the FIRST inbound pairing, naming no peer.
+        /// This is the host half the apps use (Engine::offer_inbound_pairing,
+        /// spec 3.3 Mode A), where the joiner learns its own identity in-band.
+        /// Without it the only arm this command can set is Expected, which
+        /// needs the JOINER's bundle -- a value no host ever holds.
+        #[arg(long, conflicts_with_all = ["code", "bundle"])]
+        open: bool,
         #[arg(long)]
         code: Option<String>,
         #[arg(long)]
@@ -76,6 +83,14 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let Cli { data_dir, command } = Cli::parse();
+    // `warn` so a REFUSED pairing names itself. The engine has always logged
+    // that refusal; without a subscriber the line was dropped and the only
+    // evidence anywhere was the joiner's "connection closed during
+    // handshake", which says nothing about the cause.
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::io::stderr)
+        .init();
     let data_dir = data_dir.unwrap_or_else(default_data_dir);
     match command {
         Command::Name => {
@@ -127,18 +142,24 @@ async fn main() -> Result<()> {
             println!("peer {}", hex_id(peer_id));
             engine.shutdown().await?;
         }
-        Command::PairAccept { port, code, bundle } => {
+        Command::PairAccept {
+            port,
+            code,
+            bundle,
+            open,
+        } => {
             let cfg = config(&data_dir, "./daak-recv", port)?;
             let engine = Engine::start(cfg).await?;
             println!("listening on {}", engine.local_addr());
-            match (code, bundle) {
-                (Some(code), None) => engine.offer_code_pairing(code).await?,
-                (None, Some(bundle)) => {
+            match (code, bundle, open) {
+                (Some(code), None, false) => engine.offer_code_pairing(code).await?,
+                (None, Some(bundle), false) => {
                     engine
                         .offer_pairing(bundle_from_hex(&bundle)?, PairMode::Qr, None)
                         .await?
                 }
-                _ => bail!("provide exactly one of --code or --bundle"),
+                (None, None, true) => engine.offer_inbound_pairing(PairMode::Qr).await?,
+                _ => bail!("provide exactly one of --code, --bundle, or --open"),
             }
             let sas = engine.accept_pairing_once().await?;
             println!("sas {sas}");

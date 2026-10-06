@@ -25,5 +25,11 @@ module.exports = {
     // works from apps/desktop and fails with "Failed to locate package.json"
     // from anywhere else.
     '@daak/rn-securestore': { root: join(__dirname, '..', '..', 'modules', 'rn-securestore') },
+    // The pairing QR. generateQr() calls TurboModuleRegistry.getEnforcing at
+    // MODULE EVAL, so without this pod the desktop cannot render a host QR at
+    // all -- and it can never pair, so it can never send. Same shape and same
+    // reason as rn-securestore above: a dependency of @daak/platform rather
+    // than of this app, named by PATH because pnpm links only direct deps.
+    '@daak/rn-qrscanner': { root: join(__dirname, '..', '..', 'modules', 'rn-qrscanner') },
   },
 };

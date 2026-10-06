@@ -5,8 +5,10 @@ import { fakeEngine } from '../testing/fakeEngine';
 import { initialUiState } from '../state/store';
 import type { DaakEngine, DeviceInfo, SendRequest } from '@daak/core';
 
-const pixel: DeviceInfo = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true };
-const thinkpad: DeviceInfo = { deviceId: 'bb'.repeat(16), name: 'ThinkPad', addr: '192.168.1.10:40001', online: true };
+// `paired: true`: R42g shows Send only for a peer the engine will accept a send
+// for, and an unpaired peer is refused.
+const pixel: DeviceInfo = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true, paired: true };
+const thinkpad: DeviceInfo = { deviceId: 'bb'.repeat(16), name: 'ThinkPad', addr: '192.168.1.10:40001', online: true, paired: true };
 
 function spyEngine(devices: DeviceInfo[]): { engine: DaakEngine; sent: SendRequest[] } {
   const sent: SendRequest[] = [];

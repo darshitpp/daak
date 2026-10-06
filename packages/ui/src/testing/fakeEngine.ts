@@ -61,6 +61,7 @@ export function fakeEngine(devices: DeviceInfo[] = [
     }),
     setDisplayName: async () => {},
     setPresence: async () => {},
+    revokePairing: async () => {},
     on: (cb: (e: DaakEvent) => void) => {
       handlers.add(cb);
       return () => handlers.delete(cb);

@@ -8,6 +8,7 @@
 // lint is allowed crate-wide rather than patched upstream.
 #![allow(clippy::empty_line_after_doc_comments)]
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -464,8 +465,9 @@ impl DaakEngine {
     }
 
     pub fn pairing_bundle(&self) -> Result<String, FfiError> {
-        let bundle = self.rt.block_on(self.engine()?.pairing_bundle());
-        pairing_bundle_json(&bundle)
+        let engine = self.engine()?;
+        let bundle = self.rt.block_on(engine.pairing_bundle());
+        pairing_bundle_json(&bundle, dialable_local_addr(engine.local_addr().port()))
     }
 
     /// C2: arm the HOST half of QR pairing. The host has already scanned the
@@ -595,10 +597,23 @@ impl DaakEngine {
                     "deviceId": to_hex(&d.device_id),
                     "name": d.name,
                     "addr": d.addr.to_string(),
+                    // R42g: discovery and trust are different facts. The UI
+                    // offers Send only for a paired peer and Pair otherwise.
+                    "paired": d.paired,
                 })
             })
             .collect();
         serde_json::to_string(&json).map_err(protocol_err)
+    }
+
+    /// Unpair a peer. Local trust, so either side may revoke without asking the
+    /// other. Returns the peer to the unpaired state: the UI stops offering
+    /// Send and starts offering Pair.
+    pub fn revoke_pairing(&self, device_id: String) -> Result<(), FfiError> {
+        let id = parse_id(&device_id)?;
+        self.rt
+            .block_on(self.engine()?.revoke_pairing(id))
+            .map_err(engine_err)
     }
 
     pub fn cancel(&self, transfer_id: String) -> Result<(), FfiError> {
@@ -864,15 +879,49 @@ pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
     serde_json::to_string(&json).map_err(protocol_err)
 }
 
-/// The JSON shape Tasks 2/3 read: {cbor, name, device_id}. A free function, not
-/// a method, so the contract is testable without a live engine.
-pub fn pairing_bundle_json(bundle: &PairingBundle) -> Result<String, FfiError> {
+/// The address a joiner dials, given only the port this host listens on.
+///
+/// The engine binds a WILDCARD, so `local_addr()` is `[::]:port` (see
+/// net::tcp::bind). A wildcard names no host, so it cannot be the answer: a
+/// bundle that published one would send the joiner at an unroutable target,
+/// and every shipped engine binds that way, so the address has to come from the
+/// host's interface list instead. None means this host knows no address a
+/// joiner can dial, and the bundle leaves the key out so the joiner falls back
+/// to discovery.
+///
+/// The interface list is `pub(crate)` on purpose. A caller outside this crate
+/// has no listener to normalise, so only this crate's two host-side callers
+/// get the conversion.
+fn dialable_local_addr(port: u16) -> Option<SocketAddr> {
+    daak_core::discovery::host_lan_addr(port)
+}
+
+/// The JSON shape Tasks 2/3 read: {cbor, name, device_id, addr}. A free
+/// function, not a method, so the contract is testable without a live engine.
+///
+/// `addr` is what makes pairing reachable on a network mDNS does not cross
+/// (measured: a NAT-ed Android emulator saw zero peers while unicast to the
+/// host worked), so it is included whenever the host knows one. The CBOR bundle
+/// is byte-identical either way -- the address is beside it, never inside it,
+/// so a link written by an older build still pairs.
+pub fn pairing_bundle_json(
+    bundle: &PairingBundle,
+    addr: Option<SocketAddr>,
+) -> Result<String, FfiError> {
     let cbor = to_hex(&bundle.to_cbor().map_err(engine_err)?);
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "cbor": cbor,
         "name": bundle.name,
         "device_id": to_hex(&bundle.identity.device_id),
     });
+    // OMIT the key, do not write `null`. `parsePairingPayload` accepts both
+    // `undefined` and `null` as "no address", so either would parse -- but an
+    // absent key is what an older build writes, and a link written by a newer
+    // host must stay readable by an older joiner. Omitting is the shape every
+    // other consumer already handles.
+    if let Some(addr) = addr {
+        json["addr"] = serde_json::json!(addr.to_string());
+    }
     serde_json::to_string(&json).map_err(protocol_err)
 }
 

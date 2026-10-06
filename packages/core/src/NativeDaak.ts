@@ -25,6 +25,8 @@ export interface Spec extends TurboModule {
   sendFiles(peerId: string, paths: string[]): Promise<string>;
   /** UDL: list_devices() -> [{deviceId, name, addr}] (R11) */
   listDevices(): Promise<string>;
+  /** UDL: revoke_pairing(string device_id) */
+  revokePairing(deviceId: string): Promise<void>;
   /** UDL: cancel(string transfer_id) */
   cancel(transferId: string): Promise<void>;
   /** UDL: retry(string transfer_id) */

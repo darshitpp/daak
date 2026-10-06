@@ -20,7 +20,8 @@ const UNFINISHED = new Set(['queued', 'active', 'awaiting_ack', 'paused', 'recei
  * and an id prefix when it does not. A transfer row keyed on a raw device id is
  * unreadable, and the name is already in hand from devices().
  */
-const labelFor = (t: TransferSummary, devices: DeviceInfo[]): string => {
+/** Shared with the per-transfer detail so one transfer reads the same in both. */
+export const labelFor = (t: TransferSummary, devices: DeviceInfo[]): string => {
   const peer = devices.find((d) => d.deviceId === t.peerDeviceId)?.name ?? t.peerDeviceId.slice(0, 8);
   return t.direction === 'in'
     ? t.itemCount + ' item(s) from ' + peer

@@ -22,6 +22,13 @@ const when = (ms: number): string => (ms > 0 ? new Date(ms).toLocaleString() : '
 export interface InboxActions {
   open?: (path: string) => Promise<boolean>;
   share?: (paths: string[]) => void;
+  /**
+   * R42i: put a received TEXT back on the clipboard. Injected for the same
+   * reason as `share` -- packages/ui imports no clipboard TurboModule. A row
+   * renders the button only for a text entry AND only when the host supplied
+   * the verb.
+   */
+  copy?: (text: string) => void;
 }
 
 export function HistoryScreen({
@@ -42,6 +49,10 @@ export function HistoryScreen({
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
   const [noReveal, setNoReveal] = useState(false);
+  // R42j: the sender's NAME, keyed by device id. The inbox row carries only
+  // `peerDeviceId`; the name lives on the device map, which is seeded from the
+  // pairings at start, so a paired sender resolves without a store change.
+  const [names, setNames] = useState<Record<string, string>>({});
 
   const open = (path: string) =>
     // NOT .then(setNoReveal): that hands the resolved boolean to the setter,
@@ -74,9 +85,18 @@ export function HistoryScreen({
       );
     refresh();
     refreshHeld();
+    const refreshNames = () =>
+      void engine.devices().then(
+        (list) => setNames(Object.fromEntries(list.map((d) => [d.deviceId, d.name]))),
+        // A device list we cannot read must not blank the sender column; the
+        // row falls back to the device id, which is a fact.
+        () => {},
+      );
+    refreshNames();
     const off = engine.on((e) => {
       if (e.type === 'inbox.received') setInbox((prev) => [e.payload, ...prev]);
       if (e.type === 'transfer.item') refreshHeld();
+      if (e.type === 'device.discovered' || e.type === 'device.state') refreshNames();
     });
     return off;
   }, [engine]);
@@ -130,10 +150,13 @@ export function HistoryScreen({
                       {i.summary}
                     </Text>
                     <Text style={ui.rowSub} numberOfLines={1}>
-                      {i.itemCount + ' item(s), ' + when(i.receivedAt)}
+                      {(names[i.peerDeviceId] ?? 'Device ' + i.peerDeviceId.slice(0, 8)) + ' · ' + i.itemCount + ' item(s), ' + when(i.receivedAt)}
                     </Text>
                   </View>
                   <View style={ui.row}>
+                    {actions?.copy && i.kind === 'text' ? (
+                      <Btn label="Copy" onPress={() => actions.copy?.(i.summary)} testID={'copy-' + i.payloadId} />
+                    ) : null}
                     {actions?.open && i.savedPaths !== null && i.savedPaths.length > 0 ? (
                       <Btn label="Show" onPress={() => open(i.savedPaths?.[0] ?? '')} testID={'open-' + i.payloadId} />
                     ) : null}

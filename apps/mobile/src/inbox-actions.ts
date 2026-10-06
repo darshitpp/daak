@@ -1,4 +1,4 @@
-import { presentShare, revealInFileManager } from '@daak/platform';
+import { copyToClipboard, presentShare, revealInFileManager } from '@daak/platform';
 import type { InboxActions } from '@daak/ui';
 
 // The Inbox row's two real verbs, wired to the native calls that already exist:
@@ -18,5 +18,11 @@ export const mobileInboxActions: InboxActions = {
     // there means no sheet was shown -- there is nothing useful to report and
     // no second action to take.
     void presentShare({ urls: paths }).catch(() => {});
+  },
+  // R42i: put a received text back on the clipboard on demand. routeInboxEntry
+  // already copies it once on arrival; this is the row's own verb for a user
+  // who copied something else in between.
+  copy: (text) => {
+    void copyToClipboard(text).catch(() => {});
   },
 };

@@ -142,7 +142,9 @@ describe('QR pairing is reachable from the app shell', () => {
 
     await waitFor(() => expect(screen.getByText('123456')).toBeTruthy());
     // The scanned payload must have reached engine.pair - never the raw string.
-    expect(pair).toHaveBeenCalledWith('aa'.repeat(16), 'qr', 'ccdd');
+    // The fourth argument is the dialable address. This bundle has none, so it
+    // is `undefined` and the joiner falls back to discovery (R42c/R42d).
+    expect(pair).toHaveBeenCalledWith('aa'.repeat(16), 'qr', 'ccdd', undefined);
 
     fireEvent.press(screen.getByLabelText('confirm'));
     expect(screen.getByText('Scan')).toBeTruthy();
@@ -205,5 +207,29 @@ describe('QR pairing is reachable from the app shell', () => {
 
       expect(screen.getByLabelText('host-retry')).toBeTruthy();
     });
+  });
+
+  // A link join that fails reached the user as a SUCCESS. The measured screen
+  // after `am start -d daak://pair?bundle=...` on the emulator showed the
+  // button 'SAS matched - Done' and no SAS at all, above the error 'unknown
+  // device bbbb...'. `acknowledge` clears the error, so the one label that
+  // says pairing worked was on screen for a pairing that never happened, and
+  // pressing it threw the message away.
+  //
+  // No confirmation button until there is a SAS to have matched. This is not
+  // security gating: the engine commits the row either way. It only stops the
+  // screen from claiming a match that has no second value.
+  it('shows no confirmation button when a link join fails', async () => {
+    const pair = jest.spyOn(engine, 'pair').mockRejectedValue(new Error('unknown device bbbb'));
+    renderShell();
+    fireEvent.press(screen.getByText('Devices'));
+    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByText('Scan'));
+    await waitFor(() => expect(pair).toHaveBeenCalled());
+
+    await waitFor(() => expect(screen.getByLabelText('pairing-error')).toBeTruthy());
+    expect(screen.queryByText('SAS matched - Done')).toBeNull();
+    expect(screen.queryByLabelText('confirm')).toBeNull();
+    pair.mockRestore();
   });
 });

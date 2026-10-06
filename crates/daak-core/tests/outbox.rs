@@ -43,8 +43,16 @@ async fn an_offline_queued_item_auto_delivers_when_the_peer_comes_back() {
     let b_addr = b.local_addr();
     let b_id = b.pairing_bundle().await.identity.device_id;
 
-    // Pair first, but DO NOT note_peer: A must not know where B is when the
-    // share is queued, which is the whole point of the outbox.
+    // Pair first, so the secure send below has a pairing row to authenticate
+    // with.
+    //
+    // R42d changed what "unreachable" can mean here. Pairing used to leave A's
+    // device map empty, so an unannounced address WAS the way to make the peer
+    // unreachable -- and that was the bug: a paired peer could never receive a
+    // send until mDNS said hello (measured on the desktop as a row at 7 of 8
+    // attempts). Pairing now seeds the map with the address the handshake used,
+    // so this test makes the peer unreachable the real way: a DEAD port on
+    // loopback. Nothing answers there, and no announce can change that.
     b.offer_pairing(a.pairing_bundle().await, PairMode::Qr, None)
         .await
         .unwrap();
@@ -53,6 +61,8 @@ async fn an_offline_queued_item_auto_delivers_when_the_peer_comes_back() {
     let (_sas, peer_id) = a.pair_with(b_addr, b.pairing_bundle().await).await.unwrap();
     server.await.unwrap();
     assert_eq!(peer_id, b_id);
+    // Override the address pairing just seeded with one nothing listens on.
+    a.note_peer(b_id, "b", "127.0.0.1:1".parse().unwrap()).await;
 
     let src = tempfile::tempdir().unwrap();
     let path = src.path().join("queued.bin");
@@ -87,11 +97,11 @@ async fn an_offline_queued_item_auto_delivers_when_the_peer_comes_back() {
     let row = a_db.get_outbox(&payload_id).unwrap().unwrap();
     assert!(
         row.attempts >= 1,
-        "the drain should have attempted the row once and failed to resolve the peer"
+        "the drain should have attempted the row once and failed to reach the dead port"
     );
     assert_eq!(
         row.state, "pending",
-        "an unresolvable peer must leave the row queued, not delivered"
+        "an unreachable peer must leave the row queued, not delivered"
     );
     assert!(
         !d2.path().join("queued.bin").exists(),

@@ -48,8 +48,8 @@ export async function armHostPairing(engine: DaakEngine): Promise<void> {
  */
 export async function joinWithScan(engine: DaakEngine): Promise<{ sas: string }> {
   const scanned = await scanQr();
-  const { deviceId, cbor } = parsePairingPayload(scanned);
-  return engine.pair(deviceId, 'qr', cbor);
+  const { deviceId, cbor, addr } = parsePairingPayload(scanned);
+  return engine.pair(deviceId, 'qr', cbor, addr);
 }
 
 /**
@@ -59,7 +59,11 @@ export async function joinWithScan(engine: DaakEngine): Promise<{ sas: string }>
  * daak-core's crypto/identity.rs -- and cbor is the bundle CBOR as hex, which
  * engine.pair's own hexToBytes decodes. No hex decoder is re-implemented here.
  */
-export function parsePairingPayload(scanned: string): { deviceId: string; cbor: string } {
+export function parsePairingPayload(scanned: string): {
+  deviceId: string;
+  cbor: string;
+  addr?: string;
+} {
   let json: unknown;
   try {
     json = JSON.parse(scanned);
@@ -76,5 +80,29 @@ export function parsePairingPayload(scanned: string): { deviceId: string; cbor: 
   if (typeof cbor !== 'string' || cbor.length === 0) {
     throw new Error('daak: pairing bundle has no cbor');
   }
-  return { deviceId, cbor };
+  // `addr` is OPTIONAL. The host includes it when it knows a dialable address,
+  // which is what makes pairing reachable on a network mDNS does not cross
+  // (measured: a NAT-ed Android emulator saw zero peers while unicast reached
+  // the host). A bundle without the key is an older link or a host bound to
+  // loopback, and both keep working through discovery.
+  //
+  // A MALFORMED one is a hard reject. The joiner dials this string directly, so
+  // a typo passed through would reach the dialer as something the engine cannot
+  // parse -- a worse failure than no address at all.
+  const addr = (json as { addr?: unknown }).addr;
+  if (addr === undefined || addr === null) return { deviceId, cbor };
+  if (typeof addr !== 'string' || !isDialable(addr)) {
+    throw new Error('daak: pairing bundle has a malformed addr');
+  }
+  return { deviceId, cbor, addr };
+}
+
+/** `host:port` with a numeric port. No `URL`: Hermes throws on it. */
+function isDialable(s: string): boolean {
+  const at = s.lastIndexOf(':');
+  if (at <= 0 || at === s.length - 1) return false;
+  const port = s.slice(at + 1);
+  if (!/^\d{1,5}$/.test(port)) return false;
+  const n = Number(port);
+  return n >= 1 && n <= 65535 && !s.slice(0, at).includes(':');
 }

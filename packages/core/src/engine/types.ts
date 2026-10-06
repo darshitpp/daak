@@ -4,6 +4,12 @@ export interface DeviceInfo {
   addr: string;
   /** Present for peers discovered via mDNS; derived from presence when known. */
   online?: boolean;
+  /**
+   * R42g: a live pairing exists with this device. Discovery and trust are
+   * different facts -- an mDNS announce lists a peer the engine will refuse to
+   * send to. The UI offers Send when this is true and Pair when it is not.
+   */
+  paired?: boolean;
 }
 
 export type ItemState = 'pending' | 'receiving' | 'verifying' | 'done' | 'failed' | 'quarantined';
@@ -132,7 +138,22 @@ export interface DaakEngine {
   start(): Promise<void>;
   stop(): Promise<void>;
   devices(): Promise<DeviceInfo[]>;
-  pair(deviceId: string, mode: 'qr' | 'code', secret?: string): Promise<{ sas: string }>;
+  /**
+   * Unpair a peer from THIS device. Local trust, so either side may revoke
+   * without the other's agreement. The peer returns to the unpaired state, so
+   * the UI stops offering Send and offers Pair again.
+   */
+  revokePairing(deviceId: string): Promise<void>;
+  /**
+   * `addr` is an OPTIONAL `host:port` for the peer. Given one, it is dialed
+   * directly; omitted, the address is resolved from discovery as before.
+   *
+   * A pairing link can name the host's address, and mDNS does not cross every
+   * network Daak runs on -- a NAT'd emulator or a switched AP can leave the
+   * joiner with no announce to resolve. The address is link metadata; the
+   * `PairingBundle` CBOR is unchanged, so this is not a wire change.
+   */
+  pair(deviceId: string, mode: 'qr' | 'code', secret?: string, addr?: string): Promise<{ sas: string }>;
   /**
    * HOST half of QR pairing: arm the engine to accept the peer whose bundle
    * CBOR hex is given, before that peer dials in. Without it the host's own QR

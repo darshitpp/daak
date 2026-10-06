@@ -583,6 +583,7 @@ async fn every_engine_event_maps_to_an_encodable_ipc_event() {
             device_id: peer,
             name: "peer".into(),
             addr: "10.0.0.2:9000".parse().unwrap(),
+            paired: true,
         }),
         EngineEvent::DeviceLost(peer),
         EngineEvent::Presence {
@@ -751,6 +752,7 @@ async fn a_real_engine_event_reaches_a_subscribed_ipc_client() {
             device_id: peer,
             name: "peer".into(),
             addr: "10.0.0.2:9000".parse().unwrap(),
+            paired: true,
         }))
         .unwrap();
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
-import type { DaakEngine } from '@daak/core';
+import type { DaakEngine, DeviceInfo } from '@daak/core';
 import type { AppMode, UiRuntime } from './headless';
 import type { InboxActions } from './screens/HistoryScreen';
 import { Popover } from './modes/Popover';
@@ -23,7 +23,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, alert, alertRouteToken, settingsRouteToken, onCheckConnection }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -31,6 +31,15 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
+  /**
+   * The pairing route's content. A SLOT for the reason AppShell documents
+   * one: the facts live on the host, which owns the engine and the platform
+   * pairing modules. Mobile passes its PairingFlow; the desktop passes its own
+   * host-half component. A host that passes none renders no pair route and
+   * draws no "Pair a device" button -- which is what the desktop shipped, and
+   * the reason it could not pair and so could not send.
+   */
+  pair?: React.ReactNode;
   /* The two BLOCKING screens, plus the tokens that route to them. They are
      threaded rather than built here for the reason `pair` is a slot in
      AppShell: the facts live on the host, which owns the engine, and
@@ -41,6 +50,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   alertRouteToken?: string;
   settingsRouteToken?: string;
   onCheckConnection?: () => void;
+  onUnpair?: (d: DeviceInfo) => void;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -69,10 +79,12 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             peerDeviceId={peerDeviceId}
             onPickFiles={onPickFiles}
             inboxActions={inboxActions}
+            pair={pair}
             alert={alert}
             alertRouteToken={alertRouteToken}
             settingsRouteToken={settingsRouteToken}
             onCheckConnection={onCheckConnection}
+            onUnpair={onUnpair}
           />}
     </View>
   );

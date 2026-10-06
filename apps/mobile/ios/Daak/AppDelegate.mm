@@ -1,6 +1,7 @@
 #import "AppDelegate.h"
 
 #import <React/RCTBundleURLProvider.h>
+#import <React/RCTLinkingManager.h>
 // Daak-Swift.h declares DaakNotificationDelegate as conforming to
 // UNUserNotificationCenterDelegate, but the generated header only pulls that
 // framework in behind `#if __has_feature(objc_modules)`, and that feature test
@@ -39,6 +40,35 @@
   [DaakBgLaunch install];
 
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
+}
+
+// daak:// links (a pairing QR, a daak://send target, the share extension)
+// arrive here and must reach apps/mobile/src/deeplink.ts.
+//
+// THE MISSING HANDLER WAS A CRASH, NOT A DEAD BUTTON. Info.plist declares
+// LSSupportsOpeningDocumentsInPlace, and UIKit turns that key plus an absent
+// application:openURL:options: into a fatal NSInternalInconsistencyException:
+//
+//   *** Terminating app due to uncaught exception
+//   'NSInternalInconsistencyException', reason: 'Application has
+//   LSSupportsOpeningDocumentsInPlace key, but doesn't implement
+//   application:openURL:options: on delegate <AppDelegate: 0x...>'
+//
+// So every daak://pair link killed the app on the way in. Nothing ever paired,
+// the send screen refused every peer at "peer is not paired", and the parser
+// and manifest suites stayed green because both only pin registration.
+//
+// RCTLinkingManager is the one forwarder that works: it stores the cold-launch
+// initialURL and posts the `url` event, which is exactly what
+// apps/mobile/src/deeplink.ts reads through Linking.getInitialURL() and
+// Linking.addEventListener('url'). A second native emitter would be invisible
+// to both. The macOS delegate already does this in
+// apps/desktop/macos/Daak-macOS/AppDelegate.mm, so both hosts agree.
+- (BOOL)application:(UIApplication *)application
+            openURL:(NSURL *)url
+            options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options
+{
+  return [RCTLinkingManager application:application openURL:url options:options];
 }
 
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge

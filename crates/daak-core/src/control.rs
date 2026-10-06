@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 
+use std::net::SocketAddr;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     #[serde(with = "crate::manifest::byte_array")]
@@ -9,6 +11,33 @@ pub struct Hello {
 }
 
 impl Hello {
+    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        ciborium::ser::into_writer(self, &mut out).map_err(|e| CoreError::Cbor(e.to_string()))?;
+        Ok(out)
+    }
+
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+        ciborium::de::from_reader(bytes).map_err(|e| CoreError::Cbor(e.to_string()))
+    }
+}
+
+/// R42e: the address this device can be DIALED at.
+///
+/// A pairing socket tells the host where a connection CAME FROM. For a joiner
+/// that is an ephemeral source port, closed the moment the handshake ends, and
+/// the host stored it as the peer's address -- so every host-to-joiner send
+/// died on connection refused while the joiner (which dialled the host's
+/// advertised address) worked. The joiner now states its own dialable address
+/// in-band, and the host stores THAT. A new Control message, not a new field
+/// on an existing one: an older host never reads it, and its absence on an
+/// older joiner leaves the host with no address, which is the old behaviour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListenAddr {
+    pub addr: SocketAddr,
+}
+
+impl ListenAddr {
     pub fn to_cbor(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         ciborium::ser::into_writer(self, &mut out).map_err(|e| CoreError::Cbor(e.to_string()))?;

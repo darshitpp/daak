@@ -36,25 +36,33 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
- 	<dict>
- 		<key>NSAllowsArbitraryLoads</key>
- 		<true/>
- 		<key>NSExceptionDomains</key>
- 		<dict>
- 			<key>localhost</key>
- 			<dict>
- 				<key>NSExceptionAllowsInsecureHTTPLoads</key>
- 				<true/>
- 			</dict>
- 		</dict>
- 	</dict>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 	<key>NSMainStoryboardFile</key>
 	<string>Main</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_daak._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Daak finds and reaches other Daak devices on your local network.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<true/>
 	<key>NSSupportsSuddenTermination</key>
+	<true/>
+	<key>RCTNewArchEnabled</key>
 	<true/>
 </dict>
 </plist>

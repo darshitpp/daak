@@ -19,6 +19,10 @@ const METHODS: (keyof DaakEngine)[] = [
   // transfer has none), and `retryItem` is equally unusable by a user, because
   // the push-only wire protocol has no way to act on it.
   'retryItem',
+  // R42f: unpair. A peer this device can never remove is a peer the user can
+  // never re-pair, because an open-armed host refuses a device that already has
+  // a row.
+  'revokePairing',
 ];
 
 // Compile-time only: adding, removing or renaming a DaakEvent member breaks tsc.
@@ -52,6 +56,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   sendText: true,
   sendFiles: true,
   listDevices: true,
+  revokePairing: true,
   cancel: true,
   retry: true,
   retryItem: true,
@@ -83,6 +88,7 @@ describe('contract types', () => {
   it('pins the engine method set to spec 6.2', () => {
     const exhaustive: Record<keyof DaakEngine, true> = {
       start: true, stop: true, devices: true, pair: true, send: true, cancel: true,
+      revokePairing: true,
       retry: true, quarantineReport: true, deleteQuarantined: true,
       listQuarantineReports: true,
       listTransfers: true, listInbox: true, selfProfile: true, setDisplayName: true,
@@ -124,7 +130,9 @@ describe('contract types', () => {
     // on the right number only by coincidence (19+1 and 19-1+2 are both 20).
     // This form cannot drift that way again. A count bump here means a native
     // method was added without a decision here.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(24);
+    // 25: the 24 above plus revoke_pairing (R42f), which is a UDL method AND a
+    // TurboModule override on all three native modules.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(25);
   });
 
   it('models a device without fabricating liveness (R11)', () => {

@@ -10,7 +10,9 @@ import { AppShell, EngineProvider, fakeEngine } from '@daak/ui';
  // the same paths from inside packages/ui; this file pins them from the app
  // side, where the picker is injected and a slot could be dropped.
 const engine = fakeEngine();
-const device: DeviceInfo = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true };
+// `paired: true`: R42g hides Send on a peer the engine would refuse, so the
+// fixture this route is asserted against must be paired.
+const device: DeviceInfo = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true, paired: true };
 const TRANSFER_ID = 'bb'.repeat(16);
 
 function Shell() {

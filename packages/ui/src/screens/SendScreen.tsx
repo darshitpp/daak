@@ -6,6 +6,20 @@ import { AttachmentPicker } from '../components/AttachmentPicker';
 import { Btn, Empty, Note, Status, devicePresence } from '../components/ds';
 import { ui } from '../theme';
 
+// The device list is read on mount, and the engine is NOT up on mount: it is
+// behind a keystore read on macOS and behind Engine::start on mobile, which
+// takes about two seconds on a cold Android process. So the first read loses
+// that race on every launch. Without a retry the note was set once and nothing
+// ever cleared it, so the composer said "No device list" for the rest of the
+// session against a running engine.
+//
+// Same bound and cadence as SettingsScreen's name read, and for the same
+// reason: long enough to outlast a cold start, short enough that a genuinely
+// dead engine settles into a note instead of polling for ever. A read that
+// succeeds schedules nothing.
+const DEVICES_READ_ATTEMPTS = 8;
+const DEVICES_READ_RETRY_MS = 1000;
+
 /**
  * The Send tab: the prototype's send screen, wired to the engine.
  *
@@ -59,16 +73,41 @@ export function SendScreen({ peer, initialPeerDeviceId, initialText, initialFile
   }, [initialFiles]);
 
   useEffect(() => {
-    const refresh = () =>
-      void engine.devices().then(setDevices, (e: unknown) =>
-        // A rejected devices() with no message on screen reads as "no devices
-        // nearby", which sends the user to check the Wi-Fi instead of the log.
-        setReadError(e instanceof Error ? e.message : 'the engine did not answer with a device list'),
+    let alive = true;
+    const read = (attempt: number) => {
+      void engine.devices().then(
+        (list) => {
+          if (!alive) return;
+          setDevices(list);
+          // Cleared on SUCCESS, not only set on failure. A mount-time call that
+          // raced engine startup left this note on screen forever, because no
+          // later success ever reset it -- so the composer read "no device
+          // list" for the rest of the session even after the engine answered.
+          setReadError('');
+        },
+        (e: unknown) => {
+          if (!alive) return;
+          // A rejected devices() with no message on screen reads as "no devices
+          // nearby", which sends the user to check the Wi-Fi instead of the log.
+          setReadError(e instanceof Error ? e.message : 'the engine did not answer with a device list');
+          if (attempt < DEVICES_READ_ATTEMPTS) {
+            setTimeout(() => read(attempt + 1), DEVICES_READ_RETRY_MS);
+          }
+        },
       );
+    };
+    // The event subscription is the OTHER trigger: a peer that arrives later
+    // refreshes at once, so the retry only has to cover the window before the
+    // engine exists at all.
+    const refresh = () => read(0);
     refresh();
-    return engine.on((e) => {
+    const off = engine.on((e) => {
       if (e.type === 'device.state' || e.type === 'device.discovered') refresh();
     });
+    return () => {
+      alive = false;
+      off();
+    };
   }, [engine]);
 
   const target =

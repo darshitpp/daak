@@ -2,7 +2,7 @@ import { Linking } from 'react-native';
 
 export type DeepLink =
   | { kind: 'send'; deviceId: string; text?: string }
-  | { kind: 'pair'; bundle: string }
+  | { kind: 'pair'; bundle: string; addr?: string }
   | { kind: 'none' };
 
 // Parsed off the raw string with indexOf, NOT `new URL`. Hermes has no URL and
@@ -55,9 +55,28 @@ export function parseDeepLink(url: string | null): DeepLink {
   if (host === 'pair') {
     const bundle = queryParam(query, 'bundle');
     if (!bundle) return none;
-    return { kind: 'pair', bundle };
+    // `addr` is OPTIONAL, and a malformed one is a hard reject rather than a
+    // silent drop. A link that names an address must carry a usable one: the
+    // joiner dials it directly, and a typo passed through would reach the
+    // dialer as a string the engine cannot parse -- a worse error than no link
+    // at all. OMITTED entirely is the compatible case, and it keeps working on
+    // a LAN where mDNS crosses.
+    const rawAddr = queryParam(query, 'addr');
+    if (rawAddr === undefined) return { kind: 'pair', bundle };
+    if (!isDialable(rawAddr)) return none;
+    return { kind: 'pair', bundle, addr: rawAddr };
   }
   return none;
+}
+
+/** `host:port` with a numeric port. No `URL`: Hermes throws on it. */
+function isDialable(s: string): boolean {
+  const at = s.lastIndexOf(':');
+  if (at <= 0 || at === s.length - 1) return false;
+  const port = s.slice(at + 1);
+  if (!/^\d{1,5}$/.test(port)) return false;
+  const n = Number(port);
+  return n >= 1 && n <= 65535 && !s.slice(0, at).includes(':');
 }
 
 function firstIndexOfAny(s: string, chars: string, from: number): number {

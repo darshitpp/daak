@@ -22,6 +22,14 @@ react {
     //   skip the bundling of the JS bundle and the assets. By default is just 'debug'.
     //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
     // debuggableVariants = ["liteDebug", "prodDebug"]
+    //
+    // EMPTY on purpose. The default is ["debug"], which SKIPS JS bundling,
+    // so the debug APK carries no bundle and dies at startup with
+    // "Unable to load script" unless Metro happens to be running on port
+    // 8081 -- measured on the emulator and on a physical phone. The debug APK
+    // is the artifact the user installs, so it must stand alone. Setting this
+    // to [] makes the bundle task run for every variant.
+    debuggableVariants = []
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.

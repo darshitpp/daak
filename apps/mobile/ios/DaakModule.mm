@@ -52,6 +52,13 @@ RCT_EXTERN_METHOD(retry:(NSString *)transferId
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+// R42f: unpair. Declared here explicitly for the same reason as on macOS: this
+// table is the JS-visible method list, so a Swift method with no entry is not
+// callable from JS.
+RCT_EXTERN_METHOD(revokePairing:(NSString *)deviceId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(retryItem:(NSString *)transferId
                   itemIndex:(double)itemIndex
                   resolve:(RCTPromiseResolveBlock)resolve

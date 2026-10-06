@@ -25,7 +25,11 @@ const pad = { padding: 16, gap: 24 } as const;
  * is a fan-out from the ONE subscription inside bootstrap.startEngine
  * (R42/R91). The joiner's SAS comes back synchronously from engine.pair.
  */
-export function PairingFlow({ bundle, embedded = false }: { bundle?: string; embedded?: boolean } = {}) {
+export function PairingFlow({
+  bundle,
+  addr,
+  embedded = false,
+}: { bundle?: string; addr?: string; embedded?: boolean } = {}) {
   const engine = useEngine();
   const [phase, setPhase] = useState<Phase>({ kind: 'choose' });
   const [sas, setSas] = useState('');
@@ -45,14 +49,19 @@ export function PairingFlow({ bundle, embedded = false }: { bundle?: string; emb
     setPhase({ kind: 'join' });
     void Promise.resolve()
       .then(() => {
-        const { deviceId, cbor } = parsePairingPayload(bundle);
-        return engine.pair(deviceId, 'qr', cbor);
+        const parsed = parsePairingPayload(bundle);
+        // `addr` is the address, from the LINK first and the BUNDLE second.
+        // Both name the same host and either can be absent: a deep link may
+        // carry the bundle without an addr, and a bundle written by an older
+        // build has no key. With neither, the engine resolves the host from
+        // discovery, which is empty on any network mDNS does not cross.
+        return engine.pair(parsed.deviceId, 'qr', parsed.cbor, addr ?? parsed.addr);
       })
       .then(
         ({ sas: received }) => setSas(received),
         (e: unknown) => setError(e instanceof Error ? e.message : 'that pairing link did not work'),
       );
-  }, [bundle, engine]);
+  }, [bundle, addr, engine]);
 
   const startHost = () => {
     setSas('');
@@ -147,7 +156,18 @@ export function PairingFlow({ bundle, embedded = false }: { bundle?: string; emb
         </View>
       ) : null}
       <View style={pad}>
-        <Btn variant="primary" block testID="confirm" label="SAS matched - Done" onPress={acknowledge} />
+        {/* The acknowledgement needs a SAS to acknowledge. Measured on the
+            emulator, a link join that failed still rendered 'SAS matched -
+            Done' above its own error, so the one label claiming the pairing
+            worked sat on screen for a pairing that never happened -- and
+            pressing it cleared the message. Showing it only once a SAS has
+            arrived removes the false claim and the error stays readable.
+
+            This is NOT a security gate. The engine commits the pairing row
+            before either SAS is shown (Engine::commit_pairing), and the
+            button never gated that. It is an acknowledgement that needs
+            something to acknowledge. */}
+        {sas ? <Btn variant="primary" block testID="confirm" label="SAS matched - Done" onPress={acknowledge} /> : null}
         {error ? <Note tone="err" testID="pairing-error" body={error} /> : null}
       </View>
     </View>

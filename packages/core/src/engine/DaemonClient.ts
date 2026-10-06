@@ -90,20 +90,22 @@ export class DaemonClientEngine implements DaakEngine {
     return parseArray<DeviceInfo>(await this.json('Devices'), 'devices');
   }
 
-  async pair(deviceId: string, mode: 'qr' | 'code', secret?: string): Promise<{ sas: string }> {
+  async pair(deviceId: string, mode: 'qr' | 'code', secret?: string, addr?: string): Promise<{ sas: string }> {
     // IpcRequest::Pair carries an addr plus a CBOR bstr, and there is no
     // manual-code request on the wire (the FFI has no such method either, and
     // InProcess throws for it), so code mode is refused rather than sent.
     if (mode === 'code') throw new Error('manual-code pairing is not on the FFI surface yet');
     if (!secret) throw new Error('qr pairing needs the bundle hex');
-    // The request takes an ip:port, not a device id (R13), so resolve it from
-    // the daemon's device list. `secret` is the bundle CBOR as hex.
-    const device = (await this.devices()).find((d) => d.deviceId === deviceId);
-    if (!device) throw new Error(`unknown device ${deviceId}`);
+    // The request takes an ip:port, not a device id (R13), so an address has
+    // to come from somewhere. A pairing link can NAME one; without it the
+    // address is resolved from the daemon's device list. `secret` is the
+    // bundle CBOR as hex.
+    const target = addr ?? (await this.devices()).find((d) => d.deviceId === deviceId)?.addr;
+    if (!target) throw new Error(`unknown device ${deviceId}`);
     const r = JSON.parse(
       await this.json({
         Pair: {
-          addr: device.addr,
+          addr: target,
           // A Node Buffer, NOT number[]: cbor-x encodes a number[] as a CBOR
           // ARRAY and daak-ipc deserialises bundle_cbor as a bstr (R27).
           bundle_cbor: Buffer.from(secret, 'hex'),
@@ -123,6 +125,13 @@ export class DaemonClientEngine implements DaakEngine {
   // is the bug C2 is about.
   async offerPairing(_bundleCborHex: string): Promise<void> {
     throw new Error('host QR arming is mobile-only: no IpcRequest offers a pairing');
+  }
+
+  // No IpcRequest revokes a pairing, and the daemon shape is not on the live
+  // desktop path (index.js builds the in-process engine). Loud, not silent: a
+  // desktop host that no-oped here would leave a peer paired forever.
+  async revokePairing(_deviceId: string): Promise<void> {
+    throw new Error('unpairing is mobile-only: no IpcRequest revokes a pairing');
   }
 
   // Same ruling as offerPairing above, and for the same reason: the arm is

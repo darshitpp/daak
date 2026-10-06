@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import type { TransferSummary } from '@daak/core';
+import type { DeviceInfo, TransferSummary } from '@daak/core';
+import { labelFor } from './TransfersScreen';
 import { useEngine } from '../EngineContext';
 import { ProgressRow } from '../components/ProgressRow';
 import { ReceivedItemRow, type ReceivedItemView } from '../components/ReceivedItemRow';
@@ -15,11 +16,16 @@ export function TransferProgressScreen({ transferId }: { transferId: string }) {
   const engine = useEngine();
   const [summary, setSummary] = useState<TransferSummary | null>(null);
   const [items, setItems] = useState<ReceivedItemView[]>([]);
+  // R42k: the detail used `summary.kind` as its name, so a text transfer was
+  // titled literally "text". The list already builds "N item(s) to <peer>";
+  // the detail now reads the same, which needs the device names.
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
 
   useEffect(() => {
     void engine.listTransfers().then((all) => {
       setSummary(all.find((t) => t.transferId === transferId) ?? null);
     });
+    void engine.devices().then(setDevices, () => setDevices([]));
     return engine.on((e) => {
       if (e.type === 'transfer.progress' && e.transferId === transferId) {
         setSummary((prev) => prev && { ...prev, bytesDone: e.bytesDone, bytesTotal: e.bytesTotal });
@@ -37,7 +43,7 @@ export function TransferProgressScreen({ transferId }: { transferId: string }) {
     <View style={ui.stack}>
       {summary ? (
         <ProgressRow
-          name={summary.kind}
+          name={labelFor(summary, devices)}
           bytesDone={summary.bytesDone}
           bytesTotal={summary.bytesTotal}
           state={summary.state}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { View } from 'react-native';
-import type { DaakEngine } from '@daak/core';
+import type { DaakEngine, DeviceInfo } from '@daak/core';
 import type { UiState } from '../state/store';
 import type { InboxActions } from '../screens/HistoryScreen';
 import { AppShell } from '../components/AppShell';
@@ -20,16 +20,20 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, alert, alertRouteToken, settingsRouteToken, onCheckConnection }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
+  // The pairing route's content, for the same reason. The shell below is
+  // where that route renders it.
+  pair?: React.ReactNode;
   /* See DaakUiApp. These four reach AppShell unchanged; this layer only adds
      the EngineProvider the screens read from. */
   alert?: React.ReactNode;
   alertRouteToken?: string;
   settingsRouteToken?: string;
   onCheckConnection?: () => void;
+  onUnpair?: (d: DeviceInfo) => void;
 }) {
   void state;
   return (
@@ -40,10 +44,12 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           initialPeerDeviceId={peerDeviceId}
           onPickFiles={onPickFiles}
           inboxActions={inboxActions}
+          pair={pair}
           alert={alert}
           alertRouteToken={alertRouteToken}
           settingsRouteToken={settingsRouteToken}
           onCheckConnection={onCheckConnection}
+          onUnpair={onUnpair}
         />
       </View>
     </EngineProvider>

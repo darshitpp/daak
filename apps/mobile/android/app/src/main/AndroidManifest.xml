@@ -40,6 +40,35 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <!--
+          daak:// deep links: `send?deviceId=..&text=..` and
+          `pair?bundle=..`. apps/mobile/src/deeplink.ts parses both and its
+          suite is green, but a parser with no registered scheme has no caller:
+          Android resolved no activity for a daak:// intent and answered
+          "Activity not started, unable to resolve Intent", so a pairing link
+          reached iOS and macOS and died on Android.
+
+          ONE filter with two <data> elements, not two filters. Android merges
+          every <data> in one filter into a cross-product, so scheme + host
+          here matches daak://send AND daak://pair, and a second filter would
+          only let a browser offer Daak twice.
+
+          BROWSABLE is what makes the link openable from a web page or a
+          message. Without it Android refuses the intent from any non-browser
+          caller. DEFAULT is required for an implicit intent to resolve at all.
+
+          singleTask is already declared above, so a link into a RUNNING app
+          arrives on onNewIntent and Linking.getInitialURL() sees it on the
+          cold path. Nothing else is needed.
+        -->
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="daak" />
+            <data android:host="send" />
+            <data android:host="pair" />
+        </intent-filter>
       </activity>
       <!--
         Inbound share target. Translucent and no UI of its own: it only stages

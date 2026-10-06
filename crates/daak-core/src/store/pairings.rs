@@ -1,6 +1,7 @@
 use crate::error::Result;
 
 use super::Db;
+use std::net::SocketAddr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pairing {
@@ -13,6 +14,56 @@ pub struct Pairing {
 }
 
 impl Db {
+    /// Record the address a completed pairing handshake proved.
+    ///
+    /// The device map in the engine is RAM and starts empty on every launch, so
+    /// a paired peer had no address after a restart and every send failed with
+    /// "peer is not discovered" until the next mDNS announce. This column
+    /// existed and stayed NULL. SQLite is the source of truth, so the proven
+    /// address goes here.
+    pub fn set_peer_addr(&self, id: &[u8; 16], addr: SocketAddr) -> Result<()> {
+        self.conn().execute(
+            "UPDATE devices SET last_seen_addr = ?2 WHERE device_id = ?1",
+            rusqlite::params![&id[..], addr.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Every live pairing that has a proven address, so `Engine::start` can
+    /// seed the device map without waiting for an announce.
+    pub fn paired_addrs(&self) -> Result<Vec<([u8; 16], String, SocketAddr)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT d.device_id, d.display_name, d.last_seen_addr
+               FROM devices d
+               JOIN pairings p ON p.peer_device_id = d.device_id
+              WHERE p.state <> 'revoked'
+                AND d.last_seen_addr IS NOT NULL
+                AND d.last_seen_addr <> ''",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let id: Vec<u8> = r.get(0)?;
+            let name: String = r.get(1)?;
+            let addr: String = r.get(2)?;
+            Ok((id, name, addr))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, addr) = row?;
+            let id: [u8; 16] = match id.try_into() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            // A row that does not parse is a corrupt row, not a fatal error.
+            // Skipping it keeps a peer with a broken address out of the map
+            // rather than letting it fail every send with a parse error.
+            if let Ok(addr) = addr.parse::<SocketAddr>() {
+                out.push((id, name, addr));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn upsert_pairing(&self, p: &Pairing) -> Result<()> {
         let conn = self.conn();
         conn.execute(
@@ -62,9 +113,22 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Unpair a peer from THIS device. Neither side has to agree: the pairing
+    /// is LOCAL trust.
+    ///
+    /// The row is MARKED `revoked`, not deleted, and `paired_addrs` already
+    /// filters `state <> 'revoked'`, so the peer stops being seeded into the
+    /// device map. R42f: the proven address is cleared with the state. A
+    /// surviving address would let a revoked peer be dialled again before
+    /// anyone re-paired it, which is the opposite of what revoke means.
     pub fn revoke_pairing(&self, id: &[u8; 16]) -> Result<()> {
-        self.conn().execute(
+        let conn = self.conn();
+        conn.execute(
             "UPDATE pairings SET state = 'revoked' WHERE peer_device_id = ?1",
+            rusqlite::params![&id[..]],
+        )?;
+        conn.execute(
+            "UPDATE devices SET last_seen_addr = NULL WHERE device_id = ?1",
             rusqlite::params![&id[..]],
         )?;
         Ok(())

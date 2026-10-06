@@ -359,13 +359,73 @@ pub fn pick_addr(addrs: impl Iterator<Item = IpAddr>, port: u16) -> Option<Socke
         match ip {
             IpAddr::V4(v4) if v4.is_private() => 0,
             IpAddr::V4(v4) if v4.is_loopback() || v4.is_link_local() => 1,
-            IpAddr::V6(v6) if (v6.segments()[0] & 0xffc0) == 0xfe80 => 2,
             _ => 3,
         }
     }
     addrs
+        // EXCLUDE loopback and unspecified rather than rank them low. The
+        // record's address list is not a dial list: an AUTO advertiser
+        // (ServiceDaemon fills it) publishes every address the HOST owns, so
+        // the list can contain `127.0.0.1`, `::1` and `fe80::1%lo0` -- the
+        // loopback of a machine that is not the caller's. Ranked, those still
+        // WIN when the LAN address is IPv6, and then the send fails: measured,
+        // the engine resolved a live peer at `[fe80::1]:45930` and the dial
+        // returned `No route to host` while the same peer answered on
+        // `192.168.0.226:45930`.
+        //
+        // There is no reachable peer behind either address, so dropping them
+        // costs nothing and removes the whole class. `is_loopback()` covers
+        // `127.0.0.0/8` and `::1`; `is_unspecified()` covers `0.0.0.0` and `::`,
+        // which `advertise_ip` already keeps out of OUR OWN record but which a
+        // peer's record can still carry.
+        //
+        // LINK-LOCAL IPv6 (`fe80::/10`) goes here too, and for a different reason
+        // than loopback: it needs an interface SCOPE ID on every connect, and a
+        // `SocketAddr` cannot carry one. The mDNS record publishes the bare
+        // address, so a browsing peer necessarily dials a scope-less
+        // `fe80::...` and gets `No route to host` (errno 65) -- measured, while
+        // the same address WITH a scope connected, and so did the peer's IPv4
+        // address at the same moment. No rank repairs this, because the address
+        // is unusable in the form the wire carries it.
+        //
+        // LINK-LOCAL IPv4 (`169.254.0.0/16`) is KEPT. It needs no scope, so it
+        // is dialable exactly as published, and it is the address a phone gets
+        // on a network with no DHCP lease. Dropping it would break that case.
+        //
+        // An IPv6 UNIQUE-LOCAL address (`fc00::/7`) is kept for the same reason.
+        // A v6-only peer keeps working wherever it is routed.
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        .filter(|ip| match ip {
+            IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) != 0xfe80,
+            IpAddr::V4(_) => true,
+        })
         .min_by_key(|ip| (rank(*ip), *ip))
         .map(|ip| SocketAddr::new(ip, port))
+}
+
+/// This host's LAN address, for a caller that must hand a PEER something to
+/// dial and that cannot wait for a browse.
+///
+/// Every shipped engine binds a WILDCARD, so `Engine::local_addr()` is
+/// `[::]:port` and names no host. The mDNS record solves this for a browsing
+/// peer because `addr_auto` fills it with the host's interface addresses, but a
+/// pairing bundle is read before any browse happens, and a network where
+/// multicast does not cross (measured: a NAT-ed Android emulator saw zero
+/// peers while unicast reached the host) never fills it at all.
+///
+/// So the answer is taken from the same interface list `addr_auto` uses and
+/// ranked by the same [`pick_addr`], which is what keeps the two paths from
+/// disagreeing about which address is the LAN one. It is deliberately NOT the
+/// wildcard: `None` is the honest answer for a host with no routable address,
+/// and the joiner then falls back to discovery.
+///
+/// `port` is the caller's listener port. An interface list carries no port, so
+/// there is no other honest source for it.
+pub fn host_lan_addr(port: u16) -> Option<SocketAddr> {
+    let addrs: Vec<IpAddr> = if_addrs::get_if_addrs()
+        .map(|ifs| ifs.into_iter().map(|i| i.ip()).collect())
+        .unwrap_or_default();
+    pick_addr(addrs.into_iter(), port)
 }
 
 fn sanitize_host(name: &str) -> String {
@@ -723,6 +783,133 @@ mod tests {
         let reversed: Vec<IpAddr> = mixed.into_iter().rev().collect();
         let chosen_rev = pick_addr(reversed.iter().copied(), 40001).unwrap();
         assert_eq!(chosen_rev.ip(), "192.168.1.20".parse::<IpAddr>().unwrap());
+    }
+
+    /// The record's ADDRESS LIST is not a dial list. `ServiceDaemon` in AUTO
+    /// mode publishes every address the host owns, and on the measured machine
+    /// that set included `127.0.0.1`, `::1` AND `fe80::1%lo0` -- the loopback
+    /// of a machine that is not the caller's. Measured with a real browse: the
+    /// engine resolved a live peer at `[fe80::1]:45930` in every run, and the
+    /// dial died with `No route to host` while the same peer answered on
+    /// `192.168.0.226:45930`.
+    ///
+    /// Ranking is not enough here, because a rank has no way to express "this
+    /// address only works when the peer IS this machine". A browsing peer must
+    /// never be handed a loopback address at all: it is either undialable
+    /// (`No route to host` on the v6 form) or -- worse, on the v4 form -- it
+    /// silently reaches the CALLER's own loopback, so the send either hangs or
+    /// errors on a peer that is not there at all.
+    ///
+    /// So `pick_addr` now EXCLUDES loopback and unspecified addresses. There is
+    /// no reachable peer behind either. The private/link-local IPv4 and the
+    /// link-local IPv6 stay, because those are the LAN addresses the whole
+    /// product is built on.
+    #[test]
+    fn pick_addr_never_returns_a_loopback_or_unspecified_address() {
+        // Exactly the set `ServiceDaemon` published for a wildcard advertiser
+        // on this host, including the loopback that cost every send.
+        let _published: Vec<IpAddr> = vec![
+            "127.0.0.1".parse().unwrap(),
+            "::1".parse().unwrap(),
+            "fe80::1".parse().unwrap(),
+            "192.168.0.226".parse().unwrap(),
+        ];
+
+        // Whichever order they arrive in, and however many loopbacks lead, the
+        // answer must be the LAN address.
+        for order in [
+            vec!["127.0.0.1", "::1", "fe80::1", "192.168.0.226"],
+            vec!["fe80::1", "::1", "127.0.0.1", "192.168.0.226"],
+        ] {
+            let addrs: Vec<IpAddr> = order.iter().map(|s| s.parse().unwrap()).collect();
+            let chosen =
+                pick_addr(addrs.into_iter(), 40001).expect("a reachable LAN address is in the set");
+            assert_eq!(
+                chosen.ip(),
+                "192.168.0.226".parse::<IpAddr>().unwrap(),
+                "loopback must never win: order was {order:?}"
+            );
+        }
+
+        // Link-local IPv6 alone must yield None. It is a real LAN address, but
+        // NOT one this function can return usefully: it needs an interface
+        // scope id that a `SocketAddr` cannot carry, so the caller would dial
+        // `fe80::1` with no scope and get `No route to host`. Superseded by
+        // `pick_addr_never_returns_a_link_local_ipv6_address`, which measures
+        // the errno. Reporting None is the honest answer and discovery retries.
+        let v6_only: Vec<IpAddr> = vec!["::1".parse().unwrap(), "fe80::1".parse().unwrap()];
+        assert!(
+            pick_addr(v6_only.into_iter(), 40001).is_none(),
+            "a scope-less link-local IPv6 must not be handed back as a dial target"
+        );
+
+        // Nothing dialable in the set: say so instead of handing back a
+        // loopback that silently targets the wrong machine.
+        let all_loopback: Vec<IpAddr> = vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()];
+        assert!(
+            pick_addr(all_loopback.into_iter(), 40001).is_none(),
+            "an address set with no reachable peer must resolve to None"
+        );
+
+        // The unspecified address is never dialable, so it must be filtered by
+        // the same guard rather than by a lower rank.
+        let unspecified: Vec<IpAddr> = vec!["0.0.0.0".parse().unwrap(), "::".parse().unwrap()];
+        assert!(
+            pick_addr(unspecified.into_iter(), 40001).is_none(),
+            "an unspecified address must never be returned"
+        );
+    }
+
+    /// A LINK-LOCAL IPv6 address is not self-routing. `fe80::/10` needs an
+    /// interface SCOPE ID on every connect, and `SocketAddr` has nowhere to
+    /// carry one: the mDNS A/AAAA record publishes the bare address, so a
+    /// browsing peer necessarily builds a scope-less `SocketAddr`. Measured on
+    /// the dual-stack listener: `fe80::1` with no scope returned `No route to
+    /// host` (errno 65), while the same address with scope 1 connected, and so
+    /// did `fe80::...%en0` with scope 11. Every send over a link-local answer
+    /// therefore fails at dial, which is what "does not transfer" was.
+    ///
+    /// No rank can repair this, because the address is genuinely unusable in the
+    /// form the wire carries it. So link-local IPv6 is EXCLUDED from the answer
+    /// and private IPv4 is preferred absolutely. IPv4 is what every platform
+    /// Daak ships on carries, and a v6-only peer still works: its record then
+    /// offers no usable address at all, `pick_addr` returns `None`, and
+    /// discovery reports "service has no address yet" -- an honest, retryable
+    /// state instead of a send that can never succeed.
+    #[test]
+    fn pick_addr_never_returns_a_link_local_ipv6_address() {
+        // The exact set the daemon published for a dual-stack wildcard bind on
+        // this host. `fe80::...%en0` IS the working LAN address, so dropping it
+        // costs nothing only because `192.168.0.226` is also in the set.
+        let published: Vec<IpAddr> = vec![
+            "192.168.0.226".parse().unwrap(),
+            "fe80::1470:58d2:1c29:d79f".parse().unwrap(),
+        ];
+        assert_eq!(
+            pick_addr(published.into_iter(), 40001).unwrap().ip(),
+            "192.168.0.226".parse::<IpAddr>().unwrap(),
+            "a scope-less link-local IPv6 can never be dialled, so the IPv4 LAN address must win"
+        );
+
+        // Link-local IPv6 ALONE must yield None, never a dial target. This is
+        // the case that must not silently become a send that never lands.
+        let v6_only: Vec<IpAddr> = vec![
+            "fe80::1".parse().unwrap(),
+            "fe80::1470:58d2:1c29:d79f".parse().unwrap(),
+        ];
+        assert!(
+            pick_addr(v6_only.into_iter(), 40001).is_none(),
+            "a record with no IPv4 LAN address must report no address, not an unusable one"
+        );
+
+        // An IPv6 UNIQUE-LOCAL address (`fc00::/7`) needs no scope and is kept,
+        // so a v6-only LAN still works where it is routed.
+        let ula: Vec<IpAddr> = vec!["fd00::1".parse().unwrap()];
+        assert_eq!(
+            pick_addr(ula.into_iter(), 40001).unwrap().ip(),
+            "fd00::1".parse::<IpAddr>().unwrap(),
+            "unique-local IPv6 is routable without a scope and must stay selectable"
+        );
     }
 
     #[test]

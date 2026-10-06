@@ -159,6 +159,7 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
         device_id: id,
         name: "Laptop".into(),
         addr: "192.168.1.5:7777".parse().unwrap(),
+        paired: true,
     }));
     match found {
         FfiEvent::DeviceFound { data } => {
@@ -309,10 +310,12 @@ fn pairing_bundle_cbor_survives_the_json_string_the_js_layer_parses() {
     let bundle = PairingBundle::new(id.public(), "Phone".into());
 
     // The JS layer reads these keys and hands the hex cbor straight back to
-    // pair_with, so the key set is the contract: {cbor, name, device_id}.
+    // pair_with, so the key set is the contract: {cbor, name, device_id, addr}.
     let json: serde_json::Value =
-        serde_json::from_str(&daak_ffi::pairing_bundle_json(&bundle).unwrap()).unwrap();
-    // serde_json orders object keys, so compare the SET, not the order.
+        serde_json::from_str(&daak_ffi::pairing_bundle_json(&bundle, None).unwrap()).unwrap();
+    // serde_json orders object keys, so compare the SET, not the order. This is
+    // the address-less shape, so `addr` must be ABSENT rather than null -- see
+    // a_pairing_bundle_omits_the_address_when_the_host_has_none.
     let mut keys: Vec<&str> = json
         .as_object()
         .unwrap()
@@ -329,6 +332,81 @@ fn pairing_bundle_cbor_survives_the_json_string_the_js_layer_parses() {
 
     let back = hex::decode(json["cbor"].as_str().unwrap()).unwrap();
     assert_eq!(PairingBundle::from_cbor(&back).unwrap(), bundle);
+}
+
+// R42c: a pairing bundle that names NO address forces the joiner to resolve the
+// host from discovery, and mDNS does not cross every supported network. The
+// measured case is a NAT-ed Android emulator, which saw zero peers while the
+// host CLI saw itself advertising: unicast reached the host and multicast did
+// not. The address is what makes pairing reachable there, so the bundle has to
+// carry it whenever the host knows one.
+#[test]
+fn a_pairing_bundle_carries_a_dialable_address_when_the_host_knows_one() {
+    let id = daak_core::crypto::identity::Identity::generate().unwrap();
+    let bundle = PairingBundle::new(id.public(), "Phone".into());
+    let addr: std::net::SocketAddr = "192.168.0.226:51999".parse().unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&daak_ffi::pairing_bundle_json(&bundle, Some(addr)).unwrap()).unwrap();
+    assert_eq!(json["addr"], serde_json::json!("192.168.0.226:51999"));
+}
+
+// R42d: every shipped engine binds a WILDCARD, so `local_addr()` is
+// `[::]:port` and the address cannot come from there. Measured on the host: the
+// interface list held 127.0.0.1, ::1, a scope-less fe80:: and 192.168.0.226,
+// and only the last is dialable from a peer. `host_lan_addr` must therefore
+// return a real LAN address on a host that owns one, and never a loopback or a
+// wildcard.
+#[test]
+fn a_wildcard_bound_engine_still_reports_a_dialable_lan_address() {
+    let port = 51999;
+    // Guard against a VACUOUS pass. If this host owns a private IPv4 address,
+    // the answer must be Some: otherwise the test above proves nothing, and a
+    // pairing bundle with no address is exactly the defect. Enumerated from the
+    // same interface list the helper reads, so the two cannot drift.
+    let owns_private_ipv4 = if_addrs::get_if_addrs()
+        .map(|ifs| {
+            ifs.into_iter()
+                .any(|i| matches!(i.ip(), std::net::IpAddr::V4(v4) if v4.is_private()))
+        })
+        .unwrap_or(false);
+    match daak_core::discovery::host_lan_addr(port) {
+        Some(addr) => {
+            assert_eq!(
+                addr.port(),
+                port,
+                "the caller's listener port is the only port source"
+            );
+            assert!(!addr.ip().is_unspecified(), "the wildcard names no host");
+            assert!(
+                !addr.ip().is_loopback(),
+                "a loopback dials the wrong machine"
+            );
+        }
+        // A host with no routable interface has no honest answer. Then the
+        // bundle omits the key and the joiner falls back to discovery.
+        None => assert!(
+            !owns_private_ipv4,
+            "this host owns a private IPv4 address, so the helper must return one"
+        ),
+    }
+}
+
+// The address is OPTIONAL on the wire. A host bound to loopback only knows no
+// dialable address, and a bundle that advertised "[::]:1234" would send the
+// joiner at a wildcard that no peer can connect to. Absent is the honest
+// answer there, and it is the case an older link already covers.
+#[test]
+fn a_pairing_bundle_omits_the_address_when_the_host_has_none() {
+    let id = daak_core::crypto::identity::Identity::generate().unwrap();
+    let bundle = PairingBundle::new(id.public(), "Phone".into());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&daak_ffi::pairing_bundle_json(&bundle, None).unwrap()).unwrap();
+    assert!(
+        json.get("addr").is_none(),
+        "a host with no dialable address must omit the key: absent is the shape an older joiner reads"
+    );
 }
 
 #[test]

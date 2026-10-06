@@ -181,12 +181,14 @@ fn the_self_exclusion_check_rejects_a_device_list_carrying_its_own_id() {
         device_id: me,
         name: "me".into(),
         addr,
+        paired: true,
     };
     fn sibling(addr: std::net::SocketAddr) -> DeviceInfo {
         DeviceInfo {
             device_id: [1u8; 16],
             name: "sibling".into(),
             addr,
+            paired: true,
         }
     }
 

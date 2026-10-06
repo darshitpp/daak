@@ -210,6 +210,15 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().retry(transferId: transferId); return nil as Void? }
   }
 
+  @objc func revokePairing(_ deviceId: String,
+                           resolve: @escaping RCTPromiseResolveBlock,
+                           reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().revokePairing(deviceId: deviceId)
+      return nil as Void?
+    }
+  }
+
   @objc func retryItem(_ transferId: String,
                        itemIndex: Double,
                        resolve: @escaping RCTPromiseResolveBlock,

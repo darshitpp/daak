@@ -51,6 +51,12 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Daak uses the camera to scan pairing QR codes.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_daak._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Daak finds and reaches other Daak devices on your local network.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIBackgroundModes</key>

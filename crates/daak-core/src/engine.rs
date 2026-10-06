@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
-use crate::control::Hello;
+use crate::control::{Hello, ListenAddr};
 use crate::crypto::identity::{verify_static_binding, Identity, IdentityPublic};
 use crate::discovery::{
     advertise_ip, Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
@@ -88,6 +88,13 @@ pub struct DeviceInfo {
     pub device_id: [u8; 16],
     pub name: String,
     pub addr: SocketAddr,
+    /// R42g: the peer has a live pairing row with THIS device.
+    ///
+    /// Discovery and trust are two different facts and the map mixed them: an
+    /// mDNS announce puts a peer here with no pairing at all, and the UI then
+    /// offered Send to it, which the engine refused with "peer is not paired".
+    /// The UI needs to tell the two apart to offer Pair instead.
+    pub paired: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -215,10 +222,14 @@ pub(crate) struct PendingPairing {
     code: Option<String>,
 }
 
+/// The discovered-peer map, shared by name because `Engine` holds it and the
+/// accept loop hands it to `handle_inbound`. R42d.
+pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
+
 pub struct Engine {
     local_addr: SocketAddr,
     tx: broadcast::Sender<EngineEvent>,
-    devices: Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>,
+    devices: SharedDevices,
     browser: Arc<Browser>,
     accept_task: tokio::task::JoinHandle<()>,
     discovery_task: tokio::task::JoinHandle<()>,
@@ -320,21 +331,133 @@ impl Engine {
     /// ordering `record_inbox` + `InboxReceived` follows. A single function is
     /// the point: four call sites each emitting after their own upsert is four
     /// chances to forget one.
-    fn commit_pairing(
+    async fn commit_pairing(
         db: &Db,
         pairing: &Pairing,
         tx: &broadcast::Sender<EngineEvent>,
+        // R42d: the address the pairing connection used. Seeding the device map
+        // here, in the ONE place a pairing becomes real, is what makes a paired
+        // peer sendable. Both halves know a real address -- the joiner dialled
+        // it, the host read it off the socket -- and both dropped it, so a send
+        // queued right after pairing failed with "peer is not discovered" and
+        // burned the whole retry budget (measured: 7 attempts on the desktop).
+        //
+        // `Option`: a pairing over a path with no usable address keeps the old
+        // behaviour and waits for discovery. Never a guessed one.
+        devices: Option<(&SharedDevices, SocketAddr)>,
     ) -> Result<()> {
         db.upsert_pairing(pairing)?;
+        if let Some((devices, addr)) = devices {
+            // R42d: the device map is RAM and starts empty on every launch, so
+            // a paired peer had no address after a restart and every send failed
+            // with "peer is not discovered" until the next mDNS announce. This
+            // writes the proven address to the devices row, which is where
+            // `Engine::start` reads it back. Saved BEFORE the map update so a
+            // failed write cannot leave a live address with no durable copy.
+            db.set_peer_addr(&pairing.peer_device_id, addr)?;
+            let mut map = devices.lock().await;
+            // R42d: REPLACE, not insert-if-absent. A pairing connection is a
+            // completed handshake on a socket that just worked; an mDNS
+            // announce is a datagram that may be minutes old and may name an
+            // address the peer has since left. `or_insert_with` kept the stale
+            // announce, so a send queued right after pairing went to the wrong
+            // peer. Same rule as `note_peer`.
+            //
+            // The name is only seeded on insert. An existing entry keeps its
+            // name: pairing does not learn a better name than the one already
+            // resolved, and renaming a peer from a hex device id would lose
+            // the resolved name.
+            match map.entry(pairing.peer_device_id) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    e.get_mut().addr = addr;
+                    // R42g: a peer that mDNS had already inserted becomes
+                    // paired the moment the handshake completes, or the UI
+                    // keeps offering Pair for a device it just trusted.
+                    e.get_mut().paired = true;
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(DeviceInfo {
+                        device_id: pairing.peer_device_id,
+                        name: hex::encode(pairing.peer_device_id),
+                        addr,
+                        paired: true,
+                    });
+                }
+            }
+        }
         let _ = tx.send(EngineEvent::PairingDone {
             device_id: pairing.peer_device_id,
         });
         Ok(())
     }
 
+    /// R42e: after the handshake, a joiner tells the host the address to dial.
+    /// Sent AFTER `pairing::pair`, so an older host that never reads a second
+    /// control frame is unaffected: it closes the connection and the frame is
+    /// never noticed. `host_lan_addr` is the same resolver the FFI uses for
+    /// the QR bundle, so both halves name one address for one device.
+    async fn send_listen_addr(conn: &mut Connection<tokio::net::TcpStream>, bound: SocketAddr) {
+        let Some(dialable) = crate::discovery::host_lan_addr(bound.port()) else {
+            return;
+        };
+        if let Ok(body) = (ListenAddr { addr: dialable }).to_cbor() {
+            let _ = conn.send(0, RecordType::Control, Bytes::from(body)).await;
+        }
+    }
+
+    /// R42e: the host reads the joiner's dialable address. Bounded, because a
+    /// joiner that never sends one (an older build) must not stall the host:
+    /// no bytes within the window means `None`, and the host falls back to
+    /// discovery exactly as it did before this frame existed.
+    async fn read_listen_addr(conn: &mut Connection<tokio::net::TcpStream>) -> Option<SocketAddr> {
+        let frame = match tokio::time::timeout(std::time::Duration::from_secs(2), conn.recv()).await
+        {
+            Ok(Ok(Some(f))) => f,
+            _ => return None,
+        };
+        if frame.kind != RecordType::Control {
+            return None;
+        }
+        ListenAddr::from_cbor(&frame.body).ok().map(|l| l.addr)
+    }
+
     pub async fn start(cfg: EngineConfig) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(256);
         let devices = Arc::new(Mutex::new(HashMap::<[u8; 16], DeviceInfo>::new()));
+        // R42d: seed the map from the database, because it starts empty here.
+        // Every address below was proved by a completed pairing handshake and
+        // written to the devices row by `commit_pairing`, so a peer whose mDNS
+        // does not reach us is still dialable on this launch. This runs before
+        // the accept loop and the outbox worker, so a queued row finds the peer
+        // on its first attempt instead of waiting for an announce.
+        //
+        // A read failure is logged, not fatal: a corrupt row must not stop the
+        // app from launching. Discovery still populates the map in that case.
+        match cfg.db.paired_addrs() {
+            Ok(peers) => {
+                let mut map = devices.lock().await;
+                for (id, name, addr) in peers {
+                    map.insert(
+                        id,
+                        DeviceInfo {
+                            device_id: id,
+                            // An empty label came from a code pairing, which
+                            // learns no name. Fall back to the hex id so the
+                            // UI never renders a blank row.
+                            name: if name.trim().is_empty() {
+                                hex::encode(id)
+                            } else {
+                                name
+                            },
+                            addr,
+                            // Seeded from `paired_addrs`, so this IS a pairing.
+                            paired: true,
+                        },
+                    );
+                }
+            }
+            Err(e) => tracing::warn!("paired device addresses unreadable: {e}"),
+        }
         let mut session_id = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut session_id);
 
@@ -512,6 +635,9 @@ impl Engine {
             let identity = identity.clone();
             let db = db.clone();
             let profile = profile.clone();
+            // R42d: a completed pairing seeds this map with the address the
+            // connection used, so the accept task needs a handle on it.
+            let accept_devices = devices.clone();
             let out_dir = out_dir.clone();
             let pending_pairing = pending_pairing.clone();
             let pending_code = pending_code.clone();
@@ -523,7 +649,7 @@ impl Engine {
                 // shutdown also stops in-flight handle_inbound calls.
                 let mut set = tokio::task::JoinSet::new();
                 loop {
-                    let (mut conn, _peer) = match tcp::accept(&listener).await {
+                    let (mut conn, peer) = match tcp::accept(&listener).await {
                         Ok(v) => v,
                         Err(e) => {
                             if accept_error_is_fatal(&e) {
@@ -542,6 +668,7 @@ impl Engine {
                     let pairing_tx = pairing_tx.clone();
                     let tx = tx.clone();
                     let profile = profile.clone();
+                    let devices = accept_devices.clone();
                     set.spawn(async move {
                         if let Err(e) = Self::handle_inbound(
                             &identity,
@@ -552,7 +679,9 @@ impl Engine {
                             &pending_code,
                             &pairing_tx,
                             &tx,
+                            &devices,
                             &mut conn,
+                            peer,
                         )
                         .await
                         {
@@ -568,6 +697,10 @@ impl Engine {
             let tx = tx.clone();
             let devices = devices.clone();
             let browser = browser.clone();
+            // R42g: the browser task needs the store to tell a discovered peer
+            // from a paired one, and the engine still needs `db` below. A clone
+            // of the Arc, exactly as the accept loop above does.
+            let db = db.clone();
             let me = device_id;
             let outbox = outbox.clone();
             tokio::spawn(async move {
@@ -603,6 +736,10 @@ impl Engine {
                         device_id,
                         name,
                         addr,
+                        // R42g: an announce is DISCOVERY, not trust. A peer
+                        // seen only over mDNS stays unpaired until a pairing
+                        // row exists, and the UI offers Pair for it.
+                        paired: db.get_pairing(&device_id).ok().flatten().is_some(),
                     };
                     let is_new = {
                         let mut map = devices.lock().await;
@@ -675,6 +812,25 @@ impl Engine {
         self.devices.lock().await.values().cloned().collect()
     }
 
+    /// Unpair one peer from THIS device.
+    ///
+    /// Local trust: nothing is negotiated with the peer, so either side may
+    /// revoke without the other's consent. The row is marked `revoked` (see
+    /// `Db::revoke_pairing`) and the peer leaves the live map, which is what
+    /// makes the UI stop offering Send and start offering Pair again.
+    ///
+    /// `DeviceLost` is emitted only when an entry actually left the map, so a
+    /// revoke for a peer this launch never saw is silent rather than a spurious
+    /// "device left" event.
+    pub async fn revoke_pairing(&self, peer_device_id: [u8; 16]) -> Result<()> {
+        self.db.revoke_pairing(&peer_device_id)?;
+        let removed = self.devices.lock().await.remove(&peer_device_id);
+        if removed.is_some() {
+            let _ = self.tx.send(EngineEvent::DeviceLost(peer_device_id));
+        }
+        Ok(())
+    }
+
     /// R-T11-3: the registry resolves a peer's address from the device map, so a
     /// caller that was GIVEN an address (the CLI's `send --to`) must seed it.
     /// Discovery inserts the same entry; this is the one-shot path.
@@ -714,6 +870,10 @@ impl Engine {
     /// the send, so a subscriber that is slow to drain its channel cannot stall
     /// the outbox wake-up below.
     pub async fn note_peer(&self, peer: [u8; 16], name: &str, addr: SocketAddr) {
+        // R42g: read the pairing row BEFORE taking the map lock. This is a
+        // discovery path; trust comes from the store, and a store read under
+        // the map lock would hold it across a disk access.
+        let paired = self.db.get_pairing(&peer).ok().flatten().is_some();
         let mut devices = self.devices.lock().await;
         // None unless an EXISTING entry changed address. `and_modify` cannot
         // report "changed" vs "left alone" without a captured flag, so the
@@ -733,6 +893,9 @@ impl Engine {
                     device_id: peer,
                     name: name.to_string(),
                     addr,
+                    // R42g: the same rule as the browser above -- a discovered
+                    // peer is unpaired until a pairing row says otherwise.
+                    paired,
                 });
                 None
             }
@@ -1035,7 +1198,14 @@ impl Engine {
             None,
         )
         .await?;
-        Self::commit_pairing(&self.db, &pairing, &self.tx)?;
+        // R42e: tell the host where to dial US. Its socket view of this
+        // connection is our ephemeral source port -- closed the moment this
+        // function returns -- and the host stored that port as our address, so
+        // every host-to-joiner send died on connection refused.
+        Self::send_listen_addr(&mut conn, self.local_addr()).await;
+        // R42d: `addr` is the host we just completed a Noise XX handshake
+        // with, so it is a proven address and not a guess.
+        Self::commit_pairing(&self.db, &pairing, &self.tx, Some((&self.devices, addr))).await?;
         Ok((sas, pairing.peer_device_id))
     }
 
@@ -1075,7 +1245,10 @@ impl Engine {
             Some(code),
         )
         .await?;
-        Self::commit_pairing(&self.db, &pairing, &self.tx)?;
+        // R42e, same frame as the QR path above.
+        Self::send_listen_addr(&mut conn, self.local_addr()).await;
+        // R42d, same argument as `pair_with` above.
+        Self::commit_pairing(&self.db, &pairing, &self.tx, Some((&self.devices, addr))).await?;
         Ok((sas, pairing.peer_device_id))
     }
 
@@ -1366,7 +1539,12 @@ impl Engine {
         pending_code: &Mutex<Option<String>>,
         pairing_tx: &mpsc::Sender<String>,
         tx: &broadcast::Sender<EngineEvent>,
+        devices: &SharedDevices,
         conn: &mut Connection<tokio::net::TcpStream>,
+        // R42e: kept in the signature for the accept loop, but no longer
+        // stored. See `read_listen_addr`: the source port of a pairing socket
+        // is closed when the handshake ends and is not a dialable address.
+        _peer_addr: SocketAddr,
     ) -> Result<()> {
         let hello = read_hello(conn).await?;
         // Read the name INSIDE the lock and copy it: a rename swaps the whole
@@ -1412,7 +1590,13 @@ impl Engine {
                 Some(&code),
             )
             .await?;
-            Self::commit_pairing(db, &pairing, tx)?;
+            // R42e: the address to store is the one the joiner ADVERTISED,
+            // not `peer_addr`. `peer_addr` is the source port of a socket the
+            // joiner closes as soon as pairing ends, so storing it produced a
+            // peer that refused every connection. `None` when the joiner did
+            // not send one: discovery then owns the address, as before.
+            let advertised = Self::read_listen_addr(conn).await;
+            Self::commit_pairing(db, &pairing, tx, advertised.map(|a| (devices, a))).await?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
         }
@@ -1520,7 +1704,9 @@ impl Engine {
                 code.as_deref(),
             )
             .await?;
-            Self::commit_pairing(db, &pairing, tx)?;
+            // R42e, same argument as the code branch above.
+            let advertised = Self::read_listen_addr(conn).await;
+            Self::commit_pairing(db, &pairing, tx, advertised.map(|a| (devices, a))).await?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
         }

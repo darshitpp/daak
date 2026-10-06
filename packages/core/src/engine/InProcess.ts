@@ -47,17 +47,20 @@ export class InProcessEngine implements DaakEngine {
     return parsed as DeviceInfo[];
   }
 
-  async pair(deviceId: string, mode: 'qr' | 'code', secret?: string): Promise<{ sas: string }> {
+  async pair(deviceId: string, mode: 'qr' | 'code', secret?: string, addr?: string): Promise<{ sas: string }> {
     // The frozen FFI surface has only pair_with(addr, bundle_cbor bytes), which
     // runs PairingBundle::from_cbor. A manual code is not a CBOR bundle, so a
     // hex decode of it would be nonsense; say so instead of failing obscurely.
     if (mode === 'code') throw new Error('manual-code pairing is not on the FFI surface yet');
-    // pair_with takes an ip:port, not a device id (R13), so resolve it from the
-    // known devices. The `secret` is the bundle CBOR as hex.
-    const device = (await this.devices()).find((d) => d.deviceId === deviceId);
-    if (!device) throw new Error(`unknown device ${deviceId}`);
     if (!secret) throw new Error('qr pairing needs the bundle hex');
-    const { sas } = JSON.parse(await this.native.pairWith(device.addr, hexToBytes(secret)));
+    // pair_with takes an ip:port, not a device id (R13), so an address has to
+    // come from somewhere. A pairing link can NAME one; without it the address
+    // is resolved from discovery, which fails on any network mDNS does not
+    // cross (measured: a NAT-ed Android emulator saw zero peers while the host
+    // CLI saw it advertising). The `secret` is the bundle CBOR as hex.
+    const target = addr ?? (await this.devices()).find((d) => d.deviceId === deviceId)?.addr;
+    if (!target) throw new Error(`unknown device ${deviceId}`);
+    const { sas } = JSON.parse(await this.native.pairWith(target, hexToBytes(secret)));
     return { sas };
   }
 
@@ -97,6 +100,10 @@ export class InProcessEngine implements DaakEngine {
 
   async cancel(transferId: string): Promise<void> {
     await this.native.cancel(transferId);
+  }
+
+  async revokePairing(deviceId: string): Promise<void> {
+    await this.native.revokePairing(deviceId);
   }
 
   async retry(transferId: string): Promise<void> {
