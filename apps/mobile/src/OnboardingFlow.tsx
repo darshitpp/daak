@@ -7,6 +7,7 @@ import {
   PairFirstDeviceScreen,
   PermissionsScreen,
   WelcomeScreen,
+  useEngine,
   ui,
   type PermissionRowSpec,
 } from '@daak/ui';
@@ -100,6 +101,7 @@ export function OnboardingFlow({ onComplete, onReady }: {
   // engine start. A ref rather than state because it is read and written inside
   // one synchronous handler with no render in between.
   const completed = useRef(false);
+  const engine = useEngine();
 
   useEffect(() => {
     let cancelled = false;
@@ -164,6 +166,22 @@ export function OnboardingFlow({ onComplete, onReady }: {
     },
     [failWith, onComplete, onReady, state],
   );
+
+  // R42n: pairing a device IS this step's result, so the flow finishes on the
+  // engine's own `pairing.done`. Before this the only way out of the step was
+  // "Skip for now", so a user who had just paired was asked to skip the step
+  // they had completed -- and the scan-then-return-to-onboarding report was the
+  // same defect seen from the other end.
+  //
+  // `pairing.done` and NOT a device count: the count also rises for a peer
+  // seen only by mDNS, and a freshly imaged phone must not finish setup on the
+  // strength of somebody else's laptop announcing itself.
+  useEffect(() => {
+    if (step !== 'pair') return;
+    return engine.on((e) => {
+      if (e.type === 'pairing.done') finish({});
+    });
+  }, [engine, finish, step]);
 
   if (step === 'loading') {
     return <View style={ui.screen} testID="onboarding-loading" />;

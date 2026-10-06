@@ -6,7 +6,16 @@ import { Avatar, Btn, Empty, Note, Section } from '../components/ds';
 import { colors, ui } from '../theme';
 import { humanBytes, senderLabel } from './quarantine-facts';
 
-const when = (ms: number): string => (ms > 0 ? new Date(ms).toLocaleString() : 'just now');
+/**
+ * R42l: the engine's `receivedAt` is SECONDS, the value SQLite holds, and the
+ * inbox printed a 1970 date because this read it as milliseconds. The
+ * held-back list already converts (`quarantine-facts.arrivedAt`), so one of the
+ * two was always wrong. Seconds is the engine's unit; the conversion belongs
+ * here, at the one place the value becomes text. `toLocaleString` then renders
+ * it in the DEVICE's timezone, which is what a reader expects.
+ */
+const when = (seconds: number): string =>
+  seconds > 0 ? new Date(seconds * 1000).toLocaleString() : 'just now';
 
 /**
  * The prototype's per-row sheet has two verbs. They are INJECTED, like the

@@ -71,3 +71,28 @@ it('says so when the inbox cannot be read', async () => {
   render(<EngineProvider engine={engine}><HistoryScreen /></EngineProvider>);
   expect(await screen.findByText('database is locked')).toBeTruthy();
 });
+
+// R42l: `receivedAt` is SECONDS, the unit SQLite holds. The row read it as
+// milliseconds, so every arrival was stamped 1970. A value a second ago must
+// render the CURRENT year, which is the cheapest assertion that fails on the
+// old code and cannot be satisfied by any fixed clock skew.
+it('renders the arrival time from seconds, not milliseconds', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  setup([{ ...text, receivedAt: now }]);
+  await waitFor(() => expect(screen.getByText('hello')).toBeTruthy());
+  // The row's sub-line is one interpolated string, so the assertion is on the
+  // rendered text: the CURRENT year is present and 1970 is nowhere.
+  expect(screen.getByText(new RegExp(String(new Date().getFullYear())))).toBeTruthy();
+  expect(screen.queryByText(/1970/)).toBeNull();
+});
+
+// R42i: Copy is a host verb, so it renders only for a text entry AND only when
+// the host supplied it. A file row has nothing to put on the clipboard.
+it('offers Copy for a text entry when the host supplies the verb', async () => {
+  const copy = jest.fn();
+  setup([text, file], { copy });
+  await waitFor(() => expect(screen.getByText('hello')).toBeTruthy());
+  fireEvent.press(screen.getByLabelText('copy-' + text.payloadId));
+  expect(copy).toHaveBeenCalledWith('hello');
+  expect(screen.queryByLabelText('copy-' + file.payloadId)).toBeNull();
+});

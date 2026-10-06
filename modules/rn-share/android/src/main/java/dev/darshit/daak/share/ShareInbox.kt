@@ -1,7 +1,9 @@
 package dev.darshit.daak.share
 
 import android.content.Context
+import android.content.ContentResolver
 import android.net.Uri
+import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -29,8 +31,17 @@ object ShareInbox {
   private fun intentSendsDir(ctx: Context): File = File(dir(ctx), "intent-sends").apply { mkdirs() }
 
   fun copyToCache(ctx: Context, uri: Uri): File {
-    val name = uri.lastPathSegment?.substringAfterLast('/') ?: "payload"
-    val out = File(dir(ctx), UUID.randomUUID().toString() + "-" + name)
+    // R42m: the name used to come from `uri.lastPathSegment`, which for a
+    // content URI is `image:1000196782`. No extension travelled with it, so the
+    // receiving device stored an unopenable file. The provider knows the real
+    // display name; ask it, and fall back only when there is no provider answer.
+    val name = displayNameOf(ctx, uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "payload"
+    // The UUID stays but moves to a DIRECTORY. It was prefixed to the file name,
+    // and that prefixed name is what the manifest carried, so every received
+    // file arrived as `<uuid>-<name>`. A directory keeps the uniqueness and
+    // leaves the file's own name alone.
+    val home = File(dir(ctx), UUID.randomUUID().toString()).apply { mkdirs() }
+    val out = File(home, safeLeaf(name))
     // A content:// read can fail: the granting app revoked the URI, the
     // provider is dead, or openInputStream returns null. The old non-null
     // assertion turned every one of those into a NullPointerException that
@@ -45,6 +56,34 @@ object ShareInbox {
       throw t
     }
     return out
+  }
+
+  /**
+   * The provider's own name for a picked document, extension included. Null for
+   * a `file://` URI, which already carries a real name in its path, and null
+   * when the provider refuses the query -- the caller falls back rather than
+   * failing the pick.
+   */
+  private fun displayNameOf(ctx: Context, uri: Uri): String? {
+    if (uri.scheme != ContentResolver.SCHEME_CONTENT) return null
+    return try {
+      ctx.contentResolver
+        .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null }
+    } catch (t: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * One path component. A provider-supplied name is untrusted input that is
+   * about to become a file name on THIS device and on the peer, so separators
+   * and traversal are removed here rather than at the far end.
+   */
+  private fun safeLeaf(name: String): String {
+    val leaf = name.substringAfterLast('/').substringAfterLast('\\')
+    val cleaned = leaf.replace(Regex("[\\u0000-\\u001f/:*?\"<>|]"), "_").trim()
+    return if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") "payload" else cleaned
   }
 
   fun stageText(ctx: Context, text: String) =

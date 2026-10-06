@@ -337,4 +337,44 @@ describe('every launch after the first', () => {
 
     await waitFor(() => expect(setDisplayName).toHaveBeenCalledWith('Seawood Otter'));
   });
+
+  // R42n: pairing a device IS the Pair step's result. Before this the only exit
+  // was "Skip for now", so a user who had just paired was asked to skip the
+  // step they had completed -- and the reported "scanning the QR puts me back on
+  // the onboarding screen" was the same defect from the other side.
+  it('finishes onboarding when a pairing completes, with no skip tap', async () => {
+    mockReadOnboarding.mockResolvedValue(firstLaunch);
+    render(<App />);
+    await waitFor(() => screen.getByLabelText('welcome-get-started'));
+    fireEvent.press(screen.getByLabelText('welcome-get-started'));
+    await waitFor(() => screen.getByTestId('name-input'));
+    fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
+    fireEvent.press(screen.getByLabelText('name-next'));
+    await waitFor(() => screen.getByLabelText('permissions-continue'));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('perm-alerts'));
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).toBe(false),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('permissions-continue'));
+    });
+    expect(await screen.findByLabelText('pair-skip')).toBeTruthy();
+
+    // The engine's OWN event, driven through the live handlers the flow
+    // subscribed to. Nothing here taps Skip.
+    const handlers = (engine as unknown as { __handlers: Set<(e: unknown) => void> }).__handlers;
+    await act(async () => {
+      handlers.forEach((h) => h({ type: 'pairing.done', deviceId: 'aa'.repeat(16) }));
+    });
+
+    await waitFor(() => {
+      // The mock is declared with no parameters, so its call tuple is `[]` and
+      // indexing it needs the cast. The REAL write takes the next state.
+      const last = mockWriteOnboarding.mock.calls.at(-1) as unknown[] | undefined;
+      const written = last?.[0] as { complete?: boolean } | undefined;
+      expect(written?.complete).toBe(true);
+    });
+  });
 });
