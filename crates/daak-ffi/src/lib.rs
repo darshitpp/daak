@@ -977,6 +977,15 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 online: matches!(state, PresenceState::Online),
             },
         },
+        // The sealed-beacon liveness transition. Same FFI shape as Presence and
+        // DeviceLost, because the UI only needs online/offline; the difference
+        // is the source, and the source is not a wire detail the UI reads.
+        EngineEvent::DeviceState { device_id, online } => FfiEvent::DeviceState {
+            data: DeviceStateEvent {
+                device_id: to_hex(&device_id),
+                online,
+            },
+        },
         EngineEvent::TransferProgress {
             transfer_id,
             bytes_done,

@@ -62,6 +62,9 @@ export function fakeEngine(devices: DeviceInfo[] = [
     setDisplayName: async () => {},
     setPresence: async () => {},
     revokePairing: async () => {},
+    // A no-op is the honest fake: the wake only pokes an outbox drain the
+    // fake does not have, so it can neither fail nor prove anything.
+    backgroundWake: async () => {},
     replaceInboxPaths: async () => {},
     on: (cb: (e: DaakEvent) => void) => {
       handlers.add(cb);

@@ -71,6 +71,7 @@ export type DaakEvent =
   | { type: 'device.state'; deviceId: string; state: 'online' | 'offline' }
   | { type: 'pairing.sas'; peerDeviceId: string; sas: string }
   | { type: 'pairing.done'; deviceId: string }
+  | { type: 'pairing.revoked'; deviceId: string }
   | { type: 'transfer.progress'; transferId: string; bytesDone: number; bytesTotal: number }
   | { type: 'transfer.item'; transferId: string; itemIndex: number; state: ItemState; destPath?: string }
   | { type: 'transfer.done'; transferId: string }
@@ -144,6 +145,12 @@ export interface DaakEngine {
    * the UI stops offering Send and offers Pair again.
    */
   revokePairing(deviceId: string): Promise<void>;
+  /**
+   * A platform wake, such as a background refresh, tells the engine to drain
+   * the outbox now instead of waiting for the next poll tick. The Rust side is
+   * a stub until Task 4, so the call resolves and does nothing today.
+   */
+  backgroundWake(): Promise<void>;
   /**
    * R42p: record where the platform MOVED a received payload's files.
    *

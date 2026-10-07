@@ -77,16 +77,33 @@ impl PresenceSocket {
 
     pub async fn announce(&self, presence: &Presence) -> Result<()> {
         let bytes = presence.to_cbor()?;
+        self.announce_raw(&bytes).await
+    }
+
+    /// Send raw datagram bytes to the presence group.
+    ///
+    /// The engine uses this for sealed beacons, which are not a Presence.
+    /// announce() stays as the plaintext path the Phase 1 test uses.
+    pub async fn announce_raw(&self, bytes: &[u8]) -> Result<()> {
         let dest: SocketAddr = SocketAddrV4::new(PRESENCE_GROUP, PRESENCE_PORT).into();
-        self.socket.send_to(&bytes, dest).await?;
+        self.socket.send_to(bytes, dest).await?;
         Ok(())
     }
 
     pub async fn recv(&self) -> Result<(SocketAddr, Presence)> {
+        let (from, raw) = self.recv_raw().await?;
+        let p = Presence::from_cbor(&raw)?;
+        Ok((from, p))
+    }
+
+    /// Read one raw datagram and return its bytes.
+    ///
+    /// A sealed beacon cannot be decoded as a Presence, so the engine needs
+    /// the raw bytes. recv() stays as the plaintext path the Phase 1 test uses.
+    pub async fn recv_raw(&self) -> Result<(SocketAddr, Vec<u8>)> {
         let mut buf = [0u8; 2048];
         let (n, from) = self.socket.recv_from(&mut buf).await?;
-        let p = Presence::from_cbor(&buf[..n])?;
-        Ok((from, p))
+        Ok((from, buf[..n].to_vec()))
     }
 }
 

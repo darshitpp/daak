@@ -34,6 +34,7 @@ const EVENT_TYPES: Record<DaakEvent['type'], true> = {
   'device.state': true,
   'pairing.sas': true,
   'pairing.done': true,
+  'pairing.revoked': true,
   'transfer.progress': true,
   'transfer.item': true,
   'transfer.done': true,
@@ -60,6 +61,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   sendFiles: true,
   listDevices: true,
   revokePairing: true,
+  backgroundWake: true,
   replaceInboxPaths: true,
   cancel: true,
   retry: true,
@@ -98,9 +100,9 @@ describe('contract types', () => {
       listQuarantineReports: true,
       listTransfers: true, listInbox: true, selfProfile: true, setDisplayName: true,
       setPresence: true, on: true, offerPairing: true, armHostPairing: true,
-      retryItem: true,
+      retryItem: true, backgroundWake: true,
     };
-    // 10 = the union's 10 members. peer.incompatible is pinned by tsc alone,
+    // 11 = the union's 11 members. peer.incompatible is pinned by tsc alone,
     // via this Record's exhaustiveness, and NOT by the fixture below -- which
     // has 9 entries for a reason that has nothing to do with the encoder.
     // ffi_event_json DOES emit it: the FfiEvent::IncompatiblePeer arm at

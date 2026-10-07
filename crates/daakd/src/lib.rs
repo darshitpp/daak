@@ -246,6 +246,13 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
             device_id: hex::encode(device_id),
             online: matches!(state, PresenceState::Online),
         },
+        // The sealed-beacon liveness transition. Same IpcEvent::DeviceState
+        // shape as the Presence arm above: the desktop UI reads online/offline
+        // only, and the beacon IS the online source.
+        EngineEvent::DeviceState { device_id, online } => IpcEvent::DeviceState {
+            device_id: hex::encode(device_id),
+            online,
+        },
         EngineEvent::TransferProgress {
             transfer_id,
             bytes_done,

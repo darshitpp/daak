@@ -8,6 +8,8 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::control::{Hello, ListenAddr};
 use crate::crypto::identity::{verify_static_binding, Identity, IdentityPublic};
+use crate::discovery::beacon::{pairing_presence_key, SealedBeacon};
+use crate::discovery::status::{Liveness, StatusChange};
 use crate::discovery::{
     advertise_ip, Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
 };
@@ -101,6 +103,15 @@ pub struct DeviceInfo {
 pub enum EngineEvent {
     DeviceFound(DeviceInfo),
     DeviceLost([u8; 16]),
+    /// A paired peer crossed the online/offline boundary.
+    ///
+    /// This is the sealed-beacon liveness signal, not a discovery fact: it is
+    /// emitted only on a real transition, so the UI never sees a repeated
+    /// online event for every beacon. DeviceLost stays the discovery event.
+    DeviceState {
+        device_id: [u8; 16],
+        online: bool,
+    },
     Presence {
         device_id: [u8; 16],
         state: PresenceState,
@@ -234,6 +245,12 @@ pub struct Engine {
     accept_task: tokio::task::JoinHandle<()>,
     discovery_task: tokio::task::JoinHandle<()>,
     presence_task: tokio::task::JoinHandle<()>,
+    announce_task: tokio::task::JoinHandle<()>,
+    heartbeat_task: tokio::task::JoinHandle<()>,
+    /// The sealed-beacon liveness state machine. Its own lock, because the
+    /// presence receive loop, the heartbeat loop and observe_beacon all touch
+    /// it and none of them holds another lock across the call.
+    status: Arc<Mutex<crate::discovery::PresenceTracker>>,
     /// The RESOLVED name (base name plus any collision suffix). It changes at
     /// runtime -- set_display_name re-resolves and re-advertises -- so it and
     /// the mDNS Advertiser built from it are behind one lock, swapped together
@@ -756,26 +773,125 @@ impl Engine {
             })
         };
 
+        let status = Arc::new(Mutex::new(crate::discovery::PresenceTracker::default()));
+
+        // Sealed-beacon receive loop. A beacon is opened with the pairing key
+        // derived from BOTH static keys, so an unpaired or spoofed beacon is
+        // dropped before it can reach the tracker. The online case still wakes
+        // the outbox drain, exactly as the Phase 1 plaintext loop did; without
+        // it a queued send would wait for the next mDNS announce.
         let presence_task = {
             let tx = tx.clone();
             let me = device_id;
             let outbox = outbox.clone();
-            match presence_rx {
+            let status = status.clone();
+            let identity = identity.clone();
+            let db = db.clone();
+            match presence_rx.clone() {
                 Some(presence) => tokio::spawn(async move {
-                    while let Ok((_from, p)) = presence.recv().await {
-                        if p.device_id != me {
-                            if p.state == PresenceState::Online {
-                                outbox.notify_peer_online(p.device_id);
-                            }
-                            let _ = tx.send(EngineEvent::Presence {
-                                device_id: p.device_id,
-                                state: p.state,
+                    while let Ok((_from, raw)) = presence.recv_raw().await {
+                        let Ok(beacon) = SealedBeacon::from_cbor(&raw) else {
+                            continue;
+                        };
+                        let Some(pairing) = db.get_pairing(&beacon.device_id).ok().flatten() else {
+                            continue;
+                        };
+                        if pairing.state != "trusted" {
+                            continue;
+                        }
+                        let key = pairing_presence_key(
+                            &identity.static_secret().to_bytes(),
+                            &pairing.static_dh_pub,
+                        );
+                        let Ok(p) = beacon.open(&key) else {
+                            tracing::warn!(
+                                peer = %hex::encode(beacon.device_id),
+                                "dropped an unauthenticated presence beacon"
+                            );
+                            continue;
+                        };
+                        if p.device_id == me {
+                            continue;
+                        }
+                        if p.state == PresenceState::Online {
+                            outbox.notify_peer_online(p.device_id);
+                        }
+                        let now = crate::manifest::now_ms();
+                        if let Some(c) = status.lock().await.observe(p.device_id, beacon.seq, now) {
+                            let _ = tx.send(EngineEvent::DeviceState {
+                                device_id: c.device_id,
+                                online: c.state == Liveness::Online,
                             });
                         }
                     }
                 }),
                 None => tokio::spawn(async {}),
             }
+        };
+
+        // Announce loop: one sealed beacon per trusted pairing per interval.
+        // The same seq goes to every peer, which is fine because each peer has
+        // its own replay window.
+        let announce_task = {
+            let presence = presence_rx.clone();
+            let pairings = db.list_pairings().unwrap_or_default();
+            let identity = identity.clone();
+            let me = device_id;
+            let name = display_name.clone();
+            tokio::spawn(async move {
+                let mut seq = 0u64;
+                let mut tick = tokio::time::interval(std::time::Duration::from_millis(
+                    crate::discovery::BEACON_INTERVAL_MS,
+                ));
+                loop {
+                    tick.tick().await;
+                    seq += 1;
+                    let Some(sock) = &presence else {
+                        continue;
+                    };
+                    let p = Presence {
+                        device_id: me,
+                        session_id,
+                        name: name.clone(),
+                        state: PresenceState::Online,
+                        seq,
+                        sent_at_ms: crate::manifest::now_ms(),
+                    };
+                    for pairing in pairings.iter().filter(|p| p.state == "trusted") {
+                        let key = pairing_presence_key(
+                            &identity.static_secret().to_bytes(),
+                            &pairing.static_dh_pub,
+                        );
+                        if let Ok(b) = SealedBeacon::seal(&p, &key, seq) {
+                            if let Ok(bytes) = b.to_cbor() {
+                                let _ = sock.announce_raw(&bytes).await;
+                            }
+                        }
+                    }
+                }
+            })
+        };
+
+        // Heartbeat loop: declare a peer offline when its last beacon is older
+        // than the timeout, and publish each transition.
+        let heartbeat_task = {
+            let tx = tx.clone();
+            let status = status.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_millis(
+                    crate::discovery::BEACON_INTERVAL_MS,
+                ));
+                loop {
+                    tick.tick().await;
+                    let now = crate::manifest::now_ms();
+                    for c in status.lock().await.tick(now) {
+                        let _ = tx.send(EngineEvent::DeviceState {
+                            device_id: c.device_id,
+                            online: c.state == Liveness::Online,
+                        });
+                    }
+                }
+            })
         };
 
         Ok(Self {
@@ -788,6 +904,9 @@ impl Engine {
             accept_task,
             discovery_task,
             presence_task,
+            announce_task,
+            heartbeat_task,
+            status,
             identity,
             db,
             staging,
@@ -806,6 +925,50 @@ impl Engine {
 
     pub fn events(&self) -> broadcast::Receiver<EngineEvent> {
         self.tx.subscribe()
+    }
+
+    /// Verify a sealed beacon against the pinned pairing, then advance the
+    /// liveness state machine. Returns the transition, if the beacon caused one.
+    ///
+    /// An unpaired, revoked or spoofed sender is ignored, never a panic: a
+    /// beacon from an unknown device is the expected case on a busy LAN.
+    pub async fn observe_beacon(
+        &self,
+        b: &SealedBeacon,
+        now_ms: u64,
+    ) -> Result<Option<StatusChange>> {
+        let pairing = self
+            .db
+            .get_pairing(&b.device_id)?
+            .filter(|p| p.state == "trusted");
+        let Some(pairing) = pairing else {
+            return Ok(None);
+        };
+        let key = pairing_presence_key(
+            &self.identity.static_secret().to_bytes(),
+            &pairing.static_dh_pub,
+        );
+        let p = b.open(&key)?;
+        let change = self.status.lock().await.observe(p.device_id, b.seq, now_ms);
+        if let Some(c) = &change {
+            let _ = self.tx.send(EngineEvent::DeviceState {
+                device_id: c.device_id,
+                online: c.state == Liveness::Online,
+            });
+        }
+        Ok(change)
+    }
+
+    /// Heartbeat tick. Emits a DeviceState event for each peer that timed out.
+    pub async fn heartbeat(&self, now_ms: u64) -> Vec<StatusChange> {
+        let changes = self.status.lock().await.tick(now_ms);
+        for c in &changes {
+            let _ = self.tx.send(EngineEvent::DeviceState {
+                device_id: c.device_id,
+                online: c.state == Liveness::Online,
+            });
+        }
+        changes
     }
 
     pub async fn devices(&self) -> Vec<DeviceInfo> {
@@ -1782,6 +1945,8 @@ impl Engine {
         self.accept_task.abort();
         self.discovery_task.abort();
         self.presence_task.abort();
+        self.announce_task.abort();
+        self.heartbeat_task.abort();
         // B4: the outbox worker ticks every 5s and holds an Arc<Db> and the
         // session registry. Without this it kept draining rows for an engine
         // that is no longer serving anyone -- the last unreached production

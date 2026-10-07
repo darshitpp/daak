@@ -27,6 +27,8 @@ export interface Spec extends TurboModule {
   listDevices(): Promise<string>;
   /** UDL: revoke_pairing(string device_id) */
   revokePairing(deviceId: string): Promise<void>;
+  /** UDL: background_wake() -- drain the outbox now. Rust stub until Task 4. */
+  backgroundWake(): Promise<void>;
   /** UDL: replace_inbox_paths(string payload_id, sequence<string> paths) */
   replaceInboxPaths(payloadId: string, paths: string[]): Promise<void>;
   /** UDL: cancel(string transfer_id) */
