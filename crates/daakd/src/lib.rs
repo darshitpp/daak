@@ -395,6 +395,7 @@ async fn accept_loop(
     state: Arc<DaemonState>,
 ) -> std::io::Result<()> {
     let listener = bind(path)?;
+    spawn_wake_handler(state.clone());
 
     loop {
         let (stream, _) = listener.accept().await?;
@@ -405,6 +406,33 @@ async fn accept_loop(
         let (rd, wr) = stream.into_split();
         tokio::spawn(serve_connection(state, sender, rd, wr));
     }
+}
+
+/// Start the wake handler task. The task waits for SIGUSR1. On each signal it
+/// calls `Engine::background_wake`. A shell or a tray action sends SIGUSR1 to
+/// ask the engine to run its background work now.
+#[cfg(unix)]
+fn spawn_wake_handler(state: Arc<DaemonState>) {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sig = match signal(SignalKind::user_defined1()) {
+        Ok(sig) => sig,
+        Err(e) => {
+            // A missing handler is not fatal. The engine still runs its
+            // periodic work, so the daemon only loses the on-demand wake.
+            tracing::warn!("cannot install the SIGUSR1 wake handler: {e}");
+            return;
+        }
+    };
+    tokio::spawn(async move {
+        // `recv` returns None when the signal stream is closed. That only
+        // happens at runtime shutdown, so the task ends there.
+        while sig.recv().await.is_some() {
+            if let Ok(engine) = state.engine().await {
+                engine.background_wake();
+            }
+        }
+    });
 }
 
 /// The per-connection handler, split out of the accept loop so it can be
@@ -1010,6 +1038,19 @@ mod tests {
             2,
             "both parse_id rejections must be logged: {lines:?}"
         );
+    }
+
+    /// A real SIGUSR1 test: the handler task must install, and a SIGUSR1 must
+    /// not kill this process. The default action for SIGUSR1 ends the process,
+    /// so a test that reaches the sleep below proves the handler is live. The
+    /// engine call is skipped because this test starts no engine.
+    #[tokio::test]
+    async fn wake_handler_installs_and_consumes_sigusr1() {
+        spawn_wake_handler(Arc::new(DaemonState::new()));
+        let rc = unsafe { libc::raise(libc::SIGUSR1) };
+        assert_eq!(rc, 0, "raise of SIGUSR1 failed");
+        // Let the signal driver deliver the signal to the handler task.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
     /// B6: the reply-write path, driven through the REAL handler over a
