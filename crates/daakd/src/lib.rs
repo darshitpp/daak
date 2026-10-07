@@ -785,6 +785,13 @@ async fn dispatch(
                 Err(e) => err(e),
             }
         }
+        IpcRequest::Wake => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => {
+                engine.background_wake();
+                IpcResponse::Ok
+            }
+        },
         // Handled by the caller before dispatch ever runs: they close or do
         // not answer. Listed here so a new variant is a compile error rather
         // than a silent Ok.

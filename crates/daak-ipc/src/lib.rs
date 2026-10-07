@@ -170,6 +170,10 @@ pub enum IpcRequest {
     ExportDebugBundle {
         path: String,
     },
+    /// The platform asks the daemon to drain its outbox now: the desktop app
+    /// sends this on a network change or on resume. A new IpcRequest variant is
+    /// the minor version extension mechanism.
+    Wake,
     Shutdown,
 }
 

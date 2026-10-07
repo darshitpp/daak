@@ -19,7 +19,7 @@ use crate::manifest::{Manifest, PayloadKind};
 use crate::net::secure::recv_secure_transfer;
 use crate::net::tcp;
 use crate::net::Connection;
-use crate::outbox::OutboxWorker;
+use crate::outbox::{DrainPolicy, DrainTrigger, OutboxWorker};
 use crate::pairing::{PairMode, PairingBundle};
 use crate::session::{BoxConnect, BoxFutureConn, SessionRegistry, SharedSessions, TcpConn};
 use crate::staging::Staging;
@@ -284,6 +284,10 @@ pub struct Engine {
     /// derived from it, so a second copy of out_dir could name a different one.
     out_dir: PathBuf,
     outbox: Arc<OutboxWorker>,
+    /// Battery-saver switch for the outbox drain. The worker loop is seeded at
+    /// spawn time, so the runtime flag lives here and the drain closure reads it
+    /// to pick the backoff cap of each failed attempt.
+    battery_saver: Arc<std::sync::atomic::AtomicBool>,
     /// R-T11-3/R-T11-11: behind a Mutex because the Engine is only ever held by
     /// &self, and the per-row outbox drain drives sends through the same Arc.
     sessions: SharedSessions,
@@ -631,15 +635,34 @@ impl Engine {
                     connect,
                 )))
             };
+        let battery_saver = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let outbox = Arc::new({
             let drain_db = db.clone();
             let drain_staging = staging.clone();
             let drain_sessions = sessions.clone();
-            OutboxWorker::spawn(db.clone(), move |row| {
+            let drain_battery = battery_saver.clone();
+            let policy = DrainPolicy::default();
+            // The drain closure reads the battery-saver flag at drain time, so
+            // the cap follows a mode change without rebuilding the worker. A
+            // normal drain uses the policy cap; battery-saver uses the policy's
+            // raised cap.
+            let normal_cap = policy.max_backoff_secs;
+            let saver_cap = DrainPolicy {
+                battery_saver: true,
+                ..policy
+            }
+            .effective_max_backoff_secs();
+            OutboxWorker::spawn_with_policy(db.clone(), policy, move |row| {
+                let max_backoff_secs = if drain_battery.load(std::sync::atomic::Ordering::Relaxed) {
+                    saver_cap
+                } else {
+                    normal_cap
+                };
                 let ctx = DrainCtx {
                     db: drain_db.clone(),
                     staging: drain_staging.clone(),
                     sessions: drain_sessions.clone(),
+                    max_backoff_secs,
                 };
                 // ponytail: per-row drain tasks are intentionally untracked (a JoinSet
                 // here costs more than it buys); a crash mid-drain is recovered at
@@ -912,6 +935,7 @@ impl Engine {
             staging,
             out_dir,
             outbox,
+            battery_saver,
             sessions,
             pending_pairing,
             pending_code,
@@ -955,6 +979,11 @@ impl Engine {
                 device_id: c.device_id,
                 online: c.state == Liveness::Online,
             });
+            // A peer that just came online drains its own due rows on the spot,
+            // instead of waiting for the next poll tick and its backoff.
+            if c.state == Liveness::Online {
+                self.outbox.notify_peer_online(p.device_id);
+            }
         }
         Ok(change)
     }
@@ -1453,6 +1482,19 @@ impl Engine {
         // Try immediately in case the peer is already online; harmless if not.
         self.outbox.notify_peer_online(peer_device_id);
         Ok(payload_id)
+    }
+
+    /// A platform told the daemon to drain now: a timer, a network change or a
+    /// SIGUSR1. The trigger drains every due row.
+    pub fn background_wake(&self) {
+        self.outbox.wake(DrainTrigger::PlatformWake);
+    }
+
+    /// Turn battery-saver mode on or off. The outbox drain reads this flag when
+    /// it backs off a failed attempt.
+    pub fn set_battery_saver(&self, on: bool) {
+        self.battery_saver
+            .store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Cancel a queued or in-flight outbound transfer and discard its staged files.
@@ -2067,6 +2109,9 @@ struct DrainCtx<T = TcpConn> {
     /// R-T11-12: the SAME sessions the Engine holds, so a drained send reuses
     /// (and re-dials) the same per-peer connection a direct send would.
     sessions: SharedSessions<T>,
+    /// The backoff cap for a failed attempt, resolved from the battery-saver
+    /// flag at drain time (1800s when on, else the worker policy's cap).
+    max_backoff_secs: i64,
 }
 
 /// Give up on a row after this many failed delivery attempts. 8 with the 4.3
@@ -2220,6 +2265,7 @@ fn settle_failed_attempt(
     id: &[u8; 16],
     attempts: u32,
     jitter: u64,
+    max_backoff_secs: i64,
 ) -> Result<Option<&'static str>> {
     let now = crate::manifest::now_ms() as i64 / 1000;
     if attempts + 1 >= MAX_DELIVERY_ATTEMPTS {
@@ -2227,7 +2273,7 @@ fn settle_failed_attempt(
             .mark_outbox_terminal_failed(id, &format!("gave up after {} attempts", attempts + 1))?;
         Ok(won.then_some("failed"))
     } else {
-        let won = db.mark_outbox_failed(id, now, jitter)?;
+        let won = db.mark_outbox_failed_capped(id, now, jitter, max_backoff_secs)?;
         Ok(won.then_some("paused"))
     }
 }
@@ -2238,12 +2284,15 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
     row: OutboxRow,
 ) {
     let db = &ctx.db;
+    let max_backoff_secs = ctx.max_backoff_secs;
     let retry = |jitter: u64| {
         // R-T10-5: cap the retries. Without this a permanently unreachable peer
         // (or a permanently bad file) retries forever and never leaves 'failed'.
         // Only write when this drain still OWNS the row; see the None arm on
         // settle_failed_attempt.
-        if let Ok(Some(state)) = settle_failed_attempt(db, &row.id, row.attempts, jitter) {
+        if let Ok(Some(state)) =
+            settle_failed_attempt(db, &row.id, row.attempts, jitter, max_backoff_secs)
+        {
             let _ = db.set_transfer_state(&row.id, state);
         }
     };
@@ -2516,7 +2565,7 @@ mod tests {
         // Cancel owns the row; the drain's backoff guard matches nothing.
         cancel_with(&db, &staging, id).unwrap();
         assert_eq!(
-            settle_failed_attempt(&db, &id, 0, 0).unwrap(),
+            settle_failed_attempt(&db, &id, 0, 0, 600).unwrap(),
             None,
             "a lost guard must yield no state to write"
         );
@@ -2533,7 +2582,7 @@ mod tests {
                 .unwrap();
         assert!(db.mark_outbox_sending(&other).unwrap());
         assert_eq!(
-            settle_failed_attempt(&db, &other, 0, 0).unwrap(),
+            settle_failed_attempt(&db, &other, 0, 0, 600).unwrap(),
             Some("paused")
         );
     }
@@ -2624,7 +2673,7 @@ mod tests {
         // settle_failed_attempt started reporting the lost guard.
         assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
         assert_eq!(
-            settle_failed_attempt(&db, &[1u8; 16], 0, 0).unwrap(),
+            settle_failed_attempt(&db, &[1u8; 16], 0, 0, 600).unwrap(),
             Some("paused")
         );
         // A SECOND row for the give-up: the first row is no longer `sending`
@@ -2644,7 +2693,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            settle_failed_attempt(&db, &[9u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0).unwrap(),
+            settle_failed_attempt(&db, &[9u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0, 600).unwrap(),
             Some("failed"),
             "the give-up is the only terminal failure"
         );
@@ -2704,6 +2753,7 @@ mod tests {
                 db: db.clone(),
                 staging: staging.clone(),
                 sessions,
+                max_backoff_secs: 600,
             },
             row,
         )
@@ -2845,6 +2895,7 @@ mod tests {
                 db: db.clone(),
                 staging: staging.clone(),
                 sessions,
+                max_backoff_secs: 600,
             },
             row,
         )
@@ -3129,7 +3180,7 @@ mod tests {
                 db.mark_outbox_sending(&[1u8; 16]).unwrap(),
                 "the drain re-claims the row it just re-pended"
             );
-            settle_failed_attempt(&db, &[1u8; 16], want - 1, 0).unwrap();
+            settle_failed_attempt(&db, &[1u8; 16], want - 1, 0, 600).unwrap();
             let row = db.get_outbox(&[1u8; 16]).unwrap().unwrap();
             assert_eq!(row.state, "pending", "attempt {want} must back off");
             assert_eq!(row.attempts, want);
@@ -3137,7 +3188,7 @@ mod tests {
 
         // The last one is terminal: a row that never leaves 'failed' is the bug.
         db.mark_outbox_sending(&[1u8; 16]).unwrap();
-        settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0).unwrap();
+        settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0, 600).unwrap();
         assert_eq!(db.get_outbox(&[1u8; 16]).unwrap().unwrap().state, "failed");
     }
 

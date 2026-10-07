@@ -17,8 +17,16 @@ pub struct OutboxRow {
 
 /// Exponential backoff with a 10-minute cap; jitter is caller-supplied seconds.
 pub fn backoff_delay(attempts: u32, jitter: u64) -> i64 {
+    backoff_delay_with(attempts, jitter, 600)
+}
+
+/// The same backoff curve as `backoff_delay`, with a caller-supplied cap in
+/// seconds. The drain uses a higher cap when the device is in battery-saver
+/// mode. `backoff_delay(attempts, jitter)` is exactly
+/// `backoff_delay_with(attempts, jitter, 600)`.
+pub fn backoff_delay_with(attempts: u32, jitter: u64, cap_secs: i64) -> i64 {
     let base = 15i64.saturating_mul(1i64 << attempts.min(6));
-    (base + jitter as i64).min(600)
+    (base + jitter as i64).min(cap_secs)
 }
 
 /// Shared by `enqueue_outbox` and the atomic two-table enqueue, so both write
@@ -76,6 +84,34 @@ impl Db {
                ORDER BY created_at",
         )?;
         let rows = stmt.query_map(rusqlite::params![now], row_to_outbox)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The pending rows of ONE peer that are due now. A peer coming online
+    /// drains only its own rows, so a returning peer does not re-run every
+    /// other peer's queue.
+    pub fn due_outbox_for_peer(&self, peer: &[u8; 16], now: i64) -> Result<Vec<OutboxRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, payload_id, peer_device_id, manifest, total_bytes, attempts,
+                    next_attempt_at, state, created_at, updated_at
+               FROM outbox WHERE state = 'pending' AND peer_device_id = ?2 AND next_attempt_at <= ?1
+               ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![now, &peer[..]], row_to_outbox)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Every row of ONE peer, in any state. Used to prove a reconnect drained
+    /// each queued row exactly once.
+    pub fn list_outbox_for_peer(&self, peer: &[u8; 16]) -> Result<Vec<OutboxRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, payload_id, peer_device_id, manifest, total_bytes, attempts,
+                    next_attempt_at, state, created_at, updated_at
+               FROM outbox WHERE peer_device_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![&peer[..]], row_to_outbox)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -163,6 +199,18 @@ impl Db {
     /// Back off for another attempt. True only for the caller that actually
     /// moved the row; see `mark_outbox_awaiting_ack`.
     pub fn mark_outbox_failed(&self, id: &[u8; 16], now: i64, jitter: u64) -> Result<bool> {
+        self.mark_outbox_failed_capped(id, now, jitter, 600)
+    }
+
+    /// `mark_outbox_failed` with a caller-supplied backoff cap. Battery-saver
+    /// mode raises the cap so a retry battery drain is lower.
+    pub fn mark_outbox_failed_capped(
+        &self,
+        id: &[u8; 16],
+        now: i64,
+        jitter: u64,
+        cap_secs: i64,
+    ) -> Result<bool> {
         let conn = self.conn();
         let attempts: u32 = conn
             .query_row(
@@ -171,7 +219,7 @@ impl Db {
                 |r| r.get::<_, i64>(0),
             )
             .map(|v| v as u32)?;
-        let next = now + backoff_delay(attempts + 1, jitter);
+        let next = now + backoff_delay_with(attempts + 1, jitter, cap_secs);
         // Guards the "sending -> failed" edge: a settle from a drain that lost
         // the claim (row since canceled or re-armed) must not re-pend the row.
         let n = conn.execute(
@@ -305,5 +353,59 @@ mod tests {
             !db.mark_outbox_sending(&[1u8; 16]).unwrap(),
             "second claim on an already-sending row must lose"
         );
+    }
+
+    #[test]
+    fn peer_online_drains_only_that_peers_due_rows() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&row_for(1, 7)).unwrap();
+        db.enqueue_outbox(&row_for(2, 8)).unwrap();
+        assert_eq!(db.due_outbox(i64::MAX).unwrap().len(), 2);
+        let for_seven = db.due_outbox_for_peer(&[7u8; 16], i64::MAX).unwrap();
+        assert_eq!(for_seven.len(), 1);
+        assert_eq!(for_seven[0].id, [1u8; 16]);
+    }
+
+    #[test]
+    fn manual_retry_resets_backoff_and_attempts() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&row_for(1, 7)).unwrap();
+        // The real state machine only backs a row off from 'sending'.
+        assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
+        db.mark_outbox_failed(&[1u8; 16], 0, 0).unwrap();
+        assert!(db.due_outbox(0).unwrap().is_empty());
+        assert!(db.retry_outbox_now(&[1u8; 16]).unwrap());
+        // retry_outbox_now stamps the REAL clock, so the row is due only at a
+        // now after that instant.
+        let due = db.due_outbox(i64::MAX).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].attempts, 0);
+    }
+
+    #[test]
+    fn cancellation_removes_a_queued_row() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&row_for(1, 7)).unwrap();
+        db.delete_outbox(&[1u8; 16]).unwrap();
+        assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
+        assert!(db.list_outbox_for_peer(&[7u8; 16]).unwrap().is_empty());
+    }
+
+    fn row_for(id: u8, peer: u8) -> OutboxRow {
+        OutboxRow {
+            id: [id; 16],
+            payload_id: [id; 16],
+            peer_device_id: [peer; 16],
+            manifest: vec![1],
+            total_bytes: 1,
+            attempts: 0,
+            next_attempt_at: 0,
+            state: "pending".into(),
+            created_at: 0,
+            updated_at: 0,
+        }
     }
 }

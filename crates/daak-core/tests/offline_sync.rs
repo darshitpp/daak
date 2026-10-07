@@ -70,3 +70,69 @@ async fn engine_reports_online_then_offline_state() {
     );
     engine.shutdown().await.unwrap();
 }
+
+// The phase exit criterion: three payloads queue while the peer is away, the
+// peer returns, and every queued row drains exactly once.
+#[tokio::test]
+async fn peer_offline_mid_queue_then_online_drains_without_duplication() {
+    use daak_core::discovery::status::{PresenceConfig, PresenceTracker};
+    use daak_core::manifest::Manifest;
+    use daak_core::outbox::enqueue;
+    use daak_core::staging::Staging;
+
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    db.migrate().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let staging = Staging::new(dir.path().to_path_buf());
+    let peer = [7u8; 16];
+
+    // Three queued payloads while the peer is offline.
+    let mut ids = Vec::new();
+    for i in 0..3u8 {
+        let m = Manifest::text(&format!("queued {i}"));
+        ids.push(enqueue(&db, &staging, &peer, &m, &[]).unwrap());
+    }
+
+    // Every attempt fails while offline: rows back off and are not due. The
+    // real state machine only backs off a row that is 'sending' first.
+    for id in &ids {
+        assert!(db.mark_outbox_sending(id).unwrap());
+        db.mark_outbox_failed(id, 0, 0).unwrap();
+    }
+    assert!(
+        db.due_outbox_for_peer(&peer, 29).unwrap().is_empty(),
+        "rows are backing off"
+    );
+
+    // Presence goes online, then the peer drops mid-queue.
+    let mut tracker = PresenceTracker::new(PresenceConfig::default());
+    assert_eq!(
+        tracker.observe(peer, 1, 1_000).map(|c| c.state),
+        Some(Liveness::Online)
+    );
+    assert_eq!(tracker.tick(5_000).len(), 0);
+    assert_eq!(tracker.tick(7_500).len(), 1, "peer goes offline mid-queue");
+
+    // Peer returns: a successful connect resets backoff for every pending row.
+    // retry_outbox_now stamps the REAL clock, so due-ness is asked at the far
+    // future, not at a small now.
+    for id in &ids {
+        assert!(db.retry_outbox_now(id).unwrap());
+    }
+    let due = db.due_outbox_for_peer(&peer, i64::MAX).unwrap();
+    assert_eq!(due.len(), 3, "every pending row is promoted on reconnect");
+
+    // Drain exactly once per row; a second pass has nothing left to do.
+    for row in due {
+        db.mark_outbox_sending(&row.id).unwrap();
+        db.mark_outbox_awaiting_ack(&row.id).unwrap();
+        db.mark_outbox_done(&row.id).unwrap();
+    }
+    assert!(db.due_outbox_for_peer(&peer, i64::MAX).unwrap().is_empty());
+    let done = db.list_outbox_for_peer(&peer).unwrap();
+    assert_eq!(done.len(), 3);
+    assert!(
+        done.iter().all(|r| r.state == "done"),
+        "no row is left pending or duplicated"
+    );
+}

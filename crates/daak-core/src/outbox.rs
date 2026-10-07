@@ -10,6 +10,8 @@ use crate::staging::Staging;
 use crate::store::outbox::OutboxRow;
 use crate::store::Db;
 
+pub use crate::store::outbox::backoff_delay_with;
+
 pub fn enqueue(
     db: &Db,
     staging: &Staging,
@@ -94,29 +96,98 @@ pub fn enqueue(
     Ok(id)
 }
 
+/// Why the outbox drain ran. A peer coming online drains only that peer's
+/// rows; a timer, a manual retry and a platform wake drain every due row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainTrigger {
+    PeerOnline([u8; 16]),
+    Timer,
+    ManualRetry,
+    PlatformWake,
+}
+
+/// How often the drain polls and how far its backoff grows. Battery-saver mode
+/// slows the poll and raises the cap without touching the stored values.
+#[derive(Debug, Clone, Copy)]
+pub struct DrainPolicy {
+    pub poll_interval: Duration,
+    pub max_backoff_secs: i64,
+    pub jitter_secs: u64,
+    pub battery_saver: bool,
+}
+
+impl Default for DrainPolicy {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(5),
+            max_backoff_secs: 600,
+            jitter_secs: 5,
+            battery_saver: false,
+        }
+    }
+}
+
+impl DrainPolicy {
+    /// The poll interval the loop actually uses. Battery-saver mode polls four
+    /// times slower.
+    pub fn effective_poll_interval(&self) -> Duration {
+        if self.battery_saver {
+            self.poll_interval.saturating_mul(4)
+        } else {
+            self.poll_interval
+        }
+    }
+
+    /// The backoff cap the drain actually uses. Battery-saver mode raises the
+    /// cap to at most 30 minutes.
+    pub fn effective_max_backoff_secs(&self) -> i64 {
+        if self.battery_saver {
+            (self.max_backoff_secs * 3).min(1_800)
+        } else {
+            self.max_backoff_secs
+        }
+    }
+}
+
 pub struct OutboxWorker {
-    tx: mpsc::Sender<[u8; 16]>,
+    tx: mpsc::Sender<DrainTrigger>,
     task: tokio::task::JoinHandle<()>,
+    policy: DrainPolicy,
 }
 
 impl OutboxWorker {
+    /// Default-policy shim, kept so every existing call site compiles unchanged.
     pub fn spawn(db: Arc<Db>, drain: impl Fn(OutboxRow) + Send + 'static) -> Self {
-        let (tx, mut rx) = mpsc::channel::<[u8; 16]>(64);
+        Self::spawn_with_policy(db, DrainPolicy::default(), drain)
+    }
+
+    pub fn spawn_with_policy(
+        db: Arc<Db>,
+        policy: DrainPolicy,
+        drain: impl Fn(OutboxRow) + Send + 'static,
+    ) -> Self {
+        let (tx, mut rx) = mpsc::channel::<DrainTrigger>(64);
+        let poll = policy.effective_poll_interval();
         let task = tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(5));
+            let mut tick = tokio::time::interval(poll);
             // consume the immediate first tick so a drain is notify-driven, not poll-driven
             tick.tick().await;
             loop {
-                tokio::select! {
-                    peer = rx.recv() => {
+                let trigger = tokio::select! {
+                    got = rx.recv() => match got {
+                        Some(t) => t,
                         // Every sender dropped (engine gone): stop, otherwise this
                         // task ticks forever holding the last Arc<Db>.
-                        if peer.is_none() { return; }
-                    }
-                    _ = tick.tick() => {}
-                }
+                        None => return,
+                    },
+                    _ = tick.tick() => DrainTrigger::Timer,
+                };
                 let now = crate::manifest::now_ms() as i64 / 1000;
-                if let Ok(due) = db.due_outbox(now) {
+                let due = match trigger {
+                    DrainTrigger::PeerOnline(peer) => db.due_outbox_for_peer(&peer, now),
+                    _ => db.due_outbox(now),
+                };
+                if let Ok(due) = due {
                     for row in due {
                         // Only the caller that won the pending->sending claim drains
                         // it, so two concurrent workers cannot deliver a row twice.
@@ -127,11 +198,21 @@ impl OutboxWorker {
                 }
             }
         });
-        Self { tx, task }
+        Self { tx, task, policy }
+    }
+
+    /// Wake the drain without blocking. A full channel drops the wake: the
+    /// timer arm drains the row before long.
+    pub fn wake(&self, trigger: DrainTrigger) {
+        let _ = self.tx.try_send(trigger);
     }
 
     pub fn notify_peer_online(&self, peer: [u8; 16]) {
-        let _ = self.tx.try_send(peer);
+        self.wake(DrainTrigger::PeerOnline(peer));
+    }
+
+    pub fn policy(&self) -> DrainPolicy {
+        self.policy
     }
 
     /// Stop the worker. Takes &self, NOT self: the Engine holds the worker in
@@ -361,5 +442,31 @@ mod tests {
         let row = db.get_transfer(&id).unwrap().unwrap();
         assert_eq!(row.bytes_total, 123);
         assert_eq!(row.item_count, 2);
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use crate::store::outbox::backoff_delay;
+
+    #[test]
+    fn battery_saver_slows_polling_and_raises_the_cap() {
+        let normal = DrainPolicy::default();
+        let saver = DrainPolicy {
+            battery_saver: true,
+            ..DrainPolicy::default()
+        };
+        assert!(saver.effective_poll_interval() > normal.effective_poll_interval());
+        assert!(saver.effective_max_backoff_secs() > normal.effective_max_backoff_secs());
+        assert!(
+            backoff_delay_with(9, 0, saver.effective_max_backoff_secs())
+                <= saver.effective_max_backoff_secs()
+        );
+    }
+
+    #[test]
+    fn default_cap_matches_phase_three_backoff() {
+        assert_eq!(backoff_delay_with(3, 0, 600), backoff_delay(3, 0));
     }
 }
