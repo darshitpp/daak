@@ -2,6 +2,9 @@ pub mod mdns;
 pub mod naming;
 pub mod presence;
 
+pub mod beacon;
+pub use beacon::{pairing_presence_key, SealedBeacon};
+
 // pub(crate): the engine normalises a wildcard bind before advertising. Not a
 // public API -- a caller outside this crate has no listener to normalise.
 pub(crate) use mdns::advertise_ip;

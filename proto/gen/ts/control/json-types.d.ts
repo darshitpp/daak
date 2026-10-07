@@ -25,6 +25,33 @@ export interface AckJSON {
     number
   ];
 }
+export interface BeaconJSON {
+  body: number[];
+  /**
+   * @minItems 16
+   * @maxItems 16
+   */
+  device_id: [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number
+  ];
+  seq: number;
+  v: number;
+}
 export interface HelloJSON {
   /**
    * @minItems 16

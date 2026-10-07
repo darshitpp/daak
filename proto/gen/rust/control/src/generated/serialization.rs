@@ -436,6 +436,176 @@ impl Deserialize for Ack {
     }
 }
 
+impl cbor_event::se::Serialize for Beacon {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(4))?;
+        serializer.write_text("v")?;
+        serializer.write_unsigned_integer(self.v)?;
+        serializer.write_text("seq")?;
+        serializer.write_unsigned_integer(self.seq)?;
+        serializer.write_text("body")?;
+        serializer.write_bytes(&self.body)?;
+        serializer.write_text("device_id")?;
+        serializer.write_bytes(&self.device_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for Beacon {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(4)?;
+            read_len.finish()?;
+            let mut v = None;
+            let mut seq = None;
+            let mut body = None;
+            let mut device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "v" => {
+                            if v.is_some() {
+                                return Err(
+                                    DeserializeFailure::DuplicateKey(Key::Str("v".into())).into()
+                                );
+                            }
+                            v = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("v"))?,
+                            );
+                        }
+                        "seq" => {
+                            if seq.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "seq".into(),
+                                ))
+                                .into());
+                            }
+                            seq = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("seq"))?,
+                            );
+                        }
+                        "body" => {
+                            if body.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "body".into(),
+                                ))
+                                .into());
+                            }
+                            body = Some(
+                                Ok(raw.bytes()?)
+                                    .map_err(|e: DeserializeError| e.annotate("body"))?,
+                            );
+                        }
+                        "device_id" => {
+                            if device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "device_id".into(),
+                                ))
+                                .into());
+                            }
+                            device_id = Some(
+                                Ok::<_, DeserializeError>(raw.bytes()?)
+                                    .and_then(|bytes| {
+                                        bytes.try_into().map_err(|bytes: Vec<u8>| {
+                                            DeserializeFailure::RangeCheck {
+                                                found: bytes.len() as i128,
+                                                min: Some(16),
+                                                max: Some(16),
+                                            }
+                                            .into()
+                                        })
+                                    })
+                                    .map(|bytes: [u8; 16]| bytes)
+                                    .map_err(|e: DeserializeError| e.annotate("device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let v = match v {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("v")))
+                            .into(),
+                    );
+                }
+            };
+            let device_id =
+                match device_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("device_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let seq = match seq {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("seq")))
+                            .into(),
+                    );
+                }
+            };
+            let body = match body {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("body")))
+                            .into(),
+                    );
+                }
+            };
+            Ok(Self {
+                v,
+                device_id,
+                seq,
+                body,
+            })
+        })()
+        .map_err(|e| e.annotate("Beacon"))
+    }
+}
+
 impl cbor_event::se::Serialize for Hello {
     fn serialize<'se>(
         &self,

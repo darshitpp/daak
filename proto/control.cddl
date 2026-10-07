@@ -6,3 +6,10 @@ ack   = { "transfer_id": bstr .size 16, "item_index": uint, "complete": bool, "h
 ; identical to [* [uint, uint]].
 range = [uint, uint]
 nack  = { "transfer_id": bstr .size 16, "item_index": uint, "ranges": [* range] }
+
+beacon = {
+  "v":         uint,
+  "device_id": bstr .size 16,
+  "seq":       uint,
+  "body":      bstr,   ; nonce(12) || ChaCha20-Poly1305 ciphertext
+}

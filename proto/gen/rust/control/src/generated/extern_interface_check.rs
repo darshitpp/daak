@@ -21,6 +21,8 @@ fn _assert_deserialize<T: crate::generated::serialization::Deserialize>() {}
 fn _extern_interface_self_check() {
     _assert_serialize::<crate::generated::Ack>();
     _assert_deserialize::<crate::generated::Ack>();
+    _assert_serialize::<crate::generated::Beacon>();
+    _assert_deserialize::<crate::generated::Beacon>();
     _assert_serialize::<crate::generated::Hello>();
     _assert_deserialize::<crate::generated::Hello>();
     _assert_serialize::<crate::generated::Nack>();
