@@ -14,6 +14,8 @@ export interface UiState {
   devices: DeviceInfo[];
   transfers: TransferRow[];
   inbox: InboxEntry[];
+  /** Unsent outbox count per peer device id, for the "N queued" badge. */
+  queueDepth: Record<string, number>;
   /**
    * Peers currently announcing a protocol version this build refuses.
    *
@@ -37,7 +39,13 @@ export interface IncompatiblePeer {
   ourVersion: number;
 }
 
-export const initialUiState: UiState = { devices: [], transfers: [], inbox: [], incompatible: [] };
+export const initialUiState: UiState = {
+  devices: [],
+  transfers: [],
+  inbox: [],
+  incompatible: [],
+  queueDepth: {},
+};
 
 /**
  * Not a DaakEvent: the engine never emits it, so it is the store's own input.
@@ -63,6 +71,11 @@ export function reduceUiState(state: UiState, event: UiAction): UiState {
         devices: state.devices.map((d) =>
           d.deviceId === event.deviceId ? { ...d, online: event.state === 'online' } : d,
         ),
+      };
+    case 'outbox.queued':
+      return {
+        ...state,
+        queueDepth: { ...state.queueDepth, [event.deviceId]: event.queued },
       };
     case 'devices.loaded': {
       // F2/R2: a MERGE, not a replace, and not a plain union. The snapshot has

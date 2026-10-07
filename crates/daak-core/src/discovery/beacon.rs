@@ -17,6 +17,9 @@ pub struct SealedBeacon {
     pub v: u8,
     #[serde(with = "crate::manifest::byte_array")]
     pub device_id: [u8; 16],
+    /// The per-process beacon session id. A new value means a peer restart.
+    #[serde(with = "crate::manifest::byte_array")]
+    pub session_id: [u8; 16],
     pub seq: u64,
     #[serde(with = "bytes")]
     pub body: Vec<u8>, // nonce(12) || ciphertext
@@ -60,13 +63,14 @@ mod bytes {
 impl SealedBeacon {
     pub fn seal(p: &Presence, key: &[u8; 32], seq: u64) -> Result<Self> {
         let n = nonce(0, seq);
-        let aad = Self::aad(p.device_id, seq);
+        let aad = Self::aad(p.device_id, p.session_id, seq);
         let ct = seal(key, &n, &aad, &p.to_cbor()?)?;
         let mut body = n.to_vec();
         body.extend_from_slice(&ct);
         Ok(Self {
             v: 1,
             device_id: p.device_id,
+            session_id: p.session_id,
             seq,
             body,
         })
@@ -80,14 +84,15 @@ impl SealedBeacon {
         let n: [u8; 12] = n
             .try_into()
             .map_err(|_| CoreError::Protocol("bad nonce".into()))?;
-        let aad = Self::aad(self.device_id, self.seq);
+        let aad = Self::aad(self.device_id, self.session_id, self.seq);
         let pt = open(key, &n, &aad, ct)?;
         Presence::from_cbor(&pt)
     }
 
-    fn aad(device_id: [u8; 16], seq: u64) -> Vec<u8> {
+    fn aad(device_id: [u8; 16], session_id: [u8; 16], seq: u64) -> Vec<u8> {
         let mut a = b"daak-beacon".to_vec();
         a.extend_from_slice(&device_id);
+        a.extend_from_slice(&session_id);
         a.extend_from_slice(&seq.to_be_bytes());
         a
     }
@@ -155,6 +160,26 @@ mod tests {
         let back = SealedBeacon::from_cbor(&b.to_cbor().unwrap()).unwrap();
         assert_eq!(back, b);
         assert_eq!(back.open(&key).unwrap(), p);
+    }
+
+    #[test]
+    fn sealed_beacon_rejects_a_rewritten_session_id() {
+        let key = pairing_presence_key(&[8u8; 32], &peer_pub([9u8; 32]));
+        let p = Presence {
+            device_id: [4u8; 16],
+            session_id: [5u8; 16],
+            name: "n".into(),
+            state: PresenceState::Online,
+            seq: 1,
+            sent_at_ms: 1,
+        };
+        let mut tampered = SealedBeacon::seal(&p, &key, 1).unwrap();
+        // Flip the session id in the ENVELOPE, not the body. The AAD binds it.
+        tampered.session_id[0] ^= 0xff;
+        assert!(
+            tampered.open(&key).is_err(),
+            "a rewritten session id must fail the AEAD tag"
+        );
     }
 
     #[test]

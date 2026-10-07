@@ -94,7 +94,9 @@ export type DaakEvent =
       peerName: string;
       peerVersion: number;
       ourVersion: number;
-    };
+    }
+  /** The unsent outbox count for a peer, so the UI can show "N queued". */
+  | { type: 'outbox.queued'; deviceId: string; queued: number };
 
 export interface SendRequest {
   peerDeviceId: string;

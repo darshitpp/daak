@@ -50,6 +50,28 @@ export interface BeaconJSON {
     number
   ];
   seq: number;
+  /**
+   * @minItems 16
+   * @maxItems 16
+   */
+  session_id: [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number
+  ];
   v: number;
 }
 export interface HelloJSON {

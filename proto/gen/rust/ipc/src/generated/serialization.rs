@@ -1810,6 +1810,7 @@ impl cbor_event::se::Serialize for IpcEvent {
             IpcEvent::IncompatiblePeerEvent(incompatible_peer_event) => {
                 incompatible_peer_event.serialize(serializer)
             }
+            IpcEvent::QueueDepthEvent(queue_depth_event) => queue_depth_event.serialize(serializer),
         }
     }
 }
@@ -1906,6 +1907,14 @@ impl Deserialize for IpcEvent {
                 }
                 Err(e) => {
                     errs.push(e.annotate("IncompatiblePeerEvent"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = QueueDepthEvent::deserialize(raw);
+            match deser_variant {
+                Ok(queue_depth_event) => return Ok(Self::QueueDepthEvent(queue_depth_event)),
+                Err(e) => {
+                    errs.push(e.annotate("QueueDepthEvent"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -2114,6 +2123,8 @@ impl cbor_event::se::Serialize for IpcRequest {
                 export_debug_bundle_request.serialize(serializer)
             }
             IpcRequest::ShutdownRequest(shutdown_request) => shutdown_request.serialize(serializer),
+            IpcRequest::WakeRequest(wake_request) => wake_request.serialize(serializer),
+            IpcRequest::RevokeRequest(revoke_request) => revoke_request.serialize(serializer),
         }
     }
 }
@@ -2287,6 +2298,22 @@ impl Deserialize for IpcRequest {
                 Ok(shutdown_request) => return Ok(Self::ShutdownRequest(shutdown_request)),
                 Err(e) => {
                     errs.push(e.annotate("ShutdownRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = WakeRequest::deserialize(raw);
+            match deser_variant {
+                Ok(wake_request) => return Ok(Self::WakeRequest(wake_request)),
+                Err(e) => {
+                    errs.push(e.annotate("WakeRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = RevokeRequest::deserialize(raw);
+            match deser_variant {
+                Ok(revoke_request) => return Ok(Self::RevokeRequest(revoke_request)),
+                Err(e) => {
+                    errs.push(e.annotate("RevokeRequest"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -3612,6 +3639,196 @@ impl Deserialize for QuarantineReportRequest {
     }
 }
 
+impl cbor_event::se::Serialize for QueueDepthArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(2))?;
+        serializer.write_text("queued")?;
+        serializer.write_unsigned_integer(self.queued)?;
+        serializer.write_text("device_id")?;
+        serializer.write_text(&self.device_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for QueueDepthArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(2)?;
+            read_len.finish()?;
+            let mut queued = None;
+            let mut device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "queued" => {
+                            if queued.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "queued".into(),
+                                ))
+                                .into());
+                            }
+                            queued = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("queued"))?,
+                            );
+                        }
+                        "device_id" => {
+                            if device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "device_id".into(),
+                                ))
+                                .into());
+                            }
+                            device_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let device_id =
+                match device_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("device_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let queued = match queued {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("queued")))
+                            .into(),
+                    );
+                }
+            };
+            Ok(Self { device_id, queued })
+        })()
+        .map_err(|e| e.annotate("QueueDepthArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for QueueDepthEvent {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("QueueDepth")?;
+        self.queue_depth.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for QueueDepthEvent {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut queue_depth = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "QueueDepth" => {
+                            if queue_depth.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "QueueDepth".into(),
+                                ))
+                                .into());
+                            }
+                            queue_depth = Some(
+                                QueueDepthArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("queue_depth"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let queue_depth =
+                match queue_depth {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("QueueDepth"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { queue_depth })
+        })()
+        .map_err(|e| e.annotate("QueueDepthEvent"))
+    }
+}
+
 impl cbor_event::se::Serialize for RequestArm {
     fn serialize<'se>(
         &self,
@@ -4051,6 +4268,171 @@ impl Deserialize for RetryRequest {
             Ok(Self { retry })
         })()
         .map_err(|e| e.annotate("RetryRequest"))
+    }
+}
+
+impl cbor_event::se::Serialize for RevokeArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("peer_device_id")?;
+        serializer.write_text(&self.peer_device_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for RevokeArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut peer_device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "peer_device_id" => {
+                            if peer_device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "peer_device_id".into(),
+                                ))
+                                .into());
+                            }
+                            peer_device_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("peer_device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let peer_device_id =
+                match peer_device_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("peer_device_id"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { peer_device_id })
+        })()
+        .map_err(|e| e.annotate("RevokeArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for RevokeRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("Revoke")?;
+        self.revoke.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for RevokeRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut revoke = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "Revoke" => {
+                            if revoke.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "Revoke".into(),
+                                ))
+                                .into());
+                            }
+                            revoke = Some(
+                                RevokeArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("revoke"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let revoke = match revoke {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("Revoke")))
+                            .into(),
+                    );
+                }
+            };
+            Ok(Self { revoke })
+        })()
+        .map_err(|e| e.annotate("RevokeRequest"))
     }
 }
 
@@ -5967,5 +6349,38 @@ impl Deserialize for UpdateRequiredResponse {
             Ok(Self { update_required })
         })()
         .map_err(|e| e.annotate("UpdateRequiredResponse"))
+    }
+}
+
+impl cbor_event::se::Serialize for WakeRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        match self {
+            WakeRequest::ValueText57616B65 => serializer.write_text("Wake"),
+        }
+    }
+}
+
+impl Deserialize for WakeRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            match raw.cbor_type()? {
+                cbor_event::Type::Text => {
+                    let value_text57616_b65_value = raw.text()?;
+                    if value_text57616_b65_value != "Wake" {
+                        return Err(DeserializeFailure::FixedValueMismatch {
+                            found: Key::Str(value_text57616_b65_value),
+                            expected: Key::Str(String::from("Wake")),
+                        }
+                        .into());
+                    }
+                    Ok(WakeRequest::ValueText57616B65)
+                }
+                _ => Err(DeserializeFailure::NoVariantMatched.into()),
+            }
+        })()
+        .map_err(|e| e.annotate("WakeRequest"))
     }
 }

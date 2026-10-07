@@ -53,6 +53,7 @@ impl Ack {
 pub struct Beacon {
     pub v: u64,
     pub device_id: [u8; 16],
+    pub session_id: [u8; 16],
     pub seq: u64,
     pub body: Vec<u8>,
 }
@@ -61,6 +62,7 @@ impl Beacon {
     pub fn new(
         v: u64,
         device_id: Vec<u8>,
+        session_id: Vec<u8>,
         seq: u64,
         body: Vec<u8>,
     ) -> Result<Self, DeserializeError> {
@@ -72,9 +74,18 @@ impl Beacon {
                     min: Some(16),
                     max: Some(16),
                 })?;
+        let session_id: [u8; 16] =
+            session_id
+                .try_into()
+                .map_err(|bytes: Vec<u8>| DeserializeFailure::RangeCheck {
+                    found: bytes.len() as i128,
+                    min: Some(16),
+                    max: Some(16),
+                })?;
         Ok(Self {
             v,
             device_id,
+            session_id,
             seq,
             body,
         })

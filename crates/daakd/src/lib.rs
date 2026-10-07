@@ -321,6 +321,10 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
             peer_version,
             our_version,
         },
+        EngineEvent::QueueDepth { device_id, queued } => IpcEvent::QueueDepth {
+            device_id: hex::encode(device_id),
+            queued,
+        },
     }
 }
 

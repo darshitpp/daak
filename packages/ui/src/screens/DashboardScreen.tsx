@@ -33,6 +33,7 @@ export function DashboardScreen({ onSend, onPair, onUnpair, onCompose, onCheckCo
   const engine = useEngine();
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [error, setError] = useState('');
+  const [queueDepth, setQueueDepth] = useState<Record<string, number>>({});
 
   const refresh = useCallback(() => {
     void engine.devices().then(
@@ -47,6 +48,9 @@ export function DashboardScreen({ onSend, onPair, onUnpair, onCompose, onCheckCo
   useEffect(() => {
     refresh();
     return engine.on((e) => {
+      if (e.type === 'outbox.queued') {
+        setQueueDepth((q) => ({ ...q, [e.deviceId]: e.queued }));
+      }
       if (e.type === 'device.state' || e.type === 'device.discovered') refresh();
     });
   }, [engine, refresh]);
@@ -73,6 +77,7 @@ export function DashboardScreen({ onSend, onPair, onUnpair, onCompose, onCheckCo
                 <DeviceCard
                   key={d.deviceId}
                   device={d}
+                  queued={queueDepth[d.deviceId] ?? 0}
                   onSend={onSend}
                   onPair={onPair}
                   onUnpair={onUnpair}

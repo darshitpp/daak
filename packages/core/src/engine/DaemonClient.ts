@@ -400,6 +400,8 @@ export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent
       } catch {
         return undefined;
       }
+    case 'QueueDepth':
+      return { type: 'outbox.queued', deviceId: str(d.device_id), queued: num(d.queued) };
     default:
       // An unknown variant is dropped rather than handed to the UI as a
       // malformed event (R20).

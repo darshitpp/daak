@@ -29,6 +29,9 @@ export type IpcEventJSON =
     }
   | {
       IncompatiblePeerEvent: IncompatiblePeerEventJSON;
+    }
+  | {
+      QueueDepthEvent: QueueDepthEventJSON;
     };
 export type IpcMessageJSON =
   | {
@@ -94,12 +97,19 @@ export type IpcRequestJSON =
     }
   | {
       ShutdownRequest: ShutdownRequestJSON;
+    }
+  | {
+      WakeRequest: WakeRequestJSON;
+    }
+  | {
+      RevokeRequest: RevokeRequestJSON;
     };
 export type SubscribeRequestJSON = "ValueText537562736372696265";
 export type ListQuarantineReportsRequestJSON = "ValueText4C69737451756172616E74696E655265706F727473";
 export type ListInboxRequestJSON = "ValueText4C697374496E626F78";
 export type SelfProfileRequestJSON = "ValueText53656C6650726F66696C65";
 export type ShutdownRequestJSON = "ValueText53687574646F776E";
+export type WakeRequestJSON = "ValueText57616B65";
 export type IpcResponseJSON =
   | {
       OkResponse: OkResponseJSON;
@@ -213,6 +223,13 @@ export interface IncompatiblePeerArgsJSON {
   peer_name: string;
   peer_version: number;
 }
+export interface QueueDepthEventJSON {
+  queue_depth: QueueDepthArgsJSON;
+}
+export interface QueueDepthArgsJSON {
+  device_id: string;
+  queued: number;
+}
 export interface ExportDebugBundleArgsJSON {
   path: string;
 }
@@ -277,6 +294,12 @@ export interface SetPresenceRequestJSON {
 }
 export interface SetPresenceArgsJSON {
   state: string;
+}
+export interface RevokeRequestJSON {
+  revoke: RevokeArgsJSON;
+}
+export interface RevokeArgsJSON {
+  peer_device_id: string;
 }
 export interface ResponseArmJSON {
   response: IpcResponseJSON;

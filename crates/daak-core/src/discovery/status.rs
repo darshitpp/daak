@@ -47,18 +47,21 @@ pub struct StatusChange {
 #[derive(Debug)]
 struct PeerStatus {
     device_id: [u8; 16],
+    session_id: [u8; 16],
     liveness: Liveness,
     last_seen_ms: u64,
-    offline_at_ms: Option<u64>,
+    /// The time of the last liveness change. Used to absorb a brief blip.
+    last_change_ms: Option<u64>,
 }
 
 impl PeerStatus {
     fn new(device_id: [u8; 16], now_ms: u64) -> Self {
         Self {
             device_id,
+            session_id: [0u8; 16],
             liveness: Liveness::Offline,
             last_seen_ms: now_ms,
-            offline_at_ms: None,
+            last_change_ms: None,
         }
     }
 }
@@ -84,8 +87,42 @@ impl PresenceTracker {
         }
     }
 
+    pub fn set_config(&mut self, cfg: PresenceConfig) {
+        self.cfg = cfg;
+    }
+
     /// Accepts a fresh beacon and reports a liveness change, if any.
     pub fn observe(&mut self, peer: [u8; 16], seq: u64, now_ms: u64) -> Option<StatusChange> {
+        self.observe_session(peer, [0u8; 16], seq, now_ms)
+    }
+
+    /// Accepts a fresh beacon with its per-process session id.
+    ///
+    /// A new session id means the peer restarted. A restart is not a blip, so
+    /// the replay window resets and the flap window does not absorb the event.
+    pub fn observe_session(
+        &mut self,
+        peer: [u8; 16],
+        session_id: [u8; 16],
+        seq: u64,
+        now_ms: u64,
+    ) -> Option<StatusChange> {
+        let known = self
+            .peers
+            .get(&peer)
+            .map(|s| s.session_id)
+            .unwrap_or([0u8; 16]);
+        let restarted = known != [0u8; 16] && known != session_id;
+        if restarted {
+            // A new session restarts the sequence, so accept seq from 1.
+            self.windows.remove(&peer);
+            // CORRECTION 1: clear the flap state, so a restart always emits
+            // Online and is not dropped as a brief blip.
+            if let Some(s) = self.peers.get_mut(&peer) {
+                s.last_change_ms = None;
+            }
+        }
+
         let window = self
             .windows
             .entry(peer)
@@ -98,15 +135,16 @@ impl PresenceTracker {
             .peers
             .entry(peer)
             .or_insert_with(|| PeerStatus::new(peer, now_ms));
+        s.session_id = session_id;
         s.last_seen_ms = now_ms;
         match s.liveness {
             Liveness::Online => None,
             Liveness::Offline => {
                 let briefly_offline = s
-                    .offline_at_ms
+                    .last_change_ms
                     .is_some_and(|t| now_ms.saturating_sub(t) < self.cfg.flap_debounce_ms);
                 s.liveness = Liveness::Online;
-                s.offline_at_ms = None;
+                s.last_change_ms = Some(now_ms);
                 if briefly_offline {
                     None // absorb the blip; the UI never saw a stable offline
                 } else {
@@ -128,7 +166,7 @@ impl PresenceTracker {
             let stale = now_ms.saturating_sub(s.last_seen_ms) >= timeout;
             if s.liveness == Liveness::Online && stale {
                 s.liveness = Liveness::Offline;
-                s.offline_at_ms = Some(now_ms);
+                s.last_change_ms = Some(now_ms);
                 changes.push(StatusChange {
                     device_id: s.device_id,
                     state: Liveness::Offline,

@@ -186,6 +186,12 @@ pub enum EngineEvent {
     PairingDone {
         device_id: [u8; 16],
     },
+    /// The number of unsent outbox rows for a peer. Emitted with each presence
+    /// change, so the UI can show "N queued" beside online/offline.
+    QueueDepth {
+        device_id: [u8; 16],
+        queued: u64,
+    },
 }
 
 /// What the accept slot is armed WITH.
@@ -892,10 +898,20 @@ impl Engine {
                             outbox.notify_peer_online(p.device_id);
                         }
                         let now = crate::manifest::now_ms();
-                        if let Some(c) = status.lock().await.observe(p.device_id, beacon.seq, now) {
+                        if let Some(c) = status.lock().await.observe_session(
+                            p.device_id,
+                            beacon.session_id,
+                            beacon.seq,
+                            now,
+                        ) {
                             let _ = tx.send(EngineEvent::DeviceState {
                                 device_id: c.device_id,
                                 online: c.state == Liveness::Online,
+                            });
+                            let queued = db.count_outbox_for_peer(&c.device_id).unwrap_or(0);
+                            let _ = tx.send(EngineEvent::QueueDepth {
+                                device_id: c.device_id,
+                                queued,
                             });
                         }
                     }
@@ -952,6 +968,7 @@ impl Engine {
         let heartbeat_task = {
             let tx = tx.clone();
             let status = status.clone();
+            let db = db.clone();
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_millis(
                     crate::discovery::BEACON_INTERVAL_MS,
@@ -963,6 +980,11 @@ impl Engine {
                         let _ = tx.send(EngineEvent::DeviceState {
                             device_id: c.device_id,
                             online: c.state == Liveness::Online,
+                        });
+                        let queued = db.count_outbox_for_peer(&c.device_id).unwrap_or(0);
+                        let _ = tx.send(EngineEvent::QueueDepth {
+                            device_id: c.device_id,
+                            queued,
                         });
                     }
                 }
@@ -1033,12 +1055,17 @@ impl Engine {
             &pairing.static_dh_pub,
         );
         let p = b.open(&key)?;
-        let change = self.status.lock().await.observe(p.device_id, b.seq, now_ms);
+        let change =
+            self.status
+                .lock()
+                .await
+                .observe_session(p.device_id, b.session_id, b.seq, now_ms);
         if let Some(c) = &change {
             let _ = self.tx.send(EngineEvent::DeviceState {
                 device_id: c.device_id,
                 online: c.state == Liveness::Online,
             });
+            self.emit_queue_depth(c.device_id);
             // A peer that just came online drains its own due rows on the spot,
             // instead of waiting for the next poll tick and its backoff.
             if c.state == Liveness::Online {
@@ -1056,8 +1083,16 @@ impl Engine {
                 device_id: c.device_id,
                 online: c.state == Liveness::Online,
             });
+            self.emit_queue_depth(c.device_id);
         }
         changes
+    }
+
+    /// Publish the unsent outbox count for one peer, so the UI can show it.
+    fn emit_queue_depth(&self, device_id: [u8; 16]) {
+        if let Ok(queued) = self.db.count_outbox_for_peer(&device_id) {
+            let _ = self.tx.send(EngineEvent::QueueDepth { device_id, queued });
+        }
     }
 
     pub async fn devices(&self) -> Vec<DeviceInfo> {

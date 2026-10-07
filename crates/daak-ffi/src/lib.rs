@@ -122,6 +122,12 @@ pub struct IncompatiblePeerEvent {
     pub our_version: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueDepthEvent {
+    pub device_id: String,
+    pub queued: u64,
+}
+
 /// One tagged union for every engine signal, so the JS callback has a single
 /// shape to switch on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +142,7 @@ pub enum FfiEvent {
     TransferFailed { data: FailedEvent },
     InboxReceived { data: InboxReceivedEvent },
     IncompatiblePeer { data: IncompatiblePeerEvent },
+    QueueDepth { data: QueueDepthEvent },
 }
 
 /// The one method JS must implement to receive engine signals. The generated
@@ -899,6 +906,11 @@ pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
             "peerVersion": data.peer_version,
             "ourVersion": data.our_version,
         }),
+        FfiEvent::QueueDepth { data } => serde_json::json!({
+            "type": "outbox.queued",
+            "deviceId": data.device_id,
+            "queued": data.queued,
+        }),
     };
     serde_json::to_string(&json).map_err(protocol_err)
 }
@@ -1066,6 +1078,12 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 peer_name,
                 peer_version,
                 our_version,
+            },
+        },
+        EngineEvent::QueueDepth { device_id, queued } => FfiEvent::QueueDepth {
+            data: QueueDepthEvent {
+                device_id: to_hex(&device_id),
+                queued,
             },
         },
     }

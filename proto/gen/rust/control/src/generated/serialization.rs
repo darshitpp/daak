@@ -441,7 +441,7 @@ impl cbor_event::se::Serialize for Beacon {
         &self,
         serializer: &'se mut Serializer,
     ) -> cbor_event::Result<&'se mut Serializer> {
-        serializer.write_map(cbor_event::Len::Len(4))?;
+        serializer.write_map(cbor_event::Len::Len(5))?;
         serializer.write_text("v")?;
         serializer.write_unsigned_integer(self.v)?;
         serializer.write_text("seq")?;
@@ -450,6 +450,8 @@ impl cbor_event::se::Serialize for Beacon {
         serializer.write_bytes(&self.body)?;
         serializer.write_text("device_id")?;
         serializer.write_bytes(&self.device_id)?;
+        serializer.write_text("session_id")?;
+        serializer.write_bytes(&self.session_id)?;
         Ok(serializer)
     }
 }
@@ -459,12 +461,13 @@ impl Deserialize for Beacon {
         (|| -> Result<_, DeserializeError> {
             let len = raw.map()?;
             let mut read_len = CBORReadLen::from(len);
-            read_len.read_elems(4)?;
+            read_len.read_elems(5)?;
             read_len.finish()?;
             let mut v = None;
             let mut seq = None;
             let mut body = None;
             let mut device_id = None;
+            let mut session_id = None;
             let mut read = 0;
             while match len {
                 cbor_event::Len::Len(n) => read < n,
@@ -536,6 +539,29 @@ impl Deserialize for Beacon {
                                     .map_err(|e: DeserializeError| e.annotate("device_id"))?,
                             );
                         }
+                        "session_id" => {
+                            if session_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "session_id".into(),
+                                ))
+                                .into());
+                            }
+                            session_id = Some(
+                                Ok::<_, DeserializeError>(raw.bytes()?)
+                                    .and_then(|bytes| {
+                                        bytes.try_into().map_err(|bytes: Vec<u8>| {
+                                            DeserializeFailure::RangeCheck {
+                                                found: bytes.len() as i128,
+                                                min: Some(16),
+                                                max: Some(16),
+                                            }
+                                            .into()
+                                        })
+                                    })
+                                    .map(|bytes: [u8; 16]| bytes)
+                                    .map_err(|e: DeserializeError| e.annotate("session_id"))?,
+                            );
+                        }
                         unknown_key => {
                             return Err(DeserializeFailure::UnknownKey(Key::Str(
                                 unknown_key.to_owned(),
@@ -577,6 +603,16 @@ impl Deserialize for Beacon {
                         .into());
                     }
                 };
+            let session_id =
+                match session_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("session_id"),
+                        ))
+                        .into());
+                    }
+                };
             let seq = match seq {
                 Some(x) => x,
                 None => {
@@ -598,6 +634,7 @@ impl Deserialize for Beacon {
             Ok(Self {
                 v,
                 device_id,
+                session_id,
                 seq,
                 body,
             })

@@ -237,6 +237,7 @@ pub enum IpcEvent {
     TransferFailedEvent(TransferFailedEvent),
     InboxReceivedEvent(InboxReceivedEvent),
     IncompatiblePeerEvent(IncompatiblePeerEvent),
+    QueueDepthEvent(QueueDepthEvent),
 }
 
 impl IpcEvent {
@@ -278,6 +279,10 @@ impl IpcEvent {
 
     pub fn new_incompatible_peer_event(incompatible_peer_event: IncompatiblePeerEvent) -> Self {
         Self::IncompatiblePeerEvent(incompatible_peer_event)
+    }
+
+    pub fn new_queue_depth_event(queue_depth_event: QueueDepthEvent) -> Self {
+        Self::QueueDepthEvent(queue_depth_event)
     }
 }
 
@@ -334,6 +339,8 @@ pub enum IpcRequest {
     SetPresenceRequest(SetPresenceRequest),
     ExportDebugBundleRequest(ExportDebugBundleRequest),
     ShutdownRequest(ShutdownRequest),
+    WakeRequest(WakeRequest),
+    RevokeRequest(RevokeRequest),
 }
 
 impl IpcRequest {
@@ -415,6 +422,14 @@ impl IpcRequest {
 
     pub fn new_shutdown_request(shutdown_request: ShutdownRequest) -> Self {
         Self::ShutdownRequest(shutdown_request)
+    }
+
+    pub fn new_wake_request(wake_request: WakeRequest) -> Self {
+        Self::WakeRequest(wake_request)
+    }
+
+    pub fn new_revoke_request(revoke_request: RevokeRequest) -> Self {
+        Self::RevokeRequest(revoke_request)
     }
 }
 
@@ -643,6 +658,29 @@ impl QuarantineReportRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct QueueDepthArgs {
+    pub device_id: String,
+    pub queued: u64,
+}
+
+impl QueueDepthArgs {
+    pub fn new(device_id: String, queued: u64) -> Self {
+        Self { device_id, queued }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct QueueDepthEvent {
+    pub queue_depth: QueueDepthArgs,
+}
+
+impl QueueDepthEvent {
+    pub fn new(queue_depth: QueueDepthArgs) -> Self {
+        Self { queue_depth }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct RequestArm {
     pub request: IpcRequest,
 }
@@ -698,6 +736,28 @@ pub struct RetryRequest {
 impl RetryRequest {
     pub fn new(retry: TransferRef) -> Self {
         Self { retry }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct RevokeArgs {
+    pub peer_device_id: String,
+}
+
+impl RevokeArgs {
+    pub fn new(peer_device_id: String) -> Self {
+        Self { peer_device_id }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct RevokeRequest {
+    pub revoke: RevokeArgs,
+}
+
+impl RevokeRequest {
+    pub fn new(revoke: RevokeArgs) -> Self {
+        Self { revoke }
     }
 }
 
@@ -966,5 +1026,16 @@ pub struct UpdateRequiredResponse {
 impl UpdateRequiredResponse {
     pub fn new(update_required: UpdateRequiredArgs) -> Self {
         Self { update_required }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub enum WakeRequest {
+    ValueText57616B65,
+}
+
+impl WakeRequest {
+    pub fn new_value_text57616_b65() -> Self {
+        Self::ValueText57616B65
     }
 }

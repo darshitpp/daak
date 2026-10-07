@@ -115,6 +115,17 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// The number of rows for one peer that are not yet sent. Used by the
+    /// presence queue-depth signal, so the UI can show "N queued".
+    pub fn count_outbox_for_peer(&self, peer: &[u8; 16]) -> Result<u64> {
+        let n: i64 = self.conn().query_row(
+            "SELECT COUNT(1) FROM outbox WHERE peer_device_id = ?1 AND state IN ('pending','sending')",
+            rusqlite::params![&peer[..]],
+            |r| r.get(0),
+        )?;
+        Ok(n as u64)
+    }
+
     pub fn get_outbox(&self, id: &[u8; 16]) -> Result<Option<OutboxRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(

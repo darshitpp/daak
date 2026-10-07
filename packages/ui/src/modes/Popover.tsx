@@ -120,7 +120,12 @@ export function Popover({ state, engine, onExpand, onPickFiles, alert, alertRout
             <View style={ui.stackSm}>
               <Text style={ui.sectionT}>Send to</Text>
               {devices.map((d) => (
-                <DeviceCard key={d.deviceId} device={d} onSend={choose} />
+                <DeviceCard
+                  key={d.deviceId}
+                  device={d}
+                  queued={state.queueDepth[d.deviceId] ?? 0}
+                  onSend={choose}
+                />
               ))}
               {devices.length === 0 ? (
                 <Text style={ui.muted}>No devices nearby. Both devices need the same Wi-Fi.</Text>

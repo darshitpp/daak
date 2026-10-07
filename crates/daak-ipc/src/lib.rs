@@ -272,6 +272,12 @@ pub enum IpcEvent {
         peer_version: u16,
         our_version: u16,
     },
+    /// The number of unsent outbox rows for a peer. Same fields and same
+    /// meaning as the FFI arm, so both bridges hand the UI one shape.
+    QueueDepth {
+        device_id: String,
+        queued: u64,
+    },
 }
 
 /// The whole frame: a schema version plus the message. The ABSENCE of

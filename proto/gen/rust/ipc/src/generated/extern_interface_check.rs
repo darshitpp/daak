@@ -97,6 +97,10 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::PortResponse>();
     _assert_serialize::<crate::generated::QuarantineReportRequest>();
     _assert_deserialize::<crate::generated::QuarantineReportRequest>();
+    _assert_serialize::<crate::generated::QueueDepthArgs>();
+    _assert_deserialize::<crate::generated::QueueDepthArgs>();
+    _assert_serialize::<crate::generated::QueueDepthEvent>();
+    _assert_deserialize::<crate::generated::QueueDepthEvent>();
     _assert_serialize::<crate::generated::RequestArm>();
     _assert_deserialize::<crate::generated::RequestArm>();
     _assert_serialize::<crate::generated::ResponseArm>();
@@ -107,6 +111,10 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::RetryItemRequest>();
     _assert_serialize::<crate::generated::RetryRequest>();
     _assert_deserialize::<crate::generated::RetryRequest>();
+    _assert_serialize::<crate::generated::RevokeArgs>();
+    _assert_deserialize::<crate::generated::RevokeArgs>();
+    _assert_serialize::<crate::generated::RevokeRequest>();
+    _assert_deserialize::<crate::generated::RevokeRequest>();
     _assert_serialize::<crate::generated::SelfProfileRequest>();
     _assert_deserialize::<crate::generated::SelfProfileRequest>();
     _assert_serialize::<crate::generated::SendArgs>();
@@ -149,4 +157,6 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::UpdateRequiredArgs>();
     _assert_serialize::<crate::generated::UpdateRequiredResponse>();
     _assert_deserialize::<crate::generated::UpdateRequiredResponse>();
+    _assert_serialize::<crate::generated::WakeRequest>();
+    _assert_deserialize::<crate::generated::WakeRequest>();
 }

@@ -71,6 +71,8 @@ ipc-request =
   / set-presence-request
   / export-debug-bundle-request
   / shutdown-request
+  / wake-request
+  / revoke-request
 
 start-request            = { "Start": start-args }
 subscribe-request        = "Subscribe"
@@ -132,8 +134,16 @@ self-profile-request     = "SelfProfile"
 set-display-name-request = { "SetDisplayName": display-name-args }
 set-presence-request     = { "SetPresence": set-presence-args }
 shutdown-request         = "Shutdown"
+; Drain the outbox now. A UNIT variant: the request is about the daemon's own
+; worker, so there is no argument object.
+wake-request             = "Wake"
+; Drop one peer's local trust. Named by 32 lowercase hex chars, the same shape
+; every peer id on this API uses.
+revoke-request           = { "Revoke": revoke-args }
 
 transfer-ref = { "transfer_id": tstr }
+
+revoke-args = { "peer_device_id": tstr }
 
 start-args = {
   "data_dir":     tstr,
@@ -197,6 +207,7 @@ ipc-event =
   / transfer-failed-event
   / inbox-received-event
   / incompatible-peer-event
+  / queue-depth-event
 
 device-found-event      = { "DeviceFound": device-found-args }
 device-state-event      = { "DeviceState": device-state-args }
@@ -212,6 +223,8 @@ inbox-received-event    = { "InboxReceived": inbox-received-args }
 ; MANIFEST_VERSION. The UI's "update required" screen renders these two rather
 ; than a hardcoded pair.
 incompatible-peer-event = { "IncompatiblePeer": incompatible-peer-args }
+; The unsent outbox count for a peer, so the UI can show "N queued".
+queue-depth-event = { "QueueDepth": queue-depth-args }
 
 device-found-args      = { "device_id": tstr, "name": tstr, "addr": tstr }
 device-state-args      = { "device_id": tstr, "online": bool }
@@ -228,4 +241,8 @@ incompatible-peer-args = {
   "peer_name":      tstr,
   "peer_version":   uint,
   "our_version":    uint,
+}
+queue-depth-args = {
+  "device_id": tstr,
+  "queued":    uint,
 }
