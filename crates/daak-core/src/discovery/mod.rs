@@ -3,7 +3,12 @@ pub mod naming;
 pub mod presence;
 
 pub mod beacon;
+pub mod status;
 pub use beacon::{pairing_presence_key, SealedBeacon};
+pub use status::{
+    Liveness, PresenceConfig, PresenceTracker, StatusChange, BEACON_INTERVAL_MS, FLAP_DEBOUNCE_MS,
+    OFFLINE_MISSES,
+};
 
 // pub(crate): the engine normalises a wildcard bind before advertising. Not a
 // public API -- a caller outside this crate has no listener to normalise.
