@@ -792,6 +792,16 @@ async fn dispatch(
                 IpcResponse::Ok
             }
         },
+        IpcRequest::Revoke { peer_device_id } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&peer_device_id) {
+                Ok(peer) => match engine.revoke_pairing(peer).await {
+                    Ok(()) => IpcResponse::Ok,
+                    Err(e) => err(e),
+                },
+                Err(e) => e,
+            },
+        },
         // Handled by the caller before dispatch ever runs: they close or do
         // not answer. Listed here so a new variant is a compile error rather
         // than a silent Ok.

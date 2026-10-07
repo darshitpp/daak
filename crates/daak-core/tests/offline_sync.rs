@@ -136,3 +136,86 @@ async fn peer_offline_mid_queue_then_online_drains_without_duplication() {
         "no row is left pending or duplicated"
     );
 }
+
+// Revocation is terminal: the queued row and its staged bytes are purged, the
+// pairing is marked revoked, and a later handshake is refused before the Noise
+// prologue is built.
+#[tokio::test]
+async fn revoking_purges_queue_clean_staging_and_blocks_reconnect() {
+    use daak_core::manifest::{DeviceRef, Item, Manifest, CHUNK_SIZE_DEFAULT};
+    use daak_core::outbox::enqueue;
+    use daak_core::staging::Staging;
+
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    db.migrate().unwrap();
+    let peer = [6u8; 16];
+    db.upsert_pairing(&Pairing {
+        peer_device_id: peer,
+        state: "trusted".into(),
+        paired_at: 0,
+        verify_key: [1u8; 32],
+        static_dh_pub: [2u8; 32],
+        label: None,
+    })
+    .unwrap();
+
+    // The engine builds its staging root as out_dir / "staging", so the test
+    // stages into the SAME tree the engine's revoke will clean.
+    let staging_root = tempfile::tempdir().unwrap();
+    let out_dir = staging_root.path().to_path_buf();
+    let staging = Staging::new(out_dir.join("staging"));
+
+    // A REAL file, so the payload dir exists and cleanup must remove it.
+    let src = tempfile::tempdir().unwrap();
+    let file = src.path().join("payload.bin");
+    std::fs::write(&file, b"staged bytes").unwrap();
+    let item = Item::from_file(0, &file, CHUNK_SIZE_DEFAULT).unwrap();
+    let manifest = Manifest::batch(
+        DeviceRef {
+            device_id: [0u8; 16],
+            name: "local".into(),
+        },
+        vec![item],
+    )
+    .unwrap();
+    let payload_id = manifest.payload_id;
+    enqueue(&db, &staging, &peer, &manifest, &[file]).unwrap();
+
+    let staged_dir = out_dir.join("staging").join(hex16(&payload_id));
+    assert!(
+        staged_dir.exists(),
+        "a real file is staged before the revoke"
+    );
+    assert_eq!(db.due_outbox_for_peer(&peer, i64::MAX).unwrap().len(), 1);
+
+    let store = Arc::new(daak_core::crypto::secret_store::MemorySecretStore::default());
+    let identity = daak_core::crypto::identity::import_from_store(store.as_ref()).unwrap();
+    let engine = Engine::start(EngineConfig {
+        display_name: "self".into(),
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+        out_dir,
+        identity,
+        db: db.clone(),
+    })
+    .await
+    .unwrap();
+
+    engine.revoke_pairing(peer).await.unwrap();
+
+    assert!(db.is_revoked(&peer).unwrap(), "pairing state is revoked");
+    assert!(
+        db.due_outbox_for_peer(&peer, i64::MAX).unwrap().is_empty(),
+        "queue purged"
+    );
+    assert!(!staged_dir.exists(), "staging cleaned");
+    assert!(
+        engine.connection_allowed(&peer).await.is_err(),
+        "reconnect refused"
+    );
+
+    engine.shutdown().await.unwrap();
+}
+
+fn hex16(b: &[u8; 16]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}

@@ -1,6 +1,7 @@
 use crate::error::Result;
 
 use super::Db;
+use rusqlite::OptionalExtension;
 use std::net::SocketAddr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +133,23 @@ impl Db {
             rusqlite::params![&id[..]],
         )?;
         Ok(())
+    }
+
+    /// True when a pairing row exists for `peer` and its state is `revoked`.
+    ///
+    /// A peer with NO row is not revoked: an unknown peer is refused by the
+    /// existing "unpaired inbound connection" check, not by this one. Only the
+    /// explicit revoked state refuses a peer that was once trusted.
+    pub fn is_revoked(&self, peer: &[u8; 16]) -> Result<bool> {
+        let state: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT state FROM pairings WHERE peer_device_id = ?1",
+                rusqlite::params![&peer[..]],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(state.as_deref() == Some("revoked"))
     }
 }
 

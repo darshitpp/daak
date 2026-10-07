@@ -1032,11 +1032,63 @@ impl Engine {
     /// `DeviceLost` is emitted only when an entry actually left the map, so a
     /// revoke for a peer this launch never saw is silent rather than a spurious
     /// "device left" event.
+    ///
+    /// Revocation is TERMINAL. The peer's queued outbox rows and their staged
+    /// bytes are purged, its live session is dropped, and its liveness state is
+    /// forgotten, so no later drain can deliver to a peer this device no longer
+    /// trusts. `DeviceState { online: false }` tells the UI the peer is gone.
     pub async fn revoke_pairing(&self, peer_device_id: [u8; 16]) -> Result<()> {
+        // Collect BEFORE the delete: the payload ids name the staging dirs.
+        let payloads: Vec<[u8; 16]> = self
+            .db
+            .list_outbox_for_peer(&peer_device_id)?
+            .into_iter()
+            .map(|row| row.payload_id)
+            .collect();
+
         self.db.revoke_pairing(&peer_device_id)?;
+        self.db.delete_outbox_for_peer(&peer_device_id)?;
+        for payload_id in &payloads {
+            if let Err(e) = self.staging.cleanup(payload_id) {
+                // A staging dir already gone is not a failed revoke, but a real
+                // IO error must be visible.
+                tracing::warn!(
+                    payload = %hex::encode(payload_id),
+                    "staging cleanup failed during revoke: {e}"
+                );
+            }
+        }
+        self.sessions.lock().await.remove(&peer_device_id);
+        self.status.lock().await.forget(&peer_device_id);
+
         let removed = self.devices.lock().await.remove(&peer_device_id);
         if removed.is_some() {
             let _ = self.tx.send(EngineEvent::DeviceLost(peer_device_id));
+        }
+        let _ = self.tx.send(EngineEvent::DeviceState {
+            device_id: peer_device_id,
+            online: false,
+        });
+        tracing::info!(
+            peer = %hex::encode(peer_device_id),
+            purged = payloads.len(),
+            "pairing revoked"
+        );
+        Ok(())
+    }
+
+    /// Refuse a peer whose pairing row is revoked. Called on the inbound path
+    /// after the Hello, before the transfer Noise prologue is built, so a
+    /// revoked peer never reaches the handshake.
+    pub async fn connection_allowed(&self, peer: &[u8; 16]) -> Result<()> {
+        Self::refuse_revoked(&self.db, peer)
+    }
+
+    /// Static form of the revoked-peer guard, usable from the static
+    /// `handle_inbound`, which holds `db` and not `&self`.
+    fn refuse_revoked(db: &Db, peer: &[u8; 16]) -> Result<()> {
+        if db.is_revoked(peer)? {
+            return Err(CoreError::Protocol("peer pairing revoked".into()));
         }
         Ok(())
     }
@@ -1961,6 +2013,13 @@ impl Engine {
             let _ = pairing_tx.send(sas).await;
             return Ok(());
         }
+        // Not a pairing dial, so this is the transfer path and the next step
+        // builds the Noise prologue inside `recv_secure_transfer`. A revoked
+        // peer is refused HERE, before that prologue, and before the pairing
+        // row is even read for its static key. The pairing arms above are
+        // deliberately allowed through: revoking stops Send, and the UI then
+        // offers Pair again, so a revoked peer must be able to re-pair.
+        Self::refuse_revoked(db, &hello.device_id)?;
         let pairing = db
             .get_pairing(&hello.device_id)?
             .ok_or_else(|| CoreError::Protocol("unpaired inbound connection".into()))?;

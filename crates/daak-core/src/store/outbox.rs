@@ -170,6 +170,19 @@ impl Db {
         Ok(())
     }
 
+    /// Remove every queued row for one peer. Returns the number of rows removed.
+    ///
+    /// Revocation is terminal: a revoked peer has no live session and no
+    /// pairing, so a queued row for it can never drain. The purge is per-peer
+    /// because revoke acts on a peer, not on one payload id.
+    pub fn delete_outbox_for_peer(&self, peer: &[u8; 16]) -> Result<usize> {
+        let n = self.conn().execute(
+            "DELETE FROM outbox WHERE peer_device_id = ?1",
+            rusqlite::params![&peer[..]],
+        )?;
+        Ok(n)
+    }
+
     /// True only if the row was re-armed. Guards the "failed -> pending" edge of
     /// the outbox state machine: manual retry must not re-arm a row a drain has
     /// already claimed ("sending" -> double drain) or already delivered ("done"
