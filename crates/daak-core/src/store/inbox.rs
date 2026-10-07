@@ -27,6 +27,32 @@ impl Db {
         Ok(())
     }
 
+    /// Applies an inbound payload exactly once. Returns `true` on the first
+    /// application. A second delivery of the same `payload_id` writes no row.
+    pub fn add_inbox_once(&self, r: &InboxRow) -> Result<bool> {
+        let changed = self.conn().execute(
+            r#"INSERT INTO inbox_history
+                 (id, transfer_id, peer_device_id, kind, item_count, summary, received_at, saved_paths)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+               ON CONFLICT(id) DO NOTHING"#,
+            rusqlite::params![
+                &r.id[..], &r.transfer_id[..], &r.peer_device_id[..], r.kind,
+                r.item_count as i64, r.summary, r.received_at, r.saved_paths,
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// True when an inbound payload with this `payload_id` is already stored.
+    pub fn payload_seen(&self, payload_id: &[u8; 16]) -> Result<bool> {
+        let n: i64 = self.conn().query_row(
+            "SELECT COUNT(1) FROM inbox_history WHERE id = ?1",
+            rusqlite::params![&payload_id[..]],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Every received payload, newest first. listInbox() is the only reader;
     /// ordering is fixed HERE so the FFI and the daemon cannot disagree.
     /// R42p: replace the saved paths of one payload after the platform MOVED
@@ -144,5 +170,55 @@ mod tests {
 
         db.replace_inbox_paths(&[2u8; 16], &Vec::new()).unwrap();
         assert_eq!(db.list_inbox().unwrap()[0].saved_paths, "[]");
+    }
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::*;
+
+    fn row(id: u8) -> InboxRow {
+        InboxRow {
+            id: [id; 16],
+            transfer_id: [id; 16],
+            peer_device_id: [3u8; 16],
+            kind: "text".into(),
+            item_count: 1,
+            summary: "hi".into(),
+            received_at: 1,
+            saved_paths: "[]".into(),
+        }
+    }
+
+    #[test]
+    fn duplicate_payload_delivery_is_idempotent() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        assert!(
+            db.add_inbox_once(&row(1)).unwrap(),
+            "first delivery applies"
+        );
+        assert!(
+            !db.add_inbox_once(&row(1)).unwrap(),
+            "second delivery is deduped"
+        );
+        assert!(db.payload_seen(&[1u8; 16]).unwrap());
+    }
+
+    #[test]
+    fn replay_guard_persists_and_rejects_the_stored_counter() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let peer = [4u8; 16];
+        let mut w = crate::crypto::replay::ReplayWindow::new(4096);
+        assert!(w.accept(100));
+        w.persist(&db, &peer, "in").unwrap();
+
+        let mut reloaded = crate::crypto::replay::ReplayWindow::load(&db, &peer, "in").unwrap();
+        assert!(
+            !reloaded.accept(100),
+            "a persisted counter must not be accepted again"
+        );
+        assert!(reloaded.accept(101));
     }
 }

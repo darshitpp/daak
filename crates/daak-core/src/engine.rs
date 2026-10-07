@@ -1714,9 +1714,13 @@ impl Engine {
     }
 
     /// Called from the accept loop after a successful inbound transfer.
-    /// Returns the row it wrote, so the caller can put THE PERSISTED row on the
-    /// event bus rather than rebuilding it from the manifest a second time.
-    fn record_inbox(db: &Db, manifest: &Manifest, saved_paths: &[String]) -> Result<InboxRow> {
+    /// Returns the row it built and a flag. The flag is true only on the first
+    /// application of this `payload_id`. A duplicate writes no row.
+    fn record_inbox(
+        db: &Db,
+        manifest: &Manifest,
+        saved_paths: &[String],
+    ) -> Result<(InboxRow, bool)> {
         let summary = match manifest.kind {
             PayloadKind::Text => manifest
                 .items
@@ -1739,8 +1743,22 @@ impl Engine {
             // of an item that was remapped into quarantine.
             saved_paths: json_string_array(saved_paths),
         };
-        db.add_inbox(&row)?;
-        Ok(row)
+        let first = db.add_inbox_once(&row)?;
+        Ok((row, first))
+    }
+
+    /// Applies an inbound payload once. A duplicate delivery is acknowledged
+    /// but not re-applied. Returns true only on the first application.
+    pub async fn apply_inbound_once(&self, r: &InboxRow) -> Result<bool> {
+        let first = self.db.add_inbox_once(r)?;
+        if first {
+            let _ = self.tx.send(EngineEvent::TransferDone {
+                transfer_id: r.transfer_id,
+            });
+        } else {
+            tracing::info!(payload = %hex::encode(r.id), "duplicate payload delivery ignored");
+        }
+        Ok(first)
     }
 
     /// Called by the accept loop for every inbound connection.
@@ -1962,10 +1980,17 @@ impl Engine {
                 // broadcast receiver sees these in send order. If the row
                 // cannot be written there is no entry to report, so only the
                 // warn! survives -- no event for a row that does not exist.
+                // A re-delivered payload_id does not write a second row, so it
+                // must not emit a second InboxReceived event. The transfer.done
+                // event still goes out: the receiver did finish this delivery.
                 match Self::record_inbox(db, &manifest, &saved_paths) {
-                    Ok(row) => {
+                    Ok((row, true)) => {
                         let _ = tx.send(EngineEvent::InboxReceived(row));
                     }
+                    Ok((row, false)) => tracing::info!(
+                        payload = %hex::encode(row.id),
+                        "duplicate payload delivery; inbox row unchanged"
+                    ),
                     Err(e) => tracing::warn!("failed to record inbox row: {e}"),
                 }
                 let _ = tx.send(EngineEvent::TransferDone {
