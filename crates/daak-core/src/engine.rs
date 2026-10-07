@@ -36,6 +36,29 @@ fn accept_error_is_fatal(err: &crate::error::CoreError) -> bool {
     !matches!(err, crate::error::CoreError::Protocol(_))
 }
 
+/// Send one liveness event and record what the UI was told.
+///
+/// A FREE function, not only a method, because the presence receive loop and
+/// the heartbeat loop run before `Engine` is built and hold the sender and the
+/// set directly.
+async fn announce_device_state(
+    tx: &broadcast::Sender<EngineEvent>,
+    announced_offline: &tokio::sync::Mutex<std::collections::HashSet<[u8; 16]>>,
+    peer: [u8; 16],
+    online: bool,
+) {
+    let _ = tx.send(EngineEvent::DeviceState {
+        device_id: peer,
+        online,
+    });
+    let mut set = announced_offline.lock().await;
+    if online {
+        set.remove(&peer);
+    } else {
+        set.insert(peer);
+    }
+}
+
 /// The settings key the display name lives under.
 ///
 /// The value stored here is the BASE name the user asked for, never the
@@ -258,6 +281,10 @@ pub struct Engine {
     /// presence receive loop, the heartbeat loop and observe_beacon all touch
     /// it and none of them holds another lock across the call.
     status: Arc<Mutex<crate::discovery::PresenceTracker>>,
+    /// The peers the UI was last told are offline. A flap-absorbed return
+    /// emits no `StatusChange`, so the engine re-announces online when the
+    /// tracker says the peer is online but this set still holds the peer.
+    announced_offline: Arc<tokio::sync::Mutex<std::collections::HashSet<[u8; 16]>>>,
     /// The RESOLVED name (base name plus any collision suffix). It changes at
     /// runtime -- set_display_name re-resolves and re-advertises -- so it and
     /// the mDNS Advertiser built from it are behind one lock, swapped together
@@ -845,6 +872,8 @@ impl Engine {
         };
 
         let status = Arc::new(Mutex::new(crate::discovery::PresenceTracker::default()));
+        let announced_offline: Arc<tokio::sync::Mutex<std::collections::HashSet<[u8; 16]>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
 
         // Sealed-beacon receive loop. A beacon is opened with the pairing key
         // derived from BOTH static keys, so an unpaired or spoofed beacon is
@@ -856,6 +885,7 @@ impl Engine {
             let me = device_id;
             let outbox = outbox.clone();
             let status = status.clone();
+            let announced_offline = announced_offline.clone();
             let identity = identity.clone();
             let db = db.clone();
             let obs = observability.clone();
@@ -904,15 +934,26 @@ impl Engine {
                             beacon.seq,
                             now,
                         ) {
-                            let _ = tx.send(EngineEvent::DeviceState {
-                                device_id: c.device_id,
-                                online: c.state == Liveness::Online,
-                            });
+                            announce_device_state(
+                                &tx,
+                                &announced_offline,
+                                c.device_id,
+                                c.state == Liveness::Online,
+                            )
+                            .await;
                             let queued = db.count_outbox_for_peer(&c.device_id).unwrap_or(0);
                             let _ = tx.send(EngineEvent::QueueDepth {
                                 device_id: c.device_id,
                                 queued,
                             });
+                        }
+                        // A return inside the flap window emits no change, so
+                        // the card stays offline while the tracker is online.
+                        // Re-announce online when the tracker says so.
+                        if status.lock().await.is_online(&p.device_id)
+                            && announced_offline.lock().await.contains(&p.device_id)
+                        {
+                            announce_device_state(&tx, &announced_offline, p.device_id, true).await;
                         }
                     }
                 }),
@@ -968,6 +1009,7 @@ impl Engine {
         let heartbeat_task = {
             let tx = tx.clone();
             let status = status.clone();
+            let announced_offline = announced_offline.clone();
             let db = db.clone();
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_millis(
@@ -977,10 +1019,13 @@ impl Engine {
                     tick.tick().await;
                     let now = crate::manifest::now_ms();
                     for c in status.lock().await.tick(now) {
-                        let _ = tx.send(EngineEvent::DeviceState {
-                            device_id: c.device_id,
-                            online: c.state == Liveness::Online,
-                        });
+                        announce_device_state(
+                            &tx,
+                            &announced_offline,
+                            c.device_id,
+                            c.state == Liveness::Online,
+                        )
+                        .await;
                         let queued = db.count_outbox_for_peer(&c.device_id).unwrap_or(0);
                         let _ = tx.send(EngineEvent::QueueDepth {
                             device_id: c.device_id,
@@ -1004,6 +1049,7 @@ impl Engine {
             announce_task,
             heartbeat_task,
             status,
+            announced_offline,
             identity,
             db,
             staging,
@@ -1061,16 +1107,22 @@ impl Engine {
                 .await
                 .observe_session(p.device_id, b.session_id, b.seq, now_ms);
         if let Some(c) = &change {
-            let _ = self.tx.send(EngineEvent::DeviceState {
-                device_id: c.device_id,
-                online: c.state == Liveness::Online,
-            });
+            self.announce_device_state(c.device_id, c.state == Liveness::Online)
+                .await;
             self.emit_queue_depth(c.device_id);
             // A peer that just came online drains its own due rows on the spot,
             // instead of waiting for the next poll tick and its backoff.
             if c.state == Liveness::Online {
                 self.outbox.notify_peer_online(p.device_id);
             }
+        }
+        // A return inside the flap window emits no change, so re-announce
+        // online when the tracker says the peer is online but the UI was told
+        // offline.
+        if self.status.lock().await.is_online(&p.device_id)
+            && self.announced_offline.lock().await.contains(&p.device_id)
+        {
+            self.announce_device_state(p.device_id, true).await;
         }
         Ok(change)
     }
@@ -1079,13 +1131,16 @@ impl Engine {
     pub async fn heartbeat(&self, now_ms: u64) -> Vec<StatusChange> {
         let changes = self.status.lock().await.tick(now_ms);
         for c in &changes {
-            let _ = self.tx.send(EngineEvent::DeviceState {
-                device_id: c.device_id,
-                online: c.state == Liveness::Online,
-            });
+            self.announce_device_state(c.device_id, c.state == Liveness::Online)
+                .await;
             self.emit_queue_depth(c.device_id);
         }
         changes
+    }
+
+    /// Send one liveness event and record what the UI was told.
+    async fn announce_device_state(&self, peer: [u8; 16], online: bool) {
+        announce_device_state(&self.tx, &self.announced_offline, peer, online).await;
     }
 
     /// Publish the unsent outbox count for one peer, so the UI can show it.
@@ -1142,10 +1197,10 @@ impl Engine {
         if removed.is_some() {
             let _ = self.tx.send(EngineEvent::DeviceLost(peer_device_id));
         }
-        let _ = self.tx.send(EngineEvent::DeviceState {
-            device_id: peer_device_id,
-            online: false,
-        });
+        self.announce_device_state(peer_device_id, false).await;
+        // Revocation forgets the peer, so drop the announced-offline record
+        // too. A later re-pair learns a fresh state and must not be held back.
+        self.announced_offline.lock().await.remove(&peer_device_id);
         tracing::info!(
             peer = %hex::encode(peer_device_id),
             purged = payloads.len(),
@@ -2566,12 +2621,6 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
         // R-C: send_transfer already read the peer's Ack and returns Ok ONLY on
         // complete && hash_ok (Err on mismatch/close), so Ok(()) IS the ack.
         Ok(_) => {
-            ctx.observability.record(TraceLine {
-                at_ms: crate::manifest::now_ms(),
-                level: "INFO".into(),
-                target: "outbox".into(),
-                message: format!("drain delivered {}", hex::encode(row.id)),
-            });
             // B2: gate the transfers write on the outbox transition actually
             // having matched a row. A drain whose row was canceled mid-send
             // matches nothing here, and reporting that share as 'done' to the
@@ -2579,6 +2628,14 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             if db.mark_outbox_awaiting_ack(&row.id).unwrap_or(false)
                 && db.mark_outbox_done(&row.id).unwrap_or(false)
             {
+                // Record AFTER the gate. A row canceled mid-send matches
+                // nothing here, so it must not log a delivery it never made.
+                ctx.observability.record(TraceLine {
+                    at_ms: crate::manifest::now_ms(),
+                    level: "INFO".into(),
+                    target: "outbox".into(),
+                    message: format!("drain delivered {}", hex::encode(row.id)),
+                });
                 // F4: the transfers row enqueue wrote has to follow the row to
                 // its end, or a delivered share stays "queued" in the UI
                 // forever. Same best-effort treatment as the settles beside it:

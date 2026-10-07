@@ -86,7 +86,17 @@ impl SealedBeacon {
             .map_err(|_| CoreError::Protocol("bad nonce".into()))?;
         let aad = Self::aad(self.device_id, self.session_id, self.seq);
         let pt = open(key, &n, &aad, ct)?;
-        Presence::from_cbor(&pt)
+        let p = Presence::from_cbor(&pt)?;
+        // The AEAD key comes from the pairing row of `self.device_id`, so the
+        // envelope id is authenticated. A trusted peer can still seal a body
+        // that names a DIFFERENT device. Reject that mismatch here, or the
+        // tracker marks the named device online.
+        if p.device_id != self.device_id {
+            return Err(CoreError::Protocol(
+                "presence beacon device id does not match the envelope".into(),
+            ));
+        }
+        Ok(p)
     }
 
     fn aad(device_id: [u8; 16], session_id: [u8; 16], seq: u64) -> Vec<u8> {
@@ -179,6 +189,40 @@ mod tests {
         assert!(
             tampered.open(&key).is_err(),
             "a rewritten session id must fail the AEAD tag"
+        );
+    }
+
+    #[test]
+    fn sealed_beacon_rejects_a_mismatched_envelope_device_id() {
+        // A trusted peer controls the seal. It can bind the envelope to its OWN
+        // device id and still seal a body that names a DIFFERENT device. The
+        // body decrypts, so only the identity cross-check can reject it.
+        let key = pairing_presence_key(&[21u8; 32], &peer_pub([22u8; 32]));
+        let inner = Presence {
+            device_id: [9u8; 16],
+            session_id: [0u8; 16],
+            name: "n".into(),
+            state: PresenceState::Online,
+            seq: 1,
+            sent_at_ms: 1,
+        };
+        let envelope_id = [7u8; 16];
+        let seq = 1;
+        let n = nonce(0, seq);
+        let aad = SealedBeacon::aad(envelope_id, inner.session_id, seq);
+        let ct = seal(&key, &n, &aad, &inner.to_cbor().unwrap()).unwrap();
+        let mut body = n.to_vec();
+        body.extend_from_slice(&ct);
+        let b = SealedBeacon {
+            v: 1,
+            device_id: envelope_id,
+            session_id: inner.session_id,
+            seq,
+            body,
+        };
+        assert!(
+            b.open(&key).is_err(),
+            "an envelope id that differs from the inner id must be rejected"
         );
     }
 

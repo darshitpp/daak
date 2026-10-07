@@ -71,6 +71,84 @@ async fn engine_reports_online_then_offline_state() {
     engine.shutdown().await.unwrap();
 }
 
+// A return inside the flap window is absorbed by the tracker, so no
+// StatusChange is emitted. Without a re-announce the UI card stays offline
+// while the tracker is online. The engine must re-announce online.
+#[tokio::test]
+async fn blip_after_offline_reannounces_online() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    db.migrate().unwrap();
+    let peer = [5u8; 16];
+    db.upsert_pairing(&Pairing {
+        peer_device_id: peer,
+        state: "trusted".into(),
+        paired_at: 0,
+        verify_key: [1u8; 32],
+        static_dh_pub: [2u8; 32],
+        label: None,
+    })
+    .unwrap();
+
+    let store = Arc::new(daak_core::crypto::secret_store::MemorySecretStore::default());
+    let identity = daak_core::crypto::identity::import_from_store(store.as_ref()).unwrap();
+    let engine = Engine::start(EngineConfig {
+        display_name: "self".into(),
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+        out_dir: std::env::temp_dir(),
+        identity,
+        db: db.clone(),
+    })
+    .await
+    .unwrap();
+
+    let key = pairing_presence_key(&engine.identity().static_secret().to_bytes(), &[2u8; 32]);
+    let p = Presence {
+        device_id: peer,
+        session_id: [0u8; 16],
+        name: "peer".into(),
+        state: PresenceState::Online,
+        seq: 1,
+        sent_at_ms: 0,
+    };
+
+    let mut events = engine.events();
+    // t=0: the peer comes online.
+    let first = SealedBeacon::seal(&p, &key, 1).unwrap();
+    let change = engine.observe_beacon(&first, 0).await.unwrap();
+    assert_eq!(change.map(|c| c.state), Some(Liveness::Online));
+
+    // t=7500: past the 6000 ms timeout, so the heartbeat declares offline.
+    let offline = engine.heartbeat(7_500).await;
+    assert_eq!(offline.len(), 1, "the peer times out");
+    assert_eq!(offline[0].state, Liveness::Offline);
+
+    // t=7600: a fresh beacon inside the 1000 ms flap window. The tracker
+    // absorbs the return and observe_beacon returns None.
+    let fresh = SealedBeacon::seal(&p, &key, 2).unwrap();
+    let change = engine.observe_beacon(&fresh, 7_600).await.unwrap();
+    assert!(change.is_none(), "the flap window absorbs the transition");
+
+    let mut saw_online = false;
+    for _ in 0..10 {
+        match tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Ok(EngineEvent::DeviceState {
+                device_id,
+                online: true,
+            })) if device_id == peer => {
+                saw_online = true;
+                break;
+            }
+            Ok(Ok(_)) => continue,
+            _ => break,
+        }
+    }
+    assert!(
+        saw_online,
+        "the engine must re-announce online after an absorbed blip"
+    );
+    engine.shutdown().await.unwrap();
+}
+
 // The phase exit criterion: three payloads queue while the peer is away, the
 // peer returns, and every queued row drains exactly once.
 #[tokio::test]
