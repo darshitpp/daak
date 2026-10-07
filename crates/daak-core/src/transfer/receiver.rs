@@ -27,6 +27,24 @@ const BITMAP_PERSIST_INTERVAL: u64 = 256;
 const MAX_PATH_COMPONENTS: usize = 64;
 const MAX_PATH_LEN: usize = 4096;
 
+/// D23: holds the discard directory a duplicate delivery writes into, and
+/// removes it on Drop. Drop runs on the success return and on every error
+/// return, so the cleanup needs no second call at each `?`.
+struct DiscardGuard(Option<PathBuf>);
+
+impl Drop for DiscardGuard {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.0 {
+            let _ = std::fs::remove_dir_all(dir);
+            // Best effort: also remove the shared root. This succeeds only
+            // when no other duplicate delivery is writing there.
+            if let Some(parent) = dir.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
+    }
+}
+
 fn safe_item_name(item: &Item) -> String {
     let raw = item.name.as_deref().unwrap_or("");
     match Path::new(raw).file_name().and_then(|n| n.to_str()) {
@@ -322,12 +340,30 @@ pub async fn receive_transfer<T: FrameTransport>(
 
     validate_manifest(&manifest)?;
 
-    tokio::fs::create_dir_all(out_dir).await?;
+    // D23: a re-delivery of a payload_id that is already in the inbox must not
+    // write into the real destination. A half-written duplicate would truncate
+    // the first good copy. Every item write goes to a discard directory
+    // instead, and the sender still gets its Ack so it stops re-sending. The
+    // guard removes the directory on every return path.
+    let dedupe = match db {
+        Some(db) => db.payload_seen(&manifest.payload_id)?,
+        None => false,
+    };
+    let dest_root = if dedupe {
+        out_dir
+            .join("dedupe-discard")
+            .join(hex::encode(manifest.payload_id))
+    } else {
+        out_dir.to_path_buf()
+    };
+    let _discard = DiscardGuard(dedupe.then(|| dest_root.clone()));
+
+    tokio::fs::create_dir_all(&dest_root).await?;
     // R-T12-6: with a Db supplied, the inbound transfer becomes a real row so a
     // quarantined item has something to point at and `retry_item` can find it.
     // Db::upsert_transfer's ON CONFLICT branch leaves payload_id/peer/kind/
     // direction alone, so the second (final) upsert is safe.
-    if let Some(db) = db {
+    if let Some(db) = db.filter(|_| !dedupe) {
         let now = crate::manifest::now_ms() as i64 / 1000;
         db.upsert_transfer(&TransferRow {
             transfer_id: manifest.payload_id,
@@ -396,11 +432,11 @@ pub async fn receive_transfer<T: FrameTransport>(
                 "manifest chunks exceed total cap {MAX_TOTAL_CHUNKS}"
             )));
         }
-        let path = item_destination(out_dir, item)?;
+        let path = item_destination(&dest_root, item)?;
         if let Some(parent) = path.parent() {
             // B1: a folder's children arrive in subdirectories that do not
             // exist yet on the receiver.
-            ensure_real_dir_chain(out_dir, parent, item.index).await?;
+            ensure_real_dir_chain(&dest_root, parent, item.index).await?;
         }
         // Open without truncating: a resumed receive must preserve already-written
         // partial chunks so the persisted bitmap still points at real on-disk data.
@@ -540,7 +576,9 @@ pub async fn receive_transfer<T: FrameTransport>(
 
     // R-T12-5: a hash mismatch isolates ONE file, it does not fail the transfer.
     // The per-item loop keeps going so 99 good files survive 1 bad one.
-    let quarantine = Quarantine::new(out_dir.join("quarantine"));
+    // In the dedupe case dest_root is the discard directory, so a corrupt
+    // duplicate is held there and removed with it. The real file is untouched.
+    let quarantine = Quarantine::new(dest_root.join("quarantine"));
     let mut hash_ok = true;
     // C-1: Option, not a u32 sentinel of 0 - item 0 failing used to leave the
     // sentinel unset so the NEXT failure overwrote the reported item.
@@ -550,7 +588,7 @@ pub async fn receive_transfer<T: FrameTransport>(
     let mut failed: Vec<u32> = Vec::new();
     let mut held_paths: Vec<(u32, PathBuf)> = Vec::new();
     for item in manifest.binary_items() {
-        let path = item_destination(out_dir, item)?;
+        let path = item_destination(&dest_root, item)?;
         let f = std::fs::File::open(&path)?;
         let actual = blake2b256_reader(f)?;
         if Some(actual) == item.hash {
@@ -578,7 +616,7 @@ pub async fn receive_transfer<T: FrameTransport>(
 
     // R-T12-6: persist the item rows (and the final transfer state) so a
     // quarantined item is reachable by retry_item / the UI.
-    if let Some(db) = db {
+    if let Some(db) = db.filter(|_| !dedupe) {
         let mut bytes_done = 0u64;
         for item in &manifest.items {
             let quarantined = failed.contains(&item.index);
@@ -1190,6 +1228,75 @@ mod tests {
         assert_eq!(
             db.list_items(&manifest.payload_id).unwrap()[0].state,
             "quarantined"
+        );
+    }
+
+    /// D23: a second delivery of the SAME payload_id must not write into the
+    /// real destination. A half-written duplicate must not truncate the first
+    /// good copy. The duplicate lands in a discard directory that is removed
+    /// before the return, and the sender still gets its Ack.
+    #[tokio::test]
+    async fn a_duplicate_delivery_leaves_the_real_file_untouched() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("ok.bin");
+        let payload: Vec<u8> = (0..120_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &payload).unwrap();
+
+        let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            for _ in 0..2 {
+                crate::transfer::send_transfer(&mut theirs, &m, &[Some(path.clone())], &[], |_| {})
+                    .await
+                    .unwrap();
+            }
+        });
+
+        // First delivery writes the real file.
+        receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db), |_| {})
+            .await
+            .unwrap();
+        let written = dst.path().join("ok.bin");
+        assert_eq!(std::fs::read(&written).unwrap(), payload);
+
+        // The engine records the inbox row after the first delivery, so the
+        // second delivery sees the payload as already stored.
+        db.add_inbox(&crate::store::inbox::InboxRow {
+            id: manifest.payload_id,
+            transfer_id: manifest.payload_id,
+            peer_device_id: manifest.sender.device_id,
+            kind: "media".into(),
+            item_count: 1,
+            summary: "1 file(s)".into(),
+            received_at: 1,
+            saved_paths: "[]".into(),
+        })
+        .unwrap();
+        assert!(db.payload_seen(&manifest.payload_id).unwrap());
+
+        // Distinct bytes prove the duplicate cannot truncate a good file.
+        std::fs::write(&written, b"first copy stays").unwrap();
+
+        // Second delivery of the SAME payload_id.
+        receive_transfer(&mut mine, dst.path(), |_| {}, Some(&db), |_| {})
+            .await
+            .unwrap();
+        sender.await.unwrap();
+
+        assert!(
+            std::fs::read(&written).unwrap() == b"first copy stays",
+            "the duplicate delivery must not touch the first copy"
+        );
+        assert_eq!(db.list_inbox().unwrap().len(), 1);
+        assert!(
+            !dst.path().join("dedupe-discard").exists(),
+            "the discard directory must be removed before the return"
         );
     }
 
