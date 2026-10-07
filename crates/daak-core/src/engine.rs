@@ -442,6 +442,23 @@ impl Engine {
         ListenAddr::from_cbor(&frame.body).ok().map(|l| l.addr)
     }
 
+    /// Restore a consistent state after a restart.
+    ///
+    /// The caller runs this before it accepts IPC clients or network peers. A
+    /// process that stops in the middle of a transfer leaves in-flight rows.
+    /// This call moves each row back to a workable state. See
+    /// `Db::reconcile_on_startup` for the exact rows.
+    pub fn recover_after_restart(&self) -> Result<crate::store::reconcile::ReconcileReport> {
+        let report = self.db.reconcile_on_startup()?;
+        tracing::info!(
+            transfers = report.transfers_reset,
+            items = report.items_reset,
+            outbox = report.outbox_reset,
+            "startup reconciliation complete"
+        );
+        Ok(report)
+    }
+
     pub async fn start(cfg: EngineConfig) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(256);
         let devices = Arc::new(Mutex::new(HashMap::<[u8; 16], DeviceInfo>::new()));
@@ -518,19 +535,20 @@ impl Engine {
         };
         let out_dir = cfg.out_dir.clone();
 
-        // Crash recovery: a previous run may have died mid-send. Both resets run
-        // BEFORE the accept loop and the outbox worker are spawned, so nothing
-        // can claim a row that is about to be re-queued. A failed recovery is
-        // logged, not fatal -- the engine must still start.
-        match db.reset_inflight_outbox() {
-            Ok(n) if n > 0 => tracing::warn!("requeued {n} in-flight outbox row(s)"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("outbox crash recovery failed: {e}"),
-        }
-        match db.reset_inflight_transfers() {
-            Ok(n) if n > 0 => tracing::warn!("requeued {n} in-flight transfer(s)"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("transfer crash recovery failed: {e}"),
+        // Crash recovery: a previous run may have died mid-send or mid-receive.
+        // Reconciliation runs BEFORE the accept loop and the outbox worker are
+        // spawned, so nothing can claim a row that is about to be re-queued.
+        // The Engine does not exist yet here, so this calls the Db method that
+        // `recover_after_restart` also calls. A failed recovery is logged, not
+        // fatal -- the engine must still start.
+        match db.reconcile_on_startup() {
+            Ok(r) => tracing::info!(
+                transfers = r.transfers_reset,
+                items = r.items_reset,
+                outbox = r.outbox_reset,
+                "startup reconciliation complete"
+            ),
+            Err(e) => tracing::warn!("startup reconciliation failed: {e}"),
         }
 
         let (listener, local_addr) = tcp::bind(cfg.listen_addr).await?;

@@ -3,6 +3,7 @@ pub mod identity;
 pub mod inbox;
 pub mod outbox;
 pub mod pairings;
+pub mod reconcile;
 pub mod settings;
 pub mod transfers;
 
