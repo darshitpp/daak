@@ -59,6 +59,74 @@ async fn announce_device_state(
     }
 }
 
+/// Build one presence payload for the sealed announce loop.
+///
+/// PURE on purpose: the caller owns the source read and the monotonic `seq`.
+fn presence_payload(
+    device_id: [u8; 16],
+    session_id: [u8; 16],
+    name: String,
+    state: PresenceState,
+    seq: u64,
+    now_ms: u64,
+) -> Presence {
+    Presence {
+        device_id,
+        session_id,
+        name,
+        state,
+        seq,
+        sent_at_ms: now_ms,
+    }
+}
+
+/// The profile fields the announce loop publishes each tick.
+///
+/// A TRAIT so a unit test can stand in for `Profile` without a live mDNS
+/// `Advertiser`. The announce loop builds every beacon through
+/// [`presence_payload_from`], so a captured name or a hard-coded state cannot
+/// reach a peer.
+trait PresenceSource {
+    fn session_id(&self) -> [u8; 16];
+    fn resolved_name(&self) -> String;
+    fn presence_state(&self) -> PresenceState;
+}
+
+impl PresenceSource for Profile {
+    fn session_id(&self) -> [u8; 16] {
+        self.session_id
+    }
+
+    fn resolved_name(&self) -> String {
+        self.resolved_name.clone()
+    }
+
+    fn presence_state(&self) -> PresenceState {
+        self.presence_state
+    }
+}
+
+/// Build the payload from the CURRENT profile fields.
+///
+/// The announce loop calls this each tick with the locked profile, so a rename
+/// or a `set_presence` reaches peers within one interval and the payload can
+/// never carry a captured name or a hard-coded Online.
+fn presence_payload_from<P: PresenceSource>(
+    p: &P,
+    device_id: [u8; 16],
+    seq: u64,
+    now_ms: u64,
+) -> Presence {
+    presence_payload(
+        device_id,
+        p.session_id(),
+        p.resolved_name(),
+        p.presence_state(),
+        seq,
+        now_ms,
+    )
+}
+
 /// The settings key the display name lives under.
 ///
 /// The value stored here is the BASE name the user asked for, never the
@@ -289,8 +357,9 @@ pub struct Engine {
     /// runtime -- set_display_name re-resolves and re-advertises -- so it and
     /// the mDNS Advertiser built from it are behind one lock, swapped together
     /// so a reader can never see a new name next to an advertiser still
-    /// publishing the old one. Presence announcements carry the name too, so
-    /// they are re-sent on a rename rather than left stale.
+    /// publishing the old one. The presence announce loop reads the resolved
+    /// name here every tick, so a rename is published without a separate
+    /// announce.
     profile: Arc<Mutex<Profile>>,
     /// Serialises `set_display_name` end to end.
     ///
@@ -604,22 +673,7 @@ impl Engine {
         )?;
         let browser = Arc::new(Browser::start()?);
         let presence = match PresenceSocket::bind().await {
-            Ok(p) => {
-                let p = Arc::new(p);
-                // Best-effort: presence is an enhancement, not required for transfer.
-                if let Err(e) = p
-                    .announce(&Presence::new(
-                        device_id,
-                        session_id,
-                        display_name.clone(),
-                        PresenceState::Online,
-                    ))
-                    .await
-                {
-                    tracing::warn!("presence announce failed: {e}");
-                }
-                Some(p)
-            }
+            Ok(p) => Some(Arc::new(p)),
             Err(e) => {
                 tracing::warn!("presence socket unavailable: {e}");
                 None
@@ -961,15 +1015,17 @@ impl Engine {
             }
         };
 
-        // Announce loop: one sealed beacon per trusted pairing per interval.
-        // The same seq goes to every peer, which is fine because each peer has
-        // its own replay window.
+        // Announce loop: the SINGLE sender of presence, one sealed beacon per
+        // trusted pairing per interval. The profile lock is read every tick, so
+        // a rename or a `set_presence` reaches peers within one interval (D10)
+        // and a peer paired later is reached without a restart (D11). The same
+        // seq goes to every peer, which is fine because each peer has its own
+        // replay window.
         let announce_task = {
-            let presence = presence_rx.clone();
-            let pairings = db.list_pairings().unwrap_or_default();
+            let profile = profile.clone();
+            let db = db.clone();
             let identity = identity.clone();
             let me = device_id;
-            let name = display_name.clone();
             tokio::spawn(async move {
                 let mut seq = 0u64;
                 let mut tick = tokio::time::interval(std::time::Duration::from_millis(
@@ -978,23 +1034,23 @@ impl Engine {
                 loop {
                     tick.tick().await;
                     seq += 1;
-                    let Some(sock) = &presence else {
+                    let (payload, sock) = {
+                        let p = profile.lock().await;
+                        (
+                            presence_payload_from(&*p, me, seq, crate::manifest::now_ms()),
+                            p.presence.clone(),
+                        )
+                    };
+                    let Some(sock) = sock else {
                         continue;
                     };
-                    let p = Presence {
-                        device_id: me,
-                        session_id,
-                        name: name.clone(),
-                        state: PresenceState::Online,
-                        seq,
-                        sent_at_ms: crate::manifest::now_ms(),
-                    };
+                    let pairings = db.list_pairings().unwrap_or_default();
                     for pairing in pairings.iter().filter(|p| p.state == "trusted") {
                         let key = pairing_presence_key(
                             &identity.static_secret().to_bytes(),
                             &pairing.static_dh_pub,
                         );
-                        if let Ok(b) = SealedBeacon::seal(&p, &key, seq) {
+                        if let Ok(b) = SealedBeacon::seal(&payload, &key, seq) {
                             if let Ok(bytes) = b.to_cbor() {
                                 let _ = sock.announce_raw(&bytes).await;
                             }
@@ -1451,55 +1507,20 @@ impl Engine {
         p.advertiser.stop();
         p.advertiser = advertiser;
         p.base_name = name;
-        p.resolved_name = resolved.clone();
-        // Presence carries the name, so a rename that skipped this would leave
-        // peers showing the old one until their own announce refreshes.
-        if let Some(presence) = &p.presence {
-            if let Err(e) = presence
-                .announce(&Presence::new(
-                    self.identity.device_id(),
-                    p.session_id,
-                    resolved,
-                    p.presence_state,
-                ))
-                .await
-            {
-                // Best-effort, exactly like the startup announce: the mDNS
-                // record is already updated and presence is an enhancement.
-                tracing::warn!("presence announce after rename failed: {e}");
-            }
-        }
+        p.resolved_name = resolved;
+        // The announce loop reads `resolved_name` from this profile every tick
+        // and republishes it, so a rename does not announce here.
         Ok(())
     }
 
-    /// Set this device's advertised presence (online | away) and re-announce.
-    /// The state is remembered so a later rename re-announces the SAME state
-    /// instead of silently resetting the user to online.
+    /// Set this device's advertised presence (online | away).
+    ///
+    /// The announce loop reads `presence_state` from this profile every tick,
+    /// so the new state reaches peers within one interval. The state is
+    /// remembered so a later tick keeps sending the state the user chose.
     pub async fn set_presence(&self, state: PresenceState) -> Result<()> {
         let mut p = self.profile.lock().await;
-        // Remembered even if the announce below fails, so a later rename
-        // re-announces the state the user actually chose.
         p.presence_state = state;
-        if let Some(presence) = &p.presence {
-            if let Err(e) = presence
-                .announce(&Presence::new(
-                    self.identity.device_id(),
-                    p.session_id,
-                    p.resolved_name.clone(),
-                    state,
-                ))
-                .await
-            {
-                // Best-effort, exactly like the startup announce and the
-                // announce after a rename. On a host that routes IPv4
-                // multicast only over loopback an announce is EHOSTUNREACH
-                // (the same condition as the deliberately-ignored
-                // two_sockets_on_one_host_exchange_beacons test), and a peer
-                // that cannot be told our new state must not make the local
-                // state change fail. The state is recorded above regardless.
-                tracing::warn!("presence announce on set_presence failed: {e}");
-            }
-        }
         // Away is a self-declaration to peers, so the outbox drain must also
         // stop treating us as reachable. Presence is what tells a peer that,
         // and notify_peer_online only ever wakes the drain for OUR side, so
@@ -2746,6 +2767,51 @@ async fn read_identity_public(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D10/D11: the beacon must derive from the CURRENT profile fields.
+    ///
+    /// `Profile` cannot be built here: its `advertiser` field is a live mDNS
+    /// `ServiceDaemon`, which binds sockets. So this drives the loop's helper
+    /// with a stand-in source that has a RENAMED name and `Away`. A payload
+    /// that stopped reading its source (a captured name, a hard-coded Online)
+    /// would fail here.
+    #[test]
+    fn presence_payload_derives_from_the_profile_source() {
+        struct FakeSource {
+            session_id: [u8; 16],
+            name: String,
+            state: PresenceState,
+        }
+        impl PresenceSource for FakeSource {
+            fn session_id(&self) -> [u8; 16] {
+                self.session_id
+            }
+
+            fn resolved_name(&self) -> String {
+                self.name.clone()
+            }
+
+            fn presence_state(&self) -> PresenceState {
+                self.state
+            }
+        }
+        let p = presence_payload_from(
+            &FakeSource {
+                session_id: [2u8; 16],
+                name: "renamed".into(),
+                state: PresenceState::Away,
+            },
+            [1u8; 16],
+            7,
+            1234,
+        );
+        assert_eq!(p.device_id, [1u8; 16]);
+        assert_eq!(p.session_id, [2u8; 16]);
+        assert_eq!(p.name, "renamed");
+        assert_eq!(p.state, PresenceState::Away);
+        assert_eq!(p.seq, 7);
+        assert_eq!(p.sent_at_ms, 1234);
+    }
 
     /// B3: the saved_paths column is hand-built JSON that both bridges parse
     /// with serde_json. A path that needs escaping must still parse, and a
