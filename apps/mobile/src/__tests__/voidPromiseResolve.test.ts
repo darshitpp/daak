@@ -182,6 +182,9 @@ describe('a void UniFFI method must not resolve its promise with Unit', () => {
     expect(udlVoid.length).toBeGreaterThan(5);
     expect(udlVoid.map(camel).sort()).toEqual([
       'armHostPairing',
+      // Phase 7 Task 8: void in the UDL, overridden on all three native
+      // modules, so it belongs in the same pin as the other void engine verbs.
+      'backgroundWake',
       'cancel',
       'deleteQuarantined',
       'offerPairing',

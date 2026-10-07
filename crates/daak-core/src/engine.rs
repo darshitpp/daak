@@ -19,6 +19,7 @@ use crate::manifest::{Manifest, PayloadKind};
 use crate::net::secure::recv_secure_transfer;
 use crate::net::tcp;
 use crate::net::Connection;
+use crate::observability::{Observability, TraceLine};
 use crate::outbox::{DrainPolicy, DrainTrigger, OutboxWorker};
 use crate::pairing::{PairMode, PairingBundle};
 use crate::session::{BoxConnect, BoxFutureConn, SessionRegistry, SharedSessions, TcpConn};
@@ -284,6 +285,10 @@ pub struct Engine {
     /// derived from it, so a second copy of out_dir could name a different one.
     out_dir: PathBuf,
     outbox: Arc<OutboxWorker>,
+    /// The bounded, in-process trace buffer. Phase 7 Task 8 records an outbox
+    /// claim, success and failure here, and a dropped unauthenticated beacon.
+    /// Nothing in `observability` opens a socket.
+    observability: Arc<Observability>,
     /// Battery-saver switch for the outbox drain. The worker loop is seeded at
     /// spawn time, so the runtime flag lives here and the drain closure reads it
     /// to pick the backoff cap of each failed attempt.
@@ -654,11 +659,16 @@ impl Engine {
                 )))
             };
         let battery_saver = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // The bounded local trace buffer. Created before the outbox so the
+        // drain closure and the presence loop share ONE instance, which is the
+        // same instance stored on the Engine below.
+        let observability = Arc::new(Observability::default());
         let outbox = Arc::new({
             let drain_db = db.clone();
             let drain_staging = staging.clone();
             let drain_sessions = sessions.clone();
             let drain_battery = battery_saver.clone();
+            let drain_obs = observability.clone();
             let policy = DrainPolicy::default();
             // The drain closure reads the battery-saver flag at drain time, so
             // the cap follows a mode change without rebuilding the worker. A
@@ -676,11 +686,25 @@ impl Engine {
                 } else {
                     normal_cap
                 };
+                // The worker calls this closure only for the caller that won
+                // the pending->sending claim, so this line marks every drain
+                // claim together with the row it claims.
+                drain_obs.record(TraceLine {
+                    at_ms: crate::manifest::now_ms(),
+                    level: "INFO".into(),
+                    target: "outbox".into(),
+                    message: format!(
+                        "drain claim {} for peer {}",
+                        hex::encode(row.id),
+                        hex::encode(row.peer_device_id)
+                    ),
+                });
                 let ctx = DrainCtx {
                     db: drain_db.clone(),
                     staging: drain_staging.clone(),
                     sessions: drain_sessions.clone(),
                     max_backoff_secs,
+                    observability: drain_obs.clone(),
                 };
                 // ponytail: per-row drain tasks are intentionally untracked (a JoinSet
                 // here costs more than it buys); a crash mid-drain is recovered at
@@ -828,6 +852,7 @@ impl Engine {
             let status = status.clone();
             let identity = identity.clone();
             let db = db.clone();
+            let obs = observability.clone();
             match presence_rx.clone() {
                 Some(presence) => tokio::spawn(async move {
                     while let Ok((_from, raw)) = presence.recv_raw().await {
@@ -845,6 +870,15 @@ impl Engine {
                             &pairing.static_dh_pub,
                         );
                         let Ok(p) = beacon.open(&key) else {
+                            obs.record(TraceLine {
+                                at_ms: crate::manifest::now_ms(),
+                                level: "WARN".into(),
+                                target: "presence".into(),
+                                message: format!(
+                                    "dropped an unauthenticated beacon from {}",
+                                    hex::encode(beacon.device_id)
+                                ),
+                            });
                             tracing::warn!(
                                 peer = %hex::encode(beacon.device_id),
                                 "dropped an unauthenticated presence beacon"
@@ -953,6 +987,7 @@ impl Engine {
             staging,
             out_dir,
             outbox,
+            observability,
             battery_saver,
             sessions,
             pending_pairing,
@@ -967,6 +1002,13 @@ impl Engine {
 
     pub fn events(&self) -> broadcast::Receiver<EngineEvent> {
         self.tx.subscribe()
+    }
+
+    /// The bounded, in-process trace buffer. Nothing here opens a socket. The
+    /// debug bundle (spec section 7.3) reads `snapshot()` and writes it to a
+    /// local file the user chooses.
+    pub fn observability(&self) -> Arc<Observability> {
+        self.observability.clone()
     }
 
     /// Verify a sealed beacon against the pinned pairing, then advance the
@@ -2214,6 +2256,8 @@ struct DrainCtx<T = TcpConn> {
     /// The backoff cap for a failed attempt, resolved from the battery-saver
     /// flag at drain time (1800s when on, else the worker policy's cap).
     max_backoff_secs: i64,
+    /// The shared trace buffer. The drain records success and failure here.
+    observability: Arc<Observability>,
 }
 
 /// Give up on a row after this many failed delivery attempts. 8 with the 4.3
@@ -2368,16 +2412,33 @@ fn settle_failed_attempt(
     attempts: u32,
     jitter: u64,
     max_backoff_secs: i64,
+    obs: Option<&Observability>,
 ) -> Result<Option<&'static str>> {
     let now = crate::manifest::now_ms() as i64 / 1000;
-    if attempts + 1 >= MAX_DELIVERY_ATTEMPTS {
+    let state = if attempts + 1 >= MAX_DELIVERY_ATTEMPTS {
         let won = db
             .mark_outbox_terminal_failed(id, &format!("gave up after {} attempts", attempts + 1))?;
-        Ok(won.then_some("failed"))
+        won.then_some("failed")
     } else {
         let won = db.mark_outbox_failed_capped(id, now, jitter, max_backoff_secs)?;
-        Ok(won.then_some("paused"))
+        won.then_some("paused")
+    };
+    // Record only when this drain still owned the row, so a lost guard (a
+    // cancel or a settle by another worker) does not read as a real failure.
+    if let (Some(obs), Some(state)) = (obs, state) {
+        obs.record(TraceLine {
+            at_ms: crate::manifest::now_ms(),
+            level: "WARN".into(),
+            target: "outbox".into(),
+            message: format!(
+                "drain attempt {} for {} settled {}",
+                attempts + 1,
+                hex::encode(id),
+                state
+            ),
+        });
     }
+    Ok(state)
 }
 
 /// Rebuild a queued send from its row and push it, then settle the row state.
@@ -2392,9 +2453,14 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
         // (or a permanently bad file) retries forever and never leaves 'failed'.
         // Only write when this drain still OWNS the row; see the None arm on
         // settle_failed_attempt.
-        if let Ok(Some(state)) =
-            settle_failed_attempt(db, &row.id, row.attempts, jitter, max_backoff_secs)
-        {
+        if let Ok(Some(state)) = settle_failed_attempt(
+            db,
+            &row.id,
+            row.attempts,
+            jitter,
+            max_backoff_secs,
+            Some(&ctx.observability),
+        ) {
             let _ = db.set_transfer_state(&row.id, state);
         }
     };
@@ -2406,6 +2472,15 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             .mark_outbox_terminal_failed(&row.id, &why)
             .unwrap_or(false)
         {
+            ctx.observability.record(TraceLine {
+                at_ms: crate::manifest::now_ms(),
+                level: "WARN".into(),
+                target: "outbox".into(),
+                message: format!(
+                    "drain failed permanently for {}: {why}",
+                    hex::encode(row.id)
+                ),
+            });
             // B2: the transfers row was written 'queued' at enqueue; leaving it
             // there forever is the one state the UI cannot explain. The outbox
             // write is the authority, so this is gated on it.
@@ -2456,6 +2531,12 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
         // R-C: send_transfer already read the peer's Ack and returns Ok ONLY on
         // complete && hash_ok (Err on mismatch/close), so Ok(()) IS the ack.
         Ok(_) => {
+            ctx.observability.record(TraceLine {
+                at_ms: crate::manifest::now_ms(),
+                level: "INFO".into(),
+                target: "outbox".into(),
+                message: format!("drain delivered {}", hex::encode(row.id)),
+            });
             // B2: gate the transfers write on the outbox transition actually
             // having matched a row. A drain whose row was canceled mid-send
             // matches nothing here, and reporting that share as 'done' to the
@@ -2667,7 +2748,7 @@ mod tests {
         // Cancel owns the row; the drain's backoff guard matches nothing.
         cancel_with(&db, &staging, id).unwrap();
         assert_eq!(
-            settle_failed_attempt(&db, &id, 0, 0, 600).unwrap(),
+            settle_failed_attempt(&db, &id, 0, 0, 600, None).unwrap(),
             None,
             "a lost guard must yield no state to write"
         );
@@ -2684,7 +2765,7 @@ mod tests {
                 .unwrap();
         assert!(db.mark_outbox_sending(&other).unwrap());
         assert_eq!(
-            settle_failed_attempt(&db, &other, 0, 0, 600).unwrap(),
+            settle_failed_attempt(&db, &other, 0, 0, 600, None).unwrap(),
             Some("paused")
         );
     }
@@ -2775,7 +2856,7 @@ mod tests {
         // settle_failed_attempt started reporting the lost guard.
         assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
         assert_eq!(
-            settle_failed_attempt(&db, &[1u8; 16], 0, 0, 600).unwrap(),
+            settle_failed_attempt(&db, &[1u8; 16], 0, 0, 600, None).unwrap(),
             Some("paused")
         );
         // A SECOND row for the give-up: the first row is no longer `sending`
@@ -2795,7 +2876,8 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            settle_failed_attempt(&db, &[9u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0, 600).unwrap(),
+            settle_failed_attempt(&db, &[9u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0, 600, None,)
+                .unwrap(),
             Some("failed"),
             "the give-up is the only terminal failure"
         );
@@ -2856,6 +2938,7 @@ mod tests {
                 staging: staging.clone(),
                 sessions,
                 max_backoff_secs: 600,
+                observability: Arc::new(Observability::default()),
             },
             row,
         )
@@ -2998,6 +3081,7 @@ mod tests {
                 staging: staging.clone(),
                 sessions,
                 max_backoff_secs: 600,
+                observability: Arc::new(Observability::default()),
             },
             row,
         )
@@ -3282,7 +3366,7 @@ mod tests {
                 db.mark_outbox_sending(&[1u8; 16]).unwrap(),
                 "the drain re-claims the row it just re-pended"
             );
-            settle_failed_attempt(&db, &[1u8; 16], want - 1, 0, 600).unwrap();
+            settle_failed_attempt(&db, &[1u8; 16], want - 1, 0, 600, None).unwrap();
             let row = db.get_outbox(&[1u8; 16]).unwrap().unwrap();
             assert_eq!(row.state, "pending", "attempt {want} must back off");
             assert_eq!(row.attempts, want);
@@ -3290,7 +3374,7 @@ mod tests {
 
         // The last one is terminal: a row that never leaves 'failed' is the bug.
         db.mark_outbox_sending(&[1u8; 16]).unwrap();
-        settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0, 600).unwrap();
+        settle_failed_attempt(&db, &[1u8; 16], MAX_DELIVERY_ATTEMPTS - 1, 0, 600, None).unwrap();
         assert_eq!(db.get_outbox(&[1u8; 16]).unwrap().unwrap().state, "failed");
     }
 

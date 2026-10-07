@@ -59,6 +59,11 @@ RCT_EXTERN_METHOD(revokePairing:(NSString *)deviceId
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+// Phase 7 Task 8: the ONE outbox wake. InProcessEngine.backgroundWake() and
+// the iOS BGTask handler both reach this through Daak.swift.
+RCT_EXTERN_METHOD(backgroundWake:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 // R42p: the platform moved a received payload's files and reports where.
 RCT_EXTERN_METHOD(replaceInboxPaths:(NSString *)payloadId
                   paths:(NSArray<NSString *> *)paths

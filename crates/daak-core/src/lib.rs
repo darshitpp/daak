@@ -9,6 +9,7 @@ pub mod framing;
 pub mod hash;
 pub mod manifest;
 pub mod net;
+pub mod observability;
 pub mod outbox;
 pub mod pairing;
 pub mod session;
@@ -19,3 +20,4 @@ pub mod wordlist;
 
 pub use engine::{DeviceInfo, Engine, EngineConfig, EngineEvent};
 pub use error::{CoreError, Result};
+pub use observability::{Observability, TraceLine};

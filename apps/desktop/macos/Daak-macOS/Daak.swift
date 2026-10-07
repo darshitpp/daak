@@ -219,6 +219,16 @@ final class Daak: RCTEventEmitter, EventSink {
     }
   }
 
+  /// Drain the outbox now. The same ONE wake primitive the mobile platforms
+  /// use; the desktop engine is in-process (D16.10.3), so it is reached here.
+  @objc func backgroundWake(_ resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().backgroundWake()
+      return nil as Void?
+    }
+  }
+
   @objc func replaceInboxPaths(_ payloadId: String,
                                paths: [String],
                                resolve: @escaping RCTPromiseResolveBlock,

@@ -26,6 +26,9 @@ const METHODS: (keyof DaakEngine)[] = [
   // R42p: where a moved received file went. The Inbox opens this field, so a
   // move without it leaves the row pointing at a path that is gone.
   'replaceInboxPaths',
+  // Phase 7: drain the outbox now. One Rust call, Engine::background_wake,
+  // reached from every engine shape.
+  'backgroundWake',
 ];
 
 // Compile-time only: adding, removing or renaming a DaakEvent member breaks tsc.
@@ -117,7 +120,7 @@ describe('contract types', () => {
     // which is true of the 9 but not exhaustive over the encoder. smoke.rs:487
     // already flags the hand-listing (a new FfiEvent variant is not caught
     // there), so the tenth is a KNOWN, recorded gap -- not a dead event path.
-    expect(Object.keys(EVENT_TYPES).length).toBe(10);
+    expect(Object.keys(EVENT_TYPES).length).toBe(11);
     expect(Object.keys(exhaustive).length).toBe(METHODS.length);
   });
 
@@ -137,9 +140,11 @@ describe('contract types', () => {
     // on the right number only by coincidence (19+1 and 19-1+2 are both 20).
     // This form cannot drift that way again. A count bump here means a native
     // method was added without a decision here.
-    // 25: the 24 above plus revoke_pairing (R42f), which is a UDL method AND a
-    // TurboModule override on all three native modules.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(26);
+    // The Record above holds every method the three native modules override.
+    // revoke_pairing (R42f) and background_wake (Phase 7 Task 8) are each a UDL
+    // method AND a TurboModule override. A count bump here means a native
+    // method was added without a decision here.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(27);
   });
 
   it('models a device without fabricating liveness (R11)', () => {

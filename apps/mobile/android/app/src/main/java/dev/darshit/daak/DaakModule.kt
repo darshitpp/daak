@@ -12,6 +12,7 @@ import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
 import java.util.concurrent.CountDownLatch
+import dev.darshit.daak.bgsched.DaakWake
 import uniffi.daak_ffi.DaakEngine
 import uniffi.daak_ffi.EventSink
 import uniffi.daak_ffi.FfiEvent
@@ -117,6 +118,9 @@ class DaakModule(reactContext: ReactApplicationContext) :
                 synchronized(lock) { engine = e }
                 e.start(dir.absolutePath, displayName, listenPort.toInt().toUShort())
                 synchronized(lock) { startComplete = true }
+                // Register the ONE wake slot the native background triggers
+                // reach. A worker or a service with no live module no-ops.
+                DaakWake.wake = { synchronized(lock) { engine }?.backgroundWake() }
                 Log.i(NAME, "engine start returned; port=${e.localPort()}")
                 promise.resolve(null)
             } catch (t: Throwable) {
@@ -196,6 +200,12 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().revokePairing(deviceId); null }
 
     @ReactMethod
+    override fun backgroundWake(promise: Promise) =
+        // The ONE outbox wake. The trailing null is load-bearing, same as
+        // cancel()/retry(): the generated method returns Unit.
+        resolve(promise) { handle().backgroundWake(); null }
+
+    @ReactMethod
     override fun replaceInboxPaths(payloadId: String, paths: ReadableArray, promise: Promise) {
         // Same bridge shape as sendFiles above: the generated spec hands a
         // ReadableArray in, and uniffi takes a List<String>.
@@ -245,6 +255,7 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun shutdown(promise: Promise) = resolve(promise) {
         val e = synchronized(lock) { engine.also { engine = null } }
+        DaakWake.wake = null
         e?.shutdown()
         releaseMulticastLock()
         null

@@ -134,10 +134,11 @@ export class DaemonClientEngine implements DaakEngine {
     throw new Error('unpairing is mobile-only: no IpcRequest revokes a pairing');
   }
 
-  // No IpcRequest wakes the outbox. Loud, not silent: a desktop path that
-  // no-oped here would look like the wake worked.
+  // IpcRequest::Wake drains the daemon's outbox now. The daemon answers Ok
+  // after it calls Engine::background_wake, the same ONE wake primitive the
+  // in-process engines use.
   async backgroundWake(): Promise<void> {
-    throw new Error('background wake is unsupported on the daemon path');
+    await this.tx.request({ Request: 'Wake' });
   }
 
   // The daemon owns its own receive directory, and no IpcRequest reports a

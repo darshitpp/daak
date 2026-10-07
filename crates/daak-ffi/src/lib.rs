@@ -616,6 +616,13 @@ impl DaakEngine {
             .map_err(engine_err)
     }
 
+    /// Wake the shared outbox worker now. The ONE wake primitive. The mobile
+    /// background triggers and the daemon IPC Wake reach the same Rust call.
+    pub fn background_wake(&self) -> Result<(), FfiError> {
+        self.engine()?.background_wake();
+        Ok(())
+    }
+
     pub fn cancel(&self, transfer_id: String) -> Result<(), FfiError> {
         // Parse before the engine check: a malformed id is a caller bug whether
         // or not the engine happens to be running.

@@ -1,6 +1,18 @@
 import BackgroundTasks
 import Foundation
 
+/// The ONE engine-wake slot that the native background triggers reach.
+///
+/// The engine is held by the `Daak` TurboModule, and that module does not exist
+/// until the React bridge boots. A BGTask can arrive before the bridge, so this
+/// slot is nil on a cold launch and the wake is a no-op then. The wake is a
+/// single shared call, `Engine::background_wake`, and this slot does not add a
+/// second one.
+enum DaakBridge {
+  /// Set by `Daak.start()` when the engine is up, cleared by `Daak.shutdown()`.
+  static var backgroundWake: (() -> Void)?
+}
+
 /// The ONE owner of the two BGTaskScheduler registrations.
 ///
 /// This lives in the APP TARGET, not the pod, for the same reason
@@ -90,6 +102,9 @@ import Foundation
     // anyway, because a BGTask left without one is killed at its deadline with
     // no completion, which iOS counts as a failure for every future request.
     task.expirationHandler = { }
+    // Wake the engine's shared outbox worker if the module has started one.
+    // On a cold launch this is nil; the newly launched engine drains itself.
+    DaakBridge.backgroundWake?()
     task.setTaskCompleted(success: true)
     appendSpikeLine(taskId: task.identifier, startedAt: startedAt)
     // A one-shot BGAppRefreshTask is consumed. The chain only continues if the

@@ -14,12 +14,11 @@ import androidx.core.app.NotificationCompat
 /**
  * Keeps the Daak process alive while the Rust outbox is delivering.
  *
- * It does ONE thing: raise a low-importance dataSync notification. It does not
- * drain, it does not reach the engine, and it has no transport or crypto in it.
- * (GAP 1: there is no drain entry point on the engine at all, and the plan's
- * shared engine holder refers to a class that has never existed in this repo.
- * The outbox worker spawned by Engine::start owns a 5s ticker and is poked on
- * every enqueue and on peer presence, so it drains itself.)
+ * It raises a low-importance dataSync notification. It also calls the ONE
+ * engine wake, DaakWake.wake, when the Daak module has a live engine in this
+ * process. It does NOT drain: the outbox worker spawned by Engine::start owns
+ * a 5s ticker and is poked on every enqueue and on peer presence. The service
+ * has no transport and no crypto in it.
  *
  * ponytail: the service stops only when JS says a transfer finished. A process
  * killed without stopForegroundSync leaves a stale notification; upgrading to a
@@ -50,6 +49,9 @@ class DaakSyncService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    // Wake the shared outbox worker now. No-op when the module has no live
+    // engine in this process.
+    DaakWake.wake?.invoke()
     val nm = getSystemService(NotificationManager::class.java)
     // R34: the channel must EXIST before startForeground on API 26+, or the
     // notification is silently dropped and startForeground throws. Idempotent:

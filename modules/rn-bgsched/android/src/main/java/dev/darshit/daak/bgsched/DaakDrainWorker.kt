@@ -8,21 +8,32 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * The Android background wake. It does NOT drain anything (GAP 1).
+ * The ONE engine-wake slot the Android background triggers reach.
  *
- * The plan's version calls a shared engine holder's drain from here; no such
- * class exists in this repo and never has, and the engine has no drain entry
- * point at all. What actually needs doing on a background slot is to re-raise
- * the foreground service IF a transfer is in flight, because that is the only
- * thing a background slot can do that the process was not already doing. The
- * outbox's own 5s ticker drains the queue; enqueue_outbox_send and
- * notify_peer_online poke it the moment a peer appears.
+ * The engine lives in the Daak ReactModule. That module installs a wake
+ * closure here once the engine is up and clears it on shutdown. A worker or a
+ * service that runs with no live module finds a null slot and does nothing,
+ * because the engine's own outbox ticker still drains on a later launch.
+ */
+object DaakWake {
+  @Volatile var wake: (() -> Unit)? = null
+}
+
+/**
+ * The Android background wake.
  *
- * isTransferActive() is deliberately a shared-preference probe rather than a
- * query into the engine: WorkManager runs in a process that may not have a live
- * engine, and reaching one from a worker is the exact coupling the plan's
- * version assumed. The module writes the flag from the same foreground
- * start/stop calls the transfer events already drive.
+ * It does TWO things and no more. First, it calls the ONE engine wake,
+ * DaakWake.wake, when the Daak module has a live engine in this process. Then
+ * it re-raises the foreground service IF a transfer is in flight.
+ *
+ * It does NOT drain. The Rust outbox worker has its own 5s ticker. The worker
+ * is poked on every enqueue and on peer presence. A queued row is therefore
+ * delivered on reconnect with nobody asking.
+ *
+ * isTransferActive() is a shared-preference probe, not an engine query:
+ * WorkManager runs in a process that may not have a live engine. The module
+ * writes the flag from the same foreground start/stop calls the transfer
+ * events already drive.
  *
  * Result.success() always: a failed retry here would reschedule the same probe
  * in a tight loop and burn battery for no information.
@@ -32,6 +43,9 @@ class DaakDrainWorker(context: Context, params: WorkerParameters) :
   override suspend fun doWork(): Result =
       withContext(Dispatchers.IO) {
         try {
+          // Wake the shared outbox worker now. No-op when the module has no
+          // live engine in this process.
+          DaakWake.wake?.invoke()
           if (isTransferActive()) {
             DaakSyncService.start(applicationContext, "Sending with Daak")
           }

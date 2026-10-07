@@ -56,6 +56,9 @@ final class Daak: RCTEventEmitter, EventSink {
         self.eventLock.lock()
         self.eventEngine = e
         self.eventLock.unlock()
+        // Register the ONE wake slot for the native background triggers. The
+        // closure hops onto q, because every engine call is serialised there.
+        DaakBridge.backgroundWake = { [weak self] in self?.wakeFromNative() }
         resolve(nil)
       } catch { reject("E_ENGINE", String(describing: error), error) }
     }
@@ -143,6 +146,16 @@ final class Daak: RCTEventEmitter, EventSink {
                            reject: @escaping RCTPromiseRejectBlock) {
     run(resolve, reject) {
       try self.need().revokePairing(deviceId: deviceId)
+      return nil as Void?
+    }
+  }
+
+  /// Drain the outbox now. The ONE wake primitive; InProcessEngine calls this
+  /// as backgroundWake(), and the iOS BGTask handler calls it too.
+  @objc func backgroundWake(_ resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().backgroundWake()
       return nil as Void?
     }
   }
@@ -235,10 +248,17 @@ final class Daak: RCTEventEmitter, EventSink {
         self.eventLock.lock()
         self.eventEngine = nil
         self.eventLock.unlock()
+        DaakBridge.backgroundWake = nil
         try e?.shutdown()
         resolve(nil)
       } catch { reject("E_DAAK", String(describing: error), error) }
     }
+  }
+
+  /// Called from a native background trigger thread. Hops onto q, because the
+  /// engine handle is only ever touched there.
+  private func wakeFromNative() {
+    q.async { self.engine?.backgroundWake() }
   }
 
   // The generated EventSink callback, invoked on a Rust thread. The UDL hands

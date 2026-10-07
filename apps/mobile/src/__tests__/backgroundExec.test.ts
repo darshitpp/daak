@@ -355,20 +355,25 @@ describe('the iOS grant record is real and is the only field set', () => {
   });
 });
 
-describe('GAP 2: no backgroundWake engine method was invented', () => {
-  // R4 already ruled that backgroundWake arrives in Phase 7 Task 3. Adding it
-  // here would be a UDL + wire change nobody specced for this phase, on a
-  // packages/core interface that is FROZEN for both the in-process engine and
-  // the daemon client.
-  it('appears in no source and not on the engine interface', () => {
-    for (const source of [
-      ...sourcesUnder(repo + 'modules/rn-bgsched'),
-      stripComments(read(repo + 'apps/mobile/src/bootstrap.ts')),
-      stripComments(read(repo + 'packages/platform/src/bgsched.ts')),
-    ]) {
-      expect(source).not.toMatch(/backgroundWake/);
-    }
-    expect(read(repo + 'packages/core/src/engine/types.ts')).not.toMatch(/backgroundWake/);
+describe('Task 8: the native background triggers reach the ONE engine wake', () => {
+  // Phase 7 Task 3 added backgroundWake to the engine interface and the
+  // TurboModule spec; Task 8 wired the native triggers to it. The wake is ONE
+  // Rust call, Engine::background_wake, reached from JS (InProcessEngine),
+  // from the iOS BGTask handler, and from the Android worker and service.
+  it('is on the engine interface and the native FFI spec', () => {
+    expect(read(repo + 'packages/core/src/engine/types.ts')).toMatch(/backgroundWake/);
+    expect(read(repo + 'packages/core/src/NativeDaak.ts')).toMatch(/backgroundWake/);
+  });
+
+  it('is called by the iOS BGTask handler through one shared slot', () => {
+    const launch = stripComments(read(repo + 'apps/mobile/ios/Daak/DaakBgLaunch.swift'));
+    expect(launch).toMatch(/DaakBridge\.backgroundWake\?\(\)/);
+  });
+
+  it('is called by the Android worker and the foreground service', () => {
+    const binvoke = /DaakWake\.wake\?\.invoke\(\)/;
+    expect(stripComments(read(ktDir + 'DaakDrainWorker.kt'))).toMatch(binvoke);
+    expect(stripComments(read(ktDir + 'DaakSyncService.kt'))).toMatch(binvoke);
   });
 });
 

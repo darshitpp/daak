@@ -121,6 +121,10 @@ interface DaakEngine {
   // other. The peer returns to the unpaired state, so the UI stops offering
   // Send and offers Pair again.
   [Throws=FfiError] void revoke_pairing(string device_id);
+  // Drain the outbox now. The ONE wake primitive the mobile background
+  // triggers (BGTaskScheduler, WorkManager) and the daemon IPC Wake reach.
+  // Backs Engine::background_wake, which wakes the shared outbox worker.
+  [Throws=FfiError] void background_wake();
   [Throws=FfiError] void cancel(string transfer_id);
   [Throws=FfiError] void retry(string transfer_id);
   // Re-arm ONE item of a transfer. `retry` re-arms the WHOLE transfer, so the
