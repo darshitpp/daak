@@ -346,6 +346,23 @@ describe('fspaths reveal on Android', () => {
     expect(kt).toMatch(/FLAG_GRANT_READ_URI_PERMISSION/);
   });
 
+  // A literal "*/*" type makes the chooser list EVERY app that accepts any
+  // file, so the user picks from a wall of unrelated apps. The intent type
+  // must be DERIVED, not hardcoded. The content resolver answers on both
+  // branches: FileProvider maps the file's extension, and a SAF provider reads
+  // the document's stored type.
+  it('opens the file with the document type, not a hardcoded wildcard', () => {
+    const reveal = kt.slice(
+      kt.indexOf('override fun reveal('),
+      kt.indexOf('override fun exists('),
+    );
+    expect(reveal).not.toMatch(/setData(AndType)?\([^)]*"\*\/\*"/);
+    // The derived type is applied on BOTH branches: the app-storage file and
+    // the SAF document the download-folder move produced.
+    expect(reveal.match(/typeFor\(uri\)/g)?.length).toBe(2);
+    expect(kt).toContain('contentResolver.getType(');
+  });
+
   // Package visibility: on API 30+ resolveActivity() answers null for an
   // intent filter the app has not declared a <queries> for, and startActivity
   // then throws ActivityNotFoundException. Reveal would resolve false on every

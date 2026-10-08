@@ -100,7 +100,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     if (path.startsWith("content://")) {
       val uri = Uri.parse(path)
       val open = Intent(Intent.ACTION_VIEW).apply {
-        setData(uri)
+        setDataAndType(uri, typeFor(uri))
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
       }
       if (open.resolveActivity(reactApplicationContext.packageManager) == null) {
@@ -113,7 +113,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     if (!file.exists()) return@resolve false
     val uri = FileProvider.getUriForFile(reactApplicationContext, AUTHORITY, file)
     val intent = Intent(Intent.ACTION_VIEW).apply {
-      setDataAndType(uri, "*/*")
+      setDataAndType(uri, typeFor(uri))
       addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     val launched =
@@ -267,6 +267,17 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         "json" -> "application/json"
         else -> "application/octet-stream"
       }
+
+  /**
+   * The type the chooser filters on. The content resolver answers for both
+   * branches: FileProvider maps the file extension, and a SAF provider reads
+   * the document's stored type. A hardcoded wildcard type here lists every app
+   * that accepts any file, so the user picks from a wall of unrelated apps. The
+   * wildcard is the fallback only when no provider knows the type, because then
+   * there is nothing to filter on.
+   */
+  private fun typeFor(uri: Uri): String =
+      reactApplicationContext.contentResolver.getType(uri) ?: "*/*"
 
   /**
    * ONE resolution of the engine's data dir, matched by CONSTRUCTION to
