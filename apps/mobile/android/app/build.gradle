@@ -86,6 +86,26 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'org.webkit:android-jsc:+'
 
+// Release signing input. The keystore password never enters Git. Gradle reads
+// apps/mobile/android/keystore.properties when that file exists, else the four
+// ANDROID_KEY* environment variables. keystore.properties.example documents
+// both forms. When NEITHER source is present, no release signing config is
+// made, so :app:assembleRelease writes an UNSIGNED APK instead of a release APK
+// silently signed with the debug key -- a debug-signed release still installs
+// and still runs, and the user only meets the mistake on the first update, when
+// the upload key no longer matches the installed key. Pinned by
+// apps/mobile/src/__tests__/androidReleaseSigning.test.ts.
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+def releaseStoreFile = keystoreProperties.getProperty('storeFile') ?: System.getenv('ANDROID_KEYSTORE_PATH')
+def releaseStorePassword = keystoreProperties.getProperty('storePassword') ?: System.getenv('ANDROID_KEYSTORE_PASSWORD')
+def releaseKeyAlias = keystoreProperties.getProperty('keyAlias') ?: System.getenv('ANDROID_KEY_ALIAS')
+def releaseKeyPassword = keystoreProperties.getProperty('keyPassword') ?: System.getenv('ANDROID_KEY_PASSWORD')
+def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -122,15 +142,27 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // No release block at all without the four values above. AGP then has
+        // no signature to attach and emits app-release-unsigned.apk.
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // The upload key, never the debug key. See the note at the top of
+            // this file. The debug build above keeps signingConfigs.debug.
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
