@@ -81,7 +81,7 @@ describe('openDashboard still reports a missing window', () => {
 //
 // THE FIX HAS TWO PARTS.
 //
-// Part one lives in AppDelegate.mm, which sets Accessory on the next main-queue
+// Part one lives in AppDelegate.mm, which sets the policy on the next main-queue
 // turn after launch. A clean relaunch after that rebuild measured
 // activationPolicy=1.
 //
@@ -97,9 +97,10 @@ describe('openDashboard still reports a missing window', () => {
 // order so it cannot drift silently, but it does not claim to be the fix, and
 // Apple documents no ordering requirement between the two calls.
 //
-// Accessory, not Regular: Accessory keeps this out of the Dock and keeps the
-// status item, and it still allows a window to be activated on demand. Regular
-// would add the Dock icon that LSUIElement is there to remove.
+// Regular, not Accessory: this is a NORMAL app. It has a Dock icon, a Cmd-Tab
+// entry, and the standard app menu bar, and the menu-bar status item stays
+// beside them. The policy repair below only has to move the process OFF
+// Prohibited, so Regular is the value it restores.
 describe('the dashboard window can come to the front', () => {
   // Scoped to the method body AND stripped. A slice taken at the method
   // signature also carried the ten comment lines that sit below the
@@ -116,7 +117,7 @@ describe('the dashboard window can come to the front', () => {
     // app. It may be READ, to detect the broken state, but it must never be the
     // policy the app settles on. Both checks read the stripped slice.
     expect(openDashboardBody).toMatch(
-      /setActivationPolicy:\s*NSApplicationActivationPolicyAccessory/,
+      /setActivationPolicy:\s*NSApplicationActivationPolicyRegular/,
     );
     expect(openDashboardBody).not.toMatch(
       /setActivationPolicy:\s*NSApplicationActivationPolicyProhibited/,
@@ -135,11 +136,11 @@ describe('the dashboard window can come to the front', () => {
     );
   });
 
-  it('keeps the app out of the Dock while still allowing activation', () => {
-    // Regular would add a Dock icon that LSUIElement exists to remove, so the
-    // one-line fix must choose Accessory.
+  it('repairs the policy to the normal app shape', () => {
+    // The repair must choose Regular. Accessory would undo the normal app shape
+    // that this task exists to give the app.
     expect(openDashboardBody).not.toMatch(
-      /setActivationPolicy:\s*NSApplicationActivationPolicyRegular/,
+      /setActivationPolicy:\s*NSApplicationActivationPolicyAccessory/,
     );
   });
 

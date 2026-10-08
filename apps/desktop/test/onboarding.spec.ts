@@ -648,7 +648,7 @@ describe('which decisions need a window brought forward', () => {
     // 'ready' is the exception, and it is not a small one: it is published only
     // AFTER a successful start, and a returning user with a menu-bar icon can
     // open their own dashboard. Forcing a window up would make the app pop
-    // open on every single launch, which is exactly what LSUIElement is for.
+    // open on every single launch, and a returning launch must not do that.
     expect(needsWindow({ kind: 'ready' })).toBe(false);
     // Nothing has been decided yet, and the launch is not over.
     expect(needsWindow(undefined)).toBe(false);
@@ -662,11 +662,11 @@ describe('which decisions need a window brought forward', () => {
   // needsWindow('ready') is false, and that was correct on its own terms -- a
   // successful returning launch must not pop a window open on every launch. But
   // applied to a FAILED one it means the fault note renders into a window
-  // AppDelegate orderOut'd at startup, on an app with no Dock icon and no status
-  // item yet. The user sees nothing at all.
+  // AppDelegate orderOut'd at startup, on an app with no status item yet. The
+  // user sees nothing at all.
   it('brings the window forward for a start fault even when the decision says ready', () => {
     const rows: [string, boolean][] = [
-      // ready, nothing failed: STILL false. This is the LSUIElement rule and it
+      // ready, nothing failed: STILL false. The no-pop-on-returning-launch rule
       // must not regress into "always open a window".
       ['ready, no fault', needsWindowFor({ kind: 'ready' }, null)],
       // The load-bearing cell, and the whole reason needsWindowFor exists.

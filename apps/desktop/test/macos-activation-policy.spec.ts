@@ -13,12 +13,11 @@ import { stripComments } from './strip-comments';
 // window as onscreen the whole time (layer 0, onscreen=1, alpha=1, 1280x748)
 // while System Events reported zero windows, because the app was never active.
 //
-// WHY THE PROCESS SITS ON 2 IS NOT DOCUMENTED. NSRunningApplication.h maps
-// LSUIElement=1 to Accessory and maps LSBackgroundOnly=1 to Prohibited.
-// Info.plist sets LSUIElement and does NOT set LSBackgroundOnly. So the
-// documented value for this Info.plist is Accessory, and the measured value is
-// Prohibited. The disagreement is recorded as unknown. No test asserts a cause,
-// because no cause is proven.
+// WHY THE PROCESS SAT ON 2 IS NOT DOCUMENTED. The old Info.plist set
+// LSUIElement=1 and did NOT set LSBackgroundOnly. NSRunningApplication.h maps
+// LSUIElement=1 to Accessory, so the documented value for the old Info.plist was
+// Accessory while the measured value was Prohibited. The disagreement is
+// recorded as unknown. No test asserts a cause, because no cause is proven.
 //
 // THE FAILURE MODE OF THE FIRST TWO FIXES, twice measured.
 //
@@ -38,9 +37,12 @@ import { stripComments } from './strip-comments';
 // barrier. It does not prove the block runs after every AppKit setup step, so
 // "late enough" is a measured fact on this host and an assumption elsewhere.
 // The fallback in RNWindowHost openDashboard repairs the policy on a click.
-// Accessory is the right value: it keeps the app out of the Dock and keeps the
-// status item, which is what a menu-bar app is. Regular would add a Dock icon
-// that LSUIElement exists to remove.
+//
+// SHAPE CHANGED 2026-10-08. The task changed the app from an accessory app to a
+// NORMAL app. The old Info.plist set LSUIElement and there was no Dock icon.
+// Now there is a Dock icon, a Cmd-Tab entry, and the standard app menu bar, and
+// the menu-bar status item stays. Regular is the right value: it gives the
+// normal app shape. The status item survives under Regular.
 //
 // This test reads the source because the defect is in a launch path that no JS
 // suite executes, which is the house style for native defects here. See
@@ -70,14 +72,14 @@ describe('the app leaves the Prohibited policy before any click arrives', () => 
     );
   });
 
-  it('keeps the app out of the Dock while still allowing activation', () => {
-    // Accessory keeps the menu-bar behaviour. Regular adds a Dock icon that
-    // LSUIElement is there to remove.
+  it('makes the app a normal app with a Dock icon and a menu bar', () => {
+    // Regular gives the normal app shape: a Dock icon, a Cmd-Tab entry, and the
+    // standard app menu bar. The status item stays beside it.
     expect(launchBody).toMatch(
-      /setActivationPolicy:\s*NSApplicationActivationPolicyAccessory/,
+      /setActivationPolicy:\s*NSApplicationActivationPolicyRegular/,
     );
     expect(launchBody).not.toMatch(
-      /setActivationPolicy:\s*NSApplicationActivationPolicyRegular/,
+      /setActivationPolicy:\s*NSApplicationActivationPolicyAccessory/,
     );
   });
 

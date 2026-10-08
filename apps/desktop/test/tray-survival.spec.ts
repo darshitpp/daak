@@ -5,11 +5,11 @@ import { fakeEngine } from '@daak/ui';
 
 // THE MENU-BAR ICON SURVIVES A START FAULT. This is a RENDERED assertion.
 //
-// This app is a menu-bar app: Info.plist sets LSUIElement so there is no Dock
-// icon, and AppDelegate.mm does [self.window orderOut:nil] at launch. Every
-// route back into the UI runs through the status item. So when a start fault
-// destroys the tray, the app has NO visible surface at all -- no icon, no
-// status item, no window, and no way back in.
+// AppDelegate.mm does [self.window orderOut:nil] at launch, so the dashboard
+// window is hidden at startup. The status item is the quick-share surface, and
+// it is the main route back into the UI. So when a start fault destroys the
+// tray, the app has no visible surface at all -- no status item, no window, and
+// no way back in until the user clicks the Dock icon.
 //
 // THE DEFECT THIS PINS: DaakTrayOverlay used to live INSIDE
 // DesktopOnboardingGate's children. The gate REPLACES children on every

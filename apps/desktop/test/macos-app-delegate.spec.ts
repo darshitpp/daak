@@ -38,4 +38,12 @@ describe('the macOS app delegate answers the bundle URL the base class asks for'
     // the one that is no longer called at all.
     expect(delegate).toMatch(/return\s+\[self bundleURL\];/);
   });
+
+  it('brings the dashboard back when the Dock icon is clicked', () => {
+    // The window is ordered out at launch, so a normal app needs this handler.
+    // Without it the new Dock icon and the Cmd-Tab entry do nothing.
+    expect(delegate).toMatch(
+      /-\s*\(BOOL\)applicationShouldHandleReopen:[\s\S]*?hasVisibleWindows:[\s\S]*?openDashboard/,
+    );
+  });
 });

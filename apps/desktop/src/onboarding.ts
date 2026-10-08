@@ -395,19 +395,19 @@ export function phaseFor(decision: OnboardingDecision | undefined): DesktopOnboa
 /**
  * Must this decision bring a window FORWARD, unprompted?
  *
- * The macOS app is a menu-bar app: Info.plist sets LSUIElement (no Dock icon)
- * and AppDelegate.mm does [self.window orderOut:nil] at launch, so the window
- * exists but nothing shows it. Every route back in -- the tray menu, a daak://
- * link, a notification tap -- is inside the gate, so on a FIRST launch there
- * is no tray menu either. Onboarded users open their own dashboard; they have
- * an icon to click. A first launch, and a fault, have neither, so nothing
- * would ever put a window on screen and the user would be stuck in front of an
- * app with no visible surface at all.
+ * AppDelegate.mm does [self.window orderOut:nil] at launch, so the window
+ * exists but nothing shows it. The menu-bar status item is the quick-share
+ * surface. Every route back in -- the tray menu, a daak:// link, a
+ * notification tap -- is inside the gate, so on a FIRST launch there is no
+ * tray menu yet. Onboarded users open their own dashboard from the status
+ * item or the Dock icon. A first launch, and a fault, have no ready surface,
+ * so nothing would ever put a window on screen and the user would be stuck in
+ * front of an app with no visible surface at all.
  *
  * So: onboard and fault bring the window forward, `ready` does not (it is
- * published only after a successful start, and forcing a window on every
- * returning launch is precisely what LSUIElement exists to prevent), and no
- * decision yet means the launch has not reached its end.
+ * published only after a successful start, and a returning launch must not pop
+ * a window open on every start), and no decision yet means the launch has not
+ * reached its end.
  */
 export function needsWindow(decision: OnboardingDecision | undefined): boolean {
   return decision !== undefined && decision.kind !== 'ready';

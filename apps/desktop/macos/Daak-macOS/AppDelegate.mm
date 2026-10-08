@@ -19,10 +19,12 @@
 
   [super applicationDidFinishLaunching:notification];
 
-  // Menu-bar app: LSUIElement in Info.plist means there is no Dock icon, and
-  // the dashboard must not appear at launch. It is ordered in on demand. The
-  // root view stays alive inside the window, because that is what shares the
-  // bridge with the popover -- orderOut hides, it does not tear down.
+  // Normal app: Info.plist has no LSUIElement, so the app has a Dock icon, a
+  // Cmd-Tab entry, and the standard app menu bar. The dashboard must not appear
+  // at launch. It is ordered in on demand. The menu-bar status item stays
+  // beside the normal app surfaces. The root view stays alive inside the
+  // window, because that is what shares the bridge with the popover -- orderOut
+  // hides, it does not tear down.
   self.window.title = @"Daak";
   [self.window orderOut:nil];
 
@@ -33,13 +35,12 @@
   // other window. The window was on screen the whole time, so the failure
   // looked like a dead tray item.
   //
-  // WHY THE PROCESS SITS ON 2 IS NOT DOCUMENTED, AND NO CLAIM IS MADE HERE.
-  // NSRunningApplication.h maps LSUIElement=1 to Accessory and maps
-  // LSBackgroundOnly=1 to Prohibited. Info.plist sets LSUIElement and does NOT
-  // set LSBackgroundOnly, so the documented value for this Info.plist is
-  // Accessory, not Prohibited. The measured value and the documented value
-  // disagree, and the reason is recorded as unknown. What is measured is the
-  // value 2 and the window that will not come forward while it holds.
+  // WHY THE PROCESS SAT ON 2 IS NOT DOCUMENTED, AND NO CLAIM IS MADE HERE. The
+  // old Info.plist set LSUIElement=1, which NSRunningApplication.h maps to
+  // Accessory, and Prohibited comes from LSBackgroundOnly=1, which was not set.
+  // The measured value and the documented value disagree, and the reason is
+  // recorded as unknown. What is measured is the value 2 and the window that
+  // will not come forward while it holds.
   //
   // Not on the first click: the click that reaches openDashboard comes from the
   // status item, and the status item exists because the app is already running.
@@ -60,11 +61,11 @@
   // future macOS moves the overwrite later, this call loses and the fallback in
   // RNWindowHost openDashboard repairs the policy on the next click.
   //
-  // Accessory, not Regular. Accessory keeps this out of the Dock and keeps the
-  // status item, which is what a menu-bar app is. Regular would add the Dock
-  // icon that LSUIElement is there to remove.
+  // Regular, not Accessory. The app is a NORMAL app: a Dock icon, a Cmd-Tab
+  // entry, and the standard app menu bar. Regular gives that shape. The
+  // menu-bar status item stays under Regular.
   dispatch_async(dispatch_get_main_queue(), ^{
-    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   });
 
   // The dashboard root above was created by this delegate's rootViewFactory.
@@ -96,6 +97,16 @@
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
 {
   return [self bundleURL];
+}
+
+// The dashboard window is ordered out at launch, so a click on the Dock icon or
+// a selection through Cmd-Tab must bring it back. Without this handler the Dock
+// icon of the NORMAL app does nothing. AppKit calls this when the app is
+// reopened and no window is visible.
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag
+{
+  [[RNWindowHost shared] openDashboard];
+  return YES;
 }
 
 // RCTAppDelegate on react-native-macos 0.76 asks the SUBCLASS for bundleURL,

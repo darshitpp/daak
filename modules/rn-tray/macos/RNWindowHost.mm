@@ -148,29 +148,29 @@ RCT_EXPORT_MODULE(DaakWindowHost)
   // sequence. Apple documents NO ordering requirement between the two calls,
   // and none is claimed here.
   //
-  // DISCREPANCY, RECORDED, NOT RESOLVED. Info.plist sets LSUIElement=1, and
-  // NSRunningApplication.h maps LSUIElement=1 to NSApplicationActivationPolicyAccessory
-  // and maps Prohibited to LSBackgroundOnly=1. The live process still measured
-  // activationPolicy=2 with LSUIElement=1 set and no LSBackgroundOnly present.
-  // The measured value and the documented value disagree. The measurement is
-  // the fact here. The documented cause does not explain it, and no code change
-  // follows from this comment.
+  // DISCREPANCY, RECORDED, NOT RESOLVED. The old Info.plist set LSUIElement=1,
+  // and NSRunningApplication.h maps LSUIElement=1 to
+  // NSApplicationActivationPolicyAccessory and maps Prohibited to
+  // LSBackgroundOnly=1. The live process still measured activationPolicy=2 with
+  // LSUIElement=1 set and no LSBackgroundOnly present. The measured value and
+  // the documented value disagree. The measurement is the fact here. The
+  // documented cause does not explain it, and no code change follows from this
+  // comment.
   //
-  // AppDelegate.mm sets Accessory on the next main-queue turn after launch, and
-  // a clean relaunch then measured activationPolicy=1. So the guard below is
-  // FALSE on the normal path. It is defence, not the live path: it repairs the
-  // policy if AppKit ever reinstalls Prohibited, and it costs one comparison.
+  // AppDelegate.mm sets Regular on the next main-queue turn after launch, so
+  // the guard below is FALSE on the normal path. It is defence, not the live
+  // path: it repairs the policy if AppKit ever reinstalls Prohibited, and it
+  // costs one comparison.
   //
-  // Accessory, not Regular: Accessory keeps this out of the Dock and keeps the
-  // status item, which is what a menu-bar app is. Regular would add a Dock
-  // icon that LSUIElement was there to remove. The enum runs Regular 0,
-  // Accessory 1, Prohibited 2, so Accessory is the lowest by privilege. It is
-  // the lowest that still lets a window be activated on demand.
+  // Regular, not Accessory: the app is a NORMAL app with a Dock icon, a Cmd-Tab
+  // entry, and the standard app menu bar, and the status item stays beside
+  // them. The enum runs Regular 0, Accessory 1, Prohibited 2. The repair only
+  // has to move the process OFF Prohibited, so it restores Regular.
   if (NSApp.activationPolicy == NSApplicationActivationPolicyProhibited) {
     // -setActivationPolicy: returns BOOL and the value is discarded on purpose.
     // A refused change reports NO here, and the activation call below then
     // refuses too. No error handling belongs in this method.
-    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   }
   // CORRECT TODAY. -activateIgnoringOtherApps: carries API_DEPRECATED with
   // API_TO_BE_DEPRECATED, and the header names -activate as its replacement.
@@ -192,13 +192,13 @@ RCT_EXPORT_MODULE(DaakWindowHost)
 // second mechanism that could behave differently, and it is not a new Quit menu
 // item. terminate: is not restricted by the activation policy: the SDK header
 // (NSApplication.h) declares it with no API_AVAILABLE note and no policy note,
-// and AppDelegate.mm sets NSApplicationActivationPolicyAccessory on the next
-// main-queue turn after launch, so the process runs under Accessory. Whether the
+// and AppDelegate.mm sets NSApplicationActivationPolicyRegular on the next
+// main-queue turn after launch, so the process runs under Regular. Whether the
 // app menu Quit has been clicked in this process is NOT measured here; the brief
 // reported that it works. Nothing in this file depends on that report.
 //
-// The policy is NOT repaired here. Accessory is what keeps the app out of the
-// Dock while it terminates, and openDashboard's repair is about activation, not
+// The policy is NOT repaired here. Regular is the normal app shape, and the app
+// keeps it while it terminates; openDashboard's repair is about activation, not
 // about quitting: a process under Prohibited cannot show a window, but it can
 // still exit. Setting the policy from here would put one more AppKit call in
 // the last moments of the process and could only make the termination less

@@ -43,9 +43,9 @@ RCT_EXPORT_METHOD(share : (NSString *)payloadJson resolve : (RCTPromiseResolveBl
     return;
   }
 
-  // R5-B. Task 4 made this LSUIElement with the dashboard window orderOut: at
-  // launch, so NSApp.keyWindow is nil whenever only the popover is up -- and a
-  // hidden window is not a legal anchor either. RNTray owns the one piece of
+  // R5-B. Task 4 ordered the dashboard window out at launch, so NSApp.keyWindow
+  // is nil whenever only the popover is up -- and a hidden window is not a legal
+  // anchor either. RNTray owns the one piece of
   // chrome that is always on screen (the status item button), so that is the
   // anchor; the DaakTray pod is not a declared dependency here, so the class is
   // looked up by name and a nil status item (install() has not run) falls
@@ -91,8 +91,8 @@ RCT_EXPORT_METHOD(share : (NSString *)payloadJson resolve : (RCTPromiseResolveBl
 // Settles in the panel's COMPLETION, never around a blocking run: NSOpenPanel
 // presents a SHEET, which has no return value at all, so the completion handler
 // is the only place the selection can be read. runModal is the fallback for no
-// window (this app is LSUIElement with the dashboard ordered out), and it runs
-// its own nested event loop -- so its result is read AFTER it returns, inside
+// window (the dashboard is ordered out at launch), and it runs its own nested
+// event loop -- so its result is read AFTER it returns, inside
 // this method, which is the one place a modal response is legal.
 RCT_EXPORT_METHOD(pickDocuments : (BOOL)multiple resolve : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
   RCTAssertMainQueue();
@@ -140,8 +140,8 @@ RCT_EXPORT_METHOD(pickDocuments : (BOOL)multiple resolve : (RCTPromiseResolveBlo
   // say that: the tray button exists from install() onward, so once it is present
   // it satisfies an `anchorView != nil` test even when `window` came from
   // NSApp.mainWindow and that window is ordered out -- this app's normal state
-  // (LSUIElement, AppDelegate orderOut at launch). beginSheetModalForWindow: on
-  // an offscreen window throws NSInvalidArgumentException, so the first "Add
+  // (AppDelegate orderOut at launch). beginSheetModalForWindow: on an offscreen
+  // window throws NSInvalidArgumentException, so the first "Add
   // files" click of a menu-bar-only run would crash.
   //
   // share() gates the same way and REJECTS the no-window case. Here the picker

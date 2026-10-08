@@ -105,7 +105,7 @@ function functionBody(code: string, signature: string): string {
 
 // The BODY of the native quitApp method, read on the STRIPPED source. Same
 // reason as the file header gives for stripping: the comment block above the
-// method names NSApp, terminate:, Prohibited and Accessory, so an unstripped
+// method names NSApp, terminate:, Prohibited and Regular, so an unstripped
 // slice would satisfy a case on the prose instead of on the code.
 const nativeQuitAppBody = functionBody(
   stripComments(nativeSource),
@@ -312,16 +312,19 @@ describe('both quit routes reach the same native call', () => {
     expect(nativeQuitAppBody).not.toMatch(/addItem/);
   });
 
-  it('keeps the menu bar policy at Accessory, out of the Dock', () => {
-    // A Dock icon would make the symptom ambiguous: the user could no longer
-    // tell a live app from a dead one by looking at the Dock. Info.plist sets
-    // LSUIElement, and this change must not touch the activation policy.
+  it('keeps the app a normal app, with no LSUIElement', () => {
+    // The app is a NORMAL app: a Dock icon, a Cmd-Tab entry, and the standard
+    // app menu bar, with the menu-bar status item beside them. Info.plist must
+    // not set LSUIElement or the two NSSupports* keys, and the code must choose
+    // Regular. The quit routes must not change that shape.
     const info = readFileSync(
       join(__dirname, '..', 'macos', 'Daak-macOS', 'Info.plist'),
       'utf8',
     );
-    expect(info).toMatch(/<key>LSUIElement<\/key>\s*<true\/>/);
-    expect(stripComments(nativeSource)).not.toMatch(
+    expect(info).not.toMatch(/<key>LSUIElement<\/key>/);
+    expect(info).not.toMatch(/<key>NSSupportsAutomaticTermination<\/key>/);
+    expect(info).not.toMatch(/<key>NSSupportsSuddenTermination<\/key>/);
+    expect(stripComments(nativeSource)).toMatch(
       /setActivationPolicy:\s*NSApplicationActivationPolicyRegular/,
     );
   });

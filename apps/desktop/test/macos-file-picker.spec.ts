@@ -86,9 +86,9 @@ describe('the macOS file picker exists and answers when the panel does', () => {
     // The sheet path: anchored on a window when one is available.
     expect(body).toContain('beginSheetModalForWindow:');
     expect(body).toMatch(/beginSheetModalForWindow:[\s\S]*?completionHandler:/);
-    // The fallback for no window at all. This app is LSUIElement with the
-    // dashboard window ordered out at launch, so there frequently is none -- the
-    // reason share() in this same file anchors on the tray instead.
+    // The fallback for no window at all. The dashboard window is ordered out at
+    // launch, so there frequently is none -- the reason share() in this same
+    // file anchors on the tray instead.
     expect(body).toContain('runModal');
     // BOTH paths settle, and they settle in different places, so the method needs
     // more than one resolve: one inside the sheet completion handler, one on the
