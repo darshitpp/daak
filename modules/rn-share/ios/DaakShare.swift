@@ -55,6 +55,11 @@ class DaakShare: NSObject {
     let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
     picker.allowsMultipleSelection = multiple
     let delegate = DocumentPickerDelegate(resolve: resolve, reject: reject)
+    // Assigning the delegate is the WHOLE contract. It was retained with
+    // objc_setAssociatedObject and never assigned, so no callback ever fired:
+    // the promise never settled, the Send screen never received a file, and its
+    // button stayed disabled. Retaining is not assigning.
+    picker.delegate = delegate
     objc_setAssociatedObject(picker, &documentPickerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN)
     DispatchQueue.main.async {
       guard let root = Self.rootViewController() else {

@@ -650,4 +650,14 @@ describe('rn-share present opens a file the download-folder move recorded', () =
       'val shareType = mime?.takeIf { it.isNotEmpty() } ?: types.singleOrNull() ?: "*/*"',
     );
   });
+
+  // The picker was created, the delegate was retained with
+  // objc_setAssociatedObject, and picker.delegate was NEVER assigned -- so the
+  // callback never fired, the promise never settled, and the Send screen waited
+  // forever with its button disabled. Retaining the delegate is not assigning
+  // it.
+  it('assigns the document picker delegate, so a chosen file is delivered', () => {
+    const swift = read(repo + 'modules/rn-share/ios/DaakShare.swift');
+    expect(swift).toContain('picker.delegate = delegate');
+  });
 });
