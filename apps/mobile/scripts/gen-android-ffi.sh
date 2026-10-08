@@ -43,10 +43,19 @@ clean_triple() {
 
 # ---------------------------------------------------------------- bindings ---
 # uniffi-bindgen is not a workspace member, so it is invoked through a small
-# bin built against the exact version Cargo.lock pins. Same generator the crate
-# compiled against is the point: DaakModule.kt imports the package and class
-# names the generator emits, and a version skew is a compile error in Kotlin.
-version="$(awk '/^name = "uniffi_bindgen"$/{getline; gsub(/version = "|"/,""); print; exit}' Cargo.lock)"
+# bin built against the same version the crate compiles against. Same generator
+# is the point: DaakModule.kt imports the package and class names the generator
+# emits, and a version skew is a compile error in Kotlin.
+#
+# From the TRACKED manifest, not from Cargo.lock. Cargo.lock is untracked and
+# forbidden from staging, so it is not in the commit: on a clean checkout the
+# old awk came back EMPTY, and the script emitted `uniffi = { version = "=" }`,
+# which cargo cannot resolve.
+#
+# head -1: `uniffi` appears TWICE in daak-ffi/Cargo.toml (dependencies and
+# build-dependencies) and sed prints both, giving an unresolvable requirement.
+version="$(sed -n 's/^[[:space:]]*uniffi = { version = "\([0-9.]*\)".*/\1/p' crates/daak-ffi/Cargo.toml | head -1)"
+test -n "$version" || { echo "cannot read the uniffi pin from crates/daak-ffi/Cargo.toml" >&2; exit 1; }
 echo "uniffi_bindgen pinned at $version"
 
 # A FIXED directory under target/, not mktemp: see gen-ios-ffi.sh. Sharing it

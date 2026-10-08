@@ -187,4 +187,23 @@ describe('Android uniffi wiring', () => {
     expect(read(script)).toContain('target/daak-uniffi-bindgen');
     expect(read('apps/mobile/scripts/gen-ios-ffi.sh')).toContain('target/daak-uniffi-bindgen');
   });
+
+  // B1-1. The pin must come from a TRACKED file. Cargo.lock is untracked and
+  // forbidden from staging, so a clean checkout has no lock file, the old awk
+  // came back EMPTY, and the script emitted `uniffi = { version = "=" }`, which
+  // cargo cannot resolve. Same source pin as iosFfiWiring, minus the pbxproj.
+  it('reads the uniffi pin from the tracked crate manifest, not Cargo.lock', () => {
+    // Only the command inside the version="$(...)" assignment: the guard's own
+    // error message names the manifest, so matching the whole script would be
+    // satisfied by a hardcoded version that reads nothing at all.
+    const cmd = /^version="\$\((.+)\)"\r?$/m.exec(read(script))?.[1];
+    expect(cmd).toBeTruthy();
+    expect(cmd).toContain('crates/daak-ffi/Cargo.toml');
+    // Comments are stripped: the script's own why-comment names Cargo.lock.
+    const code = read(script)
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n');
+    expect(code).not.toMatch(/Cargo\.lock/);
+  });
 });

@@ -57,9 +57,8 @@ const runtime = createUiRuntime(engine);
  * Publishes a decision to both windows, and brings the window FORWARD when the
  * decision needs it.
  *
- * needsWindow is not decoration. This is a menu-bar app: Info.plist sets
- * LSUIElement so there is no Dock icon, and AppDelegate.mm orderOuts the window
- * at launch so nothing appears on its own. Every route back in -- the tray
+ * needsWindow is not decoration. AppDelegate.mm orderOuts the window at launch
+ * so nothing appears on its own. Every route back in -- the tray
  * menu, a daak:// link, a notification tap -- lives INSIDE the gate, so on a
  * FIRST launch there is no tray menu either. A returning user has an icon to
  * click and does not need a window forced on them; a first launch has no icon,
@@ -74,7 +73,7 @@ const runtime = createUiRuntime(engine);
  * part: `ready` is published on the FAILED start path too (runGateThenPublish
  * does it on both outcomes so the gate has something to draw), so a returning
  * user whose engine will not bind publishes `ready` with a dead engine behind
- * it. needsWindow('ready') is false -- no Dock icon, no window opened -- and the
+ * it. needsWindow('ready') is false -- no window opened -- and the
  * gate's fault view renders into an orderOut window nobody can ever see. A
  * recorded start fault therefore brings the window forward; see needsWindowFor.
  */

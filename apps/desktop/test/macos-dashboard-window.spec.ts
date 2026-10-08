@@ -72,12 +72,11 @@ describe('openDashboard still reports a missing window', () => {
 // behind every other window. The window was on screen the whole time, so the
 // defect looked like a dead menu item.
 //
-// WHY THE PROCESS SITS ON 2 IS NOT DOCUMENTED. NSRunningApplication.h maps
-// LSUIElement=1 to Accessory and maps LSBackgroundOnly=1 to Prohibited.
-// Info.plist sets LSUIElement and does NOT set LSBackgroundOnly, so the
-// documented value for this Info.plist is Accessory. The measured value and the
-// documented value disagree and the reason is unknown, so no test asserts a
-// cause.
+// WHY THE PROCESS SAT ON 2 IS NOT DOCUMENTED. The old Info.plist set
+// LSUIElement=1 and did NOT set LSBackgroundOnly. NSRunningApplication.h maps
+// LSUIElement=1 to Accessory, so the documented value for the old Info.plist
+// was Accessory while the measured value was Prohibited. The disagreement is
+// recorded as unknown, so no test asserts a cause.
 //
 // THE FIX HAS TWO PARTS.
 //
