@@ -1,0 +1,43 @@
+# CI does not sign. The Android keystore and the Apple certificate stay on this
+# host. So this workflow holds no signing secret and no build job. Ruling R27
+# forbids the keystore and the Apple certificate from reaching GitHub.
+#
+# This workflow creates one draft Release when a version tag lands. The host
+# builds and signs the three artifacts afterwards. The host then attaches each
+# artifact with `gh release upload`.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# A Release needs contents: write.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight (version check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/stamp-version.mjs --check
+
+  draft:
+    name: Draft Release
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --draft --title "Daak $GITHUB_REF_NAME" --generate-notes
