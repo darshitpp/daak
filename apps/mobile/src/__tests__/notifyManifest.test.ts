@@ -366,16 +366,17 @@ describe('the received banner shows an image thumbnail', () => {
       module.indexOf('override fun post('),
       module.indexOf('override fun cancel('),
     );
-    expect(post).toContain('setLargeIcon');
+    expect(post).toContain('thumbnailOf(payloadJson)?.let { setLargeIcon(it) }');
   });
 
   // A modern phone photo decoded at full size is tens of megabytes, and this
   // runs on the receive path. The decode MUST be downsampled before the bitmap
   // is allocated.
   it('downsamples the preview before it allocates the bitmap', () => {
-    expect(module).toContain('BitmapFactory');
-    expect(module).toContain('inSampleSize');
-    expect(module).toContain('inJustDecodeBounds');
+    // The CODE SHAPE, not bare words: a comment that names inSampleSize does
+    // not run it.
+    expect(module).toContain('inJustDecodeBounds = true');
+    expect(module).toContain('inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, THUMB_PX)');
   });
 });
 

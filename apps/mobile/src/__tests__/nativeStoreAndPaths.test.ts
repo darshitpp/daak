@@ -637,12 +637,17 @@ describe('rn-share present opens a file the download-folder move recorded', () =
   // Share button looks dead. An existing content:// path must pass through
   // unchanged; the read flag on the intent grants it to the receiver.
   it('passes an existing content:// path through unchanged', () => {
-    expect(share).toContain('startsWith("content://")');
+    expect(share).toContain('if (path.startsWith("content://")) {');
   });
 
   // The chooser filters on the intent type. The caller sends no type, and a
   // wildcard lists every app that accepts any file.
   it('takes the share type from the content resolver', () => {
-    expect(share).toContain('contentResolver.getType(');
+    // The CODE SHAPE, not a bare substring: a comment cannot satisfy either
+    // line, and a revert to the wildcard default breaks the second one.
+    expect(share).toContain('val types = fileUris.map { ctx.contentResolver.getType(it) }.distinct()');
+    expect(share).toContain(
+      'val shareType = mime?.takeIf { it.isNotEmpty() } ?: types.singleOrNull() ?: "*/*"',
+    );
   });
 });

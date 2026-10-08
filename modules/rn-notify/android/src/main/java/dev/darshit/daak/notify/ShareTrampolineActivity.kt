@@ -84,9 +84,12 @@ class ShareTrampolineActivity : Activity() {
       if (!f.exists()) continue
       uris.add(FileProvider.getUriForFile(this, packageName + ".fileprovider", f))
     }
-    // The chooser filters on this type. A hardcoded wildcard lists every app
-    // that accepts any file, so ask the resolver for the first document's type.
-    val shareType = uris.firstOrNull()?.let { contentResolver.getType(it) } ?: "*/*"
+    // The chooser filters on this type. Ask the resolver for each document's
+    // own type, and keep the wildcard when the documents differ, because one
+    // type would hide every app that accepts only the others. The same rule
+    // DaakShareModule.present applies; keep the two in step.
+    val types = uris.map { contentResolver.getType(it) }.distinct()
+    val shareType = types.singleOrNull() ?: "*/*"
     val send =
         if (uris.size > 1) {
           Intent(Intent.ACTION_SEND_MULTIPLE).apply {
