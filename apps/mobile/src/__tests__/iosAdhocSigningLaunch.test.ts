@@ -39,8 +39,8 @@ import { join } from 'path';
 //   Apple Development, team J6NNRLDUG4           -> launches, UI renders
 //                                                  (needs a certificate)
 //
-// So the team-prefixed application-identifier is the cause, and the App Group
-// must STAY. Stripping the injected base entitlements is what
+// So the team-prefixed application-identifier is the cause. Stripping the
+// injected base entitlements is what
 // CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO does, and it needs no certificate, so a
 // clean checkout builds a launchable app.
 //
@@ -79,18 +79,15 @@ describeIfBuilt('iOS Debug simulator build survives exec', () => {
     expect(signedEntitlements(app)).not.toMatch(/J6NNRLDUG4\./);
   });
 
-  // The App Group is still required. It is what the data-protection keychain
-  // reads, and rn-securestore sets kSecUseDataProtectionKeychain = true:
-  //
-  //   keychain read failed for onboarding.v1: -34018 Nothing has been changed.
-  //
-  // So a fix that drops the App Group trades a launch failure for an
-  // onboarding failure, which is why this assertion sits next to the one above.
-  it('still signs the App Group the keychain needs', () => {
-    expect(signedEntitlements(app)).toContain(
+  // A free Apple team grants no App Group, so a sideload profile lacks the key.
+  // The app must sign with no application-groups key or the install fails at
+  // signing time. This sits next to the assertion above because the broken
+  // build carried the group AND the team prefix at the same time.
+  it('signs no App Group, which a free sideload profile cannot grant', () => {
+    expect(signedEntitlements(app)).not.toContain(
       '<key>com.apple.security.application-groups</key>',
     );
-    expect(signedEntitlements(app)).toContain('<string>group.dev.darshit.daak</string>');
+    expect(signedEntitlements(app)).not.toContain('group.dev.darshit.daak');
   });
 });
 

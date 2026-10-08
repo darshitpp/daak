@@ -2,9 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>com.apple.security.application-groups</key>
-  <array>
-    <string>group.dev.darshit.daak</string>
-  </array>
+  <!--
+    The com.apple.security.application-groups key is removed on purpose.
+    A free Apple team grants no App Group. A sideload profile from AltStore or
+    SideStore lacks the key. So an .ipa that requests it fails to install.
+
+    ponytail: this removal parks three features. They are:
+      1. the iOS share sheet (the DaakShareExtension.appex is not embedded);
+      2. the Siri and Shortcuts send (DaakIntentBridge);
+      3. the notification-action stash (DaakNotifyActionStash).
+    The three Swift call sites fail soft on a nil container. The app still runs.
+
+    To re-enable the three features:
+      1. restore this key in Daak.entitlements;
+      2. restore this key in DaakShareExtension.entitlements;
+      3. restore the DaakShareExtension.appex entry in the
+         "Embed App Extensions" build phase of Daak.xcodeproj/project.pbxproj;
+      4. pay for the Apple Developer Program, which grants the App Group.
+  -->
 </dict>
 </plist>

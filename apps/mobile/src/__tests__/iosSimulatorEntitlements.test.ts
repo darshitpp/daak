@@ -2,8 +2,9 @@ import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
-// The iOS Debug build for the SIMULATOR SDK must sign the App Group into the
-// product, or onboarding dies at the first keychain read:
+// The iOS Debug build for the SIMULATOR SDK must send its entitlements to the
+// code signature, not into a Mach-O section. The original defect hid the App
+// Group there, and the data-protection keychain then refused the read:
 //
 //   Daak could not read this device
 //   keychain read failed for onboarding.v1: _34018
@@ -70,24 +71,20 @@ function signedEntitlements(bundle: string): string {
   return start === -1 ? '' : raw.slice(start);
 }
 
-describeIfBuilt('iOS Debug simulator build embeds the App Group', () => {
-  it('signs Daak.app with group.dev.darshit.daak', () => {
-    // An empty dict is what the defect produced, so the assertion is on the
-    // group being PRESENT rather than on the plist merely parsing.
-    expect(signedEntitlements(app)).toContain(
+describeIfBuilt('iOS Debug simulator build carries no App Group', () => {
+  // A free Apple team grants no App Group, so a sideload profile lacks the
+  // key and the install fails at signing time. The key is removed from the app.
+  it('signs Daak.app without an application-groups key', () => {
+    expect(signedEntitlements(app)).not.toContain(
       '<key>com.apple.security.application-groups</key>',
     );
-    expect(signedEntitlements(app)).toContain('<string>group.dev.darshit.daak</string>');
+    expect(signedEntitlements(app)).not.toContain('group.dev.darshit.daak');
   });
 
-  // The extension declares the same group and shares the container. Signed
-  // without it, a share into Daak writes to a container the app cannot read --
-  // a failure that surfaces as an empty inbox rather than as an error.
-  it('signs the ShareExtension with the same group', () => {
-    expect(signedEntitlements(appex)).toContain(
-      '<key>com.apple.security.application-groups</key>',
-    );
-    expect(signedEntitlements(appex)).toContain('<string>group.dev.darshit.daak</string>');
+  // The .ipa must carry no .appex. A free team cannot sign the extension, so
+  // the extension is not embedded in the app.
+  it('does not embed the ShareExtension', () => {
+    expect(existsSync(appex)).toBe(false);
   });
 });
 

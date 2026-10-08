@@ -18,7 +18,6 @@
 		DA0AB0011A68108700A75B9A /* DaakModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0031A68108700A75B9A /* DaakModule.mm */; };
 		DA0AB0021A68108700A75B9A /* Daak.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0041A68108700A75B9A /* Daak.swift */; };
 		DA0AB00A1A68108700A75B9A /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB00C1A68108700A75B9A /* ShareViewController.swift */; };
-		DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = DA0AB00E1A68108700A75B9A /* DaakShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DA0AB0201A68108700A75B9A /* DaakIntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0221A68108700A75B9A /* DaakIntentBridge.swift */; };
 		DA0AB0211A68108700A75B9A /* SendToDeviceIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0231A68108700A75B9A /* SendToDeviceIntent.swift */; };
 		DA0AB0241A68108700A75B9A /* AppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0AB0251A68108700A75B9A /* AppShortcuts.swift */; };
@@ -52,7 +51,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				DA0AB00B1A68108700A75B9A /* DaakShareExtension.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
