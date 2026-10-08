@@ -73,21 +73,26 @@ export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
  * The engine is told ONLY when something moved. A payload with no saved paths,
  * or one whose files all stayed put, needs no write, and a write per receive
  * for nothing is a row rewritten on every arrival.
+ *
+ * RETURNS the locations the move produced, or null when nothing moved. The
+ * caller needs them because a notification is a SNAPSHOT: its payload JSON is
+ * baked into the notification's extras at post time, so a banner posted before
+ * the move carries paths the move then DELETES.
  */
 export async function relocateReceivedFiles(
   engine: { replaceInboxPaths(payloadId: string, paths: string[]): Promise<void> },
   payload: { payloadId: string; savedPaths: string[] | null },
-): Promise<void> {
+): Promise<string[] | null> {
   const before = payload.savedPaths;
-  if (!before || before.length === 0) return;
+  if (!before || before.length === 0) return null;
   let after: string[];
   try {
     after = await moveReceivedFiles(before);
   } catch {
-    return;
+    return null;
   }
-  if (after.length !== before.length) return;
-  if (after.every((p, i) => p === before[i])) return;
+  if (after.length !== before.length) return null;
+  if (after.every((p, i) => p === before[i])) return null;
   try {
     await engine.replaceInboxPaths(payload.payloadId, after);
   } catch {
@@ -95,6 +100,9 @@ export async function relocateReceivedFiles(
     // safe to do from here: the next receive rewrites the row it cares about,
     // and a retry loop in an event handler is worse than a stale path.
   }
+  // Returned even when the DB write above lost: the FILES moved, and the
+  // caller needs where they really are.
+  return after;
 }
 
 /**

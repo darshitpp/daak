@@ -81,6 +81,10 @@ describe('startEngine notifications', () => {
     on.mockReturnValue(jest.fn());
     await startEngine();
     on.mock.calls[0][0]({ type: 'inbox.received', payload: entry });
+    // The banner is posted AFTER the download-folder move, so the post is one
+    // async hop behind the event. Let the microtask queue drain.
+    await Promise.resolve();
+    await Promise.resolve();
     expect(platform.notifyReceived).toHaveBeenCalledWith(entry);
   });
 

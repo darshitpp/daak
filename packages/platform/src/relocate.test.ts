@@ -48,7 +48,9 @@ it('does nothing for a payload with no files', async () => {
 it('records the new locations after a move', async () => {
   moveReceivedFiles.mockResolvedValue(['/Users/me/Downloads/a.jpg']);
   const engine = engineSpy();
-  await relocateReceivedFiles(engine, { payloadId: 'p', savedPaths: ['/app/downloads/a.jpg'] });
+  await expect(
+    relocateReceivedFiles(engine, { payloadId: 'p', savedPaths: ['/app/downloads/a.jpg'] }),
+  ).resolves.toEqual(['/Users/me/Downloads/a.jpg']);
   expect(engine.calls).toEqual([{ payloadId: 'p', paths: ['/Users/me/Downloads/a.jpg'] }]);
 });
 
@@ -66,9 +68,11 @@ it('writes nothing when every path stayed put', async () => {
 it('never throws when the move or the write fails', async () => {
   moveReceivedFiles.mockRejectedValue(new Error('no such folder'));
   const engine = engineSpy();
+  // A rejected move means nothing moved, so there are no new locations to
+  // report: null, not an array of paths the caller must not use.
   await expect(
     relocateReceivedFiles(engine, { payloadId: 'p', savedPaths: ['/app/downloads/a.jpg'] }),
-  ).resolves.toBeUndefined();
+  ).resolves.toBeNull();
   expect(engine.calls).toHaveLength(0);
 
   moveReceivedFiles.mockResolvedValue(['/moved/a.jpg']);
@@ -77,7 +81,10 @@ it('never throws when the move or the write fails', async () => {
       throw new Error('database is locked');
     },
   };
+  // The FILES moved even though the row could not be rewritten, so the caller
+  // still has to learn where they are: a banner posted with the OLD paths would
+  // name files the move already deleted.
   await expect(
     relocateReceivedFiles(failing, { payloadId: 'p', savedPaths: ['/app/downloads/a.jpg'] }),
-  ).resolves.toBeUndefined();
+  ).resolves.toEqual(['/moved/a.jpg']);
 });

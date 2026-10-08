@@ -1,4 +1,10 @@
-import { createEngine, notifyReceived, routeInboxEntry, syncShortcutTargets } from '@daak/platform';
+import {
+  createEngine,
+  notifyReceived,
+  relocateReceivedFiles,
+  routeInboxEntry,
+  syncShortcutTargets,
+} from '@daak/platform';
 import type { DaakEngine, DaakEvent, InboxEntry } from '@daak/core';
 import { startEngine } from '../bootstrap';
 
@@ -110,5 +116,43 @@ describe('startEngine pairing.done subscription', () => {
     expect(routed).toHaveBeenCalledWith(entry, expect.objectContaining({ clipboard: expect.anything() }));
     expect(notified).toHaveBeenCalledTimes(1);
     expect(notified).toHaveBeenCalledWith(entry);
+  });
+
+  // The banner is a SNAPSHOT: its payload JSON is baked into the notification's
+  // extras at post time. Posting BEFORE the download-folder move baked in paths
+  // that the move then DELETED, so the banner's Share built a URI for a file
+  // that was gone and the sheet opened with nothing attached.
+  it('posts the banner with the locations the move produced', async () => {
+    const engine = createEngine();
+    const handlers = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+    const moved = jest.mocked(relocateReceivedFiles);
+    const notified = jest.mocked(notifyReceived);
+    moved.mockClear();
+    notified.mockClear();
+    moved.mockResolvedValueOnce(['content://tree/new.jpg']);
+
+    const entry: InboxEntry = {
+      payloadId: 'p2',
+      transferId: 't2',
+      peerDeviceId: 'd1',
+      kind: 'media',
+      itemCount: 1,
+      summary: 'photo.jpg',
+      receivedAt: 1,
+      savedPaths: ['/app/downloads/photo.jpg'],
+    };
+    for (const handler of handlers) handler({ type: 'inbox.received', payload: entry });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(moved).toHaveBeenCalledWith(engine, entry);
+    expect(notified).toHaveBeenCalledWith({
+      ...entry,
+      savedPaths: ['content://tree/new.jpg'],
+    });
+    // The move must run BEFORE the post, or the banner snapshots a path the
+    // move is about to delete.
+    expect(moved.mock.invocationCallOrder[0]).toBeLessThan(notified.mock.invocationCallOrder[0]);
   });
 });

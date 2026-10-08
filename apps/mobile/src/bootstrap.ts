@@ -15,7 +15,7 @@ import {
   stopTransferForeground,
   syncShortcutTargets,
 } from '@daak/platform';
-import type { DaakEngine } from '@daak/core';
+import type { DaakEngine, InboxEntry } from '@daak/core';
 import type { InboundShareItem } from '@daak/platform';
 
 export const engine: DaakEngine = createEngine();
@@ -115,6 +115,25 @@ export function startEngineOnce(): Promise<void> {
   return started;
 }
 
+/**
+ * Move a received payload's files, THEN post its banner with the locations the
+ * move produced.
+ *
+ * A notification is a SNAPSHOT: its payload JSON is baked into the
+ * notification's extras at post time. Posting before the move baked in paths
+ * that the move then DELETED, so the banner's Share built a URI for a file that
+ * was gone and the sheet opened with nothing attached. The move therefore runs
+ * first, and the banner carries where the files really are.
+ *
+ * Never throws: it runs inside the app's ONE engine event handler, where an
+ * unhandled rejection would kill the subscription and with it every later
+ * notification and pairing publish.
+ */
+async function notifyAfterRelocate(engine: DaakEngine, entry: InboxEntry): Promise<void> {
+  const moved = await relocateReceivedFiles(engine, entry);
+  await notifyReceived(moved ? { ...entry, savedPaths: moved } : entry);
+}
+
 export async function startEngine(): Promise<void> {
   await engine.start();
   // R36: a denied permission is an ordinary answer, not a startup failure. The
@@ -183,11 +202,11 @@ export async function startEngine(): Promise<void> {
     // outbox owns every Daak-to-Daak transfer.
     if (e.type === 'inbox.received') {
       void routeInboxEntry(e.payload, realReceiveDeps);
-      void notifyReceived(e.payload);
       // R42p: a file the user asked to keep somewhere else is MOVED there now,
       // and the row is told where. Here, on the ONE subscription, for the same
-      // reason every other branch is here.
-      void relocateReceivedFiles(engine, e.payload);
+      // reason every other branch is here. The BANNER is posted after it, and
+      // the ordering is load-bearing -- see notifyAfterRelocate.
+      void notifyAfterRelocate(engine, e.payload);
     }
     // R42/GAP 3: the plan's wireBackground opens a SECOND engine.on to do this.
     // It lives here, on the ONE subscription, for the reason every other branch
