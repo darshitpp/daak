@@ -42,6 +42,27 @@ Build the APK:
 
 The APK is `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`.
 
+## Signing on this machine
+
+The script `scripts/sign-android.sh` reads the store password from the macOS
+login Keychain. Nobody types the password for a build. No password file exists
+on disk. The script exports the four `ANDROID_KEY*` variables, runs the release
+Gradle task, and prints the APK path, its size, and the signer certificate
+digest. The digest is public.
+
+Add the Keychain item one time. The command prompts for the password and does
+not put it on the command line.
+
+    security add-generic-password -a daak -s daak-android-upload -w
+
+Then build and sign:
+
+    ./scripts/sign-android.sh
+
+The script exits non-zero with a clear message when the Keychain item is
+missing. The key password equals the store password, so the script uses the one
+Keychain value for both Gradle variables.
+
 ## Verify a download
 
 The user compares the signer of the downloaded APK with the fingerprint above.
