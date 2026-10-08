@@ -49,6 +49,41 @@ pub(crate) fn advertise_ip(ip: IpAddr) -> Option<IpAddr> {
     (!ip.is_unspecified()).then_some(ip)
 }
 
+/// Interface names that are NOT the LAN.
+///
+/// A VPN (utun), a point-to-point tunnel (ppp, tun, tap), Apple Wireless Direct
+/// Link (awdl, llw) and the loopback all carry an address a peer on the LAN
+/// cannot dial. Worse, a VPN's address often SORTS FIRST in [pick_addr]:
+/// rank prefers a private IPv4 and then the numerically smallest one, so a
+/// VPN's 10.7.0.1 beats the real LAN's 192.168.0.226. That is the measured
+/// case: with a VPN connected, this device advertised the tunnel address and
+/// every peer dialled it and hung.
+fn is_lan_interface(name: &str) -> bool {
+    !(name.starts_with("utun")
+        || name.starts_with("ipsec")
+        || name.starts_with("ppp")
+        || name.starts_with("tun")
+        || name.starts_with("tap")
+        || name.starts_with("awdl")
+        || name.starts_with("llw")
+        || name.starts_with("lo"))
+}
+
+/// The address OUR mDNS record should publish, for a listener bound to bound.
+///
+/// A specific bind publishes itself. A WILDCARD bind is the shipped case, and
+/// [advertise_ip] alone turns it into None, which enables the daemon's auto
+/// form and publishes EVERY interface address -- including a VPN's. A browsing
+/// peer then runs [pick_addr] over that list and can choose the tunnel. So the
+/// wildcard case resolves the ONE interface address a peer on this LAN can
+/// dial, and publishes exactly that.
+pub(crate) fn advertise_bind_ip(bound: SocketAddr) -> Option<IpAddr> {
+    if let Some(ip) = advertise_ip(bound.ip()) {
+        return Some(ip);
+    }
+    host_lan_addr(bound.port()).map(|a| a.ip())
+}
+
 impl Advertiser {
     pub fn start(name: &str, port: u16, device_id: [u8; 16]) -> Result<Self> {
         Self::start_with_meta(name, port, device_id, "", "", 0, "online", None)
@@ -422,9 +457,21 @@ pub fn pick_addr(addrs: impl Iterator<Item = IpAddr>, port: u16) -> Option<Socke
 /// `port` is the caller's listener port. An interface list carries no port, so
 /// there is no other honest source for it.
 pub fn host_lan_addr(port: u16) -> Option<SocketAddr> {
-    let addrs: Vec<IpAddr> = if_addrs::get_if_addrs()
-        .map(|ifs| ifs.into_iter().map(|i| i.ip()).collect())
-        .unwrap_or_default();
+    let ifs = if_addrs::get_if_addrs().unwrap_or_default();
+    // A tunnel address is not dialable from the LAN, so it never competes.
+    let lan: Vec<IpAddr> = ifs
+        .iter()
+        .filter(|i| is_lan_interface(&i.name))
+        .map(|i| i.ip())
+        .collect();
+    // The unfiltered list is the fallback for a host whose only interfaces are
+    // tunnels: a wrong address still beats no address for a caller that must
+    // hand a peer something to dial.
+    let addrs: Vec<IpAddr> = if lan.is_empty() {
+        ifs.into_iter().map(|i| i.ip()).collect()
+    } else {
+        lan
+    };
     pick_addr(addrs.into_iter(), port)
 }
 
@@ -1052,6 +1099,56 @@ mod tests {
             info.is_addr_auto(),
             "and the daemon must stay free to fill in the host's real \
              interfaces, which is what makes the record dialable"
+        );
+    }
+
+    // Measured on the developer's Mac: with a VPN connected the host owned
+    // 10.7.0.1 on a tunnel AND 192.168.0.226 on the LAN. A tunnel address is
+    // not dialable from the LAN, and pick_addr prefers the numerically smaller
+    // private IPv4, so the tunnel won and every peer dialled it.
+    #[test]
+    fn pick_addr_alone_prefers_a_vpn_tunnel_address() {
+        let picked = pick_addr(
+            ["10.7.0.1", "192.168.0.226"]
+                .iter()
+                .map(|a| a.parse().unwrap()),
+            4_000,
+        )
+        .unwrap();
+        assert_eq!(
+            picked.ip().to_string(),
+            "10.7.0.1",
+            "this is the defect is_lan_interface exists to remove"
+        );
+    }
+
+    #[test]
+    fn a_tunnel_interface_is_not_a_lan_interface() {
+        for name in ["en0", "en1", "eth0", "wlan0", "bridge100"] {
+            assert!(is_lan_interface(name), "{name} is a LAN interface");
+        }
+        for name in [
+            "utun0", "utun3", "ipsec0", "ppp0", "tun0", "tap0", "awdl0", "llw0", "lo0",
+        ] {
+            assert!(!is_lan_interface(name), "{name} must not count as the LAN");
+        }
+    }
+
+    #[test]
+    fn the_lan_address_wins_once_tunnels_are_filtered() {
+        let all = [
+            ("utun3", "10.7.0.1"),
+            ("en0", "192.168.0.226"),
+            ("awdl0", "169.254.1.1"),
+        ];
+        let lan: Vec<IpAddr> = all
+            .iter()
+            .filter(|(n, _)| is_lan_interface(n))
+            .map(|(_, ip)| ip.parse().unwrap())
+            .collect();
+        assert_eq!(
+            pick_addr(lan.into_iter(), 4_000).unwrap().ip().to_string(),
+            "192.168.0.226"
         );
     }
 }

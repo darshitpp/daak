@@ -11,7 +11,7 @@ use crate::crypto::identity::{verify_static_binding, Identity, IdentityPublic};
 use crate::discovery::beacon::{pairing_presence_key, SealedBeacon};
 use crate::discovery::status::{Liveness, StatusChange};
 use crate::discovery::{
-    advertise_ip, Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
+    advertise_bind_ip, Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
 };
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
@@ -664,12 +664,13 @@ impl Engine {
             local_addr.port(),
             device_id,
             &mut rand::thread_rng(),
-            // Every shipped entry point binds 0.0.0.0, and tcp::bind reports
-            // that wildcard back. Publishing it verbatim with addr_auto off
-            // writes 0.0.0.0:<port> into the A record, which a browsing peer
-            // resolves and then refuses as non-local. advertise_ip maps it back
-            // to None so the auto form is used instead.
-            advertise_ip(local_addr.ip()),
+            // Every shipped entry point binds a WILDCARD, and tcp::bind reports
+            // that wildcard back. Publishing it verbatim writes 0.0.0.0:<port>
+            // into the A record, which a browsing peer resolves and refuses as
+            // non-local. The auto form is worse: it publishes EVERY interface
+            // address, so a peer with a VPN connected dials the tunnel.
+            // advertise_bind_ip resolves the ONE LAN address for a wildcard.
+            advertise_bind_ip(local_addr),
         )?;
         let browser = Arc::new(Browser::start()?);
         let presence = match PresenceSocket::bind().await {
@@ -1497,8 +1498,9 @@ impl Engine {
             self.identity.device_id(),
             &mut rand::thread_rng(),
             // The SAME normalisation as startup (see the call there): a rename
-            // must not republish a literal wildcard.
-            advertise_ip(self.local_addr.ip()),
+            // must not republish a literal wildcard, nor fall back to the auto
+            // form that publishes every interface address.
+            advertise_bind_ip(self.local_addr),
         )?;
         let mut p = self.profile.lock().await;
         // The new advertiser is created BEFORE the old one is stopped (above vs
