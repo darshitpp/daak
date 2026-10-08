@@ -21,16 +21,22 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
 
   override fun present(text: String?, urls: ReadableArray?, mime: String?, promise: Promise) {
     val activity = currentActivity ?: return promise.reject("E_NO_ACTIVITY", "no foreground activity")
-    val fileUris = (urls?.toArrayList() ?: emptyList<Any>()).map { uriFor(activity, it as String) }
+    val fileUris = (urls?.toArrayList() ?: emptyList<Any>()).map { uriFor(it as String) }
+    // The chooser filters on the intent type, and the caller sends none. Ask
+    // the content resolver for the first document's type: a hardcoded wildcard
+    // here lists every app that accepts any file.
+    val shareType = mime?.takeIf { it.isNotEmpty() }
+        ?: fileUris.firstOrNull()?.let { ctx.contentResolver.getType(it) }
+        ?: "*/*"
     val intent = if (fileUris.size > 1) {
       Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-        type = mime?.takeIf { it.isNotEmpty() } ?: "*/*"
+        type = shareType
         putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(fileUris))
         if (!text.isNullOrEmpty()) putExtra(Intent.EXTRA_TEXT, text)
       }
     } else {
       Intent(Intent.ACTION_SEND).apply {
-        type = mime?.takeIf { it.isNotEmpty() } ?: "*/*"
+        type = shareType
         if (fileUris.size == 1) putExtra(Intent.EXTRA_STREAM, fileUris[0])
         if (!text.isNullOrEmpty()) putExtra(Intent.EXTRA_TEXT, text)
       }
@@ -118,8 +124,17 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
 
   override fun onNewIntent(intent: Intent) = Unit
 
-  private fun uriFor(activity: Activity, path: String): Uri =
-    FileProvider.getUriForFile(activity, activity.packageName + ".fileprovider", File(path))
+  private fun uriFor(path: String): Uri =
+    if (path.startsWith("content://")) {
+      // The download-folder move recorded a SAF document URI, and the app holds
+      // the persisted tree grant. FileProvider cannot build a URI for a path
+      // that is not a file: it THROWS, present() rejects, and the JS share verb
+      // swallows the rejection, so the Share button looks dead. Pass the URI
+      // through and let the intent's read flag grant it to the receiver.
+      Uri.parse(path)
+    } else {
+      FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", File(path))
+    }
 
   override fun addListener(eventName: String) = Unit
   override fun removeListeners(count: Double) = Unit

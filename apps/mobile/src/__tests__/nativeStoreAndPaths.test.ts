@@ -625,3 +625,24 @@ describe('no module gained a send path', () => {
     }
   });
 });
+
+describe('rn-share present opens a file the download-folder move recorded', () => {
+  const share = read(
+    repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/DaakShareModule.kt',
+  );
+
+  // After the download-folder move the recorded path is a content:// document
+  // URI. File(path) is not a file, so FileProvider.getUriForFile THROWS on it,
+  // present() rejects, and the JS share verb swallows the rejection -- so the
+  // Share button looks dead. An existing content:// path must pass through
+  // unchanged; the read flag on the intent grants it to the receiver.
+  it('passes an existing content:// path through unchanged', () => {
+    expect(share).toContain('startsWith("content://")');
+  });
+
+  // The chooser filters on the intent type. The caller sends no type, and a
+  // wildcard lists every app that accepts any file.
+  it('takes the share type from the content resolver', () => {
+    expect(share).toContain('contentResolver.getType(');
+  });
+});
