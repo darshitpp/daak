@@ -71,6 +71,10 @@ describe('the macOS .dmg packaging script', () => {
     expect(code).toMatch(/release\/version\.json/);
   });
 
+  it('checks the version stamp before the build', () => {
+    expect(code).toMatch(/stamp-version\.mjs --check/);
+  });
+
   it('does not run notarytool, stapler, or a secure timestamp', () => {
     // No Developer ID certificate exists, so the app cannot be notarized. A
     // call to notarytool or stapler fails, because the secure timestamp server

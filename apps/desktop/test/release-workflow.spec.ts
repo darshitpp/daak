@@ -41,6 +41,11 @@ describe('the release workflow', () => {
     expect(code).toMatch(/contents:\s*write/);
   });
 
+  it('fails the preflight when the tag does not match release/version.json', () => {
+    expect(code).toMatch(/test\s+"v\$/);
+    expect(code).toMatch(/release\/version\.json/);
+  });
+
   it('creates the draft Release with the gh CLI', () => {
     expect(code).toMatch(/gh release create/);
     expect(code).toMatch(/--draft/);

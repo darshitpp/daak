@@ -52,9 +52,12 @@ clean_triple() {
 # old awk came back EMPTY, and the script emitted `uniffi = { version = "=" }`,
 # which cargo cannot resolve.
 #
-# head -1: `uniffi` appears TWICE in daak-ffi/Cargo.toml (dependencies and
+# The first line: `uniffi` appears TWICE in daak-ffi/Cargo.toml (dependencies and
 # build-dependencies) and sed prints both, giving an unresolvable requirement.
-version="$(sed -n 's/^[[:space:]]*uniffi = { version = "\([0-9.]*\)".*/\1/p' crates/daak-ffi/Cargo.toml | head -1)"
+# Read the whole output into a variable, then keep the first line, because a
+# pipeline that ends in `head -1` is unsafe under `set -o pipefail`.
+version_lines="$(sed -n 's/^[[:space:]]*uniffi = { version = "\([0-9.]*\)".*/\1/p' crates/daak-ffi/Cargo.toml)"
+version="${version_lines%%$'\n'*}"
 test -n "$version" || { echo "cannot read the uniffi pin from crates/daak-ffi/Cargo.toml" >&2; exit 1; }
 echo "uniffi_bindgen pinned at $version"
 

@@ -33,10 +33,10 @@
 	     signature grants what this plist REQUESTS and invents nothing, so an
 	     earlier version of this file that omitted the key would have made the
 	     engine unstartable on a properly signed build too. Requested with an
-	     explicit group. AGENTS.md writes the plain group.dev.darshit.daak form,
-	     but the four Xcode profiles grant NO App Group, so the registered form
-	     cannot be used on macOS. Apple's registration-free form is
-	     <team id>.<group name>: J6NNRLDUG4.group.dev.darshit.daak. -->
+	     explicit group. AGENTS.md writes the registration-free form
+	     J6NNRLDUG4.group.dev.darshit.daak. The four Xcode profiles grant NO
+	     App Group, so the plain group.dev.darshit.daak form cannot be used on
+	     macOS. -->
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)group.dev.darshit.daak</string>

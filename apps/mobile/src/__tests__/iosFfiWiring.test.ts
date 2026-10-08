@@ -37,7 +37,7 @@ const code = (s: string) =>
 
 const src = () => code(read(script));
 
-// The command inside the version="$(...)" assignment, e.g.
+// The command inside the version_lines="$(...)" read, e.g.
 // `sed -n '...' crates/daak-ffi/Cargo.toml | head -1`. Every assertion about
 // WHERE the pin is read goes through this and not through src(): the guard's
 // own error message names the manifest, so matching the whole script is
@@ -50,7 +50,7 @@ const src = () => code(read(script));
 // output has no trailing \r. The real CRLF failure is at runtime, where bash
 // sets version="0.28\r" and cargo chokes on `=0.28\r`; that is a script bug,
 // not a test gap, and latent (no .gitattributes, core.autocrlf unset).
-const assignment = () => /^version="\$\((.+)\)"\r?$/m.exec(src());
+const assignment = () => /^version_lines="\$\((.+)\)"\r?$/m.exec(src());
 const extraction = () => assignment()?.[1];
 
 // Xcode writes each PBXShellScriptBuildPhase object as its own block, opening
@@ -90,16 +90,16 @@ describe('iOS uniffi bindgen pin', () => {
     const s = src();
     const cd = /^cd "\$\(cd .*&& pwd\)"$/m.exec(s)?.[0];
     expect(cd).toBeTruthy();
-    expect(s.indexOf(cd as string)).toBeLessThan(s.indexOf('version="$('));
+    expect(s.indexOf(cd as string)).toBeLessThan(s.indexOf('version_lines="$('));
   });
 
   // uniffi appears twice in daak-ffi/Cargo.toml (dependencies and
   // build-dependencies), so sed prints both and the value comes out as
   // "0.28 0.28" -- an unresolvable requirement. And an empty extraction is the
   // clean-checkout case above, which must abort rather than write "=".
-  it('keeps the head -1 and the empty-extraction guard', () => {
+  it('keeps the first line and the empty-extraction guard', () => {
     expect(extraction()).toBeTruthy();
-    expect(extraction()).toMatch(/\| head -1\s*$/);
+    expect(src()).toContain('version="${version_lines%%');
     expect(src()).toMatch(/test -n "\$version"/);
   });
 
@@ -112,11 +112,16 @@ describe('iOS uniffi bindgen pin', () => {
   // requirement the crate actually declares, so it resolves to the same 0.28.3
   // on every machine off one commit.
   it('extracting against the tracked manifest yields 0.28', () => {
+    const linesInScript = src().split('\n');
+    const readLine = linesInScript.find((l) => l.startsWith('version_lines="$('));
+    const cutLine = linesInScript.find((l) => l.startsWith('version="${'));
+    expect(readLine).toBeTruthy();
+    expect(cutLine).toBeTruthy();
     expect(
-      execFileSync('bash', ['-c', extraction() as string], {
+      execFileSync('bash', ['-c', `${readLine}\n${cutLine}\nprintf %s "$version"`], {
         cwd: repoRoot,
         encoding: 'utf8',
-      }).trim(),
+      }),
     ).toBe('0.28');
   });
 });

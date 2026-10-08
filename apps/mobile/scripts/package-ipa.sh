@@ -21,6 +21,9 @@ cd "$REPO_ROOT"
 # The version comes from release/version.json, the single source of truth.
 VERSION="$(node -p 'require("./release/version.json").version')"
 
+# The version stamp must match release/version.json before the build.
+node scripts/stamp-version.mjs --check
+
 # One fixed scratch directory. Reuse it on every run. A per-attempt path fills
 # the disk, and a full disk kills an Xcode build with no error message.
 SCRATCH="${TMPDIR%/}/daak"

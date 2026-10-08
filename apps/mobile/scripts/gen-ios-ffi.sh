@@ -38,11 +38,14 @@ mkdir -p "$out/Headers" "$out/lib"
 # 0.28 requirement resolves to the same 0.28.3 everywhere; `=0.28` is what the
 # lockfile path effectively wanted.
 #
-# head -1: `uniffi` appears TWICE in daak-ffi/Cargo.toml (dependencies and
+# The first line: `uniffi` appears TWICE in daak-ffi/Cargo.toml (dependencies and
 # build-dependencies) and sed prints both, giving version="0.28
 # 0.28" -- an unresolvable requirement. That is a real bug the first attempt at
 # this line had, found by running it.
-version="$(sed -n 's/^[[:space:]]*uniffi = { version = "\([0-9.]*\)".*/\1/p' crates/daak-ffi/Cargo.toml | head -1)"
+# Read the whole output into a variable, then keep the first line, because a
+# pipeline that ends in `head -1` is unsafe under `set -o pipefail`.
+version_lines="$(sed -n 's/^[[:space:]]*uniffi = { version = "\([0-9.]*\)".*/\1/p' crates/daak-ffi/Cargo.toml)"
+version="${version_lines%%$'\n'*}"
 test -n "$version" || { echo "cannot read the uniffi pin from crates/daak-ffi/Cargo.toml" >&2; exit 1; }
 echo "uniffi_bindgen pinned at $version"
 

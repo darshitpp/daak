@@ -585,23 +585,26 @@ describe('macOS runs the engine in-process', () => {
     // the wrong one. That is the whole difference between this test and the
     // revision that read the lockfile and reported 0.28 while the build used the
     // manifest.
+    const readLine = body.split('\n').find((l) => l.startsWith('version_lines="'));
     const versionLine = versionLines.at(-1);
+    expect(readLine).toBeDefined();
     expect(versionLine).toBeDefined();
     expect(
-      // /bin/sh, not a shell literal in this file: the point is to execute the
-      // extracted line verbatim, quoting and all.
-      execFileSync('/bin/sh', ['-c', `${versionLine}; printf %s "$version"`], {
+      // bash, not /bin/sh: the cut line is ANSI-C quoted (`$'\n'`), which dash
+      // does not support. The point is to execute the extracted lines verbatim,
+      // quoting and all.
+      execFileSync('bash', ['-c', `${readLine}\n${versionLine}\nprintf %s "$version"`], {
         cwd: REPO,
         encoding: 'utf8',
       }),
     ).toBe('0.28');
 
-    // And head -1 is load-bearing, which the real-manifest run cannot show: the
-    // real file's two `uniffi` lines carry DIFFERENT trailing feature lists, so
-    // a missing head -1 yields the right string anyway. Same shape, identical
-    // features on both lines -- which is what makes the requirement unresolvable
-    // (version="0.28\n0.28") rather than merely untidy -- and here the two answers
-    // differ, so a dropped head -1 is caught.
+    // And the first-line cut is load-bearing, which the real-manifest run cannot
+    // show: the real file's two `uniffi` lines carry DIFFERENT trailing feature
+    // lists, so a dropped cut yields the right string anyway. Same shape,
+    // identical features on both lines -- which is what makes the requirement
+    // unresolvable (version="0.28\n0.28") rather than merely untidy -- so a
+    // dropped cut is caught.
     const TOML = [
       '[package]',
       'name = "daak-ffi"',
@@ -613,17 +616,22 @@ describe('macOS runs the engine in-process', () => {
       'uniffi = { version = "0.28", features = ["cli"] }',
       '',
     ].join('\n');
-    // The sed half of the script's own line, reused verbatim: the fixture test
-    // exists to prove `head -1` is load-bearing for THIS pattern, so a pattern
-    // written out here instead would be testing a different command.
-    const sed = versionLine!.match(/sed -n '[^']*'/)?.[0];
+    // The sed half of the script's own read line, reused verbatim: the fixture
+    // test exists to prove the cut is load-bearing for THIS pattern, so a
+    // pattern written out here instead would be testing a different command.
+    const sed = readLine!.match(/sed -n '[^']*'/)?.[0];
     expect(sed).toBeDefined();
-    const extract = (pipe: string) =>
-      execFileSync('/bin/sh', ['-c', `${sed} <<'TOML' ${pipe}\n${TOML}TOML`], {
+    const raw = execFileSync('/bin/sh', ['-c', `${sed} <<'TOML'\n${TOML}TOML`], {
+      encoding: 'utf8',
+    });
+    expect(raw).toBe('0.28\n0.28\n');
+    // Apply the script's own cut line to the two-line value. The `$'...'` is
+    // ANSI-C quoted, so this run needs bash, not dash.
+    expect(
+      execFileSync('bash', ['-c', `version_lines=$'0.28\\n0.28'\n${versionLine}\nprintf %s "$version"`], {
         encoding: 'utf8',
-      });
-    expect(extract('| head -1')).toBe('0.28\n');
-    expect(extract('')).toBe('0.28\n0.28\n');
+      }),
+    ).toBe('0.28');
   });
 
   it('the xcode project links the generated staticlib and the ffi module', () => {

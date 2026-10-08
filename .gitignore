@@ -35,4 +35,3 @@ apps/mobile/android/keystore.properties
 *.mobileprovision
 *.keystore
 *.jks
-release/appcast.xml

@@ -77,4 +77,9 @@ describe('Android signing helper script', () => {
     expect(code).toMatch(/\.\/gradlew\s+:app:assembleRelease/);
     expect(code).toMatch(/--offline/);
   });
+
+  it('checks the version stamp before the Gradle run', () => {
+    const code = stripComments(readFileSync(scriptPath, 'utf8'));
+    expect(code).toMatch(/stamp-version\.mjs --check/);
+  });
 });

@@ -36,6 +36,11 @@ copy is gitignored. Never commit it.
 | Certificate | `release/daak-signing-cert.pem` |
 | SHA-256 fingerprint | `0D:82:5C:DC:00:69:C9:17:6B:C9:23:2F:4B:E5:A5:26:6D:51:88:8F:54:C8:FC:2F:F1:23:C5:B4:1F:8F:9D:F5` |
 
+`apksigner` prints the digest in lowercase and with no colons, so the printed
+value is `0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5`.
+Both values are the same digest. Compare the printed value with the lowercase
+value.
+
 Build the APK:
 
     export JAVA_HOME="/path/to/jdk-17"

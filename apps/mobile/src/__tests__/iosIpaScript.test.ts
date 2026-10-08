@@ -75,6 +75,10 @@ describe('the iOS unsigned .ipa packaging script', () => {
     expect(code).toMatch(/release\/version\.json/);
   });
 
+  it('checks the version stamp before the build', () => {
+    expect(code).toMatch(/stamp-version\.mjs --check/);
+  });
+
   it('does not sign or notarize, and ships no store lane', () => {
     // The script must not sign the app and must not notarize it. A call to a
     // signing or notarization tool fails, because no credential exists.

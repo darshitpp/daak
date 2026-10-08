@@ -30,6 +30,9 @@ jobs:
         with:
           node-version: 20
       - run: node scripts/stamp-version.mjs --check
+      - name: Check that the tag matches release/version.json
+        run: |
+          test "v$(node -p "require('./release/version.json').version")" = "$GITHUB_REF_NAME"
 
   draft:
     name: Draft Release

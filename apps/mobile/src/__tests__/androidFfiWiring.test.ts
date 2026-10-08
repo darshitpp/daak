@@ -193,10 +193,10 @@ describe('Android uniffi wiring', () => {
   // came back EMPTY, and the script emitted `uniffi = { version = "=" }`, which
   // cargo cannot resolve. Same source pin as iosFfiWiring, minus the pbxproj.
   it('reads the uniffi pin from the tracked crate manifest, not Cargo.lock', () => {
-    // Only the command inside the version="$(...)" assignment: the guard's own
+    // Only the command inside the version_lines="$(...)" read: the guard's own
     // error message names the manifest, so matching the whole script would be
     // satisfied by a hardcoded version that reads nothing at all.
-    const cmd = /^version="\$\((.+)\)"\r?$/m.exec(read(script))?.[1];
+    const cmd = /^version_lines="\$\((.+)\)"\r?$/m.exec(read(script))?.[1];
     expect(cmd).toBeTruthy();
     expect(cmd).toContain('crates/daak-ffi/Cargo.toml');
     // Comments are stripped: the script's own why-comment names Cargo.lock.

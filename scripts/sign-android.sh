@@ -42,6 +42,9 @@ fi
 export ANDROID_KEYSTORE_PASSWORD
 export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
 
+# The version stamp must match release/version.json before the build.
+( cd "$(dirname "$0")/.." && node scripts/stamp-version.mjs --check )
+
 cd "$(dirname "$0")/../apps/mobile/android"
 ./gradlew :app:assembleRelease --offline
 
