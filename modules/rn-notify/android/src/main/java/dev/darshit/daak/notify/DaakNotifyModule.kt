@@ -6,8 +6,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.facebook.react.bridge.Arguments
@@ -18,11 +22,15 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.modules.core.PermissionAwareActivity
 import com.facebook.react.modules.core.PermissionListener
 import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 
 private const val EVENT = "DaakNotifyEvent"
 private const val PERM_REQUEST_CODE = 0x0DA6
 private const val POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
 private const val TAG = "DaakNotify"
+/** The short side of the banner thumbnail, in pixels. */
+private const val THUMB_PX = 512
 
 @ReactModule(name = DaakNotifyModule.NAME)
 class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNotifySpec(ctx) {
@@ -245,6 +253,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
             setContentIntent(
                 PendingIntent.getActivity(ctx, (id + ":open").hashCode(), launch, IMMUTABLE))
           }
+          // A preview thumbnail for the first image the entry saved, when there
+          // is one. Best-effort: a banner must never fail the receive.
+          thumbnailOf(payloadJson)?.let { setLargeIcon(it) }
         }
         .build()
     try {
@@ -277,6 +288,61 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
       putExtra(EXTRA_PAYLOAD, payload)
     }
     return PendingIntent.getBroadcast(ctx, (id + ":" + action).hashCode(), intent, IMMUTABLE)
+  }
+
+  /**
+   * A small preview of the first image the entry saved, or null.
+   *
+   * Best-effort: a banner must never fail the receive, so every failure here is
+   * swallowed. The decode is DOWNSAMPLED before the bitmap is allocated,
+   * because a modern phone photo decoded at full size is tens of megabytes and
+   * this runs on the receive path.
+   */
+  private fun thumbnailOf(payloadJson: String): Bitmap? =
+      try {
+        val arr = JSONObject(payloadJson).optJSONArray("savedPaths")
+        val path =
+            (0 until (arr?.length() ?: 0))
+                .mapNotNull { arr?.optString(it, null) }
+                .firstOrNull { mimeFor(it)?.startsWith("image/") == true }
+        if (path == null) null else decodeThumb(path)
+      } catch (t: Throwable) {
+        Log.w(TAG, "no thumbnail", t)
+        null
+      }
+
+  /**
+   * The type of a saved document. A content:// path carries its type in the
+   * provider; a filesystem path carries it in the file extension.
+   */
+  private fun mimeFor(path: String): String? =
+      if (path.startsWith("content://")) {
+        ctx.contentResolver.getType(Uri.parse(path))
+      } else {
+        MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase())
+      }
+
+  /** Decode a bitmap no larger than THUMB_PX on its short side. */
+  private fun decodeThumb(path: String): Bitmap? {
+    val uri = if (path.startsWith("content://")) Uri.parse(path) else Uri.fromFile(File(path))
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val opts =
+        BitmapFactory.Options().apply {
+          inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, THUMB_PX)
+        }
+    return ctx.contentResolver.openInputStream(uri)?.use {
+      BitmapFactory.decodeStream(it, null, opts)
+    }
+  }
+
+  /** The largest power of two that keeps both sides at or above the target. */
+  private fun sampleSize(width: Int, height: Int, target: Int): Int {
+    var s = 1
+    while (width / (s * 2) >= target && height / (s * 2) >= target) s *= 2
+    return s
   }
 
   override fun addListener(eventName: String) {

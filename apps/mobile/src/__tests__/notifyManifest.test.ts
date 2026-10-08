@@ -317,3 +317,64 @@ describe('App manifest', () => {
     expect(app).not.toMatch(/ShareTrampolineActivity/);
   });
 });
+
+describe('an Android action tap reaches a foreground surface', () => {
+  const receiver = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/NotificationActionReceiver.kt',
+  );
+  const trampoline = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/ShareTrampolineActivity.kt',
+  );
+
+  // A BroadcastReceiver cannot put an activity in front, so the trampoline is
+  // the ONLY thing that brings the app up for a tapped action. The old code
+  // returned before it for every id except Share, so a tapped Open did nothing
+  // whenever the app was not already in front.
+  it('starts the trampoline for Open as well as Share', () => {
+    expect(receiver).not.toContain('if (action != DaakNotifyModule.ACTION_SHARE) return');
+    expect(receiver).toContain('ShareTrampolineActivity::class.java');
+    expect(receiver).toContain('putExtra(DaakNotifyModule.EXTRA_ACTION, action)');
+    expect(receiver).toContain('action == DaakNotifyModule.ACTION_OPEN');
+  });
+
+  // Share is presented natively by the trampoline. Emitting it to JS as well
+  // would present a SECOND sheet from a warm app.
+  it('builds the chooser only for Share', () => {
+    expect(trampoline).toContain('action == DaakNotifyModule.ACTION_SHARE');
+  });
+
+  // The download-folder move records a SAF content:// document URI, and
+  // File(p).exists() is false for it: the old guard SKIPPED every moved file,
+  // so the sheet opened with nothing attached.
+  it('passes a content:// path through instead of a File', () => {
+    expect(trampoline).toContain('startsWith("content://")');
+  });
+
+  it('opens the chooser with the document type, not a hardcoded wildcard', () => {
+    expect(trampoline).not.toContain('type = "*/*"');
+    expect(trampoline).toContain('contentResolver.getType(');
+  });
+});
+
+describe('the received banner shows an image thumbnail', () => {
+  const module = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt',
+  );
+
+  it('sets a large icon from the first image the entry saved', () => {
+    const post = module.slice(
+      module.indexOf('override fun post('),
+      module.indexOf('override fun cancel('),
+    );
+    expect(post).toContain('setLargeIcon');
+  });
+
+  // A modern phone photo decoded at full size is tens of megabytes, and this
+  // runs on the receive path. The decode MUST be downsampled before the bitmap
+  // is allocated.
+  it('downsamples the preview before it allocates the bitmap', () => {
+    expect(module).toContain('BitmapFactory');
+    expect(module).toContain('inSampleSize');
+    expect(module).toContain('inJustDecodeBounds');
+  });
+});

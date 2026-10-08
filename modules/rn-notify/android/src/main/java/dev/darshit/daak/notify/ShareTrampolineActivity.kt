@@ -39,6 +39,7 @@ class ShareTrampolineActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     val payload = intent?.getStringExtra(DaakNotifyModule.EXTRA_PAYLOAD) ?: "{}"
+    val action = intent?.getStringExtra(DaakNotifyModule.EXTRA_ACTION).orEmpty()
     val paths = savedPaths(payload)
     val host = DaakNotifyModule.launchIntent(this)
     if (host == null) {
@@ -49,7 +50,9 @@ class ShareTrampolineActivity : Activity() {
       return
     }
     host.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-    if (paths.isNotEmpty()) {
+    // Share builds the chooser; Open only needs the app in front. A chooser on
+    // an Open tap would show a share sheet the user did not ask for.
+    if (action == DaakNotifyModule.ACTION_SHARE && paths.isNotEmpty()) {
       // Best-effort: a chooser that cannot be built must not stop the app from
       // coming up, because the stash/reveal still has somewhere to go.
       try {
@@ -67,16 +70,27 @@ class ShareTrampolineActivity : Activity() {
   private fun chooser(paths: List<String>): Intent {
     val uris: ArrayList<Uri> = ArrayList(paths.size)
     for (p in paths) {
+      // R42p: the download-folder move records a SAF content:// document URI.
+      // File(p) is not a file, so the old exists() guard SKIPPED every moved
+      // file and the sheet opened with nothing attached. Pass the URI through;
+      // the read flag below grants it to the receiver.
+      if (p.startsWith("content://")) {
+        uris.add(Uri.parse(p))
+        continue
+      }
       val f = File(p)
       // A path that no longer exists (the user moved it, or the app's cache dir
       // was cleared) must not take down the whole sheet.
       if (!f.exists()) continue
       uris.add(FileProvider.getUriForFile(this, packageName + ".fileprovider", f))
     }
+    // The chooser filters on this type. A hardcoded wildcard lists every app
+    // that accepts any file, so ask the resolver for the first document's type.
+    val shareType = uris.firstOrNull()?.let { contentResolver.getType(it) } ?: "*/*"
     val send =
         if (uris.size > 1) {
           Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-            type = "*/*"
+            type = shareType
             // putParcelableArrayListExtra takes a CONCRETE java.util.ArrayList,
             // not a kotlin.collections.List. `uris` is already an ArrayList, so
             // this needs no copy.
@@ -84,7 +98,7 @@ class ShareTrampolineActivity : Activity() {
           }
         } else {
           Intent(Intent.ACTION_SEND).apply {
-            type = "*/*"
+            type = shareType
             // There is no putParcelableExtra on Intent: the single-item
             // Parcelable overload is putExtra(String, Parcelable). The
             // ARRAY-LIST form one branch up IS a distinct method, which is why
