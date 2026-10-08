@@ -313,7 +313,11 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
             .getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase())
       }
 
-  /** Decode a bitmap no larger than THUMB_PX on its short side. */
+  /**
+   * Decode a bitmap downsampled so that BOTH sides stay at or above THUMB_PX.
+   * The short side therefore lands in [THUMB_PX, 2 * THUMB_PX), which bounds
+   * the bitmap without turning it into a postage stamp.
+   */
   private fun decodeThumb(path: String): Bitmap? {
     val uri = if (path.startsWith("content://")) Uri.parse(path) else Uri.fromFile(File(path))
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

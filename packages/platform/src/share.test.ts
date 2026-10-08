@@ -21,9 +21,12 @@ describe('share facade', () => {
     expect(native.present).toHaveBeenCalledWith('hi', ['/tmp/a.pdf'], 'application/pdf');
   });
 
-  it('defaults mime to */* when none is given', async () => {
+  // An empty mime is the honest "no preference": the native side then derives
+  // the type per document. A '*/*' default here made the native derivation dead
+  // code, and the chooser listed every app that accepts any file.
+  it('sends no mime when none is given, so the native side derives the type', async () => {
     await presentShare({ urls: ['/tmp/a.pdf'] });
-    expect(native.present).toHaveBeenLastCalledWith('', ['/tmp/a.pdf'], '*/*');
+    expect(native.present).toHaveBeenLastCalledWith('', ['/tmp/a.pdf'], '');
   });
 
   it('exposes the document picker', async () => {

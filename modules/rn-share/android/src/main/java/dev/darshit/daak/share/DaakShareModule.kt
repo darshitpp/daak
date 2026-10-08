@@ -22,12 +22,13 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
   override fun present(text: String?, urls: ReadableArray?, mime: String?, promise: Promise) {
     val activity = currentActivity ?: return promise.reject("E_NO_ACTIVITY", "no foreground activity")
     val fileUris = (urls?.toArrayList() ?: emptyList<Any>()).map { uriFor(it as String) }
-    // The chooser filters on the intent type, and the caller sends none. Ask
-    // the content resolver for the first document's type: a hardcoded wildcard
-    // here lists every app that accepts any file.
-    val shareType = mime?.takeIf { it.isNotEmpty() }
-        ?: fileUris.firstOrNull()?.let { ctx.contentResolver.getType(it) }
-        ?: "*/*"
+    // The chooser filters on the intent type. An empty mime from the caller
+    // means "ask the platform", so resolve each document's own type: a
+    // hardcoded wildcard lists every app that accepts any file. When the
+    // documents differ, keep the wildcard, because one type would hide every
+    // app that accepts only the others.
+    val types = fileUris.map { ctx.contentResolver.getType(it) }.distinct()
+    val shareType = mime?.takeIf { it.isNotEmpty() } ?: types.singleOrNull() ?: "*/*"
     val intent = if (fileUris.size > 1) {
       Intent(Intent.ACTION_SEND_MULTIPLE).apply {
         type = shareType

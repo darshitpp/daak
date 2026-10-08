@@ -128,6 +128,11 @@ export function startEngineOnce(): Promise<void> {
  * Never throws: it runs inside the app's ONE engine event handler, where an
  * unhandled rejection would kill the subscription and with it every later
  * notification and pairing publish.
+ *
+ * ponytail: the banner now WAITS for the move. A slow or hung SAF move delays
+ * the banner, and a move that never returns drops it. That is the price of a
+ * path that is correct. Upgrade to a placeholder banner rewritten when the move
+ * settles, if the delay is ever felt.
  */
 async function notifyAfterRelocate(engine: DaakEngine, entry: InboxEntry): Promise<void> {
   const moved = await relocateReceivedFiles(engine, entry);
