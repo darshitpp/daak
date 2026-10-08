@@ -57,13 +57,14 @@ describe('permission rows are only as switchable as the platform really is', () 
     expect(permissionRows({}).rows[2]?.state).toBe('off');
   });
 
-  // The Continue gate names only what the user can actually act on. Listing
-  // discovery or local network there would promise that pressing something on
-  // this screen would change them.
-  it('unblocks Continue only once the askable permission is answered', () => {
+  // NOTHING blocks Continue. The other two rows are facts the user cannot change
+  // here, and the alerts row is OPTIONAL. Gating on it dead-ended onboarding on
+  // iOS, which never re-prompts after a denial: a user who tapped "Don't Allow"
+  // could never leave this step.
+  it('never blocks Continue on an optional permission', () => {
     expect(permissionRows({ notificationsGranted: true }).stillNeeded).toEqual([]);
-    expect(permissionRows({ notificationsGranted: false }).stillNeeded).toEqual([ALERTS_TITLE]);
-    expect(permissionRows({}).stillNeeded).toEqual([ALERTS_TITLE]);
+    expect(permissionRows({ notificationsGranted: false }).stillNeeded).toEqual([]);
+    expect(permissionRows({}).stillNeeded).toEqual([]);
   });
 
   // A declined notification permission is an ORDINARY answer (R36), not an

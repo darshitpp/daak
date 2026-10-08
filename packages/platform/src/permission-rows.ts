@@ -110,10 +110,16 @@ export function permissionRows(facts: CapabilityFacts): {
   ];
   return {
     rows,
-    // Only the row the user can actually act on. Naming discovery or local
-    // network here would promise that pressing something on this screen would
-    // change them, and it cannot.
-    stillNeeded: granted === true ? [] : [ALERTS_TITLE],
+    // NOTHING blocks Continue.
+    //
+    // The other two rows are facts the user cannot change here, and the alerts
+    // row is OPTIONAL -- its own subtitle says so. Gating on it dead-ended
+    // onboarding on iOS, which never re-prompts after a denial: a user who
+    // tapped "Don't Allow" could never leave this step, because the Continue
+    // button was disabled by a permission the same screen calls optional.
+    // Declining a banner costs a banner and never a transfer (R36), so the step
+    // may offer the row without requiring an answer.
+    stillNeeded: [],
   };
 }
 
