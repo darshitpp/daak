@@ -58,3 +58,9 @@ base64 = "0.22"
 # is a wrong cache expiry, not a crash. R59 records this trade.
 [profile.dev.package.mdns-sd]
 overflow-checks = false
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
+panic = "abort"

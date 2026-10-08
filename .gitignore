@@ -28,3 +28,10 @@ modules/*/android/build/
 
 # pnpm store shadow: a local .pnpm-store/ shadows the real store on the next install
 .pnpm-store/
+
+apps/mobile/android/keystore.properties
+*.p12
+*.pfx
+*.mobileprovision
+*.keystore
+release/appcast.xml
