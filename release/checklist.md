@@ -13,20 +13,20 @@ The controller runs a check and writes the real value in the Result column.
 | Android | `Daak-0.1.0.apk` | The file holds four ABIs. | PASS |
 | Android | `Daak-0.1.0.apk` | The Hermes bundle is present. | PASS |
 | Android | `Daak-0.1.0.apk` | The signer fingerprint equals the public fingerprint `0D:82:5C:DC:00:69:C9:17:6B:C9:23:2F:4B:E5:A5:26:6D:51:88:8F:54:C8:FC:2F:F1:23:C5:B4:1F:8F:9D:F5`. | PASS |
-| Android | `Daak-0.1.0.apk` | The SHA-256 is `4ac0ed2edf94050a9771a8cc07801d603267f3d20be1c4fda49601892d0ca81a`. | PASS |
+| Android | `Daak-0.1.0.apk` | The SHA-256 is `9c828add42c20c18c224acbc7a60b8c5756e87c98fe1b2f3777580e48b433055`. | PASS |
 | Android | `Daak-0.1.0.apk` | Discrepancy D-A8: the APK reports `minSdk` 24. The plan floor is 26. | OPEN |
 | macOS | `Daak-0.1.0.dmg` | The archive printed `ARCHIVE SUCCEEDED`. | PASS |
 | macOS | `Daak-0.1.0.dmg` | `codesign` reports valid on disk. | PASS |
 | macOS | `Daak-0.1.0.dmg` | The app satisfies its Designated Requirement. | PASS |
 | macOS | `Daak-0.1.0.dmg` | `spctl` rejects the app and the image. The origin is `Apple Development: darshit12@gmail.com (9VTBKNCJJ2)`. The app is not notarized, so this result is expected. | PASS |
-| macOS | `Daak-0.1.0.dmg` | The SHA-256 is `b1719b22312b2cecfa2820a32657e346b81b1a82f85efc0032dc0c4863fadee8`. | PASS |
+| macOS | `Daak-0.1.0.dmg` | The SHA-256 is `d8413dc1663dec8e8d275ba9630aae1668318048796feec84ebb6f8f54a387ab`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The archive printed `ARCHIVE SUCCEEDED`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The app holds no `PlugIns` directory. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The app holds no `.appex` file. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The app holds no `embedded.mobileprovision`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The executable is `arm64`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The app is not signed. | PASS |
-| iOS | `Daak-0.1.0.ipa` | The SHA-256 is `149964d518f15e9b368c94f54e1a7d6c20d8469d0a2ae0d8df7f73f5149530c9`. | PASS |
+| iOS | `Daak-0.1.0.ipa` | The SHA-256 is `e0d89fa989fea87c594cf3d0f6834efc18426627d06c5bcc6371b61e7d325ae9`. | PASS |
 
 ## Checks that a human must run by hand
 
