@@ -193,6 +193,17 @@ describe('the iOS scan and generate path', () => {
     const plist = read(repo + 'apps/mobile/ios/Daak/Info.plist');
     expect(plist).toContain('<key>NSCameraUsageDescription</key>');
   });
+
+  // A capture session with NO preview layer runs the camera and draws nothing:
+  // the green LED lights and the screen stays black, which the user cannot tell
+  // apart from a dead camera. The preview layer is the whole visible half of
+  // the scan screen.
+  it('draws the camera preview, not just the capture session', () => {
+    const vc = stripComments(read(qr + 'ios/ScannerViewController.swift'));
+    expect(vc).toContain('AVCaptureVideoPreviewLayer(session: session)');
+    expect(vc).toMatch(/override func viewDidLayoutSubviews\(\)/);
+    expect(vc).toContain('previewLayer?.frame = view.bounds');
+  });
 });
 
 describe('the module gained no send path', () => {

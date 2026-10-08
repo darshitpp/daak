@@ -7,6 +7,10 @@ import UIKit
 /// cannot usefully restart in place.
 final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
   private let session = AVCaptureSession()
+  /// The visible half of this screen. A session with no preview layer runs the
+  /// camera and draws NOTHING: the green LED lights and the screen stays black,
+  /// which the user cannot tell apart from a dead camera.
+  private var previewLayer: AVCaptureVideoPreviewLayer?
   private let onResult: (String) -> Void
   private let onError: (String) -> Void
 
@@ -31,6 +35,17 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
     session.addOutput(output)
     output.setMetadataObjectsDelegate(self, queue: .main)
     output.metadataObjectTypes = [.qr]
+    let preview = AVCaptureVideoPreviewLayer(session: session)
+    preview.videoGravity = .resizeAspectFill
+    view.layer.addSublayer(preview)
+    previewLayer = preview
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    // Bounds, not frame: the layer hangs off view.layer, whose coordinate space
+    // is the view's bounds.
+    previewLayer?.frame = view.bounds
   }
 
   override func viewDidAppear(_ animated: Bool) {
