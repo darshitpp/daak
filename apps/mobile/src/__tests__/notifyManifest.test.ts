@@ -378,3 +378,27 @@ describe('the received banner shows an image thumbnail', () => {
     expect(module).toContain('inJustDecodeBounds');
   });
 });
+
+describe('the Android banner carries no action buttons', () => {
+  const module = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt',
+  );
+  const post = module.slice(
+    module.indexOf('override fun post('),
+    module.indexOf('override fun cancel('),
+  );
+
+  // The two buttons were REMOVED. Open did nothing whenever the app was not in
+  // front, and Share built a URI for a path the download-folder move had
+  // deleted. A button is a promise; withhold it until it keeps the promise.
+  it('adds no action button', () => {
+    expect(post).not.toContain('addAction(');
+  });
+
+  // The BODY tap keeps the one useful verb -- land on the Inbox -- by routing
+  // through the SAME receiver the Open button used: it brings the app up and
+  // delivers the open event, which the shell turns into the Inbox tab.
+  it('routes a body tap through the open action', () => {
+    expect(post).toContain('setContentIntent(actionPending(id, ACTION_OPEN, payloadJson))');
+  });
+});

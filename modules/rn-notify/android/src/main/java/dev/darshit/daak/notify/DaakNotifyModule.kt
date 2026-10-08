@@ -228,31 +228,21 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         .setContentText(body)
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         .setAutoCancel(true)
-        // R33: every action below leads to the OS share sheet or the app. None
-        // of them sends anything; the engine outbox owns every send.
-        .addAction(0, "Open", actionPending(id, ACTION_OPEN, payloadJson))
-        .addAction(0, "Share", actionPending(id, ACTION_SHARE, payloadJson))
+        // NO action buttons. Open did nothing whenever the app was not already
+        // in front, and Share built a URI for a path the download-folder move
+        // had deleted. A button is a promise, so both are withheld until they
+        // keep it. The BODY tap keeps the one useful verb -- land on the Inbox
+        // -- by routing through the SAME receiver the Open button used: it
+        // brings the app up and delivers the open event, which the shell turns
+        // into the Inbox tab. R33 still holds: nothing here sends.
+        //
+        // setContentIntent is a BUILDER method, so it has to run before
+        // build(). It was once called on the Notification build() returns, where
+        // contentIntent is only a public field: the call went nowhere and a
+        // body tap did nothing at all. A request code per id keeps two posts
+        // from sharing one PendingIntent.
+        .setContentIntent(actionPending(id, ACTION_OPEN, payloadJson))
         .apply {
-          // setContentIntent is a BUILDER method, so it has to run before
-          // build(). It was called on the Notification build() returns, where
-          // contentIntent is only a public FIELD: the call went nowhere and
-          // tapping the notification body did nothing at all.
-          launchIntent(ctx)?.let { launch ->
-            // Tapping the BODY is the same user-visible thing as the Open
-            // button: both foreground the app to the inbox, and daak.open is
-            // already wired end to end. So the body intent carries no extras:
-            // nothing reads launch extras (MainActivity is a bare
-            // ReactActivity with no onNewIntent, and bootstrap.ts never reads
-            // them), and writing them asserted a path that does not exist. Add
-            // them back only alongside a real onNewIntent handler that feeds
-            // consumePendingAction.
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            // A request code per id keeps two posts from sharing one
-            // PendingIntent, which would make the second overwrite the first's
-            // payload.
-            setContentIntent(
-                PendingIntent.getActivity(ctx, (id + ":open").hashCode(), launch, IMMUTABLE))
-          }
           // A preview thumbnail for the first image the entry saved, when there
           // is one. Best-effort: a banner must never fail the receive.
           thumbnailOf(payloadJson)?.let { setLargeIcon(it) }
