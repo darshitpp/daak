@@ -2,6 +2,9 @@
 
 This directory holds the public release material. It holds no secret.
 
+For the user install steps for each target, see the `## Install` section in the
+root `README.md`.
+
 ## Release matrix
 
 Daak ships three targets from GitHub Releases on `darshitpp/daak`.
