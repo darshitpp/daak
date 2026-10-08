@@ -9,7 +9,7 @@
 	     is why the extension is not sandboxed to a path. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.dev.darshit.daak</string>
+		<string>J6NNRLDUG4.group.dev.darshit.daak</string>
 	</array>
 	<!-- READ-WRITE, and the R42p destination feature is why. A user-selected
 	     folder was granted read-only here, so the sandbox denied every move into
@@ -33,7 +33,10 @@
 	     signature grants what this plist REQUESTS and invents nothing, so an
 	     earlier version of this file that omitted the key would have made the
 	     engine unstartable on a properly signed build too. Requested with an
-	     explicit group, matching AGENTS.md's group.dev.darshit.daak. -->
+	     explicit group. AGENTS.md writes the plain group.dev.darshit.daak form,
+	     but the four Xcode profiles grant NO App Group, so the registered form
+	     cannot be used on macOS. Apple's registration-free form is
+	     <team id>.<group name>: J6NNRLDUG4.group.dev.darshit.daak. -->
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)group.dev.darshit.daak</string>

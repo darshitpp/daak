@@ -982,6 +982,44 @@ describe('macOS runs the engine in-process', () => {
     );
   });
 
+  it('requests the registration-free team-prefixed App Group on macOS', () => {
+    // Phase 8 Task 5. The four Xcode profiles grant NO App Group, so the
+    // registered 'group.dev.darshit.daak' form cannot be used on macOS. Apple
+    // documents a registration-free form for macOS, '<team id>.<group name>'.
+    // containerURL(forSecurityApplicationGroupIdentifier:) looks the string up
+    // EXACTLY as the entitlement writes it, so the host entitlement, the
+    // extension entitlement, and the extension's Swift literal must all agree
+    // on the same team-prefixed value. The team is pinned elsewhere in the
+    // project as DEVELOPMENT_TEAM = J6NNRLDUG4.
+    const GROUP = 'J6NNRLDUG4.group.dev.darshit.daak';
+    const REPO = join(APP, '..', '..');
+    const host = readFileSync(join(MACOS, 'Daak-macOS', 'Daak.entitlements'), 'utf8');
+    const ext = readFileSync(
+      join(REPO, 'extensions', 'macos-share', 'ShareExtension.entitlements'),
+      'utf8',
+    );
+    const swift = readFileSync(
+      join(REPO, 'extensions', 'macos-share', 'ShareViewController.swift'),
+      'utf8',
+    );
+    // The application-groups VALUE, not a bare toContain: the keychain group
+    // already spells the team out, so a toContain of the team prefix would pass
+    // while the application-groups value stayed in the registered form.
+    const groupValue =
+      /<key>com\.apple\.security\.application-groups<\/key>\s*<array>\s*<string>([^<]+)<\/string>/;
+    for (const [name, src] of [
+      ['Daak.entitlements', host],
+      ['ShareExtension.entitlements', ext],
+    ] as const) {
+      const match = src.match(groupValue);
+      expect(match, name + ' must request an application group').not.toBeNull();
+      expect(match![1], name + ' application-groups value').toBe(GROUP);
+    }
+    // The literal, not a read of the entitlement at build time: the extension
+    // resolves the group identifier verbatim at runtime.
+    expect(swift).toMatch(/private let kAppGroup = "J6NNRLDUG4\.group\.dev\.darshit\.daak"/);
+  });
+
   it('refuses to start over a file identity instead of silently re-pairing', () => {
     // D16.12.6. b122254 shipped the UDL's plain constructor, so any Mac that ran
     // it wrote its Ed25519 identity to Documents/daak/keys. This build asks the

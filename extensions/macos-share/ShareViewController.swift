@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 // (apps/mobile/ios/DaakShareExtension/ShareViewController.swift) and the same
 // staged layout, so one drain rule serves both platforms.
 private let kDarwinInboxChanged = "dev.darshit.daak.inbox.changed"
-private let kAppGroup = "group.dev.darshit.daak"
+private let kAppGroup = "J6NNRLDUG4.group.dev.darshit.daak"
 private let kInboxDir = "share-inbox"
 private let kBatchDir = "batches"
 
