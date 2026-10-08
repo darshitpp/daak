@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    The SIMULATOR build uses this file, not Daak.entitlements. It carries the
+    App Group because the iOS 26 simulator data protection keychain grants
+    access ONLY to a process whose adhoc signature carries an access group.
+    This file is selected with
+      CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]
+    so Daak.entitlements (the DEVICE build) stays free of the App Group and a
+    free-team sideload .ipa still installs.
+
+    ponytail: measured on the iPhone 17 simulator (5E019877), iOS 26.2. The
+    keychain read for onboarding.v1 returned -34018 with an empty entitlements
+    file. keychain-access-groups SIGKILLed the app at exec (SBMainWorkspace
+    denied the launch), with or without a team prefix, with or without
+    application-identifier and com.apple.developer.team-identifier. Only this
+    key made the read succeed. Remove this key and the -34018 banner returns.
+    The DEVICE build must NOT carry it: a free team grants no App Group.
+  -->
+  <key>com.apple.security.application-groups</key>
+  <array>
+    <string>group.dev.darshit.daak</string>
+  </array>
+</dict>
+</plist>

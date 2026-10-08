@@ -71,14 +71,16 @@ function signedEntitlements(bundle: string): string {
   return start === -1 ? '' : raw.slice(start);
 }
 
-describeIfBuilt('iOS Debug simulator build carries no App Group', () => {
-  // A free Apple team grants no App Group, so a sideload profile lacks the
-  // key and the install fails at signing time. The key is removed from the app.
-  it('signs Daak.app without an application-groups key', () => {
-    expect(signedEntitlements(app)).not.toContain(
+describeIfBuilt('iOS Debug simulator build carries the simulator App Group', () => {
+  // The simulator build signs with Daak.simulator.entitlements, which carries
+  // the App Group the iOS 26 simulator keychain needs (a keychain read without
+  // it returns -34018). The DEVICE file, Daak.entitlements, carries none, so a
+  // free-team sideload .ipa still installs.
+  it('signs Daak.app with the application-groups key the keychain needs', () => {
+    expect(signedEntitlements(app)).toContain(
       '<key>com.apple.security.application-groups</key>',
     );
-    expect(signedEntitlements(app)).not.toContain('group.dev.darshit.daak');
+    expect(signedEntitlements(app)).toContain('group.dev.darshit.daak');
   });
 
   // The .ipa must carry no .appex. A free team cannot sign the extension, so

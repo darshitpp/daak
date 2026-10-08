@@ -3,17 +3,31 @@
 <plist version="1.0">
 <dict>
   <!--
-    The com.apple.security.application-groups key is removed on purpose.
-    A free Apple team grants no App Group. A sideload profile from AltStore or
-    SideStore lacks the key. So an .ipa that requests it fails to install.
+    This is the DEVICE entitlements file. It holds no
+    com.apple.security.application-groups key. A free Apple team grants no App
+    Group, so a sideload profile from AltStore or SideStore lacks the key. An
+    .ipa that requests it fails to install.
 
-    ponytail: this removal parks three features. They are:
+    ponytail: the App Group IS what the iOS 26 SIMULATOR keychain needed.
+    Measured on the iPhone 17 simulator with an adhoc "Sign to Run Locally"
+    signature:
+      - an empty entitlements file launches and SecItemCopyMatching returns
+        -34018 (errSecMissingEntitlement);
+      - keychain-access-groups SIGKILLs the app at exec and the launch is
+        denied by SBMainWorkspace, with or without a team prefix, with or
+        without application-identifier and com.apple.developer.team-identifier;
+      - only com.apple.security.application-groups makes the read succeed.
+    So the simulator build takes the App Group from Daak.simulator.entitlements,
+    selected with CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]. THIS file stays
+    clear of the group so the DEVICE build still installs from a free profile.
+
+    ponytail: the removal parks three features on a DEVICE build. They are:
       1. the iOS share sheet (the DaakShareExtension.appex is not embedded);
       2. the Siri and Shortcuts send (DaakIntentBridge);
       3. the notification-action stash (DaakNotifyActionStash).
     The three Swift call sites fail soft on a nil container. The app still runs.
 
-    To re-enable the three features:
+    To re-enable the three features on a DEVICE build:
       1. restore this key in Daak.entitlements;
       2. restore this key in DaakShareExtension.entitlements;
       3. restore the DaakShareExtension.appex entry in the
