@@ -258,7 +258,10 @@ final class Daak: RCTEventEmitter, EventSink {
   /// Called from a native background trigger thread. Hops onto q, because the
   /// engine handle is only ever touched there.
   private func wakeFromNative() {
-    q.async { self.engine?.backgroundWake() }
+    // The UDL marks background_wake as throwing, so the call needs `try`. A
+    // failure here only means the engine is already gone. A native trigger has
+    // no JS promise to reject, so the error is dropped.
+    q.async { try? self.engine?.backgroundWake() }
   }
 
   // The generated EventSink callback, invoked on a Rust thread. The UDL hands
