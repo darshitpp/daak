@@ -26,7 +26,7 @@ The controller runs a check and writes the real value in the Result column.
 | iOS | `Daak-0.1.0.ipa` | The app holds no `embedded.mobileprovision`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The executable is `arm64`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The app is not signed. | PASS |
-| iOS | `Daak-0.1.0.ipa` | The SHA-256 is `440378bfe261e02b658eba67f1e4eeb05ee5c39acea0b1553f33dd77c08b34b2`. | PASS |
+| iOS | `Daak-0.1.0.ipa` | The SHA-256 is `315072ce31d85168a52a8ea189f11c50d896d4de0721dc345c95f87cc8426dfe`. | PASS |
 
 ## Checks that a human must run by hand
 
