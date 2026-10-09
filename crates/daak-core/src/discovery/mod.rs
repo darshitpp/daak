@@ -15,6 +15,12 @@ pub use status::{
 // pub(crate): the engine normalises a wildcard bind before advertising. Not a
 // public API -- a caller outside this crate has no listener to normalise.
 pub(crate) use mdns::advertise_bind_ip;
-pub use mdns::{host_lan_addr, Advertiser, Browser, PeerAnnounce, SERVICE_TYPE};
+pub use mdns::{host_lan_addr, PeerAnnounce, SERVICE_TYPE};
+// iOS needs a restricted entitlement for raw multicast. The system responder
+// needs none for a declared service type. See the iOS discovery design spec.
+#[cfg(target_os = "ios")]
+pub use dnssd::{Advertiser, Browser};
+#[cfg(not(target_os = "ios"))]
+pub use mdns::{Advertiser, Browser};
 pub use naming::{default_display_name, resolve_name, unique_display_name};
 pub use presence::{Presence, PresenceSocket, PresenceState, PRESENCE_GROUP, PRESENCE_PORT};
