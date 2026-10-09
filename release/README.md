@@ -48,7 +48,16 @@ Build the APK:
     export ANDROID_SDK_ROOT=$ANDROID_HOME
     cd apps/mobile/android && ./gradlew :app:assembleRelease --offline
 
-The APK is `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`.
+ABI splits emit three signed APKs in
+`apps/mobile/android/app/build/outputs/apk/release/`:
+
+| APK | Use |
+| --- | --- |
+| `daak-0.1.0-arm64-v8a.apk` | A modern 64-bit phone |
+| `daak-0.1.0-armeabi-v7a.apk` | An older 32-bit phone |
+| `daak-0.1.0-universal.apk` | A user who does not know the device ABI. It holds both ABIs |
+
+The two device APKs are the small download. The universal APK is the fallback.
 
 ## Signing on this machine
 

@@ -48,10 +48,16 @@ export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
 cd "$(dirname "$0")/../apps/mobile/android"
 ./gradlew :app:assembleRelease --offline
 
-apk="$PWD/app/build/outputs/apk/release/app-release.apk"
-echo "APK: $apk"
-echo "APK size: $(stat -f '%z' "$apk") bytes"
+# ABI splits emit three signed APKs. The user installs ONE of them. The two
+# device APKs are small. The universal APK is the fallback for a user who does
+# not know the device ABI.
+for apk in "$PWD"/app/build/outputs/apk/release/daak-*-arm64-v8a.apk \
+           "$PWD"/app/build/outputs/apk/release/daak-*-armeabi-v7a.apk \
+           "$PWD"/app/build/outputs/apk/release/daak-*-universal.apk; do
+  echo "APK: $apk"
+  echo "APK size: $(stat -f '%z' "$apk") bytes"
 
-# The certificate digest is public. It is the same value the release README
-# prints, so a user can compare a downloaded APK against it.
-"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
+  # The certificate digest is public. It is the same value the release README
+  # prints, so a user can compare a downloaded APK against it.
+  "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
+done

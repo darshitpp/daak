@@ -106,8 +106,13 @@ esac
 
 libs=()
 for t in "${targets[@]}"; do
-  cargo build -p daak-ffi --target "$t"
-  libs+=("target/$t/debug/libdaak_ffi.a")
+  if [ "${CONFIGURATION:-}" = "Release" ]; then
+    cargo build --release -p daak-ffi --target "$t"
+    libs+=("target/$t/release/libdaak_ffi.a")
+  else
+    cargo build -p daak-ffi --target "$t"
+    libs+=("target/$t/debug/libdaak_ffi.a")
+  fi
 done
 
 if [ "${#libs[@]}" -gt 1 ]; then

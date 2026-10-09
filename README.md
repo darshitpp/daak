@@ -11,16 +11,25 @@ of `darshitpp/daak`. Windows and Linux are not released.
 
 ### Android
 
-Download `Daak-0.1.0.apk`. The package is `dev.darshit.daak`. The version name
-is 0.1.0. The version code is 1. The file holds four ABIs and the Hermes VM.
+The package is `dev.darshit.daak`. The version name is 0.1.0. The version code
+is 1. Three APK files are available.
 
-1. Download `Daak-0.1.0.apk`.
+| APK | Use |
+| --- | --- |
+| `daak-0.1.0-arm64-v8a.apk` | A modern 64-bit phone |
+| `daak-0.1.0-armeabi-v7a.apk` | An older 32-bit phone |
+| `daak-0.1.0-universal.apk` | A user who does not know the device ABI. It holds both ABIs |
+
+Download the APK that matches the device. Download the universal APK when the
+device ABI is unknown. Each file holds the Hermes VM.
+
+1. Download the APK.
 2. Open the file on the device.
 3. Allow the install from this source when the system asks.
 
 Verify the signer before you install the file. Run this command:
 
-    apksigner verify --print-certs Daak-0.1.0.apk
+    apksigner verify --print-certs <apk>
 
 `apksigner` ships in the Android build-tools.
 

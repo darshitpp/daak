@@ -612,7 +612,10 @@
 				PRODUCT_NAME = Daak;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "Daak-macOS/Daak-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_TESTABILITY = NO;
 			};
 			name = Release;
 		};

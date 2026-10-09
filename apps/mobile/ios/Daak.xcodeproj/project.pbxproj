@@ -692,6 +692,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak;
 				PRODUCT_NAME = Daak;
 				SWIFT_OBJC_BRIDGING_HEADER = "Daak/Daak-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};

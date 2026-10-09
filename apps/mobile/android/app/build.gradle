@@ -135,6 +135,31 @@ android {
         versionCode 1
         versionName "0.1.0"
     }
+    splits {
+        abi {
+            // ABI splits are a RELEASE-only size cut. AGP 8.12 has no
+            // per-variant splits API, so the enable flag reads the requested
+            // task names. `assembleDebug` names no release task, so the debug
+            // variant keeps its single app-debug.apk and the documented debug
+            // flow does not change.
+            // shortcut: an `assemble` of both variants turns splits on for
+            // debug too, replace with a property flag when that flow matters.
+            enable gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+            reset()
+            include "arm64-v8a", "armeabi-v7a"
+            universalApk true
+        }
+    }
+    applicationVariants.all { variant ->
+        if (variant.buildType.name == "release") {
+            variant.outputs.all { output ->
+                def version = variant.versionName
+                def abi = output.getFilter(com.android.build.OutputFile.ABI)
+                def newName = abi ? "daak-" + version + "-" + abi + ".apk" : "daak-" + version + "-universal.apk"
+                outputFileName = newName
+            }
+        }
+    }
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -165,6 +190,16 @@ android {
             }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            // The universal APK must target mobile devices only. splits.abi
+            // narrows the per-ABI APKs, but the universal APK otherwise packs
+            // every native library present: JNA's armeabi/mips stubs and React
+            // Android's x86 builds ride along. abiFilters removes them before
+            // packaging, where packaging.excludes cannot (the React plugin's
+            // jniLibs pickFirsts re-include its own prefab libs). AGP permits
+            // abiFilters beside splits only while universalApk is true.
+            ndk {
+                abiFilters "arm64-v8a", "armeabi-v7a"
+            }
         }
     }
 }

@@ -7,14 +7,16 @@ The controller runs a check and writes the real value in the Result column.
 
 | Target | Artifact | Check | Result |
 | --- | --- | --- | --- |
-| Android | `Daak-0.1.0.apk` | The package is `dev.darshit.daak`. | PASS |
-| Android | `Daak-0.1.0.apk` | `versionName` is `0.1.0`. | PASS |
-| Android | `Daak-0.1.0.apk` | `versionCode` is `1`. | PASS |
-| Android | `Daak-0.1.0.apk` | The file holds four ABIs. | PASS |
-| Android | `Daak-0.1.0.apk` | The Hermes bundle is present. | PASS |
-| Android | `Daak-0.1.0.apk` | The signer fingerprint equals the public fingerprint `0D:82:5C:DC:00:69:C9:17:6B:C9:23:2F:4B:E5:A5:26:6D:51:88:8F:54:C8:FC:2F:F1:23:C5:B4:1F:8F:9D:F5`. | PASS |
-| Android | `Daak-0.1.0.apk` | The SHA-256 is `8160796ef1b99ceca248dabc0eebe7c9dfebede9649de7e98f674911a0690119`. | PASS |
-| Android | `Daak-0.1.0.apk` | Discrepancy D-A8: the APK reports `minSdk` 24. The plan floor is 26. | OPEN |
+| Android | `daak-0.1.0-arm64-v8a.apk` | The package is `dev.darshit.daak`. | PASS |
+| Android | `daak-0.1.0-arm64-v8a.apk` | `versionName` is `0.1.0`. | PASS |
+| Android | `daak-0.1.0-arm64-v8a.apk` | `versionCode` is `1`. | PASS |
+| Android | `daak-0.1.0-arm64-v8a.apk` | The file holds the `arm64-v8a` ABI only. | PASS |
+| Android | `daak-0.1.0-armeabi-v7a.apk` | The file holds the `armeabi-v7a` ABI only. | PASS |
+| Android | `daak-0.1.0-universal.apk` | The file holds the `arm64-v8a` and `armeabi-v7a` ABIs only. | PASS |
+| Android | each APK | The Hermes bundle is present. | PASS |
+| Android | each APK | The signer fingerprint equals the public fingerprint `0D:82:5C:DC:00:69:C9:17:6B:C9:23:2F:4B:E5:A5:26:6D:51:88:8F:54:C8:FC:2F:F1:23:C5:B4:1F:8F:9D:F5`. | NOT RUN. A signed re-cut must re-run this check |
+| Android | each APK | The SHA-256 must be recorded from the signed re-cut. The earlier value `8160796ef1b99ceca248dabc0eebe7c9dfebede9649de7e98f674911a0690119` covers the old single APK. | NOT RUN |
+| Android | each APK | Discrepancy D-A8: the APK reports `minSdk` 24. The plan floor is 26. | OPEN |
 | macOS | `Daak-0.1.0.dmg` | The archive printed `ARCHIVE SUCCEEDED`. | PASS |
 | macOS | `Daak-0.1.0.dmg` | `codesign` reports valid on disk. | PASS |
 | macOS | `Daak-0.1.0.dmg` | The app satisfies its Designated Requirement. | PASS |
@@ -32,7 +34,7 @@ The controller runs a check and writes the real value in the Result column.
 
 | Target | Check | Result |
 | --- | --- | --- |
-| Android | Install the `Daak-0.1.0.apk` on a device. Open the app. | NOT RUN |
+| Android | Install `daak-0.1.0-arm64-v8a.apk` on a device. Open the app. | NOT RUN |
 | macOS | Mount the `Daak-0.1.0.dmg`. Launch the app past Gatekeeper. | NOT RUN |
 | iOS | Sideload the `Daak-0.1.0.ipa` with a free Apple ID. Finish onboarding. | NOT RUN |
 
