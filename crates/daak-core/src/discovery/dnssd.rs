@@ -199,6 +199,12 @@ fn register_iface() -> u32 {
     }
 }
 
+/// Why a registration failed. A taken name is a case of its own.
+enum RegisterError {
+    NameConflict,
+    Other(CoreError),
+}
+
 pub struct Advertiser {
     sd: SdRef,
     stop: Arc<AtomicBool>,
@@ -242,8 +248,26 @@ impl Advertiser {
         pk: &str,
         caps: u32,
         status: &str,
-        _bind_ip: Option<IpAddr>,
+        bind_ip: Option<IpAddr>,
     ) -> Result<Self> {
+        Self::register(name, port, device_id, fp, pk, caps, status, bind_ip).map_err(|e| match e {
+            RegisterError::NameConflict => discovery_err("register", ERR_NAME_CONFLICT),
+            RegisterError::Other(e) => e,
+        })
+    }
+
+    /// Like `start_with_meta`, but a taken name gives the typed `NameConflict`.
+    #[allow(clippy::too_many_arguments)]
+    fn register(
+        name: &str,
+        port: u16,
+        device_id: [u8; 16],
+        fp: &str,
+        pk: &str,
+        caps: u32,
+        status: &str,
+        _bind_ip: Option<IpAddr>,
+    ) -> std::result::Result<Self, RegisterError> {
         let id = hex::encode(device_id);
         let ver = PROTO_VERSION.to_string();
         let caps = caps.to_string();
@@ -260,8 +284,8 @@ impl Advertiser {
         pairs.push(("st", status));
         let txt = txt_record(&pairs);
 
-        let instance =
-            CString::new(sanitize_host(name)).map_err(|e| CoreError::Discovery(e.to_string()))?;
+        let instance = CString::new(sanitize_host(name))
+            .map_err(|e| RegisterError::Other(CoreError::Discovery(e.to_string())))?;
         let regtype = CString::new(SERVICE_TYPE).expect("constant has no NUL");
         let conflict = Arc::new(AtomicI32::new(0));
         let mut sd: SdRef = std::ptr::null_mut();
@@ -284,8 +308,11 @@ impl Advertiser {
                 Arc::as_ptr(&conflict) as *mut c_void,
             )
         };
+        if rc == ERR_NAME_CONFLICT {
+            return Err(RegisterError::NameConflict);
+        }
         if rc != 0 {
-            return Err(discovery_err("register", rc));
+            return Err(RegisterError::Other(discovery_err("register", rc)));
         }
         let stop = Arc::new(AtomicBool::new(false));
         let t_stop = stop.clone();
@@ -330,7 +357,7 @@ impl Advertiser {
                 .collect::<Vec<_>>()
         };
         let start =
-            |name: &str| Self::start_with_meta(name, port, device_id, "", "", 0, "online", bind_ip);
+            |name: &str| Self::register(name, port, device_id, "", "", 0, "online", bind_ip);
         let mut seen = names(super::mdns::BROWSE_WINDOW);
         let mut name = resolve_name(base_name, &seen, rng);
         for _ in 0..2 {
@@ -343,13 +370,17 @@ impl Advertiser {
                     adv.stop();
                     seen.extend(late);
                 }
-                Err(e) if e.to_string().contains(&ERR_NAME_CONFLICT.to_string()) => {}
-                Err(e) => return Err(e),
+                Err(RegisterError::NameConflict) => {}
+                Err(RegisterError::Other(e)) => return Err(e),
             }
             seen.push(name.clone());
             name = resolve_name(base_name, &seen, rng);
         }
-        Ok((start(&name)?, name))
+        match start(&name) {
+            Ok(adv) => Ok((adv, name)),
+            Err(RegisterError::NameConflict) => Err(discovery_err("register", ERR_NAME_CONFLICT)),
+            Err(RegisterError::Other(e)) => Err(e),
+        }
     }
 
     /// True when the system reported a name conflict for this registration.
@@ -389,6 +420,13 @@ struct Svc {
     port: u16,
     txt: Vec<u8>,
     addrs: Vec<IpAddr>,
+    /// Set by `resolve_cb` when the host changes. The pump loop restarts the lookup.
+    restart_addr: bool,
+}
+
+/// True when a later resolve reply names a new host. The first reply is no change.
+fn host_changed(old: &str, new: &str) -> bool {
+    !old.is_empty() && old != new
 }
 
 impl Drop for Svc {
@@ -549,6 +587,7 @@ extern "C" fn browse_cb(
             port: 0,
             txt: Vec::new(),
             addrs: Vec::new(),
+            restart_addr: false,
         }),
     );
 }
@@ -573,9 +612,14 @@ extern "C" fn resolve_cb(
         return;
     };
     // SAFETY: the system passes a valid NUL-terminated string.
-    svc.host = unsafe { CStr::from_ptr(host) }
+    let new_host = unsafe { CStr::from_ptr(host) }
         .to_string_lossy()
         .into_owned();
+    // A callback must not free a ref. The pump loop restarts the lookup.
+    if host_changed(&svc.host, &new_host) {
+        svc.restart_addr = true;
+    }
+    svc.host = new_host;
     svc.port = u16::from_be(port_be);
     svc.txt = if txt.is_null() || txt_len == 0 {
         Vec::new()
@@ -585,7 +629,10 @@ extern "C" fn resolve_cb(
     };
     if !svc.addr.is_null() {
         // A later resolve reply, such as a TXT change. Send the known addresses again.
-        emit_and_track(state, svc);
+        // After a host change, the pump loop clears the old addresses first.
+        if !svc.restart_addr {
+            emit_and_track(state, svc);
+        }
         return;
     }
     let Ok(host_c) = CString::new(svc.host.as_str()) else {
@@ -652,6 +699,41 @@ extern "C" fn addr_cb(
         svc.addrs.push(ip);
     }
     emit_and_track(state, svc);
+}
+
+/// Start a new address lookup for every service whose host changed.
+/// The caller must not run inside a callback.
+fn restart_addr_lookups(state: &mut State) {
+    let root = state.root;
+    for svc in state.services.values_mut().filter(|s| s.restart_addr) {
+        svc.restart_addr = false;
+        // SAFETY: the old ref is live and this thread created it. No callback runs
+        // now, so none can use the Key through the old ref after this call.
+        unsafe { DNSServiceRefDeallocate(svc.addr) };
+        svc.addr = std::ptr::null_mut();
+        svc.addrs.clear();
+        let Ok(host_c) = CString::new(svc.host.as_str()) else {
+            continue;
+        };
+        let mut a = root;
+        // SAFETY: host_c is valid for the call. The context is the Key of this Svc.
+        // The Svc deallocates the new ref before it frees the Key.
+        let rc = unsafe {
+            DNSServiceGetAddrInfo(
+                &mut a,
+                FLAG_SHARE_CONNECTION,
+                svc.iface,
+                PROTOCOL_IPV4_IPV6,
+                host_c.as_ptr(),
+                addr_cb,
+                svc.ctx as *mut c_void,
+            )
+        };
+        // On failure, `addr` stays null. The next resolve reply starts a lookup.
+        if rc == 0 {
+            svc.addr = a;
+        }
+    }
 }
 
 /// Deallocate the refs of every service in `dead`, then drop the services.
@@ -743,7 +825,13 @@ fn spawn_browse(sink: Box<dyn FnMut(DiscoveryEvent) + Send>) -> Result<BrowseHan
         // SAFETY: this thread owns `state` from now on. Callbacks also run here.
         // The root ref is read from the state, so the closure captures no raw ref.
         let root = unsafe { (*state).root };
-        pump(root, &t_stop, || drain_dead(unsafe { &mut *state }));
+        pump(root, &t_stop, || {
+            // SAFETY: the pump runs this closure on the thread that owns `state`.
+            // No callback is active here.
+            let st = unsafe { &mut *state };
+            restart_addr_lookups(st);
+            drain_dead(st);
+        });
         // SAFETY: the pump ended, so no callback runs. This thread is the only owner.
         let mut st = unsafe { Box::from_raw(state) };
         let live: Vec<_> = st.services.drain().map(|(_, s)| s).collect();
@@ -919,6 +1007,16 @@ mod tests {
         first.stop();
     }
 
+    #[test]
+    fn a_duplicate_name_is_a_typed_conflict() {
+        let name = format!("dnssd-tc-{}", hex::encode(&unique_id()[..4]));
+        let first = start_named(&name);
+        let second =
+            Advertiser::register(&name, unique_port(), unique_id(), "", "", 0, "online", None);
+        assert!(matches!(second, Err(RegisterError::NameConflict)));
+        first.stop();
+    }
+
     // The LAN path: the system calls `register_cb` with NameConflict.
     #[test]
     fn the_register_callback_records_a_name_conflict() {
@@ -1015,6 +1113,13 @@ mod tests {
 #[cfg(all(test, any(target_os = "ios", target_os = "macos")))]
 mod pure_tests {
     use super::*;
+
+    #[test]
+    fn a_new_host_needs_an_address_restart() {
+        assert!(host_changed("a.local.", "b.local."));
+        assert!(!host_changed("a.local.", "a.local."));
+        assert!(!host_changed("", "a.local."));
+    }
 
     #[test]
     fn a_txt_value_over_255_bytes_is_cut_to_fit() {
