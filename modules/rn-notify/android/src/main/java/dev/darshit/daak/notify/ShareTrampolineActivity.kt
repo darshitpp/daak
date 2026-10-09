@@ -10,8 +10,10 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Brings the app up so a tapped action has a foreground context, and for
- * daak.share builds the OS chooser over the entry's saved paths.
+ * Brings the app up so a tapped action has a foreground context. It serves two
+ * actions. For daak.share it builds the OS chooser over the entry's saved paths.
+ * For daak.open it emits the action to JS, or stashes it when no listener
+ * exists, and only brings the app to the front.
  *
  * R33: this is the SAME sheet DaakShare's present() builds, over the same
  * FileProvider URIs. It has no transport, no crypto and no outbox: sharing a

@@ -84,3 +84,10 @@ apps/mobile/android/keystore.properties
 # agent tool config: .mcp.json holds a machine-specific path
 .mcp.json
 .github/copilot-instructions.md
+
+# secrets and local state that must never reach the public repo
+keystore.properties
+.env
+.env.*
+xcuserdata/
+docs/superpowers/

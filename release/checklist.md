@@ -22,7 +22,7 @@ The controller runs a check and writes the real value in the Result column.
 | macOS | `Daak-0.1.0.dmg` | The archive printed `ARCHIVE SUCCEEDED`. | PASS |
 | macOS | `Daak-0.1.0.dmg` | `codesign` reports valid on disk. | PASS |
 | macOS | `Daak-0.1.0.dmg` | The app satisfies its Designated Requirement. | PASS |
-| macOS | `Daak-0.1.0.dmg` | `spctl` rejects the app and the image. The origin is `Apple Development: darshit12@gmail.com (9VTBKNCJJ2)`. The app is not notarized, so this result is expected. | PASS |
+| macOS | `Daak-0.1.0.dmg` | `spctl` rejects the app and the image. The origin is the `Apple Development` certificate of team `J6NNRLDUG4`. The app is not notarized, so this result is expected. | PASS |
 | macOS | `Daak-0.1.0.dmg` | The SHA-256 is `124a1eb89b97d786c4dc8dbc4014b9d8fb067aa49743356f51ed084e9f8ac156`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The archive printed `ARCHIVE SUCCEEDED`. | PASS |
 | iOS | `Daak-0.1.0.ipa` | The app holds no `PlugIns` directory. | PASS |

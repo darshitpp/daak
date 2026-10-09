@@ -39,7 +39,6 @@ DMG="$DMG_DIR/Daak-$VERSION.dmg"
 STAGE="$SCRATCH/dmg-stage"
 
 # The signing identity. Exactly one development identity exists on this host.
-# The DMG sign falls back to this exact name when the Keychain query is empty.
 # Read the whole output into a variable first. A `sed ... | head -1` pipeline
 # is unsafe under `set -o pipefail`: an early `head` exit sends SIGPIPE to sed,
 # the pipeline status becomes non-zero, and `set -e` stops the script.
@@ -47,7 +46,8 @@ IDENTITY_INFO="$(security find-identity -v -p codesigning 2>/dev/null || true)"
 IDENTITY_LINES="$(sed -n 's/.*"\(Apple Development:.*\)"/\1/p' <<<"$IDENTITY_INFO")"
 IDENTITY="${IDENTITY_LINES%%$'\n'*}"
 if [ -z "$IDENTITY" ]; then
-  IDENTITY="Apple Development: darshit12@gmail.com (9VTBKNCJJ2)"
+  echo "package-dmg: no Apple Development signing identity in the Keychain." >&2
+  exit 1
 fi
 
 mkdir -p "$DMG_DIR"

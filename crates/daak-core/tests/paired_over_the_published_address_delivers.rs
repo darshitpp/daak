@@ -29,6 +29,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 async fn engine(name: &str, out: PathBuf) -> (Arc<Engine>, Arc<Db>) {
+    // This test starts a real engine on a wildcard bind. Without this setting,
+    // the engine announces a fake device to every phone on the LAN.
+    std::env::set_var("DAAK_MDNS_OFF_LAN", "1");
     let store = Arc::new(MemorySecretStore::default());
     let identity = import_from_store(store.as_ref()).unwrap();
     let db = Arc::new(Db::open_in_memory().unwrap());

@@ -52,9 +52,8 @@ describe('the macOS targets declare a signing team', () => {
   });
 
   it('uses the team that owns the certificate', () => {
-    // J6NNRLDUG4 is the team that owns the certificate
-    // "Apple Development: darshit12@gmail.com (9VTBKNCJJ2)" and both macOS
-    // provisioning profiles. A different team produces a signature that the
+    // J6NNRLDUG4 is the team that owns the Apple Development certificate
+    // and both macOS provisioning profiles. A different team produces a signature that the
     // keychain rejects at the first write.
     expect(source).toMatch(/DEVELOPMENT_TEAM = J6NNRLDUG4;/);
   });
