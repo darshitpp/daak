@@ -554,11 +554,19 @@ impl Engine {
     /// control frame is unaffected: it closes the connection and the frame is
     /// never noticed. `host_lan_addr` is the same resolver the FFI uses for
     /// the QR bundle, so both halves name one address for one device.
-    async fn send_listen_addr(conn: &mut Connection<tokio::net::TcpStream>, bound: SocketAddr) {
+    async fn send_listen_addr(
+        conn: &mut Connection<tokio::net::TcpStream>,
+        bound: SocketAddr,
+        name: &str,
+    ) {
         let Some(dialable) = crate::discovery::host_lan_addr(bound.port()) else {
             return;
         };
-        if let Ok(body) = (ListenAddr { addr: dialable }).to_cbor() {
+        let announce = ListenAddr {
+            addr: dialable,
+            name: Some(name.to_owned()),
+        };
+        if let Ok(body) = announce.to_cbor() {
             let _ = conn.send(0, RecordType::Control, Bytes::from(body)).await;
         }
     }
@@ -567,7 +575,7 @@ impl Engine {
     /// joiner that never sends one (an older build) must not stall the host:
     /// no bytes within the window means `None`, and the host falls back to
     /// discovery exactly as it did before this frame existed.
-    async fn read_listen_addr(conn: &mut Connection<tokio::net::TcpStream>) -> Option<SocketAddr> {
+    async fn read_listen_addr(conn: &mut Connection<tokio::net::TcpStream>) -> Option<ListenAddr> {
         let frame = match tokio::time::timeout(std::time::Duration::from_secs(2), conn.recv()).await
         {
             Ok(Ok(Some(f))) => f,
@@ -576,7 +584,7 @@ impl Engine {
         if frame.kind != RecordType::Control {
             return None;
         }
-        ListenAddr::from_cbor(&frame.body).ok().map(|l| l.addr)
+        ListenAddr::from_cbor(&frame.body).ok()
     }
 
     /// Restore a consistent state after a restart.
@@ -1675,7 +1683,7 @@ impl Engine {
         // connection is our ephemeral source port -- closed the moment this
         // function returns -- and the host stored that port as our address, so
         // every host-to-joiner send died on connection refused.
-        Self::send_listen_addr(&mut conn, self.local_addr()).await;
+        Self::send_listen_addr(&mut conn, self.local_addr(), &local.name).await;
         // R42d: `addr` is the host we just completed a Noise XX handshake
         // with, so it is a proven address and not a guess.
         Self::commit_pairing(&self.db, &pairing, &self.tx, Some((&self.devices, addr))).await?;
@@ -1719,7 +1727,7 @@ impl Engine {
         )
         .await?;
         // R42e, same frame as the QR path above.
-        Self::send_listen_addr(&mut conn, self.local_addr()).await;
+        Self::send_listen_addr(&mut conn, self.local_addr(), &local.name).await;
         // R42d, same argument as `pair_with` above.
         Self::commit_pairing(&self.db, &pairing, &self.tx, Some((&self.devices, addr))).await?;
         Ok((sas, pairing.peer_device_id))
@@ -2084,7 +2092,7 @@ impl Engine {
             .await?;
             let name = hex::encode(peer_public.device_id);
             let expected = PairingBundle::new(peer_public, name);
-            let (pairing, sas) = crate::pairing::pair(
+            let (mut pairing, sas) = crate::pairing::pair(
                 conn,
                 identity,
                 &local,
@@ -2099,7 +2107,11 @@ impl Engine {
             // joiner closes as soon as pairing ends, so storing it produced a
             // peer that refused every connection. `None` when the joiner did
             // not send one: discovery then owns the address, as before.
-            let advertised = Self::read_listen_addr(conn).await;
+            let announced = Self::read_listen_addr(conn).await;
+            let advertised = announced.as_ref().map(|l| l.addr);
+            if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
+                pairing.label = Some(name);
+            }
             Self::commit_pairing(db, &pairing, tx, advertised.map(|a| (devices, a))).await?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
@@ -2198,7 +2210,7 @@ impl Engine {
                     "pairing arm already consumed by another joiner".into(),
                 ));
             }
-            let (pairing, sas) = crate::pairing::pair(
+            let (mut pairing, sas) = crate::pairing::pair(
                 conn,
                 identity,
                 &local,
@@ -2209,7 +2221,11 @@ impl Engine {
             )
             .await?;
             // R42e, same argument as the code branch above.
-            let advertised = Self::read_listen_addr(conn).await;
+            let announced = Self::read_listen_addr(conn).await;
+            let advertised = announced.as_ref().map(|l| l.addr);
+            if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
+                pairing.label = Some(name);
+            }
             Self::commit_pairing(db, &pairing, tx, advertised.map(|a| (devices, a))).await?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
@@ -2314,6 +2330,14 @@ async fn read_hello(conn: &mut Connection<tokio::net::TcpStream>) -> Result<Hell
             None => return Err(CoreError::Protocol("closed before hello".into())),
         }
     }
+}
+
+/// A peer names itself in the post-pairing frame, so the text is untrusted
+/// display data: control characters go, and the length is capped.
+fn clean_peer_name(raw: String) -> Option<String> {
+    let name: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let name: String = name.trim().chars().take(64).collect();
+    (!name.is_empty()).then_some(name)
 }
 
 /// The Expected-arm guard: the Hello the peer opened with must name the very
@@ -2980,6 +3004,19 @@ mod tests {
     /// seeded with the hex device id, so a peer whose discovery never resolves
     /// stayed a UUID on screen until a restart read the name back from the
     /// devices row.
+    #[test]
+    fn clean_peer_name_strips_controls_trims_and_caps() {
+        assert_eq!(
+            clean_peer_name("  Pixel\u{7} 8\n".into()).as_deref(),
+            Some("Pixel 8")
+        );
+        assert_eq!(clean_peer_name("\u{0}\u{1}  ".into()), None);
+        assert_eq!(
+            clean_peer_name("x".repeat(200)).unwrap().chars().count(),
+            64
+        );
+    }
+
     #[tokio::test]
     async fn commit_pairing_seeds_the_bundle_name_not_the_hex_id() {
         let db = Db::open_in_memory().unwrap();

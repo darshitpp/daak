@@ -35,6 +35,11 @@ impl Hello {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListenAddr {
     pub addr: SocketAddr,
+    /// The joiner's display name. The QR host never scans the joiner, so this
+    /// frame is the only way it learns the name. Additive: an older host skips
+    /// the field, and an older joiner omits it (the host keeps the hex id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl ListenAddr {
