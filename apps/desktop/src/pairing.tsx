@@ -39,15 +39,29 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
   const [error, setError] = useState('');
 
   const onEvent = useCallback(
-    (event: { type: string; sas?: string; deviceId?: string }) => {
-      if (event.type === 'pairing.sas' && typeof event.sas === 'string') setSas(event.sas);
-      // Stored before the SAS shows; kept so a SAS that does not match can remove it.
-      if (event.type === 'pairing.done' && typeof event.deviceId === 'string') setPeerId(event.deviceId);
+    (event: { type: string; sas?: string; peerDeviceId?: string }) => {
+      if (event.type === 'pairing.sas' && typeof event.sas === 'string') {
+        setSas(event.sas);
+        // The engine keeps the pairing pending. The id lets the user confirm or reject it.
+        if (typeof event.peerDeviceId === 'string') setPeerId(event.peerDeviceId);
+      }
     },
     [],
   );
 
-  // The SAS did not match: remove the pairing the engine already stored.
+  const confirm = () => {
+    setError('');
+    void engine.confirmPairing(peerId).then(
+      () => {
+        setSas('');
+        setPeerId('');
+        setPhase({ kind: 'idle' });
+      },
+      (e: unknown) => setError(e instanceof Error ? e.message : 'could not confirm the pairing'),
+    );
+  };
+
+  // The SAS did not match: remove the pending pairing.
   const reject = () => {
     const id = peerId;
     setSas('');
@@ -125,6 +139,7 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
         qrUri={phase.qrUri}
         onScan={showQr}
         sas={sas}
+        onConfirm={peerId ? confirm : undefined}
         onReject={peerId ? reject : undefined}
       />
       {/* The arm is ONE-SHOT: the engine takes it for the first joiner, and a

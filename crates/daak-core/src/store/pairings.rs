@@ -38,7 +38,7 @@ impl Db {
             "SELECT d.device_id, d.display_name, d.last_seen_addr
                FROM devices d
                JOIN pairings p ON p.peer_device_id = d.device_id
-              WHERE p.state <> 'revoked'
+              WHERE p.state = 'trusted'
                 AND d.last_seen_addr IS NOT NULL
                 AND d.last_seen_addr <> ''",
         )?;
@@ -103,6 +103,23 @@ impl Db {
             Some(r) => Ok(Some(row_to_pairing(r)?)),
             None => Ok(None),
         }
+    }
+
+    /// Pending to trusted. True when a pending row existed.
+    pub fn trust_pending_pairing(&self, id: &[u8; 16]) -> Result<bool> {
+        let n = self.conn().execute(
+            "UPDATE pairings SET state = 'trusted' WHERE peer_device_id = ?1 AND state = 'pending'",
+            rusqlite::params![&id[..]],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Drop every pairing nobody confirmed. A pending row that outlives its run
+    /// is an abandoned pairing.
+    pub fn delete_pending_pairings(&self) -> Result<usize> {
+        Ok(self
+            .conn()
+            .execute("DELETE FROM pairings WHERE state = 'pending'", [])?)
     }
 
     /// True only for a live pairing. A revoked row still exists, so a bare

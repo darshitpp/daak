@@ -78,10 +78,13 @@ export async function armHostPairing(engine: DaakEngine): Promise<void> {
  * and throws for an unknown device, so a bundle that names a peer we have not
  * discovered rejects here with the engine's error.
  */
-export async function joinWithScan(engine: DaakEngine): Promise<{ sas: string }> {
+export async function joinWithScan(
+  engine: DaakEngine,
+): Promise<{ sas: string; peerDeviceId: string }> {
   const scanned = await scanQr();
   const { deviceId, cbor, addr } = parsePairingPayload(scanned);
-  return engine.pair(deviceId, 'qr', cbor, addr);
+  const { sas } = await engine.pair(deviceId, 'qr', cbor, addr);
+  return { sas, peerDeviceId: deviceId };
 }
 
 /**

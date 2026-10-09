@@ -95,3 +95,18 @@ fn arm_host_pairing_takes_no_bundle_and_arms_the_open_slot() {
         Err(FfiError::Engine(_))
     ));
 }
+
+/// `confirm_pairing` is the gate's FFI door. It follows the other methods: a
+/// malformed id is a caller bug, and a stopped engine is an engine error.
+#[test]
+fn confirm_pairing_checks_its_id_and_needs_a_started_engine() {
+    let engine = FfiEngine::new(Box::new(Recorder));
+    assert!(matches!(
+        engine.confirm_pairing("zz".into()),
+        Err(FfiError::Protocol(_))
+    ));
+    assert!(matches!(
+        engine.confirm_pairing("11".repeat(16)),
+        Err(FfiError::Engine(_))
+    ));
+}

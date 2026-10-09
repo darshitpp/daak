@@ -414,6 +414,9 @@ pub struct Engine {
     /// spawn time, so the runtime flag lives here and the drain closure reads it
     /// to pick the backoff cap of each failed attempt.
     battery_saver: Arc<std::sync::atomic::AtomicBool>,
+    /// When set, a new pairing is stored `pending` and grants nothing until
+    /// `confirm_pairing`. Off by default; the app bindings turn it on.
+    confirm_required: Arc<std::sync::atomic::AtomicBool>,
     /// R-T11-3/R-T11-11: behind a Mutex because the Engine is only ever held by
     /// &self, and the per-row outbox drain drives sends through the same Arc.
     sessions: SharedSessions,
@@ -492,7 +495,14 @@ impl Engine {
         // `Option`: a pairing over a path with no usable address keeps the old
         // behaviour and waits for discovery. Never a guessed one.
         devices: Option<(&SharedDevices, SocketAddr)>,
+        // The gate: a pending pairing grants nothing until the user confirms.
+        confirm_required: bool,
     ) -> Result<()> {
+        let mut stored = pairing.clone();
+        if confirm_required {
+            stored.state = "pending".into();
+        }
+        let pairing = &stored;
         db.upsert_pairing(pairing)?;
         if let Some((devices, addr)) = devices {
             // R42d: the device map is RAM and starts empty on every launch, so
@@ -520,7 +530,7 @@ impl Engine {
                     // R42g: a peer that mDNS had already inserted becomes
                     // paired the moment the handshake completes, or the UI
                     // keeps offering Pair for a device it just trusted.
-                    e.get_mut().paired = true;
+                    e.get_mut().paired = !confirm_required;
                 }
                 std::collections::hash_map::Entry::Vacant(e) => {
                     // R73: seed the name the pairing bundle carried, not the
@@ -540,14 +550,17 @@ impl Engine {
                         device_id: pairing.peer_device_id,
                         name,
                         addr,
-                        paired: true,
+                        paired: !confirm_required,
                     });
                 }
             }
         }
-        let _ = tx.send(EngineEvent::PairingDone {
-            device_id: pairing.peer_device_id,
-        });
+        // A pending pairing is not done. `confirm_pairing` says so later.
+        if !confirm_required {
+            let _ = tx.send(EngineEvent::PairingDone {
+                device_id: pairing.peer_device_id,
+            });
+        }
         Ok(())
     }
 
@@ -756,46 +769,49 @@ impl Engine {
         // R-T11-3: the registry owns dialling. The connect closure resolves the
         // peer's SocketAddr from the device map and runs the ONE initiator
         // handshake (net::secure::open_secure) -- no second handshake anywhere.
-        let sessions: SharedSessions =
-            {
+        let sessions: SharedSessions = {
+            let db = db.clone();
+            let identity = identity.clone();
+            let devices = devices.clone();
+            let connect: BoxConnect = Box::new(move |peer: [u8; 16]| {
                 let db = db.clone();
                 let identity = identity.clone();
                 let devices = devices.clone();
-                let connect: BoxConnect =
-                    Box::new(move |peer: [u8; 16]| {
-                        let db = db.clone();
-                        let identity = identity.clone();
-                        let devices = devices.clone();
-                        Box::pin(async move {
-                            let addr = devices.lock().await.get(&peer).map(|d| d.addr).ok_or_else(
-                                || {
-                                    CoreError::Protocol(format!(
-                                        "peer {} is not discovered",
-                                        hex::encode(peer)
-                                    ))
-                                },
-                            )?;
-                            let pairing = db
-                                .get_pairing(&peer)?
-                                .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
-                            let secret =
-                                zeroize::Zeroizing::new(identity.static_secret().to_bytes());
-                            let conn = tcp::dial(addr).await?;
-                            crate::net::secure::open_secure(
-                                conn,
-                                &secret,
-                                &pairing.static_dh_pub,
-                                identity.device_id(),
-                            )
+                Box::pin(async move {
+                    let addr =
+                        devices
+                            .lock()
                             .await
-                        }) as BoxFutureConn
-                    });
-                Arc::new(Mutex::new(SessionRegistry::new(
-                    SESSION_IDLE_TIMEOUT,
-                    connect,
-                )))
-            };
+                            .get(&peer)
+                            .map(|d| d.addr)
+                            .ok_or_else(|| {
+                                CoreError::Protocol(format!(
+                                    "peer {} is not discovered",
+                                    hex::encode(peer)
+                                ))
+                            })?;
+                    let pairing = db
+                        .get_pairing(&peer)?
+                        .filter(|p| p.state == "trusted")
+                        .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
+                    let secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
+                    let conn = tcp::dial(addr).await?;
+                    crate::net::secure::open_secure(
+                        conn,
+                        &secret,
+                        &pairing.static_dh_pub,
+                        identity.device_id(),
+                    )
+                    .await
+                }) as BoxFutureConn
+            });
+            Arc::new(Mutex::new(SessionRegistry::new(
+                SESSION_IDLE_TIMEOUT,
+                connect,
+            )))
+        };
         let battery_saver = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let confirm_required = Arc::new(std::sync::atomic::AtomicBool::new(false));
         // The bounded local trace buffer. Created before the outbox so the
         // drain closure and the presence loop share ONE instance, which is the
         // same instance stored on the Engine below.
@@ -857,6 +873,7 @@ impl Engine {
             // R42d: a completed pairing seeds this map with the address the
             // connection used, so the accept task needs a handle on it.
             let accept_devices = devices.clone();
+            let accept_confirm = confirm_required.clone();
             let out_dir = out_dir.clone();
             let pending_pairing = pending_pairing.clone();
             let pending_code = pending_code.clone();
@@ -888,6 +905,8 @@ impl Engine {
                     let tx = tx.clone();
                     let profile = profile.clone();
                     let devices = accept_devices.clone();
+                    let confirm_required =
+                        accept_confirm.load(std::sync::atomic::Ordering::Relaxed);
                     set.spawn(async move {
                         if let Err(e) = Self::handle_inbound(
                             &identity,
@@ -899,6 +918,7 @@ impl Engine {
                             &pairing_tx,
                             &tx,
                             &devices,
+                            confirm_required,
                             &mut conn,
                             peer,
                         )
@@ -1169,6 +1189,7 @@ impl Engine {
             outbox,
             observability,
             battery_saver,
+            confirm_required,
             sessions,
             pending_pairing,
             pending_code,
@@ -1264,6 +1285,27 @@ impl Engine {
 
     pub async fn devices(&self) -> Vec<DeviceInfo> {
         self.devices.lock().await.values().cloned().collect()
+    }
+
+    /// Turn the confirmation gate on or off. On: a new pairing stays `pending`
+    /// and grants nothing until [`Engine::confirm_pairing`].
+    pub fn set_pairing_confirmation_required(&self, on: bool) {
+        self.confirm_required
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The user compared the SAS and it matched. A pending pairing becomes
+    /// trusted, the peer reads as paired, and `PairingDone` fires. Reject uses
+    /// [`Engine::revoke_pairing`].
+    pub async fn confirm_pairing(&self, peer: [u8; 16]) -> Result<()> {
+        if !self.db.trust_pending_pairing(&peer)? {
+            return Err(CoreError::Protocol("no pending pairing to confirm".into()));
+        }
+        if let Some(d) = self.devices.lock().await.get_mut(&peer) {
+            d.paired = true;
+        }
+        let _ = self.tx.send(EngineEvent::PairingDone { device_id: peer });
+        Ok(())
     }
 
     /// Revoke a pairing because the peer said it unpaired us. The accept task
@@ -1743,7 +1785,15 @@ impl Engine {
         Self::send_listen_addr(&mut conn, self.local_addr(), &local.name).await;
         // R42d: `addr` is the host we just completed a Noise XX handshake
         // with, so it is a proven address and not a guess.
-        Self::commit_pairing(&self.db, &pairing, &self.tx, Some((&self.devices, addr))).await?;
+        Self::commit_pairing(
+            &self.db,
+            &pairing,
+            &self.tx,
+            Some((&self.devices, addr)),
+            self.confirm_required
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        .await?;
         Ok((sas, pairing.peer_device_id))
     }
 
@@ -1786,7 +1836,15 @@ impl Engine {
         // R42e, same frame as the QR path above.
         Self::send_listen_addr(&mut conn, self.local_addr(), &local.name).await;
         // R42d, same argument as `pair_with` above.
-        Self::commit_pairing(&self.db, &pairing, &self.tx, Some((&self.devices, addr))).await?;
+        Self::commit_pairing(
+            &self.db,
+            &pairing,
+            &self.tx,
+            Some((&self.devices, addr)),
+            self.confirm_required
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+        .await?;
         Ok((sas, pairing.peer_device_id))
     }
 
@@ -2109,6 +2167,7 @@ impl Engine {
         pairing_tx: &mpsc::Sender<String>,
         tx: &broadcast::Sender<EngineEvent>,
         devices: &SharedDevices,
+        confirm_required: bool,
         conn: &mut Connection<tokio::net::TcpStream>,
         // R42e: kept in the signature for the accept loop, but no longer
         // stored. See `read_listen_addr`: the source port of a pairing socket
@@ -2169,7 +2228,14 @@ impl Engine {
             if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
                 pairing.label = Some(name);
             }
-            Self::commit_pairing(db, &pairing, tx, advertised.map(|a| (devices, a))).await?;
+            Self::commit_pairing(
+                db,
+                &pairing,
+                tx,
+                advertised.map(|a| (devices, a)),
+                confirm_required,
+            )
+            .await?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
         }
@@ -2285,7 +2351,14 @@ impl Engine {
             if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
                 pairing.label = Some(name);
             }
-            Self::commit_pairing(db, &pairing, tx, advertised.map(|a| (devices, a))).await?;
+            Self::commit_pairing(
+                db,
+                &pairing,
+                tx,
+                advertised.map(|a| (devices, a)),
+                confirm_required,
+            )
+            .await?;
             let _ = pairing_tx.send(sas).await;
             return Ok(());
         }
@@ -2298,6 +2371,7 @@ impl Engine {
         Self::refuse_revoked(db, &hello.device_id)?;
         let pairing = db
             .get_pairing(&hello.device_id)?
+            .filter(|p| p.state == "trusted")
             .ok_or_else(|| CoreError::Protocol("unpaired inbound connection".into()))?;
         let static_secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
         // B3: the destinations the receiver actually created, read off the item
@@ -3101,7 +3175,7 @@ mod tests {
         let devices: SharedDevices = Arc::new(Mutex::new(HashMap::new()));
         let (tx, _rx) = broadcast::channel(8);
         let addr: SocketAddr = "192.168.0.5:40000".parse().unwrap();
-        Engine::commit_pairing(&db, &pairing, &tx, Some((&devices, addr)))
+        Engine::commit_pairing(&db, &pairing, &tx, Some((&devices, addr)), false)
             .await
             .unwrap();
         let entry = devices
@@ -3135,7 +3209,7 @@ mod tests {
         let devices: SharedDevices = Arc::new(Mutex::new(HashMap::new()));
         let (tx, _rx) = broadcast::channel(8);
         let addr: SocketAddr = "192.168.0.5:40001".parse().unwrap();
-        Engine::commit_pairing(&db, &pairing, &tx, Some((&devices, addr)))
+        Engine::commit_pairing(&db, &pairing, &tx, Some((&devices, addr)), false)
             .await
             .unwrap();
         let entry = devices.lock().await.get(&id).cloned().unwrap();

@@ -219,6 +219,16 @@ final class Daak: RCTEventEmitter, EventSink {
     }
   }
 
+  /// The SAS compare matched: a pending pairing becomes trusted.
+  @objc func confirmPairing(_ deviceId: String,
+                            resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().confirmPairing(deviceId: deviceId)
+      return nil as Void?
+    }
+  }
+
   /// Drain the outbox now. The same ONE wake primitive the mobile platforms
   /// use; the desktop engine is in-process (D16.10.3), so it is reached here.
   @objc func backgroundWake(_ resolve: @escaping RCTPromiseResolveBlock,

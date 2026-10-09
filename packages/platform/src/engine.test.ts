@@ -20,6 +20,7 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     shutdown: async () => { calls.push(['shutdown']); },
     listDevices: async () => JSON.stringify([]),
     revokePairing: async (id) => { calls.push(['revokePairing', id]); },
+    confirmPairing: async (id) => { calls.push(['confirmPairing', id]); },
     backgroundWake: async () => { calls.push(['backgroundWake']); },
     replaceInboxPaths: async (id, paths) => { calls.push(['replaceInboxPaths', id, paths]); },
     pairingBundle: async () => '{}',

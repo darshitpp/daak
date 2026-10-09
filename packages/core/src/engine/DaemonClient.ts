@@ -134,6 +134,11 @@ export class DaemonClientEngine implements DaakEngine {
     throw new Error('unpairing is mobile-only: no IpcRequest revokes a pairing');
   }
 
+  // The daemon confirms its own pairings: ipc.cddl has no confirm request, and
+  // proto/gen cannot be regenerated without network access. So there is nothing
+  // to confirm here, and the call is a quiet no-op rather than an error.
+  async confirmPairing(_deviceId: string): Promise<void> {}
+
   // IpcRequest::Wake drains the daemon's outbox now. The daemon answers Ok
   // after it calls Engine::background_wake, the same ONE wake primitive the
   // in-process engines use.

@@ -28,7 +28,7 @@ describe('joinWithScan', () => {
     const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: '123456' });
     mockedScan.mockResolvedValue(SCANNED);
 
-    await expect(joinWithScan(engine)).resolves.toEqual({ sas: '123456' });
+    await expect(joinWithScan(engine)).resolves.toEqual({ sas: '123456', peerDeviceId: PEER });
     // The fourth argument is the bundle's optional address. SCANNED has none,
     // so the joiner falls back to discovery. A host on loopback only and an
     // older link both land here.

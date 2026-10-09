@@ -24,24 +24,12 @@ export const engine: DaakEngine = createEngine();
 // subscribes while the Pair tab is open; the ONE engine.on inside startEngine
 // delivers pairing.sas events into this set. This is NOT a second subscription
 // -- it is a fan-out from the single handler R42 pins.
-const pairingSasListeners = new Set<(sas: string) => void>();
+const pairingSasListeners = new Set<(sas: string, peerDeviceId: string) => void>();
 
-export function onPairingSas(cb: (sas: string) => void): () => void {
+export function onPairingSas(cb: (sas: string, peerDeviceId: string) => void): () => void {
   pairingSasListeners.add(cb);
   return () => {
     pairingSasListeners.delete(cb);
-  };
-}
-
-// The engine emits pairing.done when it stores the pairing, on BOTH sides and
-// before the SAS shows. The pairing screen reads the peer id here, so a SAS
-// that does not match can remove the stored pairing. Same fan-out rule as above.
-const pairingDoneListeners = new Set<(deviceId: string) => void>();
-
-export function onPairingDone(cb: (deviceId: string) => void): () => void {
-  pairingDoneListeners.add(cb);
-  return () => {
-    pairingDoneListeners.delete(cb);
   };
 }
 
@@ -210,13 +198,10 @@ export async function startEngine(): Promise<void> {
     // here, on the ONE subscription, and is fanned out to PairingFlow. The
     // joiner's SAS comes back from engine.pair, so only the host reads this.
     if (e.type === 'pairing.sas') {
-      for (const cb of [...pairingSasListeners]) cb(e.sas);
+      for (const cb of [...pairingSasListeners]) cb(e.sas, e.peerDeviceId);
       return;
     }
-    if (e.type === 'pairing.done') {
-      for (const cb of [...pairingDoneListeners]) cb(e.deviceId);
-      void publish();
-    }
+    if (e.type === 'pairing.done') void publish();
     // A revoked peer must leave the share sheet and Siri now, not at next launch.
     if (e.type === 'pairing.revoked') void publish();
     // R42: BOTH effects on the ONE subscription. routeInboxEntry copies a text

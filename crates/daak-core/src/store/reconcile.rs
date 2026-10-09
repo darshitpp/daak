@@ -18,6 +18,8 @@ impl Db {
     /// only. The persisted `chunk_state` bitmap (Phase 3) stays correct, so the
     /// sender and the receiver resume from the gaps that `gaps_to_nack` gives.
     pub fn reconcile_on_startup(&self) -> Result<ReconcileReport> {
+        // A pairing the user never confirmed died with its run.
+        self.delete_pending_pairings()?;
         let transfers_reset = self.reset_inflight_transfers()?;
         let items_reset = self.conn().execute(
             "UPDATE transfer_items SET state = 'pending' WHERE state IN ('receiving','verifying')",

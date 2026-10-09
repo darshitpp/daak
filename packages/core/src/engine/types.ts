@@ -148,6 +148,13 @@ export interface DaakEngine {
    */
   revokePairing(deviceId: string): Promise<void>;
   /**
+   * The user compared the SAS and it matched. A new pairing is pending until
+   * this call, and a pending pairing grants nothing. Rejecting a pairing is
+   * `revokePairing`. Resolves without effect when the engine does not gate
+   * pairings (the daemon confirms its own).
+   */
+  confirmPairing(deviceId: string): Promise<void>;
+  /**
    * A platform wake, such as a background refresh, tells the engine to drain
    * the outbox now instead of waiting for the next poll tick. The Rust side is
    * a stub until Task 4, so the call resolves and does nothing today.

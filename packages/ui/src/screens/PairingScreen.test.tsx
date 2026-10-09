@@ -44,6 +44,21 @@ describe('PairingScreen', () => {
     expect(screen.queryByLabelText('reject')).toBeNull();
   });
 
+  it('offers confirm only once a SAS is shown and a handler exists', () => {
+    const onConfirm = jest.fn();
+    const { rerender } = render(
+      <PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas="" onConfirm={onConfirm} />,
+    );
+    expect(screen.queryByLabelText('confirm')).toBeNull();
+    rerender(
+      <PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} onConfirm={onConfirm} />,
+    );
+    fireEvent.press(screen.getByLabelText('confirm'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    rerender(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
+    expect(screen.queryByLabelText('confirm')).toBeNull();
+  });
+
   it('always shows the SAS', () => {
     render(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
     expect(screen.getByText(SAS)).toBeTruthy();

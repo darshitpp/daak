@@ -433,6 +433,8 @@ impl DaakEngine {
             db: Arc::new(db),
         };
         let engine = Arc::new(self.rt.block_on(Engine::start(cfg)).map_err(engine_err)?);
+        // Every app build gates a new pairing on the user's SAS compare.
+        engine.set_pairing_confirmation_required(true);
 
         let mut events = engine.events();
         let sink = self.sink.clone();
@@ -621,6 +623,15 @@ impl DaakEngine {
         let id = parse_id(&device_id)?;
         self.rt
             .block_on(self.engine()?.revoke_pairing(id))
+            .map_err(engine_err)
+    }
+
+    /// The user compared the SAS and it matched. A pending pairing becomes
+    /// trusted. Reject is `revoke_pairing`.
+    pub fn confirm_pairing(&self, device_id: String) -> Result<(), FfiError> {
+        let id = parse_id(&device_id)?;
+        self.rt
+            .block_on(self.engine()?.confirm_pairing(id))
             .map_err(engine_err)
     }
 

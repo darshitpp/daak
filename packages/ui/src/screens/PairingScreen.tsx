@@ -4,15 +4,16 @@ import { QrView } from '../components/QrView';
 import { Btn, Note, Section } from '../components/ds';
 import { ui } from '../theme';
 
-export function PairingScreen({ role, qrUri, onScan, sas, onReject, embedded = false }: {
+export function PairingScreen({ role, qrUri, onScan, sas, onConfirm, onReject, embedded = false }: {
   role: 'host' | 'join';
   qrUri: string;
   onScan: () => void;
   sas: string;
   /**
-   * The engine stores the pairing before the user sees the SAS, so a SAS that
-   * does not match must remove it. The control shows only with a SAS on screen.
+   * A new pairing is pending until the user says the SAS matched. Both
+   * controls show only with a SAS on screen. Reject removes the pending pairing.
    */
+  onConfirm?: () => void;
   onReject?: () => void;
   /**
    * Drop this screen's own appbar and scroll container, because a host is
@@ -44,8 +45,11 @@ export function PairingScreen({ role, qrUri, onScan, sas, onReject, embedded = f
             <Text style={ui.verify} accessibilityLabel="sas">{sas}</Text>
           </View>
         ) : null}
+        {sas && onConfirm ? (
+          <Btn variant="primary" block testID="confirm" label="They match" onPress={onConfirm} />
+        ) : null}
         {sas && onReject ? (
-          <Btn variant="quiet" block testID="reject" label="Does not match - remove" onPress={onReject} />
+          <Btn variant="quiet" block testID="reject" label="Does not match" onPress={onReject} />
         ) : null}
         <Note
           title="Both devices need to be on the same Wi-Fi"

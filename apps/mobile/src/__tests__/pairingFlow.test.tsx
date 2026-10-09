@@ -143,41 +143,47 @@ describe('QR pairing is reachable from the app shell', () => {
     // A SAS that is fetched and never shown is not pairing.
     await waitFor(() => expect(screen.getByText(SAS)).toBeTruthy());
 
+    const confirmPairing = jest.spyOn(engine, 'confirmPairing');
     fireEvent.press(screen.getByLabelText('confirm'));
-    expect(screen.getByText('Show QR')).toBeTruthy();
+    // The SAS event named the peer, so confirming needs no other source.
+    await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith('aa'.repeat(16)));
+    await waitFor(() => expect(screen.getByText('Show QR')).toBeTruthy());
   });
 
-  // C2: the button is NOT a security gate. The engine auto-commits the
-  // pairing row before the SAS is even computed, so "Confirm" promised a
-  // control the user does not have. The honest label says what pressing it
-  // does: acknowledge the matching SAS and leave the flow.
-  it('labels the final button as an acknowledgement, not as gating a pairing', async () => {
+  // The engine keeps a new pairing pending. The screen offers a real answer to
+  // the SAS compare: "They match" confirms it, "Does not match" removes it.
+  it('offers They match and Does not match once a SAS is on screen', async () => {
     renderShell();
     fireEvent.press(screen.getByText('Devices'));
-      fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByLabelText('pair-a-device'));
     fireEvent.press(screen.getByText('Scan'));
     await waitFor(() => expect(screen.getByText('123456')).toBeTruthy());
 
-    expect(screen.queryByText('Confirm')).toBeNull();
-    expect(screen.getByText('SAS matched - Done')).toBeTruthy();
+    expect(screen.getByText('They match')).toBeTruthy();
+    expect(screen.getByText('Does not match')).toBeTruthy();
+    expect(screen.queryByText('SAS matched - Done')).toBeNull();
   });
 
-  // The engine stores the pairing before the user sees the SAS. A mismatch must
-  // therefore remove the stored pairing, or the other device stays trusted.
-  it('removes the stored pairing when the user rejects a SAS that does not match', async () => {
-    await startEngine();
+  it('confirms the pending pairing for the scanned peer when the user says it matches', async () => {
+    const confirmPairing = jest.spyOn(engine, 'confirmPairing');
+    renderShell();
+    fireEvent.press(screen.getByText('Devices'));
+    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByText('Scan'));
+    await waitFor(() => expect(screen.getByText('123456')).toBeTruthy());
+
+    fireEvent.press(screen.getByLabelText('confirm'));
+    await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith('aa'.repeat(16)));
+    await waitFor(() => expect(screen.getByText('Scan')).toBeTruthy());
+  });
+
+  // A SAS that does not match must remove the pending pairing.
+  it('removes the pending pairing when the user rejects a SAS that does not match', async () => {
     const revoke = jest.spyOn(engine, 'revokePairing');
     renderShell();
     fireEvent.press(screen.getByText('Devices'));
     fireEvent.press(screen.getByLabelText('pair-a-device'));
-    // The engine emits pairing.done when it stores the row, before the SAS shows.
-    const handlers = (
-      engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }
-    ).__handlers;
     fireEvent.press(screen.getByText('Scan'));
-    act(() => {
-      for (const h of handlers) h({ type: 'pairing.done', deviceId: 'aa'.repeat(16) });
-    });
     await waitFor(() => expect(screen.getByText('123456')).toBeTruthy());
 
     fireEvent.press(screen.getByLabelText('reject'));
@@ -199,7 +205,7 @@ describe('QR pairing is reachable from the app shell', () => {
     expect(pair).toHaveBeenCalledWith('aa'.repeat(16), 'qr', 'ccdd', undefined);
 
     fireEvent.press(screen.getByLabelText('confirm'));
-    expect(screen.getByText('Scan')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Scan')).toBeTruthy());
   });
 
   // Finding 2. A consumed or failed arm had NO way back: `acknowledge` returned

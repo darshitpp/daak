@@ -27,6 +27,8 @@ export interface Spec extends TurboModule {
   listDevices(): Promise<string>;
   /** UDL: revoke_pairing(string device_id) */
   revokePairing(deviceId: string): Promise<void>;
+  /** UDL: confirm_pairing(string device_id) -- the SAS compare matched. */
+  confirmPairing(deviceId: string): Promise<void>;
   /** UDL: background_wake() -- drain the outbox now. Rust stub until Task 4. */
   backgroundWake(): Promise<void>;
   /** UDL: replace_inbox_paths(string payload_id, sequence<string> paths) */

@@ -150,6 +150,16 @@ final class Daak: RCTEventEmitter, EventSink {
     }
   }
 
+  /// The SAS compare matched: a pending pairing becomes trusted.
+  @objc func confirmPairing(_ deviceId: String,
+                            resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().confirmPairing(deviceId: deviceId)
+      return nil as Void?
+    }
+  }
+
   /// Drain the outbox now. The ONE wake primitive; InProcessEngine calls this
   /// as backgroundWake(), and the iOS BGTask handler calls it too.
   @objc func backgroundWake(_ resolve: @escaping RCTPromiseResolveBlock,

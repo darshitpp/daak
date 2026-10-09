@@ -200,6 +200,12 @@ class DaakModule(reactContext: ReactApplicationContext) :
         resolve(promise) { handle().revokePairing(deviceId); null }
 
     @ReactMethod
+    override fun confirmPairing(deviceId: String, promise: Promise) =
+        // The SAS compare matched. The trailing null is load-bearing, same as
+        // revokePairing(): the generated method returns Unit.
+        resolve(promise) { handle().confirmPairing(deviceId); null }
+
+    @ReactMethod
     override fun backgroundWake(promise: Promise) =
         // The ONE outbox wake. The trailing null is load-bearing, same as
         // cancel()/retry(): the generated method returns Unit.

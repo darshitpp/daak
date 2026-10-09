@@ -23,6 +23,8 @@ const METHODS: (keyof DaakEngine)[] = [
   // never re-pair, because an open-armed host refuses a device that already has
   // a row.
   'revokePairing',
+  // The SAS gate: a pairing stays pending until this call says the compare matched.
+  'confirmPairing',
   // R42p: where a moved received file went. The Inbox opens this field, so a
   // move without it leaves the row pointing at a path that is gone.
   'replaceInboxPaths',
@@ -65,6 +67,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   sendFiles: true,
   listDevices: true,
   revokePairing: true,
+  confirmPairing: true,
   backgroundWake: true,
   replaceInboxPaths: true,
   cancel: true,
@@ -98,7 +101,7 @@ describe('contract types', () => {
   it('pins the engine method set to spec 6.2', () => {
     const exhaustive: Record<keyof DaakEngine, true> = {
       start: true, stop: true, devices: true, pair: true, send: true, cancel: true,
-      revokePairing: true,
+      revokePairing: true, confirmPairing: true,
       replaceInboxPaths: true,
       retry: true, quarantineReport: true, deleteQuarantined: true,
       listQuarantineReports: true,
@@ -146,7 +149,9 @@ describe('contract types', () => {
     // revoke_pairing (R42f) and background_wake (Phase 7 Task 8) are each a UDL
     // method AND a TurboModule override. A count bump here means a native
     // method was added without a decision here.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(27);
+    // confirm_pairing (the SAS gate) is the 28th: a UDL method and a TurboModule
+    // override on all three native modules.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(28);
   });
 
   it('models a device without fabricating liveness (R11)', () => {

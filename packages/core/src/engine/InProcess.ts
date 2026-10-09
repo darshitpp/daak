@@ -106,6 +106,10 @@ export class InProcessEngine implements DaakEngine {
     await this.native.revokePairing(deviceId);
   }
 
+  async confirmPairing(deviceId: string): Promise<void> {
+    await this.native.confirmPairing(deviceId);
+  }
+
   async backgroundWake(): Promise<void> {
     await this.native.backgroundWake();
   }

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Btn, Note, PairingScreen, Section, ui, useEngine } from '@daak/ui';
 import { armHostPairing, hostPairingQr, joinWithScan, parsePairingPayload } from './pairing';
-import { onPairingDone, onPairingSas } from './bootstrap';
+import { onPairingSas } from './bootstrap';
 
 type Phase = { kind: 'choose' } | { kind: 'host'; qrUri: string } | { kind: 'join' };
 
@@ -35,9 +35,18 @@ export function PairingFlow({
   const [sas, setSas] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => onPairingSas((received) => setSas(received)), []);
+  // The peer the SAS belongs to. The engine keeps a new pairing pending until
+  // confirmPairing, so the screen needs the id to confirm or reject it.
   const [peerId, setPeerId] = useState('');
-  useEffect(() => onPairingDone(setPeerId), []);
+
+  useEffect(
+    () =>
+      onPairingSas((received, peer) => {
+        setSas(received);
+        setPeerId(peer);
+      }),
+    [],
+  );
 
   // A link bundle IS a join, with no camera: the user already chose to pair by
   // opening the link, and a scanner prompt on top of that is a step that does
@@ -57,10 +66,15 @@ export function PairingFlow({
         // carry the bundle without an addr, and a bundle written by an older
         // build has no key. With neither, the engine resolves the host from
         // discovery, which is empty on any network mDNS does not cross.
-        return engine.pair(parsed.deviceId, 'qr', parsed.cbor, addr ?? parsed.addr);
+        return engine
+          .pair(parsed.deviceId, 'qr', parsed.cbor, addr ?? parsed.addr)
+          .then(({ sas: received }) => ({ received, peer: parsed.deviceId }));
       })
       .then(
-        ({ sas: received }) => setSas(received),
+        ({ received, peer }) => {
+          setSas(received);
+          setPeerId(peer);
+        },
         (e: unknown) => setError(e instanceof Error ? e.message : 'that pairing link did not work'),
       );
   }, [bundle, addr, engine]);
@@ -103,17 +117,16 @@ export function PairingFlow({
     setError('');
     setPhase({ kind: 'join' });
     void joinWithScan(engine).then(
-      ({ sas: received }) => setSas(received),
+      ({ sas: received, peerDeviceId }) => {
+        setSas(received);
+        setPeerId(peerDeviceId);
+      },
       (e: unknown) => setError(e instanceof Error ? e.message : 'scan failed'),
     );
   };
 
-  // Not a gate. The engine persists the pairing row BEFORE either SAS is
-  // shown (Engine::commit_pairing), so this button only acknowledges that the
-  // two SAS matched. The reject button below is the other half: it removes the
-  // stored pairing. A confirm API that gated the commit is still a Phase 7
-  // change with a crypto consequence.
-  // The SAS did not match: remove the pairing the engine already stored.
+  // The engine keeps a new pairing pending: it grants nothing until the user
+  // says the two SAS values matched. Reject removes the pending pairing.
   const reject = () => {
     const id = peerId;
     setSas('');
@@ -127,10 +140,16 @@ export function PairingFlow({
     }
   };
 
-  const acknowledge = () => {
-    setSas('');
+  const confirm = () => {
     setError('');
-    setPhase({ kind: 'choose' });
+    void engine.confirmPairing(peerId).then(
+      () => {
+        setSas('');
+        setPeerId('');
+        setPhase({ kind: 'choose' });
+      },
+      (e: unknown) => setError(e instanceof Error ? e.message : 'could not confirm the pairing'),
+    );
   };
 
   // EMBEDDED is the onboarding case. PairFirstDeviceScreen already supplies an
@@ -170,6 +189,7 @@ export function PairingFlow({
         qrUri={phase.kind === 'host' ? phase.qrUri : ''}
         onScan={startJoin}
         sas={sas}
+        onConfirm={peerId ? confirm : undefined}
         onReject={peerId ? reject : undefined}
         embedded={embedded}
       />
@@ -185,18 +205,6 @@ export function PairingFlow({
         </View>
       ) : null}
       <View style={pad}>
-        {/* The acknowledgement needs a SAS to acknowledge. Measured on the
-            emulator, a link join that failed still rendered 'SAS matched -
-            Done' above its own error, so the one label claiming the pairing
-            worked sat on screen for a pairing that never happened -- and
-            pressing it cleared the message. Showing it only once a SAS has
-            arrived removes the false claim and the error stays readable.
-
-            This is NOT a security gate. The engine commits the pairing row
-            before either SAS is shown (Engine::commit_pairing), and the
-            button never gated that. It is an acknowledgement that needs
-            something to acknowledge. */}
-        {sas ? <Btn variant="primary" block testID="confirm" label="SAS matched - Done" onPress={acknowledge} /> : null}
         {error ? <Note tone="err" testID="pairing-error" body={error} /> : null}
       </View>
     </View>

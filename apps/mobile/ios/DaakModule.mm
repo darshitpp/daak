@@ -61,6 +61,10 @@ RCT_EXTERN_METHOD(revokePairing:(NSString *)deviceId
 
 // Phase 7 Task 8: the ONE outbox wake. InProcessEngine.backgroundWake() and
 // the iOS BGTask handler both reach this through Daak.swift.
+RCT_EXTERN_METHOD(confirmPairing:(NSString *)deviceId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(backgroundWake:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
