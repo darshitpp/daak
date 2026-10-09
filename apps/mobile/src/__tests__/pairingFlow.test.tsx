@@ -1,4 +1,5 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent } from '@daak/core';
 import { AppShell, EngineProvider } from '@daak/ui';
@@ -86,6 +87,22 @@ describe('QR pairing is reachable from the app shell', () => {
     expect(screen.getByText('Scan')).toBeTruthy();
     expect(mockedBundle).not.toHaveBeenCalled();
     expect(mockedQr).not.toHaveBeenCalled();
+  });
+
+  it('bounds the host frame so PairingScreen can take its height', async () => {
+    // The host QR was INVISIBLE on a phone: PairingScreen's own root is
+    // ui.screen (flex: 1) and the wrapper had automatic height, so the whole
+    // screen -- appbar, section and QR -- resolved to zero pixels. The pair
+    // route then showed only the retry and back buttons, which reads as a
+    // dead "Show QR". Reproduced on the iPhone 17 simulator. The desktop
+    // wrapper already carries this flex; the phone's did not.
+    renderShell();
+    fireEvent.press(screen.getByText('Devices'));
+    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByText('Show QR'));
+    await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
+    const frame = screen.getByTestId('pair-frame');
+    expect(StyleSheet.flatten(frame.props.style)).toMatchObject({ flex: 1 });
   });
 
   it('host half: shows the QR and arms with NO camera scan', async () => {

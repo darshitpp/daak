@@ -139,7 +139,16 @@ export function PairingFlow({
     );
   }
   return (
-    <View>
+    // flex: 1 is load-bearing, the same as apps/desktop/src/pairing.tsx.
+    // PairingScreen's own root IS ui.screen (flex: 1), so a wrapper with
+    // automatic height collapses it -- and the QR with it -- to zero pixels.
+    // The pair route then shows only the retry and back buttons, which reads
+    // as a dead "Show QR". Reproduced on the iPhone 17 simulator.
+    //
+    // EMBEDDED keeps automatic height: OnboardingFlow owns the frame and puts
+    // a sibling "Skip for now" button beside this flow, which a flex: 1 child
+    // would push off screen.
+    <View style={embedded ? undefined : ui.screen} testID="pair-frame">
       <PairingScreen
         role={phase.kind}
         qrUri={phase.kind === 'host' ? phase.qrUri : ''}
