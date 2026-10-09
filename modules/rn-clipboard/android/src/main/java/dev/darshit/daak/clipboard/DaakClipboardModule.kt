@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Handler
+import android.os.PersistableBundle
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactMethod
@@ -22,7 +23,13 @@ class DaakClipboardModule(reactContext: ReactApplicationContext) :
   // threading a Handler through the call site.
   @ReactMethod
   override fun setString(text: String, promise: Promise) = onMain(promise) {
-    clipboard().setPrimaryClip(ClipData.newPlainText("daak", text))
+    val clip = ClipData.newPlainText("daak", text)
+    // Received text can be private. Android 13 and later hides a sensitive clip
+    // from the on-screen clipboard preview. Older versions ignore the extra.
+    clip.description.extras = PersistableBundle().apply {
+      putBoolean("android.content.extra.IS_SENSITIVE", true)
+    }
+    clipboard().setPrimaryClip(clip)
     promise.resolve(true)
   }
 

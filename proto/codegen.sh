@@ -68,7 +68,10 @@ for spec_path in "$PROTO_DIR"/*.cddl; do
   # shipped run-json2ts.js compiles it to TypeScript.
   printf '{"private":true,"name":"daak-proto-%s-gen","version":"0.0.0","dependencies":{"json-schema-to-typescript":"%s"}}\n' \
     "$spec" "$JSON2TS_VERSION" > "$out/package.json"
-  ( cd "$out" && pnpm install --silent --ignore-workspace )
+  # Install from the committed lockfile. A drift between package.json and the
+  # lockfile fails the run instead of resolving new versions.
+  cp "$PROTO_DIR/codegen.pnpm-lock.yaml" "$out/pnpm-lock.yaml"
+  ( cd "$out" && pnpm install --silent --ignore-workspace --frozen-lockfile )
   ( cd "$out/wasm/json-gen" && cargo run --quiet )
   ( cd "$out" && node scripts/run-json2ts.js )
 

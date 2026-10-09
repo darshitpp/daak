@@ -12,6 +12,9 @@ import {
 } from '../src/ipc/transport';
 import { Encoder } from 'cbor-x';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Real frames: 'DAAK' || u32 BE length || CBOR({"v":<version>,"msg":<IpcMessage>}).
 // The CBOR bodies are produced by daak_ipc::write_message in a throwaway probe
@@ -186,5 +189,14 @@ describe('ipc transport', () => {
     sock.emit('close');
     sock.emit('error', new Error('EPIPE'));
     expect(closes).toBe(1);
+  });
+});
+
+describe('IpcTransport.connect', () => {
+  it('refuses a path that is not a socket', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'daak-ipc-'));
+    const file = join(dir, 'daakd.sock');
+    writeFileSync(file, 'not a socket');
+    await expect(IpcTransport.connect(file)).rejects.toThrow(/not a socket/);
   });
 });

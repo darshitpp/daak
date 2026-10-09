@@ -36,9 +36,11 @@ describe('the release workflow', () => {
     expect(code).toMatch(/v\*/);
   });
 
-  it('grants contents: write, because a Release needs it', () => {
-    expect(code).toMatch(/permissions:/);
-    expect(code).toMatch(/contents:\s*write/);
+  it('grants contents: write to the draft job only, because only a Release needs it', () => {
+    expect(code).toMatch(/^permissions:\s*\n\s+contents: read/m);
+    const draft = code.slice(code.indexOf('  draft:'));
+    expect(draft).toMatch(/permissions:\s*\n\s+contents:\s*write/);
+    expect(code.slice(0, code.indexOf('  draft:'))).not.toMatch(/contents:\s*write/);
   });
 
   it('fails the preflight when the tag does not match release/version.json', () => {
@@ -83,5 +85,18 @@ describe('the CI workflow', () => {
 
   it('grants the token read access only', () => {
     expect(stripYamlComments(ci)).toMatch(/^permissions:\s*\n\s+contents: read/m);
+  });
+});
+
+describe('every workflow action', () => {
+  const dir = join(__dirname, '..', '..', '..', '.github', 'workflows');
+
+  it('is pinned to a full commit SHA', () => {
+    for (const file of ['ci.yml', 'release.yml']) {
+      const code = stripYamlComments(readFileSync(join(dir, file), 'utf8'));
+      const uses = [...code.matchAll(/uses:\s*(\S+)/g)].map((m) => m[1]);
+      expect(uses.length).toBeGreaterThan(0);
+      for (const u of uses) expect(u).toMatch(/@[0-9a-f]{40}$/);
+    }
   });
 });

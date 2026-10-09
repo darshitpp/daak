@@ -1,5 +1,6 @@
 <paths>
   <cache-path name="daak_cache" path="." />
-  <files-path name="daak_files" path="." />
+  <files-path name="daak_downloads" path="daak/downloads/" />
+  <files-path name="daak_inbox" path="share-inbox/" />
   <external-files-path name="daak_ext" path="." />
 </paths>

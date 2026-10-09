@@ -7,7 +7,8 @@
   getUriForFile throws IllegalArgumentException on an undeclared authority.
 -->
 <paths>
-  <files-path name="daak_fspaths_files" path="." />
+  <files-path name="daak_fspaths_downloads" path="daak/downloads/" />
+  <files-path name="daak_fspaths_inbox" path="share-inbox/" />
   <external-files-path name="daak_fspaths_ext" path="." />
   <cache-path name="daak_fspaths_cache" path="." />
 </paths>

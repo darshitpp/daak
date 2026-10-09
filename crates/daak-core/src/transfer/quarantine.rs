@@ -31,9 +31,26 @@ impl Quarantine {
 
     /// Move a hash-failed file into quarantine and return its held path.
     pub fn hold(&self, payload_id: &[u8; 16], name: &str, tmp: &Path) -> Result<PathBuf> {
-        let dest = self.slot(payload_id, name);
+        let mut dest = self.slot(payload_id, name);
         if let Some(dir) = dest.parent() {
             std::fs::create_dir_all(dir)?;
+        }
+        // A held file is never replaced. A second file with the same name gets
+        // a counter: `x.bin`, `x (1).bin`, `x (2).bin`. The receiver records the
+        // returned path, and a later lookup reads the name from that record.
+        let first = dest.clone();
+        let mut n = 0u32;
+        while dest.symlink_metadata().is_ok() {
+            n += 1;
+            let stem = first
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unnamed");
+            let numbered = match first.extension().and_then(|e| e.to_str()) {
+                Some(ext) => format!("{stem} ({n}).{ext}"),
+                None => format!("{stem} ({n})"),
+            };
+            dest = first.with_file_name(numbered);
         }
         std::fs::rename(tmp, &dest)?;
         Ok(dest)
@@ -61,6 +78,31 @@ mod tests {
             "held path must sit under the quarantine root, got {held:?}"
         );
         assert_eq!(std::fs::read(&held).unwrap(), b"partial");
+    }
+
+    /// Two failed items can share one leaf name (`a/x.bin` and `b/x.bin`). The
+    /// second must not replace the first held file.
+    #[test]
+    fn a_second_file_with_the_same_name_gets_a_counter() {
+        let root = tempfile::tempdir().unwrap();
+        let q = Quarantine::new(root.path().join("quarantine"));
+        let mut held = Vec::new();
+        for (i, body) in [b"one".as_slice(), b"two", b"three"]
+            .into_iter()
+            .enumerate()
+        {
+            let tmp = root.path().join(format!("part{i}.tmp"));
+            std::fs::write(&tmp, body).unwrap();
+            held.push(q.hold(&[9u8; 16], "x.bin", &tmp).unwrap());
+        }
+        let names: Vec<_> = held
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["x.bin", "x (1).bin", "x (2).bin"]);
+        assert_eq!(std::fs::read(&held[0]).unwrap(), b"one");
+        assert_eq!(std::fs::read(&held[1]).unwrap(), b"two");
+        assert_eq!(std::fs::read(&held[2]).unwrap(), b"three");
     }
 
     /// I-1: `name` is a pub parameter and the receiver stores the RAW wire name

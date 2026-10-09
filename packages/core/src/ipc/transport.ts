@@ -20,6 +20,7 @@
 //   IpcEvent::InboxReceived{..} -> {"Event": {"InboxReceived": {"payload_json": "<STRING>"}}}
 
 import { Decoder, Encoder } from 'cbor-x';
+import { lstatSync } from 'node:fs';
 import { connect, type Socket } from 'node:net';
 
 export const MAGIC = Buffer.from('DAAK', 'ascii');
@@ -149,6 +150,18 @@ export class IpcTransport {
 
   static connect(sockPath: string): Promise<IpcTransport> {
     return new Promise((resolve, reject) => {
+      // Talk only to a socket that this user owns. On a shared host another user
+      // could plant a socket at a predictable path and forge every reply.
+      try {
+        const st = lstatSync(sockPath);
+        if (!st.isSocket()) throw new Error(`${sockPath} is not a socket`);
+        if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+          throw new Error(`${sockPath} is owned by uid ${st.uid}, not this user`);
+        }
+      } catch (e) {
+        reject(e);
+        return;
+      }
       const sock = connect(sockPath);
       const t = new IpcTransport(sock);
       sock.once('connect', () => resolve(t));

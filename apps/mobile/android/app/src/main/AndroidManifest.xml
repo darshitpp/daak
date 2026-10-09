@@ -128,9 +128,11 @@
           tools:replace on the meta-data is the fix, not a workaround. The
           surviving @xml/daak_fspaths_file_paths declares files-path,
           external-files-path and cache-path, the same three roots
-          @xml/daak_file_paths declared, all at path ".", so every path
-          rn-share's getUriForFile() resolves (its share-inbox lives under
-          cacheDir) still resolves. One provider with one meta-data instead of
+          @xml/daak_file_paths declared. The files-path roots name only
+          daak/downloads/ and share-inbox/, so the database and the identity
+          under filesDir are never served. Every path rn-share's
+          getUriForFile() resolves (its share-inbox lives under cacheDir)
+          still resolves. One provider with one meta-data instead of
           two would have been the alternative; that needs rn-share to stop
           declaring its own, which is more churn for the same result.
         -->
