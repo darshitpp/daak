@@ -20,7 +20,7 @@ use super::mdns::{
     PROTO_VERSION,
 };
 use super::naming::resolve_name;
-use super::records::DiscoveryEvent;
+use super::records::{DiscoveryEvent, RecordTracker};
 
 type SdRef = *mut c_void;
 
@@ -402,7 +402,9 @@ impl Drop for Svc {
 struct State {
     root: SdRef,
     browse: SdRef,
-    sink: Box<dyn FnMut(PeerAnnounce) + Send>,
+    sink: Box<dyn FnMut(DiscoveryEvent) + Send>,
+    // The tracker key is the same string as the `services` key.
+    tracker: RecordTracker,
     services: HashMap<String, Box<Svc>>, // key: "<instance>\0<interface>"
     // The Svc stays boxed so the address of its Key owner never moves.
     #[allow(clippy::vec_box)]
@@ -435,7 +437,8 @@ unsafe fn service_of<'a>(ctx: *mut c_void) -> Option<(&'a mut State, &'a mut Svc
     Some((&mut *state_ptr, &mut **svc))
 }
 
-fn emit(svc: &Svc, sink: &mut dyn FnMut(PeerAnnounce)) {
+/// Report the record as `Found`. Return the device id when the record parses.
+fn emit(svc: &Svc, sink: &mut dyn FnMut(DiscoveryEvent)) -> Option<[u8; 16]> {
     let map = parse_txt(&svc.txt);
     // A local-only service resolves to the loopback address only, and
     // `pick_addr` drops that. In a test build, a local-only service that has an
@@ -455,7 +458,19 @@ fn emit(svc: &Svc, sink: &mut dyn FnMut(PeerAnnounce)) {
         addrs.iter().copied(),
         svc.port,
     ) {
-        sink(a);
+        let id = a.device_id;
+        sink(DiscoveryEvent::Found(a));
+        return Some(id);
+    }
+    None
+}
+
+/// Report the record and remember which device it announces.
+fn emit_and_track(state: &mut State, svc: &Svc) {
+    if let Some(id) = emit(svc, &mut state.sink) {
+        // SAFETY: `ctx` is the Key of this Svc. The Svc owns it until it drops.
+        let key = unsafe { &(*svc.ctx).key };
+        state.tracker.found(key, id);
     }
 }
 
@@ -483,6 +498,10 @@ extern "C" fn browse_cb(
         // Move the Svc out. The refs are deallocated after ProcessResult returns.
         if let Some(s) = state.services.remove(&key) {
             state.dead.push(s);
+        }
+        // The sink call frees no ref. A record that never resolved gives None.
+        if let Some(id) = state.tracker.removed(&key) {
+            (state.sink)(DiscoveryEvent::Lost(id));
         }
         return;
     }
@@ -566,7 +585,7 @@ extern "C" fn resolve_cb(
     };
     if !svc.addr.is_null() {
         // A later resolve reply, such as a TXT change. Send the known addresses again.
-        emit(svc, &mut state.sink);
+        emit_and_track(state, svc);
         return;
     }
     let Ok(host_c) = CString::new(svc.host.as_str()) else {
@@ -632,7 +651,7 @@ extern "C" fn addr_cb(
     if !svc.addrs.contains(&ip) {
         svc.addrs.push(ip);
     }
-    emit(svc, &mut state.sink);
+    emit_and_track(state, svc);
 }
 
 /// Deallocate the refs of every service in `dead`, then drop the services.
@@ -674,7 +693,7 @@ impl Drop for BrowseHandle {
     }
 }
 
-fn spawn_browse(sink: Box<dyn FnMut(PeerAnnounce) + Send>) -> Result<BrowseHandle> {
+fn spawn_browse(sink: Box<dyn FnMut(DiscoveryEvent) + Send>) -> Result<BrowseHandle> {
     let mut root: SdRef = std::ptr::null_mut();
     // SAFETY: root is a valid out pointer.
     let rc = unsafe { DNSServiceCreateConnection(&mut root) };
@@ -685,6 +704,7 @@ fn spawn_browse(sink: Box<dyn FnMut(PeerAnnounce) + Send>) -> Result<BrowseHandl
         root,
         browse: std::ptr::null_mut(),
         sink,
+        tracker: RecordTracker::default(),
         services: HashMap::new(),
         dead: Vec::new(),
         next_gen: 0,
@@ -743,15 +763,15 @@ fn spawn_browse(sink: Box<dyn FnMut(PeerAnnounce) + Send>) -> Result<BrowseHandl
 }
 
 pub struct Browser {
-    rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PeerAnnounce>>,
+    rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<DiscoveryEvent>>,
     handle: BrowseHandle,
 }
 
 impl Browser {
     pub fn start() -> Result<Self> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let handle = spawn_browse(Box::new(move |a| {
-            let _ = tx.send(a);
+        let handle = spawn_browse(Box::new(move |e| {
+            let _ = tx.send(e);
         }))?;
         Ok(Self {
             rx: tokio::sync::Mutex::new(rx),
@@ -761,7 +781,7 @@ impl Browser {
 
     /// The next peer record. `None` after `stop`.
     pub async fn recv(&self) -> Option<DiscoveryEvent> {
-        self.rx.lock().await.recv().await.map(DiscoveryEvent::Found)
+        self.rx.lock().await.recv().await
     }
 
     pub fn stop(&self) {
@@ -774,8 +794,8 @@ impl Browser {
 #[allow(dead_code)]
 pub(crate) fn observed(window: Duration, own: Option<[u8; 16]>) -> Vec<PeerAnnounce> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let Ok(b) = spawn_browse(Box::new(move |a| {
-        let _ = tx.send(a);
+    let Ok(b) = spawn_browse(Box::new(move |e| {
+        let _ = tx.send(e);
     })) else {
         return vec![];
     };
@@ -783,7 +803,9 @@ pub(crate) fn observed(window: Duration, own: Option<[u8; 16]>) -> Vec<PeerAnnou
     let mut out = Vec::new();
     while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
         match rx.recv_timeout(left) {
-            Ok(a) if !is_own_advertisement(Some(a.device_id), own) => out.push(a),
+            Ok(DiscoveryEvent::Found(a)) if !is_own_advertisement(Some(a.device_id), own) => {
+                out.push(a)
+            }
             Ok(_) => {}
             Err(_) => break,
         }
@@ -835,13 +857,48 @@ mod tests {
     }
 
     fn start_named(name: &str) -> Advertiser {
-        Advertiser::start_with_meta(name, unique_port(), unique_id(), "", "", 0, "online", None)
-            .unwrap()
+        start_named_with_id(name, unique_id())
+    }
+
+    fn start_named_with_id(name: &str, id: [u8; 16]) -> Advertiser {
+        Advertiser::start_with_meta(name, unique_port(), id, "", "", 0, "online", None).unwrap()
     }
 
     // Observed: a test build registers on the local host only, so the system
     // refuses a duplicate name at once. The call returns NameConflict (-65548).
     // A LAN registration reports the same code later, through `register_cb`.
+    #[tokio::test]
+    async fn a_stopped_advertiser_reports_lost() {
+        let id = unique_id();
+        let name = format!("dnssd-lost-{}", hex::encode(&id[..4]));
+        let adv = start_named_with_id(&name, id);
+        let browser = Browser::start().unwrap();
+        let saw_found = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(DiscoveryEvent::Found(a)) = browser.recv().await {
+                    if a.device_id == id {
+                        return;
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(saw_found.is_ok(), "the browse must find the service first");
+        adv.stop();
+        let lost = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(DiscoveryEvent::Lost(got)) = browser.recv().await {
+                    if got == id {
+                        return;
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(lost.is_ok(), "the browse must report the removal");
+        browser.stop();
+    }
+
     #[test]
     fn a_taken_local_instance_name_is_refused() {
         let name = format!("dnssd-cf-{}", hex::encode(&unique_id()[..4]));

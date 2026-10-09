@@ -19,14 +19,14 @@ pub struct RecordTracker {
 }
 
 impl RecordTracker {
-    /// Remember that `record` announces `id`.
+    /// Remember that `record` announces `id`. A record name ignores case.
     pub fn found(&mut self, record: &str, id: [u8; 16]) {
-        self.by_record.insert(record.to_string(), id);
+        self.by_record.insert(record.to_ascii_lowercase(), id);
     }
 
     /// Forget `record`. Returns `Some(id)` only when no other record names `id`.
     pub fn removed(&mut self, record: &str) -> Option<[u8; 16]> {
-        let id = self.by_record.remove(record)?;
+        let id = self.by_record.remove(&record.to_ascii_lowercase())?;
         (!self.by_record.values().any(|other| *other == id)).then_some(id)
     }
 }
@@ -62,6 +62,13 @@ mod tests {
     fn an_unknown_record_reports_nothing() {
         let mut t = RecordTracker::default();
         assert_eq!(t.removed("never-resolved"), None);
+    }
+
+    #[test]
+    fn a_record_name_ignores_case() {
+        let mut t = RecordTracker::default();
+        t.found("A._daak._tcp", [1; 16]);
+        assert_eq!(t.removed("a._daak._tcp"), Some([1; 16]));
     }
 
     #[test]
