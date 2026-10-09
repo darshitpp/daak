@@ -511,18 +511,52 @@ pub fn pick_addr(addrs: impl Iterator<Item = IpAddr>, port: u16) -> Option<Socke
 /// `port` is the caller's listener port. An interface list carries no port, so
 /// there is no other honest source for it.
 pub fn host_lan_addr(port: u16) -> Option<SocketAddr> {
-    let ifs = if_addrs::get_if_addrs().unwrap_or_default();
+    let ifs: Vec<(String, IpAddr)> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|i| (i.name.clone(), i.ip()))
+        .collect();
+    choose_lan_addr(&ifs, default_route_ip(), port)
+}
+
+/// The local address the OS would use to reach a routed destination. Connecting
+/// a UDP socket sends nothing: it only makes the OS pick a source address, and
+/// that is the default route's. `None` when the host has no route.
+fn default_route_ip() -> Option<IpAddr> {
+    // 192.0.2.1 is TEST-NET-1: routable by a default route, owned by nobody.
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("192.0.2.1:9").ok()?;
+    sock.local_addr().ok().map(|a| a.ip())
+}
+
+/// Pure selection behind [`host_lan_addr`]. The default route's address wins when
+/// it sits on a LAN interface. That needs no interface-name list, which a phone
+/// maker can always outgrow. Otherwise the older rule applies: drop tunnel and
+/// cellular interfaces by name, then rank the rest with [`pick_addr`].
+fn choose_lan_addr(
+    ifs: &[(String, IpAddr)],
+    primary: Option<IpAddr>,
+    port: u16,
+) -> Option<SocketAddr> {
+    if let Some(ip) = primary {
+        let on_lan = ifs
+            .iter()
+            .any(|(name, a)| *a == ip && is_lan_interface(name));
+        if on_lan && !ip.is_loopback() && !ip.is_unspecified() {
+            return pick_addr(std::iter::once(ip), port);
+        }
+    }
     // A tunnel address is not dialable from the LAN, so it never competes.
     let lan: Vec<IpAddr> = ifs
         .iter()
-        .filter(|i| is_lan_interface(&i.name))
-        .map(|i| i.ip())
+        .filter(|(name, _)| is_lan_interface(name))
+        .map(|(_, ip)| *ip)
         .collect();
     // The unfiltered list is the fallback for a host whose only interfaces are
     // tunnels: a wrong address still beats no address for a caller that must
     // hand a peer something to dial.
     let addrs: Vec<IpAddr> = if lan.is_empty() {
-        ifs.into_iter().map(|i| i.ip()).collect()
+        ifs.iter().map(|(_, ip)| *ip).collect()
     } else {
         lan
     };
@@ -1201,6 +1235,45 @@ mod tests {
             picked.ip().to_string(),
             "10.7.0.1",
             "this is the defect is_lan_interface exists to remove"
+        );
+    }
+
+    /// The interface names a phone reports vary by maker (`rmnet_data1`,
+    /// `r_rmnet_data0`, `ccmni1`, ...), so a name list always misses one. The
+    /// address the OS would use to reach the network is the default route's, and
+    /// on a phone joined to Wi-Fi that is the Wi-Fi address. Measured: an Android
+    /// phone on 192.168.0.143 advertised 172.30.195.165 from another interface,
+    /// because the smallest private address won.
+    #[test]
+    fn the_default_route_address_beats_a_smaller_private_address() {
+        let ifs: Vec<(String, IpAddr)> = vec![
+            ("lo".into(), "127.0.0.1".parse().unwrap()),
+            ("carrier0".into(), "172.30.195.165".parse().unwrap()),
+            ("wlan0".into(), "192.168.0.143".parse().unwrap()),
+        ];
+        let wifi: IpAddr = "192.168.0.143".parse().unwrap();
+        assert_eq!(choose_lan_addr(&ifs, Some(wifi), 4_000).unwrap().ip(), wifi);
+        // Without the default route the old rule applies. This is the defect.
+        assert_eq!(
+            choose_lan_addr(&ifs, None, 4_000).unwrap().ip().to_string(),
+            "172.30.195.165"
+        );
+    }
+
+    /// A default route over a tunnel (a full VPN) is not a LAN address.
+    #[test]
+    fn a_tunnel_default_route_is_ignored() {
+        let ifs: Vec<(String, IpAddr)> = vec![
+            ("utun4".into(), "10.7.0.1".parse().unwrap()),
+            ("en0".into(), "192.168.0.226".parse().unwrap()),
+        ];
+        let primary: Option<IpAddr> = Some("10.7.0.1".parse().unwrap());
+        assert_eq!(
+            choose_lan_addr(&ifs, primary, 4_000)
+                .unwrap()
+                .ip()
+                .to_string(),
+            "192.168.0.226"
         );
     }
 
