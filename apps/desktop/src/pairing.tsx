@@ -35,14 +35,31 @@ type Phase = { kind: 'idle' } | { kind: 'host'; qrUri: string };
 export function DesktopPairing({ engine }: { engine: DaakEngine }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [sas, setSas] = useState('');
+  const [peerId, setPeerId] = useState('');
   const [error, setError] = useState('');
 
   const onEvent = useCallback(
-    (event: { type: string; sas?: string }) => {
+    (event: { type: string; sas?: string; deviceId?: string }) => {
       if (event.type === 'pairing.sas' && typeof event.sas === 'string') setSas(event.sas);
+      // Stored before the SAS shows; kept so a SAS that does not match can remove it.
+      if (event.type === 'pairing.done' && typeof event.deviceId === 'string') setPeerId(event.deviceId);
     },
     [],
   );
+
+  // The SAS did not match: remove the pairing the engine already stored.
+  const reject = () => {
+    const id = peerId;
+    setSas('');
+    setPeerId('');
+    setPhase({ kind: 'idle' });
+    setError('');
+    if (id) {
+      void engine.revokePairing(id).catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : 'could not remove the pairing'),
+      );
+    }
+  };
   useEffect(() => engine.on(onEvent), [engine, onEvent]);
 
   const showQr = () => {
@@ -103,7 +120,13 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
     // route with no code at all, which reads as a dead button. The parent
     // in AppShell is flex: 1, so the flex has a space to fill.
     <View style={{ flex: 1 }}>
-      <PairingScreen role="host" qrUri={phase.qrUri} onScan={showQr} sas={sas} />
+      <PairingScreen
+        role="host"
+        qrUri={phase.qrUri}
+        onScan={showQr}
+        sas={sas}
+        onReject={peerId ? reject : undefined}
+      />
       {/* The arm is ONE-SHOT: the engine takes it for the first joiner, and a
           stray LAN connection can spend it without the user. One button
           re-arms, which is the whole recovery path. Shown before any SAS has

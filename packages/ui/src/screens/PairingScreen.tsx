@@ -4,11 +4,16 @@ import { QrView } from '../components/QrView';
 import { Btn, Note, Section } from '../components/ds';
 import { ui } from '../theme';
 
-export function PairingScreen({ role, qrUri, onScan, sas, embedded = false }: {
+export function PairingScreen({ role, qrUri, onScan, sas, onReject, embedded = false }: {
   role: 'host' | 'join';
   qrUri: string;
   onScan: () => void;
   sas: string;
+  /**
+   * The engine stores the pairing before the user sees the SAS, so a SAS that
+   * does not match must remove it. The control shows only with a SAS on screen.
+   */
+  onReject?: () => void;
   /**
    * Drop this screen's own appbar and scroll container, because a host is
    * already drawing both. Onboarding's Pair First Device step supplies the
@@ -38,6 +43,9 @@ export function PairingScreen({ role, qrUri, onScan, sas, embedded = false }: {
             <Text style={ui.sectionT}>Read this out loud. Both screens must match.</Text>
             <Text style={ui.verify} accessibilityLabel="sas">{sas}</Text>
           </View>
+        ) : null}
+        {sas && onReject ? (
+          <Btn variant="quiet" block testID="reject" label="Does not match - remove" onPress={onReject} />
         ) : null}
         <Note
           title="Both devices need to be on the same Wi-Fi"

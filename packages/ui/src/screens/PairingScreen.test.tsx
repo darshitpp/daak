@@ -31,6 +31,19 @@ describe('PairingScreen', () => {
     expect(onScan).toHaveBeenCalledTimes(1);
   });
 
+  it('offers a reject control only once a SAS is shown and a handler exists', () => {
+    const onReject = jest.fn();
+    const { rerender } = render(
+      <PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas="" onReject={onReject} />,
+    );
+    expect(screen.queryByLabelText('reject')).toBeNull();
+    rerender(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} onReject={onReject} />);
+    fireEvent.press(screen.getByLabelText('reject'));
+    expect(onReject).toHaveBeenCalledTimes(1);
+    rerender(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
+    expect(screen.queryByLabelText('reject')).toBeNull();
+  });
+
   it('always shows the SAS', () => {
     render(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
     expect(screen.getByText(SAS)).toBeTruthy();

@@ -21,6 +21,7 @@ jest.mock('../bootstrap', () => ({
   wireNotificationActions: jest.fn(() => () => {}),
   sendIntentItems: jest.fn(async () => {}),
   onPairingSas: () => () => {},
+  onPairingDone: () => () => {},
   // The peer.incompatible fan-out off the ONE engine subscription. Every file
   // that renders App needs it: the import is undefined without it and the mount
   // effect throws before the shell renders at all.

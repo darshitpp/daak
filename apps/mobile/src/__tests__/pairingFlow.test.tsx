@@ -162,6 +162,29 @@ describe('QR pairing is reachable from the app shell', () => {
     expect(screen.getByText('SAS matched - Done')).toBeTruthy();
   });
 
+  // The engine stores the pairing before the user sees the SAS. A mismatch must
+  // therefore remove the stored pairing, or the other device stays trusted.
+  it('removes the stored pairing when the user rejects a SAS that does not match', async () => {
+    await startEngine();
+    const revoke = jest.spyOn(engine, 'revokePairing');
+    renderShell();
+    fireEvent.press(screen.getByText('Devices'));
+    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    // The engine emits pairing.done when it stores the row, before the SAS shows.
+    const handlers = (
+      engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }
+    ).__handlers;
+    fireEvent.press(screen.getByText('Scan'));
+    act(() => {
+      for (const h of handlers) h({ type: 'pairing.done', deviceId: 'aa'.repeat(16) });
+    });
+    await waitFor(() => expect(screen.getByText('123456')).toBeTruthy());
+
+    fireEvent.press(screen.getByLabelText('reject'));
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith('aa'.repeat(16)));
+    expect(screen.queryByText('123456')).toBeNull();
+  });
+
   it('join half: scanning pairs through the engine and the SAS is shown', async () => {
     const pair = jest.spyOn(engine, 'pair');
     renderShell();

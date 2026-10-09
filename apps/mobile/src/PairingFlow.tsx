@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Btn, Note, PairingScreen, Section, ui, useEngine } from '@daak/ui';
 import { armHostPairing, hostPairingQr, joinWithScan, parsePairingPayload } from './pairing';
-import { onPairingSas } from './bootstrap';
+import { onPairingDone, onPairingSas } from './bootstrap';
 
 type Phase = { kind: 'choose' } | { kind: 'host'; qrUri: string } | { kind: 'join' };
 
@@ -36,6 +36,8 @@ export function PairingFlow({
   const [error, setError] = useState('');
 
   useEffect(() => onPairingSas((received) => setSas(received)), []);
+  const [peerId, setPeerId] = useState('');
+  useEffect(() => onPairingDone(setPeerId), []);
 
   // A link bundle IS a join, with no camera: the user already chose to pair by
   // opening the link, and a scanner prompt on top of that is a step that does
@@ -107,10 +109,24 @@ export function PairingFlow({
   };
 
   // Not a gate. The engine persists the pairing row BEFORE either SAS is
-  // shown (Engine::commit_pairing), so there is nothing here to approve -- the
-  // button only acknowledges that the two SAS matched and returns to the
-  // start. A confirm API that actually gated the commit is a Phase 7 change
-  // with a crypto consequence; see the blocker report.
+  // shown (Engine::commit_pairing), so this button only acknowledges that the
+  // two SAS matched. The reject button below is the other half: it removes the
+  // stored pairing. A confirm API that gated the commit is still a Phase 7
+  // change with a crypto consequence.
+  // The SAS did not match: remove the pairing the engine already stored.
+  const reject = () => {
+    const id = peerId;
+    setSas('');
+    setPeerId('');
+    setPhase({ kind: 'choose' });
+    setError('');
+    if (id) {
+      void engine.revokePairing(id).catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : 'could not remove the pairing'),
+      );
+    }
+  };
+
   const acknowledge = () => {
     setSas('');
     setError('');
@@ -154,6 +170,7 @@ export function PairingFlow({
         qrUri={phase.kind === 'host' ? phase.qrUri : ''}
         onScan={startJoin}
         sas={sas}
+        onReject={peerId ? reject : undefined}
         embedded={embedded}
       />
       {/* The arm is ONE-SHOT: the engine takes it for the first joiner, and a

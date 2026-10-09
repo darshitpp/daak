@@ -33,6 +33,18 @@ export function onPairingSas(cb: (sas: string) => void): () => void {
   };
 }
 
+// The engine emits pairing.done when it stores the pairing, on BOTH sides and
+// before the SAS shows. The pairing screen reads the peer id here, so a SAS
+// that does not match can remove the stored pairing. Same fan-out rule as above.
+const pairingDoneListeners = new Set<(deviceId: string) => void>();
+
+export function onPairingDone(cb: (deviceId: string) => void): () => void {
+  pairingDoneListeners.add(cb);
+  return () => {
+    pairingDoneListeners.delete(cb);
+  };
+}
+
 // peer.incompatible fan-out, same shape and same single-subscription rule as
 // the SAS above (R42/R91). The engine emits this whenever a peer advertises a
 // protocol version this build refuses; without a listener it reached the store
@@ -200,7 +212,10 @@ export async function startEngine(): Promise<void> {
       for (const cb of [...pairingSasListeners]) cb(e.sas);
       return;
     }
-    if (e.type === 'pairing.done') void publish();
+    if (e.type === 'pairing.done') {
+      for (const cb of [...pairingDoneListeners]) cb(e.deviceId);
+      void publish();
+    }
     // R42: BOTH effects on the ONE subscription. routeInboxEntry copies a text
     // payload to the clipboard; a file payload is deliberately inert until the
     // UI owns reveal. Neither throws, and neither is a send: the engine's
