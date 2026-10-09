@@ -59,6 +59,25 @@ base64 = "0.22"
 [profile.dev.package.mdns-sd]
 overflow-checks = false
 
+# The dev and test profiles emit full DWARF by default (debug = 2, "full").
+# rustc keeps one object file for each codegen unit in target/debug/deps. In
+# this repository that is about 315,000 files and about 20 GiB, and most of it
+# is debug info.
+#
+# Line tables keep the file name and the line number in a backtrace. They drop
+# the variable and type DWARF. The workspace crates keep this level.
+[profile.dev]
+debug = "line-tables-only"
+
+# A dependency does not need debug info. The "*" table matches dependencies
+# only, and not workspace members. This removes most of the per-CGU object
+# size.
+#
+# Cost if wrong: you cannot step into a dependency in a debugger. A backtrace
+# for workspace code keeps its line numbers.
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 codegen-units = 1
 lto = "thin"
