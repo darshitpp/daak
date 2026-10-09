@@ -77,3 +77,10 @@ apps/mobile/android/keystore.properties
 *.mobileprovision
 *.keystore
 *.jks
+
+# sverklo per-project state (memory journal, etc.)
+.sverklo/
+
+# agent tool config: .mcp.json holds a machine-specific path
+.mcp.json
+.github/copilot-instructions.md
