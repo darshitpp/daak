@@ -70,6 +70,15 @@ fn is_lan_interface(name: &str) -> bool {
         || name.starts_with("tap")
         || name.starts_with("awdl")
         || name.starts_with("llw")
+        // Cellular data (Android rmnet/ccmni/clat, iOS pdp_ip, Linux wwan). The
+        // carrier gives a private address that can sort before the Wi-Fi one.
+        || name.starts_with("rmnet")
+        || name.starts_with("v4-rmnet")
+        || name.starts_with("ccmni")
+        || name.starts_with("clat")
+        || name.starts_with("pdp_ip")
+        || name.starts_with("wwan")
+        || name.starts_with("dummy")
         || name.starts_with("lo"))
 }
 
@@ -1201,7 +1210,26 @@ mod tests {
             assert!(is_lan_interface(name), "{name} is a LAN interface");
         }
         for name in [
-            "utun0", "utun3", "ipsec0", "ppp0", "tun0", "tap0", "awdl0", "llw0", "lo0",
+            "utun0",
+            "utun3",
+            "ipsec0",
+            "ppp0",
+            "tun0",
+            "tap0",
+            "awdl0",
+            "llw0",
+            "lo0",
+            // Cellular data. A phone on Wi-Fi AND mobile data owns a private
+            // carrier address (172.30.x) that sorts before the Wi-Fi one, so
+            // it advertised an address no LAN peer can reach.
+            "rmnet_data0",
+            "rmnet0",
+            "v4-rmnet_data0",
+            "ccmni0",
+            "pdp_ip0",
+            "wwan0",
+            "clat4",
+            "dummy0",
         ] {
             assert!(!is_lan_interface(name), "{name} must not count as the LAN");
         }
