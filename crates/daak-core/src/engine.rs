@@ -689,11 +689,10 @@ impl Engine {
         }
 
         let (listener, local_addr) = tcp::bind(cfg.listen_addr).await?;
-        let (advertiser, display_name) = Advertiser::start_resolving_on(
-            &base_name,
+        let (advertiser, display_name) = crate::discovery::start_resolving_off_runtime(
+            base_name.clone(),
             local_addr.port(),
             device_id,
-            &mut rand::thread_rng(),
             // Every shipped entry point binds a WILDCARD, and tcp::bind reports
             // that wildcard back. Publishing it verbatim writes 0.0.0.0:<port>
             // into the A record, which a browsing peer resolves and refuses as
@@ -701,7 +700,8 @@ impl Engine {
             // address, so a peer with a VPN connected dials the tunnel.
             // advertise_bind_ip resolves the ONE LAN address for a wildcard.
             advertise_bind_ip(local_addr),
-        )?;
+        )
+        .await?;
         let browser = Arc::new(Browser::start()?);
         let presence = match PresenceSocket::bind().await {
             Ok(p) => Some(Arc::new(p)),
@@ -1522,22 +1522,23 @@ impl Engine {
         // down and carries a LAN-collision suffix. Storing it would make a
         // device that booted as "daak-2" unable to go back to "daak".
         self.db.set_setting(DISPLAY_NAME_KEY, name.as_bytes())?;
-        // Resolve OUTSIDE the lock. Advertiser::start_resolving does a std
-        // recv_timeout on a background thread (up to ~1.3s), and the announce
-        // below is a socket write; holding the profile mutex across both
-        // stalled every display_name() / pairing_bundle() reader for that long.
+        // Resolve OUTSIDE the lock. The name check waits on a socket with std
+        // timeouts (about 650 ms). start_resolving_off_runtime runs that wait
+        // on a blocking thread, so it does not hold a tokio worker. The
+        // profile mutex stays free, so display_name() and pairing_bundle()
+        // readers do not wait for the check.
         // The SAME bind IP as startup: a rename must not republish a record
         // pointing at a different interface than the listener is on.
-        let (advertiser, resolved) = Advertiser::start_resolving_on(
-            &name,
+        let (advertiser, resolved) = crate::discovery::start_resolving_off_runtime(
+            name.clone(),
             self.local_addr.port(),
             self.identity.device_id(),
-            &mut rand::thread_rng(),
             // The SAME normalisation as startup (see the call there): a rename
             // must not republish a literal wildcard, nor fall back to the auto
             // form that publishes every interface address.
             advertise_bind_ip(self.local_addr),
-        )?;
+        )
+        .await?;
         let mut p = self.profile.lock().await;
         // The new advertiser is created BEFORE the old one is stopped (above vs
         // below), so there is no zero-advertisement window even though the lock
