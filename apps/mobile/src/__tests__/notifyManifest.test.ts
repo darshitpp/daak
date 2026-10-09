@@ -326,15 +326,15 @@ describe('an Android action tap reaches a foreground surface', () => {
     '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/ShareTrampolineActivity.kt',
   );
 
-  // A BroadcastReceiver cannot put an activity in front, so the trampoline is
-  // the ONLY thing that brings the app up for a tapped action. The old code
-  // returned before it for every id except Share, so a tapped Open did nothing
-  // whenever the app was not already in front.
-  it('starts the trampoline for Open as well as Share', () => {
-    expect(receiver).not.toContain('if (action != DaakNotifyModule.ACTION_SHARE) return');
-    expect(receiver).toContain('ShareTrampolineActivity::class.java');
-    expect(receiver).toContain('putExtra(DaakNotifyModule.EXTRA_ACTION, action)');
-    expect(receiver).toContain('action == DaakNotifyModule.ACTION_OPEN');
+  // A BroadcastReceiver that a notification tap triggers cannot start an
+  // activity on Android 12 or higher. The body tap launches the trampoline
+  // directly, so the trampoline delivers the Open event. The receiver keeps its
+  // code, but a body tap no longer reaches it.
+  it('delivers Open from the trampoline, not from a receiver start', () => {
+    expect(trampoline).toContain('action == DaakNotifyModule.ACTION_OPEN');
+    expect(trampoline).toContain('DaakNotifyModule.emitToJs(action, payload)');
+    expect(trampoline).toContain('NotifyStash.put(this, action, payload)');
+    expect(receiver).toContain('A body tap no longer reaches this receiver');
   });
 
   // Share is presented natively by the trampoline. Emitting it to JS as well
@@ -396,10 +396,11 @@ describe('the Android banner carries no action buttons', () => {
     expect(post).not.toContain('addAction(');
   });
 
-  // The BODY tap keeps the one useful verb -- land on the Inbox -- by routing
-  // through the SAME receiver the Open button used: it brings the app up and
-  // delivers the open event, which the shell turns into the Inbox tab.
+  // The BODY tap keeps the one useful verb -- land on the Inbox -- by launching
+  // the trampoline activity directly: a receiver cannot start an activity from
+  // a notification tap on Android 12 or higher. The activity brings the app up
+  // and delivers the open event, which the shell turns into the Inbox tab.
   it('routes a body tap through the open action', () => {
-    expect(post).toContain('setContentIntent(actionPending(id, ACTION_OPEN, payloadJson))');
+    expect(post).toContain('setContentIntent(openPending(id, payloadJson))');
   });
 });

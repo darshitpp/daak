@@ -231,17 +231,19 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         // NO action buttons. Open did nothing whenever the app was not already
         // in front, and Share built a URI for a path the download-folder move
         // had deleted. A button is a promise, so both are withheld until they
-        // keep it. The BODY tap keeps the one useful verb -- land on the Inbox
-        // -- by routing through the SAME receiver the Open button used: it
-        // brings the app up and delivers the open event, which the shell turns
-        // into the Inbox tab. R33 still holds: nothing here sends.
+        // keep it. The BODY tap keeps the one useful verb: land on the Inbox.
+        // The tap launches ShareTrampolineActivity directly. A receiver that a
+        // notification tap triggers cannot start an activity when the app
+        // targets Android 12 or higher (notification trampoline restriction).
+        // The activity brings the app up and delivers the open event, which the
+        // shell turns into the Inbox tab. R33 still holds: nothing here sends.
         //
         // setContentIntent is a BUILDER method, so it has to run before
         // build(). It was once called on the Notification build() returns, where
         // contentIntent is only a public field: the call went nowhere and a
         // body tap did nothing at all. A request code per id keeps two posts
         // from sharing one PendingIntent.
-        .setContentIntent(actionPending(id, ACTION_OPEN, payloadJson))
+        .setContentIntent(openPending(id, payloadJson))
         .apply {
           // A preview thumbnail for the first image the entry saved, when there
           // is one. Best-effort: a banner must never fail the receive.
@@ -269,6 +271,20 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
    * taps an action with the app killed sees nothing happen at all.
    */
   override fun consumePendingAction(promise: Promise) = promise.resolve(NotifyStash.take(ctx))
+
+  // The body tap launches an activity directly. A receiver that a notification
+  // tap triggers cannot start an activity when the app targets Android 12 or
+  // higher. The old broadcast route therefore left the app closed.
+  private fun openPending(id: String, payload: String): PendingIntent {
+    val intent = Intent(ctx, ShareTrampolineActivity::class.java).apply {
+      action = ACTION_OPEN
+      putExtra(EXTRA_ACTION, ACTION_OPEN)
+      putExtra(EXTRA_ID, id)
+      putExtra(EXTRA_PAYLOAD, payload)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return PendingIntent.getActivity(ctx, (id + ":" + ACTION_OPEN).hashCode(), intent, IMMUTABLE)
+  }
 
   private fun actionPending(id: String, action: String, payload: String): PendingIntent {
     val intent = Intent(ctx, NotificationActionReceiver::class.java).apply {

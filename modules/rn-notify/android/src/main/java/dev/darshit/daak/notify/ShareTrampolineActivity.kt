@@ -41,6 +41,14 @@ class ShareTrampolineActivity : Activity() {
     val payload = intent?.getStringExtra(DaakNotifyModule.EXTRA_PAYLOAD) ?: "{}"
     val action = intent?.getStringExtra(DaakNotifyModule.EXTRA_ACTION).orEmpty()
     val paths = savedPaths(payload)
+    // Open is emitted to JS, so a live app switches to the Inbox tab. With no
+    // listener, the code stashes the action. JS drains it on the first
+    // subscription.
+    if (action == DaakNotifyModule.ACTION_OPEN) {
+      if (!DaakNotifyModule.emitToJs(action, payload)) {
+        NotifyStash.put(this, action, payload)
+      }
+    }
     val host = DaakNotifyModule.launchIntent(this)
     if (host == null) {
       // Nothing to launch means no host app for the launch intent; there is

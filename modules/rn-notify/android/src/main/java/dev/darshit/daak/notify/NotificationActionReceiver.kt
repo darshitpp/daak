@@ -13,6 +13,10 @@ import android.util.Log
  * parallel send path this project exists to avoid. All this does is report
  * WHICH action was tapped and bring the app up, because a receiver cannot put an
  * activity in front and cannot present a chooser.
+ *
+ * A body tap no longer reaches this receiver. The body tap launches
+ * ShareTrampolineActivity directly. A startActivity call from here is blocked
+ * on Android 12 and higher when a notification tap triggers the receiver.
  */
 class NotificationActionReceiver : BroadcastReceiver() {
   companion object {
