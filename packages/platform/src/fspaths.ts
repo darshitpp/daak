@@ -45,7 +45,17 @@ export async function revealInFileManager(path: string): Promise<boolean> {
  * chooses one.
  */
 export async function chooseDownloadFolder(): Promise<string | null> {
-  return NativeDaakFsPaths.chooseDownloadFolder();
+  // `?? null` is the whole point of this facade line. A CANCELLED picker
+  // resolves `nil` natively, and the bridge can deliver `undefined` for it
+  // rather than `null`. Every caller reads this contract as `string | null`:
+  // DownloadFolderRow treats `null` as "the user cancelled, change nothing"
+  // and ANY other value as a new name, so an `undefined` set its name to
+  // undefined, the row fell back to "This app's own storage", and a folder the
+  // user still had was CLEARED. Measured on the iPhone 17 simulator: closing
+  // the picker reverted a folder that had just been chosen. The platform layer
+  // is where a bridge quirk is absorbed, so it is fixed here and not in each
+  // caller.
+  return (await NativeDaakFsPaths.chooseDownloadFolder()) ?? null;
 }
 
 export async function downloadFolderName(): Promise<string | null> {
