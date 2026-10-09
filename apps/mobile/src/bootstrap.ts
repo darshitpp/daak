@@ -163,7 +163,8 @@ export async function startEngine(): Promise<void> {
   // platforms (Android dynamic shortcuts, iOS App Group defaults). Re-run on
   // pairing.done so a fresh peer shows up in Siri without an app relaunch.
   const publish = () =>
-    engine.devices().then(syncShortcutTargets, () => {
+    // Only paired devices: discovery lists peers the engine refuses to send to.
+    engine.devices().then((all) => syncShortcutTargets(all.filter((d) => d.paired)), () => {
       /* the engine is not up yet; startEngine's own publish will follow */
     });
   await publish();
@@ -216,6 +217,8 @@ export async function startEngine(): Promise<void> {
       for (const cb of [...pairingDoneListeners]) cb(e.deviceId);
       void publish();
     }
+    // A revoked peer must leave the share sheet and Siri now, not at next launch.
+    if (e.type === 'pairing.revoked') void publish();
     // R42: BOTH effects on the ONE subscription. routeInboxEntry copies a text
     // payload to the clipboard; a file payload is deliberately inert until the
     // UI owns reveal. Neither throws, and neither is a send: the engine's

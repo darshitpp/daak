@@ -81,6 +81,29 @@ describe('startEngine pairing.done subscription', () => {
     expect(sync).toHaveBeenCalled();
   });
 
+  // A revoked peer must leave the share sheet at once, not at the next launch.
+  // Discovery lists peers the engine refuses to send to, so only paired devices
+  // become shortcuts.
+  it('republishes only paired devices when a pairing is revoked', async () => {
+    const engine = createEngine();
+    const handlers = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+    await startEngine();
+    const sync = jest.mocked(syncShortcutTargets);
+    sync.mockClear();
+    jest.spyOn(engine, 'devices').mockResolvedValue([
+      { deviceId: 'aa'.repeat(16), name: 'Paired', online: true, paired: true },
+      { deviceId: 'bb'.repeat(16), name: 'Seen only', online: true, paired: false },
+    ] as Awaited<ReturnType<typeof engine.devices>>);
+
+    for (const handler of handlers) handler({ type: 'pairing.revoked', deviceId: 'cc'.repeat(16) });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(sync.mock.calls[0][0].map((d) => d.deviceId)).toEqual(['aa'.repeat(16)]);
+  });
+
   // R42: the inbox route is reached from the SAME subscription, next to
   // notifyReceived. A second engine.on would double-post a banner per receive
   // AND break the invariant the tests above pin, so this drives the ONE handler
