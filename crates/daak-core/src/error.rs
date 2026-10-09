@@ -14,6 +14,9 @@ pub enum CoreError {
     Cbor(String),
     #[error("protocol: {0}")]
     Protocol(String),
+    /// The peer sent an unpair notice. The inbound path revokes its own pairing.
+    #[error("peer unpaired this device")]
+    PeerUnpaired,
     #[error("transfer: {0}")]
     Transfer(String),
     /// B4: the receiver received every chunk, verified the hashes, and HELD an

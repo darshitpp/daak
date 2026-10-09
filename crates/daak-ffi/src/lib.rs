@@ -136,6 +136,7 @@ pub enum FfiEvent {
     DeviceState { data: DeviceStateEvent },
     PairingSas { data: PairingSasEvent },
     PairingDone { data: PairingDoneEvent },
+    PairingRevoked { data: PairingDoneEvent },
     TransferProgress { data: ProgressEvent },
     TransferItem { data: TransferItemEvent },
     TransferDone { data: DoneEvent },
@@ -865,6 +866,10 @@ pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
             "type": "pairing.done",
             "deviceId": data.device_id,
         }),
+        FfiEvent::PairingRevoked { data } => serde_json::json!({
+            "type": "pairing.revoked",
+            "deviceId": data.device_id,
+        }),
         FfiEvent::TransferProgress { data } => serde_json::json!({
             "type": "transfer.progress",
             "transferId": data.transfer_id,
@@ -982,6 +987,11 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 name: d.name,
                 addr: d.addr.to_string(),
                 online: true,
+            },
+        },
+        EngineEvent::PairingRevoked(id) => FfiEvent::PairingRevoked {
+            data: PairingDoneEvent {
+                device_id: to_hex(&id),
             },
         },
         EngineEvent::DeviceLost(id) => FfiEvent::DeviceState {

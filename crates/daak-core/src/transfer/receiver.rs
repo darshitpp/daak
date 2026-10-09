@@ -333,6 +333,13 @@ pub async fn receive_transfer<T: FrameTransport>(
     let manifest = loop {
         match conn.recv().await? {
             Some(f) if f.kind == RecordType::Manifest => break Manifest::from_cbor(&f.body)?,
+            Some(f) if f.kind == RecordType::Control => {
+                if let Ok(crate::control::ControlMsg::Unpair) =
+                    crate::control::ControlMsg::from_cbor(&f.body)
+                {
+                    return Err(CoreError::PeerUnpaired);
+                }
+            }
             Some(_) => continue,
             None => return Err(CoreError::Protocol("closed before manifest".into())),
         }
@@ -1093,6 +1100,21 @@ mod tests {
             err.contains("1") && err.contains("quarantin"),
             "error must name how many items were quarantined, got {err:?}"
         );
+    }
+
+    // The peer unpaired this device. The notice arrives where a manifest is
+    // expected, on the authenticated session, and ends the receive.
+    #[tokio::test]
+    async fn an_unpair_notice_ends_the_receive_with_peer_unpaired() {
+        let dst = tempfile::tempdir().unwrap();
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let notice = crate::control::ControlMsg::Unpair.to_cbor().unwrap();
+        theirs
+            .send(CONTROL_STREAM, RecordType::Control, Bytes::from(notice))
+            .await
+            .unwrap();
+        let r = receive_transfer(&mut mine, dst.path(), |_| {}, None, |_| {}).await;
+        assert!(matches!(r, Err(CoreError::PeerUnpaired)), "got {r:?}");
     }
 
     // B2: a peer can put ANY size on a non-binary item. Nothing is ever

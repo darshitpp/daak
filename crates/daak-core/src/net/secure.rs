@@ -329,9 +329,17 @@ impl<T: FrameTransport + Send> FrameTransport for SecureConnection<T> {
                     // R4: Rekey frames are control-plane only — apply the epoch
                     // advance and never surface them to the transfer layer.
                     if f.kind == RecordType::Rekey {
-                        let ControlMsg::Rekey { epoch } = ControlMsg::from_cbor(&pt)?;
-                        self.session.advance_recv_epoch(epoch)?;
-                        continue;
+                        match ControlMsg::from_cbor(&pt)? {
+                            ControlMsg::Rekey { epoch } => {
+                                self.session.advance_recv_epoch(epoch)?;
+                                continue;
+                            }
+                            ControlMsg::Unpair => {
+                                return Err(crate::CoreError::Protocol(
+                                    "unpair notice on a rekey frame".into(),
+                                ))
+                            }
+                        }
                     }
                     return Ok(Some(Frame::new(f.stream_id, f.kind, Bytes::from(pt))));
                 }

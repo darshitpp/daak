@@ -97,7 +97,12 @@ impl NackMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ControlMsg {
-    Rekey { epoch: u32 },
+    Rekey {
+        epoch: u32,
+    },
+    /// The sender unpaired this device. It arrives on an authenticated session
+    /// to a peer that holds a trusted pairing, and the peer revokes its own row.
+    Unpair,
 }
 
 impl ControlMsg {

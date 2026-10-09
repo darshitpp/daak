@@ -242,6 +242,12 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
             device_id: hex::encode(id),
             online: false,
         },
+        // ipc.cddl has no revoked event. The desktop list refreshes on a device
+        // state change, so a revoke reads as the peer going offline.
+        EngineEvent::PairingRevoked(id) => IpcEvent::DeviceState {
+            device_id: hex::encode(id),
+            online: false,
+        },
         EngineEvent::Presence { device_id, state } => IpcEvent::DeviceState {
             device_id: hex::encode(device_id),
             online: matches!(state, PresenceState::Online),

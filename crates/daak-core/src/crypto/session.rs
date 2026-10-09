@@ -218,7 +218,9 @@ mod tests {
         let pt = receiver
             .decrypt(0, RecordType::Rekey, &rekey_frame)
             .unwrap();
-        let ControlMsg::Rekey { epoch } = ControlMsg::from_cbor(&pt).unwrap();
+        let ControlMsg::Rekey { epoch } = ControlMsg::from_cbor(&pt).unwrap() else {
+            panic!("a rekey frame must hold a Rekey message");
+        };
         assert_eq!(epoch, 1);
         receiver.advance_recv_epoch(epoch).unwrap();
 

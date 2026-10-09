@@ -196,6 +196,8 @@ pub struct DeviceInfo {
 pub enum EngineEvent {
     DeviceFound(DeviceInfo),
     DeviceLost([u8; 16]),
+    /// A pairing was revoked: by this device, or by the peer's unpair notice.
+    PairingRevoked([u8; 16]),
     /// A paired peer crossed the online/offline boundary.
     ///
     /// This is the sealed-beacon liveness signal, not a discovery fact: it is
@@ -1264,6 +1266,57 @@ impl Engine {
         self.devices.lock().await.values().cloned().collect()
     }
 
+    /// Revoke a pairing because the peer said it unpaired us. The accept task
+    /// holds no sessions or staging handle, so this does the durable part: the
+    /// row, the peer's queued rows, the device map, and the events. Staged files
+    /// of the purged rows are orphans that the next start sweeps.
+    async fn revoke_remote(
+        db: &Db,
+        devices: &SharedDevices,
+        tx: &broadcast::Sender<EngineEvent>,
+        peer: [u8; 16],
+    ) -> Result<()> {
+        db.revoke_pairing(&peer)?;
+        db.delete_outbox_for_peer(&peer)?;
+        if devices.lock().await.remove(&peer).is_some() {
+            let _ = tx.send(EngineEvent::DeviceLost(peer));
+        }
+        let _ = tx.send(EngineEvent::PairingRevoked(peer));
+        tracing::info!(peer = %hex::encode(peer), "pairing revoked by the peer");
+        Ok(())
+    }
+
+    /// Tell a peer that this device is unpairing it. Best effort: the local
+    /// revoke must finish whether or not the peer is reachable, so every failure
+    /// is logged and none is returned.
+    async fn notify_unpaired(&self, peer: [u8; 16]) {
+        let Some(addr) = self.devices.lock().await.get(&peer).map(|d| d.addr) else {
+            return;
+        };
+        let Ok(Some(pairing)) = self.db.get_pairing(&peer) else {
+            return;
+        };
+        if pairing.state != "trusted" {
+            return;
+        }
+        let secret = zeroize::Zeroizing::new(self.identity.static_secret().to_bytes());
+        let device_id = self.identity.device_id();
+        let send = async {
+            let conn = tcp::dial(addr).await?;
+            let mut secure =
+                crate::net::secure::open_secure(conn, &secret, &pairing.static_dh_pub, device_id)
+                    .await?;
+            let body = crate::control::ControlMsg::Unpair.to_cbor()?;
+            crate::net::FrameTransport::send(&mut secure, 0, RecordType::Control, Bytes::from(body))
+                .await
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(3), send).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(peer = %hex::encode(peer), "unpair notice failed: {e}"),
+            Err(_) => tracing::warn!(peer = %hex::encode(peer), "unpair notice timed out"),
+        }
+    }
+
     /// Unpair one peer from THIS device.
     ///
     /// Local trust: nothing is negotiated with the peer, so either side may
@@ -1280,6 +1333,9 @@ impl Engine {
     /// forgotten, so no later drain can deliver to a peer this device no longer
     /// trusts. `DeviceState { online: false }` tells the UI the peer is gone.
     pub async fn revoke_pairing(&self, peer_device_id: [u8; 16]) -> Result<()> {
+        // Tell the peer first, while the pairing still counts as trusted. The
+        // notice is best effort and never blocks the revoke below.
+        self.notify_unpaired(peer_device_id).await;
         // Collect BEFORE the delete: the payload ids name the staging dirs.
         let payloads: Vec<[u8; 16]> = self
             .db
@@ -1307,6 +1363,7 @@ impl Engine {
         if removed.is_some() {
             let _ = self.tx.send(EngineEvent::DeviceLost(peer_device_id));
         }
+        let _ = self.tx.send(EngineEvent::PairingRevoked(peer_device_id));
         self.announce_device_state(peer_device_id, false).await;
         // Revocation forgets the peer, so drop the announced-offline record
         // too. A later re-pair learns a fresh state and must not be held back.
@@ -2290,6 +2347,12 @@ impl Engine {
                 let _ = tx.send(EngineEvent::TransferDone {
                     transfer_id: manifest.payload_id,
                 });
+                Ok(())
+            }
+            // The peer unpaired this device. It is not a failed transfer: revoke
+            // our side of the pairing and tell the UI.
+            Err(CoreError::PeerUnpaired) => {
+                Self::revoke_remote(db, devices, tx, hello.device_id).await?;
                 Ok(())
             }
             Err(e) => {

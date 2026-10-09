@@ -54,6 +54,7 @@ interface FfiEvent {
   DeviceState(DeviceStateEvent data);
   PairingSas(PairingSasEvent data);
   PairingDone(PairingDoneEvent data);
+  PairingRevoked(PairingDoneEvent data);
   TransferProgress(ProgressEvent data);
   TransferItem(TransferItemEvent data);
   TransferDone(DoneEvent data);
