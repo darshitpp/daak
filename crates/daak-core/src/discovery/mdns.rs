@@ -314,7 +314,10 @@ fn announced_name(info: &ServiceInfo) -> String {
 ///
 /// A record that announces no id is kept. Dropping it would let an unnamed
 /// service claim our name unchecked, which is the worse failure.
-fn is_own_advertisement(announced: Option<[u8; 16]>, local_device_id: Option<[u8; 16]>) -> bool {
+pub(crate) fn is_own_advertisement(
+    announced: Option<[u8; 16]>,
+    local_device_id: Option<[u8; 16]>,
+) -> bool {
     match (announced, local_device_id) {
         (Some(announced_id), Some(local_id)) => announced_id == local_id,
         _ => false,
@@ -353,36 +356,41 @@ impl Browser {
 
 pub fn announce_from_service(info: &ServiceInfo) -> Result<PeerAnnounce> {
     let props = info.get_properties();
-    let id_hex = props
-        .get_property_val_str("id")
-        .ok_or_else(|| CoreError::Discovery("service missing 'id' txt".into()))?;
+    announce_from_props(
+        |k| props.get_property_val_str(k).map(str::to_string),
+        info.get_hostname(),
+        info.get_addresses().iter().copied(),
+        info.get_port(),
+    )
+}
+
+/// Build a `PeerAnnounce` from TXT values that any discovery backend supplies.
+/// `get` returns the value of one TXT key.
+pub(crate) fn announce_from_props(
+    get: impl Fn(&str) -> Option<String>,
+    hostname: &str,
+    addrs: impl Iterator<Item = IpAddr>,
+    port: u16,
+) -> Result<PeerAnnounce> {
+    let id_hex =
+        get("id").ok_or_else(|| CoreError::Discovery("service missing 'id' txt".into()))?;
     let bytes = hex::decode(id_hex).map_err(|e| CoreError::Discovery(e.to_string()))?;
     let device_id: [u8; 16] = bytes
         .try_into()
         .map_err(|_| CoreError::Discovery("device id must be 16 bytes".into()))?;
-    let name = props
-        .get_property_val_str("name")
-        .unwrap_or_else(|| info.get_hostname())
-        .to_string();
-    let proto_version = props
-        .get_property_val_str("v")
+    let name = get("name").unwrap_or_else(|| hostname.to_string());
+    let proto_version = get("v")
         .and_then(|v| v.parse().ok())
         .unwrap_or(PROTO_VERSION);
-    let capabilities = props
-        .get_property_val_str("caps")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    let status = props
-        .get_property_val_str("st")
-        .unwrap_or("unknown")
-        .to_string();
-    let addr = pick_addr(info.get_addresses().iter().copied(), info.get_port())
+    let capabilities = get("caps").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let status = get("st").unwrap_or_else(|| "unknown".to_string());
+    let addr = pick_addr(addrs, port)
         .ok_or_else(|| CoreError::Discovery("service has no address yet".into()))?;
     Ok(PeerAnnounce {
         device_id,
         name,
         addr,
-        port: info.get_port(),
+        port,
         proto_version,
         capabilities,
         status,
@@ -475,7 +483,7 @@ pub fn host_lan_addr(port: u16) -> Option<SocketAddr> {
     pick_addr(addrs.into_iter(), port)
 }
 
-fn sanitize_host(name: &str) -> String {
+pub(crate) fn sanitize_host(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() {
@@ -489,7 +497,7 @@ fn sanitize_host(name: &str) -> String {
         .to_string()
 }
 
-fn txt_short(value: &str, max_chars: usize) -> Option<String> {
+pub(crate) fn txt_short(value: &str, max_chars: usize) -> Option<String> {
     if value.is_empty() {
         None
     } else {
@@ -501,6 +509,34 @@ fn txt_short(value: &str, max_chars: usize) -> Option<String> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn announce_from_props_reads_every_txt_key() {
+        let id = [9u8; 16];
+        let get = |k: &str| match k {
+            "id" => Some(hex::encode(id)),
+            "name" => Some("Kitchen".to_string()),
+            "v" => Some("1".to_string()),
+            "caps" => Some("7".to_string()),
+            "st" => Some("online".to_string()),
+            _ => None,
+        };
+        let addrs = ["192.168.0.50".parse::<IpAddr>().unwrap()];
+        let a = announce_from_props(get, "host.local.", addrs.into_iter(), 4000).unwrap();
+        assert_eq!(a.device_id, id);
+        assert_eq!(a.name, "Kitchen");
+        assert_eq!(a.port, 4000);
+        assert_eq!(a.capabilities, 7);
+        assert_eq!(a.status, "online");
+        assert_eq!(a.addr.to_string(), "192.168.0.50:4000");
+    }
+
+    #[test]
+    fn announce_from_props_rejects_a_record_without_an_id() {
+        let get = |_: &str| None;
+        let addrs = ["192.168.0.50".parse::<IpAddr>().unwrap()];
+        assert!(announce_from_props(get, "h.local.", addrs.into_iter(), 4000).is_err());
+    }
 
     const LOCAL_ID_HEX: &str = "aabbccddeeff00112233445566778899";
     const PEER_ID_HEX: &str = "11111111111122222222333344445555";
