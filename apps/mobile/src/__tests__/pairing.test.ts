@@ -76,6 +76,31 @@ describe('hostPairingQr', () => {
     expect(mockedBundle).toHaveBeenCalledTimes(1);
     expect(mockedGenerate).toHaveBeenCalledWith(bundle, PAIRING_QR_SIZE);
   });
+
+  // A native bridge that never settles its promise is the one failure that
+  // reaches the user as NOTHING: no QR, no error, a button that looks dead.
+  // Every rejecting path already renders a note, so a bounded wait is what
+  // turns this case into a message the user can act on.
+  it('rejects instead of hanging when a native promise never settles', async () => {
+    jest.useFakeTimers();
+    try {
+      mockedBundle.mockResolvedValue('{}');
+      mockedGenerate.mockReturnValue(new Promise(() => {}));
+      const pending = hostPairingQr();
+      const assertion = expect(pending).rejects.toThrow(/did not finish/);
+      jest.advanceTimersByTime(10_000);
+      await assertion;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  // The real message must reach the screen. A fixed "hosting failed" hides
+  // the cause the user would otherwise be able to report.
+  it('propagates a rejected bundle unchanged', async () => {
+    mockedBundle.mockRejectedValue(new Error('engine not started'));
+    await expect(hostPairingQr()).rejects.toThrow('engine not started');
+  });
 });
 
 describe('armHostPairing (C2)', () => {

@@ -16,8 +16,40 @@ import { generateQr, PAIRING_QR_SIZE, pairingBundle, scanQr } from '@daak/platfo
  * can show its own SAS when the joiner confirms.
  */
 export async function hostPairingQr(): Promise<{ uri: string; bundle: string }> {
-  const bundle = await pairingBundle();
-  return { uri: await generateQr(bundle, PAIRING_QR_SIZE), bundle };
+  const bundle = await withDeadline(pairingBundle(), 'the pairing bundle');
+  const uri = await withDeadline(generateQr(bundle, PAIRING_QR_SIZE), 'the QR code');
+  return { uri, bundle };
+}
+
+/**
+ * A native bridge that never settles its promise reaches the user as NOTHING:
+ * no QR, no error, a button that looks dead. Every rejecting path already
+ * shows a note, so the only unexplained failure is the one that never arrives.
+ * Bound the wait and name it, so "Show QR" either works or says why.
+ *
+ * Generous on purpose: a cold process can take a moment, and this catches a
+ * promise that NEVER settles, not a slow one.
+ */
+const HOST_QR_DEADLINE_MS = 10_000;
+
+export function withDeadline<T>(
+  promise: Promise<T>,
+  what: string,
+  ms = HOST_QR_DEADLINE_MS,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`daak: ${what} did not finish`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 /**

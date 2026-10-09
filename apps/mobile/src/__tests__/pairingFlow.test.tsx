@@ -66,6 +66,18 @@ beforeEach(() => {
 // red here -- the same reachability discipline AppShell.test.tsx applies to the
 // background slot.
 describe('QR pairing is reachable from the app shell', () => {
+  // Same class as the missing bounded wait: the flow must never swallow the
+  // reason a host screen failed to render. A fixed "hosting failed" tells the
+  // user nothing and tells the next debugging round nothing either.
+  it('shows the real hosting error, not a fixed string', async () => {
+    mockedBundle.mockRejectedValueOnce(new Error('engine not started'));
+    renderShell();
+    fireEvent.press(screen.getByText('Devices'));
+    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByText('Show QR'));
+    await waitFor(() => expect(screen.getByText(/engine not started/)).toBeTruthy());
+  });
+
   it('mounts the flow lazily: no bundle fetch and no QR until the user asks', () => {
     renderShell();
     fireEvent.press(screen.getByText('Devices'));

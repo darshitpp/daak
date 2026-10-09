@@ -87,7 +87,10 @@ export function PairingFlow({
         setPhase({ kind: 'host', qrUri: uri });
         return armHostPairing(engine);
       },
-      () => setError('hosting failed'),
+      // The REAL message, never a fixed string: "hosting failed" hides the
+      // cause (a dead engine, a bridge that never settles) from the user and
+      // from the next debugging round alike.
+      (e: unknown) => setError(e instanceof Error ? e.message : 'hosting failed'),
     ).catch((e: unknown) =>
       setError(e instanceof Error ? e.message : 'arming failed'),
     );
