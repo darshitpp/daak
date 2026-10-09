@@ -74,3 +74,14 @@ describe('the release workflow', () => {
     expect(code).not.toMatch(/_(android|ios|macos|windows|linux)\.yml/);
   });
 });
+
+describe('the CI workflow', () => {
+  const ci = readFileSync(
+    join(__dirname, '..', '..', '..', '.github', 'workflows', 'ci.yml'),
+    'utf8',
+  );
+
+  it('grants the token read access only', () => {
+    expect(stripYamlComments(ci)).toMatch(/^permissions:\s*\n\s+contents: read/m);
+  });
+});

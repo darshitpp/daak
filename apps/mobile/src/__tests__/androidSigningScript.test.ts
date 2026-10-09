@@ -74,8 +74,13 @@ describe('Android signing helper script', () => {
 
   it('runs the release Gradle task offline', () => {
     const code = stripComments(readFileSync(scriptPath, 'utf8'));
-    expect(code).toMatch(/\.\/gradlew\s+:app:assembleRelease/);
+    expect(code).toMatch(/\.\/gradlew\s+(--no-daemon\s+)?:app:assembleRelease/);
     expect(code).toMatch(/--offline/);
+  });
+
+  it('runs Gradle without a daemon, so the password does not outlive the script', () => {
+    const code = stripComments(readFileSync(scriptPath, 'utf8'));
+    expect(code).toMatch(/\.\/gradlew\s+--no-daemon\s+:app:assembleRelease/);
   });
 
   it('checks the version stamp before the Gradle run', () => {

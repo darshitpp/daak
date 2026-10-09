@@ -104,9 +104,23 @@ it('opens pairing from a pair link and joins with its bundle, no camera', async 
   // the raw link value, which is the R88 rule for a scanned QR too.
   // The link's bundle names no address, so the fourth argument is `undefined`
   // and the joiner falls back to discovery (R42c/R42d).
+  // A link is an untrusted request from another app or a web page. It asks the
+  // user first and joins nothing until the user taps Pair.
+  fireEvent.press(await screen.findByLabelText('link-pair-confirm'));
   await waitFor(() => expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc', undefined));
   expect(await screen.findByText('555666')).toBeTruthy();
   expect(jest.requireMock('@daak/platform').scanQr).not.toHaveBeenCalled();
+});
+
+it('asks before it joins a pair link, and Cancel joins nothing', async () => {
+  const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: '555666' });
+  render(<App />);
+  emit('daak://pair?bundle=' + encodeURIComponent(BUNDLE));
+  expect(await screen.findByText(/Pair with/)).toBeTruthy();
+  expect(pair).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByLabelText('link-pair-cancel'));
+  expect(pair).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('link-pair-confirm')).toBeNull();
 });
 
 it('says so when a pair link is not a bundle', async () => {

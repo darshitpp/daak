@@ -1,3 +1,4 @@
+import { Alert } from 'react-native';
 import {
   consumeIntentSends,
   consumePendingShare,
@@ -272,8 +273,10 @@ export async function drainInbound(
 export async function sendIntentItems(
   engine: DaakEngine,
   items: InboundShareItem[],
+  confirm: ConfirmIntentSend,
 ): Promise<void> {
-  const known = new Set((await engine.devices()).map((d) => d.deviceId));
+  const devices = await engine.devices();
+  const known = new Set(devices.map((d) => d.deviceId));
   for (const item of items) {
     if (item.kind !== 'intent-send') continue;
     // ShareTargetActivity is exported, so any app on the device can hand us an
@@ -294,6 +297,10 @@ export async function sendIntentItems(
     // A drain already DELETED the staged file, so one rejected send must not
     // abandon the rest of the batch: the items are gone from disk either way,
     // and the honest response is to try them all.
+    // Another app chose this peer and this text. Nothing leaves the device until
+    // the user has seen both and agreed.
+    const name = devices.find((d) => d.deviceId === item.deviceId)?.name ?? 'a paired device';
+    if (!(await confirm(name, item.text ?? ''))) continue;
     try {
       await engine.send({ peerDeviceId: item.deviceId, text: item.text });
     } catch {
@@ -311,9 +318,28 @@ export async function sendIntentItems(
  * delete the text/file batches Task 6 staged, orphaning bytes that nothing
  * routes until Task 11. drainInbound above stays unwired for that reason.
  */
-export async function drainIntentSends(engine: DaakEngine): Promise<void> {
-  await sendIntentItems(engine, await consumeIntentSends());
+export async function drainIntentSends(
+  engine: DaakEngine,
+  confirm: ConfirmIntentSend = confirmIntentSend,
+): Promise<void> {
+  await sendIntentItems(engine, await consumeIntentSends(), confirm);
 }
+
+/** Asks the user whether to send `text` to the peer `name`. Resolves true on Send. */
+export type ConfirmIntentSend = (name: string, text: string) => Promise<boolean>;
+
+const confirmIntentSend: ConfirmIntentSend = (name, text) =>
+  new Promise((resolve) => {
+    Alert.alert(
+      `Send to ${name}?`,
+      text.length > 300 ? `${text.slice(0, 300)}…` : text,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Send', onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
 
 /**
  * Routes a tapped action. R33: `daak.share` is wired to `presentShare`, the

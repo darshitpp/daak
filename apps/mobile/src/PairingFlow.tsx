@@ -48,36 +48,51 @@ export function PairingFlow({
     [],
   );
 
-  // A link bundle IS a join, with no camera: the user already chose to pair by
-  // opening the link, and a scanner prompt on top of that is a step that does
-  // not exist in the flow. Joined on bundle IDENTITY, not on mount: this
+  // A link bundle IS a join, with no camera. But a link is a request from
+  // another app or a web page, so it never joins by itself: the user sees who
+  // is asking and taps Pair. Joined on bundle IDENTITY, not on mount: this
   // component is mounted whenever the pair route opens, so a plain mount effect
   // would re-pair a user who came here from Devices.
+  const [link, setLink] = useState<{ parsed: ReturnType<typeof parsePairingPayload>; name: string } | null>(
+    null,
+  );
+
   useEffect(() => {
+    setLink(null);
     if (!bundle) return;
     setSas('');
     setError('');
+    try {
+      const parsed = parsePairingPayload(bundle);
+      const raw = (JSON.parse(bundle) as { name?: unknown }).name;
+      const name = typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 64) : 'another device';
+      setLink({ parsed, name });
+    } catch (e) {
+      setPhase({ kind: 'join' });
+      setError(e instanceof Error ? e.message : 'that pairing link did not work');
+    }
+  }, [bundle, addr]);
+
+  const joinLink = () => {
+    if (!link) return;
+    const { parsed } = link;
+    setLink(null);
     setPhase({ kind: 'join' });
-    void Promise.resolve()
-      .then(() => {
-        const parsed = parsePairingPayload(bundle);
-        // `addr` is the address, from the LINK first and the BUNDLE second.
-        // Both name the same host and either can be absent: a deep link may
-        // carry the bundle without an addr, and a bundle written by an older
-        // build has no key. With neither, the engine resolves the host from
-        // discovery, which is empty on any network mDNS does not cross.
-        return engine
-          .pair(parsed.deviceId, 'qr', parsed.cbor, addr ?? parsed.addr)
-          .then(({ sas: received }) => ({ received, peer: parsed.deviceId }));
-      })
+    // `addr` is the address, from the LINK first and the BUNDLE second.
+    // Both name the same host and either can be absent: a deep link may
+    // carry the bundle without an addr, and a bundle written by an older
+    // build has no key. With neither, the engine resolves the host from
+    // discovery, which is empty on any network mDNS does not cross.
+    void engine
+      .pair(parsed.deviceId, 'qr', parsed.cbor, addr ?? parsed.addr)
       .then(
-        ({ received, peer }) => {
+        ({ sas: received }) => {
           setSas(received);
-          setPeerId(peer);
+          setPeerId(parsed.deviceId);
         },
         (e: unknown) => setError(e instanceof Error ? e.message : 'that pairing link did not work'),
       );
-  }, [bundle, addr, engine]);
+  };
 
   const startHost = () => {
     setSas('');
@@ -158,6 +173,20 @@ export function PairingFlow({
   // screen inside another. Only the FRAME is suppressed; every control is the
   // same real one, which is the property that matters, because the alternative
   // would have been decorative QR data.
+  if (link) {
+    return (
+      <View style={embedded ? ui.stack : undefined}>
+        <Section title={`Pair with ${link.name}?`}>
+          <Note
+            tone="warn"
+            body="A link asked to pair this device. Pair only if you opened this link yourself and know this device."
+          />
+          <Btn variant="primary" block testID="link-pair-confirm" label="Pair" onPress={joinLink} />
+          <Btn variant="quiet" block testID="link-pair-cancel" label="Cancel" onPress={() => setLink(null)} />
+        </Section>
+      </View>
+    );
+  }
   if (phase.kind === 'choose') {
     return (
       <View style={embedded ? ui.stack : undefined}>

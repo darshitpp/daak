@@ -50,7 +50,7 @@ export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
 "$(dirname "$0")/../apps/mobile/scripts/gen-android-ffi.sh"
 
 cd "$(dirname "$0")/../apps/mobile/android"
-./gradlew :app:assembleRelease --offline
+./gradlew --no-daemon :app:assembleRelease --offline
 
 # ABI splits emit three signed APKs. The user installs ONE of them. The two
 # device APKs are small. The universal APK is the fallback for a user who does

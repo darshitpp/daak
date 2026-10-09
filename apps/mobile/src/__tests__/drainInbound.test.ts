@@ -3,6 +3,8 @@ import { consumeIntentSends, consumePendingShare } from '@daak/platform';
 import { fakeEngine } from '@daak/ui';
 import { drainIntentSends, drainInbound, sendIntentItems } from '../bootstrap';
 
+const yes = async () => true;
+
 jest.mock('@daak/platform', () => {
   // bootstrap builds the engine at import time, so the mock has to answer
   // createEngine too, not just consumePendingShare.
@@ -71,7 +73,7 @@ describe('sendIntentItems', () => {
       { kind: 'text', text: 'hello daak' },
       { kind: 'file', path: '/data/share-inbox/1-a.png', name: '1-a.png' },
       { kind: 'intent-send', deviceId: await id, text: 'hi' },
-    ]);
+    ], yes);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith({ peerDeviceId: await id, text: 'hi' });
   });
@@ -86,7 +88,7 @@ describe('sendIntentItems', () => {
     const send = jest.spyOn(engine, 'send');
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: 'attacker-chosen-id', text: 'hi' }]);
+      await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: 'attacker-chosen-id', text: 'hi' }], yes);
       expect(send).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
@@ -106,7 +108,7 @@ describe('sendIntentItems', () => {
     try {
       await sendIntentItems(engine, [
         { kind: 'intent-send', deviceId: 'paired-a-second-ago', text: 'lost share' },
-      ]);
+      ], yes);
       expect(send).not.toHaveBeenCalled();
       // The id must be in the message, otherwise the owner cannot act on it.
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('paired-a-second-ago'));
@@ -122,7 +124,7 @@ describe('sendIntentItems', () => {
     const engine = fakeEngine([{ deviceId: id, name: 'Pixel 9', addr: '1.2.3.4:1' }]);
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: id, text: 'hi' }]);
+      await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: id, text: 'hi' }], yes);
       expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
@@ -133,7 +135,7 @@ describe('sendIntentItems', () => {
     const id = 'aa'.repeat(16);
     const engine = fakeEngine([{ deviceId: id, name: 'Pixel 9', addr: '192.168.1.9:40001' }]);
     const send = jest.spyOn(engine, 'send');
-    await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: id, text: 'hi' }]);
+    await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: id, text: 'hi' }], yes);
     expect(send).toHaveBeenCalledWith({ peerDeviceId: id, text: 'hi' });
   });
 
@@ -146,8 +148,27 @@ describe('sendIntentItems', () => {
     await sendIntentItems(engine, [
       { kind: 'intent-send', deviceId: id, text: 'first' },
       { kind: 'intent-send', deviceId: id, text: 'second' },
-    ]);
+    ], yes);
     expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('intent-send confirmation', () => {
+  it('sends nothing when the user declines, and shows the peer name and text', async () => {
+    const id = 'aa'.repeat(16);
+    const engine = fakeEngine([{ deviceId: id, name: 'Pixel 9', addr: '192.168.1.9:40001' }]);
+    const send = jest.spyOn(engine, 'send');
+    const confirm = jest.fn(async () => false);
+    await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: id, text: 'pay me' }], confirm);
+    expect(confirm).toHaveBeenCalledWith('Pixel 9', 'pay me');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not ask about a peer that is not paired', async () => {
+    const engine = fakeEngine();
+    const confirm = jest.fn(async () => true);
+    await sendIntentItems(engine, [{ kind: 'intent-send', deviceId: 'zz', text: 'x' }], confirm);
+    expect(confirm).not.toHaveBeenCalled();
   });
 });
 
@@ -158,7 +179,7 @@ describe('drainIntentSends', () => {
     consume.mockResolvedValueOnce([{ kind: 'intent-send', deviceId: 'aa', text: 'hi' }]);
     const engine = fakeEngine([{ deviceId: 'aa', name: 'Pixel 9', addr: '1.2.3.4:1' }]);
     const send = jest.spyOn(engine, 'send');
-    await drainIntentSends(engine);
+    await drainIntentSends(engine, yes);
     // A text/file batch staged by Task 6 must still be on disk after this. The
     // only proof available here is that the other native drain is never called;
     // the dir partition itself is pinned in packages/platform (inbound.test.ts).
@@ -170,7 +191,7 @@ describe('drainIntentSends', () => {
     consume.mockResolvedValueOnce([]);
     const engine = fakeEngine();
     const send = jest.spyOn(engine, 'send');
-    await drainIntentSends(engine);
+    await drainIntentSends(engine, yes);
     expect(send).not.toHaveBeenCalled();
   });
 });
