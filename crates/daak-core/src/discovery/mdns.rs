@@ -10,7 +10,10 @@ use super::naming::resolve_name;
 use super::records::{DiscoveryEvent, RecordTracker};
 
 pub const SERVICE_TYPE: &str = "_daak._tcp.local.";
-pub const PROTO_VERSION: u16 = 1;
+/// The wire protocol version. The major part is `PROTO_VERSION / 100`.
+/// Major 1: the session keys come from the secret Noise `split()` output.
+/// Major 0 (value 1) derived them from the public handshake hash.
+pub const PROTO_VERSION: u16 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerAnnounce {

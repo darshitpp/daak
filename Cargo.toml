@@ -30,7 +30,7 @@ futures = "0.3"
 hostname = "0.4"
 tempfile = "3"
 hex = "0.4"
-snow = "0.9"
+snow = { version = "0.9", features = ["risky-raw-split"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"

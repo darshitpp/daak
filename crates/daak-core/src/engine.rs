@@ -14,7 +14,7 @@ use crate::discovery::{
     advertise_bind_ip, Advertiser, Browser, DiscoveryEvent, PeerAnnounce, Presence, PresenceSocket,
     PresenceState,
 };
-use crate::error::{ensure_compatible, CoreError, Result};
+use crate::error::{ensure_proto_compatible, CoreError, Result};
 use crate::framing::RecordType;
 use crate::manifest::{Manifest, PayloadKind};
 use crate::net::secure::recv_secure_transfer;
@@ -242,7 +242,7 @@ pub enum EngineEvent {
         error: String,
     },
     /// A peer on this LAN announced a protocol version this build refuses
-    /// (ensure_compatible), so it is dropped from the device map and never
+    /// (ensure_proto_compatible), so it is dropped from the device map and never
     /// becomes a sendable peer. It used to be a `tracing::warn!` and nothing
     /// else, which made the Open Design "update required" screen
     /// unimplementable without inventing version numbers: the UI had no way to
@@ -921,7 +921,7 @@ impl Engine {
                     if device_id == me {
                         continue;
                     }
-                    if let Err(e) = ensure_compatible(proto_version) {
+                    if let Err(e) = ensure_proto_compatible(proto_version) {
                         tracing::warn!(
                             "peer {name} ({addr}) advertises incompatible proto version {proto_version}: {e}"
                         );
@@ -934,7 +934,7 @@ impl Engine {
                             peer_device_id: device_id,
                             peer_name: name.clone(),
                             peer_version: proto_version,
-                            our_version: crate::manifest::MANIFEST_VERSION,
+                            our_version: crate::discovery::mdns::PROTO_VERSION,
                         });
                         continue;
                     }

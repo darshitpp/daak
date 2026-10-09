@@ -46,11 +46,13 @@ impl<T: FrameTransport + Send + ?Sized> FrameTransport for &mut T {
     }
 }
 
+/// Runs the Noise XX handshake. Returns the send key, the receive key, the
+/// public handshake hash (the SAS input), and the secret key for `confirm_keys`.
 pub async fn complete_handshake<T: FrameTransport>(
     conn: &mut T,
     mut driver: HandshakeDriver,
     initiator: bool,
-) -> Result<([u8; 32], [u8; 32], Vec<u8>)> {
+) -> Result<([u8; 32], [u8; 32], Vec<u8>, [u8; 32])> {
     if initiator {
         let m1 = driver.write()?;
         conn.send(0, RecordType::Handshake, Bytes::from(m1)).await?;
@@ -67,20 +69,23 @@ pub async fn complete_handshake<T: FrameTransport>(
         driver.read(&m3)?;
     }
     let hash = driver.handshake_hash();
-    let (tx, rx) = crate::crypto::keys::directional_keys(&hash, initiator);
-    Ok((tx, rx, hash))
+    let (i2r, r2i) = driver.raw_split();
+    let confirm_key = crate::crypto::keys::derive_key(&i2r, b"confirm", 0);
+    let (tx, rx) = crate::crypto::keys::directional_keys(i2r, r2i, initiator);
+    Ok((tx, rx, hash, confirm_key))
 }
 
 /// Explicit key confirmation (spec §3.5): both sides exchange
-/// `keyed-BLAKE2s(key = "daak-confirm", message = handshake_hash)` and abort on
-/// mismatch. Keyed BLAKE2s, not HMAC — the constant is the key, the handshake
-/// hash is the message.
+/// `keyed-BLAKE2s(key = confirm_key, message = "daak-confirm" || handshake_hash)`
+/// and abort on mismatch. `confirm_key` comes from the secret split keys, so a
+/// peer that did not complete the handshake cannot compute the tag.
 pub async fn confirm_keys<T: FrameTransport>(
     conn: &mut T,
     hash: &[u8],
+    confirm_key: &[u8; 32],
     initiator: bool,
 ) -> Result<()> {
-    let tag = confirm_tag(hash);
+    let tag = confirm_tag(confirm_key, hash);
     let peer = if initiator {
         conn.send(0, RecordType::Control, Bytes::copy_from_slice(&tag))
             .await?;
@@ -101,12 +106,13 @@ pub async fn confirm_keys<T: FrameTransport>(
     Ok(())
 }
 
-fn confirm_tag(hash: &[u8]) -> [u8; 32] {
+fn confirm_tag(key: &[u8; 32], hash: &[u8]) -> [u8; 32] {
     use blake2::digest::consts::U32;
     use blake2::digest::{KeyInit, Mac};
-    use blake2::Blake2bMac;
-    let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(b"daak-confirm")
-        .expect("32-byte key for 32-byte tag");
+    use blake2::Blake2sMac;
+    let mut mac =
+        <Blake2sMac<U32> as KeyInit>::new_from_slice(key).expect("32-byte key for 32-byte tag");
+    mac.update(b"daak-confirm");
     mac.update(hash);
     mac.finalize().into_bytes().into()
 }
@@ -173,7 +179,7 @@ pub async fn open_secure<T: FrameTransport + Send>(
 
     let prologue = session_prologue(&x25519_public(static_secret), peer_static);
     let driver = HandshakeDriver::initiator(static_secret, &prologue)?;
-    let (tx, rx, _hash) = complete_handshake(&mut conn, driver, true).await?;
+    let (tx, rx, _hash, _confirm) = complete_handshake(&mut conn, driver, true).await?;
     Ok(SecureConnection::new(conn, tx, rx))
 }
 
@@ -187,7 +193,7 @@ pub async fn recv_secure_transfer<T: FrameTransport + Send>(
 ) -> Result<Manifest> {
     let prologue = session_prologue(&x25519_public(static_secret), initiator_static);
     let driver = HandshakeDriver::responder(static_secret, &prologue)?;
-    let (tx, rx, _hash) = complete_handshake(conn, driver, false).await?;
+    let (tx, rx, _hash, _confirm) = complete_handshake(conn, driver, false).await?;
     let mut secure = SecureConnection::new(conn, tx, rx);
     receive_transfer(&mut secure, out_dir, |_| {}, db, on_item).await
 }
@@ -433,8 +439,8 @@ mod tests {
             complete_handshake(&mut a_io, a_hs, true),
             complete_handshake(&mut b_io, b_hs, false),
         );
-        let (a_tx, a_rx, _a_hash) = a_side.unwrap();
-        let (b_tx, b_rx, _b_hash) = b_side.unwrap();
+        let (a_tx, a_rx, _a_hash, _) = a_side.unwrap();
+        let (b_tx, b_rx, _b_hash, _) = b_side.unwrap();
 
         // Mirrored directional keys: initiator's tx == responder's rx, and vice versa.
         let mut a = SecureConnection::new(a_io, a_tx, a_rx);

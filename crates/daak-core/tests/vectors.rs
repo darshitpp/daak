@@ -58,8 +58,11 @@ fn noise_xx_pin() {
     let b_hash = b.handshake_hash();
     assert_eq!(a_hash, b_hash);
 
-    let (a_tx, a_rx) = directional_keys(&a_hash, true);
-    let (b_tx, b_rx) = directional_keys(&b_hash, false);
+    let (a_i2r, a_r2i) = a.raw_split();
+    let (b_i2r, b_r2i) = b.raw_split();
+    assert_eq!((a_i2r, a_r2i), (b_i2r, b_r2i), "both sides split alike");
+    let (a_tx, a_rx) = directional_keys(a_i2r, a_r2i, true);
+    let (b_tx, b_rx) = directional_keys(b_i2r, b_r2i, false);
     assert_eq!(a_tx, b_rx, "tx_a must equal rx_b");
     assert_eq!(a_rx, b_tx, "rx_a must equal tx_b");
     assert_ne!(a_tx, a_rx, "tx and rx must differ");
@@ -73,13 +76,9 @@ fn kdf_known_answers() {
         "96b6b67a38009fe97292f60252c24e5b338146efcb0da7c2fbc7e3ecd9c79e1b".to_string(),
         hex::encode(k)
     );
-    let (tx, rx) = directional_keys(&[7u8; 64], true);
-    assert_eq!(
-        "57eb65fcfeb53b3c8e3fc1772a8f13920dae0926a0744842e8fbc0a2b4236e6b".to_string(),
-        hex::encode(tx)
-    );
-    assert_eq!(
-        "888afb69dc8b1855402039da269d930e03d235c1fd8aaea37770351ecd0808ac".to_string(),
-        hex::encode(rx)
-    );
+    // The raw split keys are the session keys. The initiator sends with i2r.
+    let (tx, rx) = directional_keys([7u8; 32], [8u8; 32], true);
+    assert_eq!((tx, rx), ([7u8; 32], [8u8; 32]));
+    let (tx, rx) = directional_keys([7u8; 32], [8u8; 32], false);
+    assert_eq!((tx, rx), ([8u8; 32], [7u8; 32]));
 }

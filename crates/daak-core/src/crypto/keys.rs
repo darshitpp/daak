@@ -17,12 +17,10 @@ pub fn derive_key(base: &[u8; 32], info: &[u8], epoch: u64) -> [u8; 32] {
     mac.finalize().into_bytes().into()
 }
 
-pub fn directional_keys(handshake_hash: &[u8], initiator: bool) -> ([u8; 32], [u8; 32]) {
-    let mut mac = <Blake2sMac<U32> as KeyInit>::new_from_slice(b"daak-keys").expect("32-byte key");
-    mac.update(handshake_hash);
-    let base: [u8; 32] = mac.finalize().into_bytes().into();
-    let i2r = derive_key(&base, b"initiator-to-responder", 0);
-    let r2i = derive_key(&base, b"responder-to-initiator", 0);
+/// Orders the 2 raw Noise `split()` keys as (send, receive) for one role.
+/// The keys depend on the DH results, so only the 2 peers know them. The
+/// handshake hash is public and must never be a key input.
+pub fn directional_keys(i2r: [u8; 32], r2i: [u8; 32], initiator: bool) -> ([u8; 32], [u8; 32]) {
     if initiator {
         (i2r, r2i)
     } else {
@@ -36,8 +34,8 @@ mod tests {
 
     #[test]
     fn directional_keys_are_mirrored() {
-        let (a_tx, a_rx) = directional_keys(b"hash", true);
-        let (b_tx, b_rx) = directional_keys(b"hash", false);
+        let (a_tx, a_rx) = directional_keys([1u8; 32], [2u8; 32], true);
+        let (b_tx, b_rx) = directional_keys([1u8; 32], [2u8; 32], false);
         assert_eq!(a_tx, b_rx);
         assert_eq!(a_rx, b_tx);
         assert_ne!(a_tx, a_rx);

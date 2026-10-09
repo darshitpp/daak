@@ -76,9 +76,15 @@ impl HandshakeDriver {
         self.state.get_handshake_hash().to_vec()
     }
 
+    /// The 2 raw Noise `split()` keys: initiator to responder, then responder to
+    /// initiator. Call it only after `is_finished`. These keys depend on the DH
+    /// results, unlike `handshake_hash`, which an eavesdropper can compute.
+    pub fn raw_split(&mut self) -> ([u8; 32], [u8; 32]) {
+        self.state.dangerously_get_raw_split()
+    }
+
     /// Finishes the handshake and returns the Noise transport plus the handshake
-    /// hash. Directional keys are derived from this hash (Task 6), because snow
-    /// does not expose its raw `split()` key material.
+    /// hash. Only tests use it. Session keys come from `raw_split`.
     pub fn into_transport(self) -> Result<(TransportState, Vec<u8>)> {
         let hash = self.state.get_handshake_hash().to_vec();
         let transport = self

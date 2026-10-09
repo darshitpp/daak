@@ -105,8 +105,9 @@ pub async fn pair<T: FrameTransport>(
     } else {
         HandshakeDriver::responder(&static_secret, &prologue)?
     };
-    let (_tx, _rx, hash) = crate::net::secure::complete_handshake(conn, driver, initiator).await?;
-    crate::net::secure::confirm_keys(conn, &hash, initiator).await?;
+    let (_tx, _rx, hash, confirm_key) =
+        crate::net::secure::complete_handshake(conn, driver, initiator).await?;
+    crate::net::secure::confirm_keys(conn, &hash, &confirm_key, initiator).await?;
     let sas = sas_from_handshake_hash(&hash);
     let pairing = Pairing {
         peer_device_id: expected.identity.device_id,

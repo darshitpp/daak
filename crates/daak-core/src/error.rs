@@ -77,9 +77,18 @@ impl CoreError {
     }
 }
 
-/// Refuse peers whose protocol major version (version / 100) differs from ours.
-pub fn ensure_compatible(peer_proto_version: u16) -> Result<()> {
-    if peer_proto_version / 100 == crate::manifest::MANIFEST_VERSION / 100 {
+/// Refuse a manifest whose major version (version / 100) differs from ours.
+pub fn ensure_compatible(manifest_version: u16) -> Result<()> {
+    if manifest_version / 100 == crate::manifest::MANIFEST_VERSION / 100 {
+        Ok(())
+    } else {
+        Err(CoreError::UnsupportedSchema)
+    }
+}
+
+/// Refuse peers whose wire protocol major version (version / 100) differs from ours.
+pub fn ensure_proto_compatible(peer_proto_version: u16) -> Result<()> {
+    if peer_proto_version / 100 == crate::discovery::mdns::PROTO_VERSION / 100 {
         Ok(())
     } else {
         Err(CoreError::UnsupportedSchema)
@@ -123,10 +132,19 @@ mod tests {
     #[test]
     fn version_mismatch_is_refused() {
         use crate::discovery::mdns::PROTO_VERSION;
-        assert!(ensure_compatible(PROTO_VERSION).is_ok());
+        assert!(ensure_proto_compatible(PROTO_VERSION).is_ok());
         // /100 grouping: +100 steps to the next incompatible major version.
         assert!(matches!(
-            ensure_compatible(PROTO_VERSION + 100),
+            ensure_proto_compatible(PROTO_VERSION + 100),
+            Err(CoreError::UnsupportedSchema)
+        ));
+    }
+
+    #[test]
+    fn build_with_the_old_session_key_schedule_is_refused() {
+        // Proto 1 derived the session keys from the public handshake hash.
+        assert!(matches!(
+            ensure_proto_compatible(1),
             Err(CoreError::UnsupportedSchema)
         ));
     }
