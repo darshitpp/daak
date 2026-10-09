@@ -27,6 +27,17 @@ pub struct SecureSession {
     old_epochs: [(u32, [u8; 32]); 2],
 }
 
+impl Drop for SecureSession {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.send_key.zeroize();
+        self.recv_key.zeroize();
+        for (_, key) in &mut self.old_epochs {
+            key.zeroize();
+        }
+    }
+}
+
 impl SecureSession {
     pub fn new(send_key: [u8; 32], recv_key: [u8; 32]) -> Self {
         Self {
@@ -164,6 +175,18 @@ impl SecureSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_a_session_wipes_its_keys() {
+        let mut s = std::mem::ManuallyDrop::new(SecureSession::new([1u8; 32], [2u8; 32]));
+        s.old_epochs[0] = (0, [3u8; 32]);
+        // SAFETY: the value is dropped once and only read as plain bytes after.
+        unsafe { std::mem::ManuallyDrop::drop(&mut s) };
+        assert_eq!(s.send_key, [0u8; 32]);
+        assert_eq!(s.recv_key, [0u8; 32]);
+        assert_eq!(s.old_epochs[0].1, [0u8; 32]);
+    }
+
     use crate::control::ControlMsg;
 
     #[test]

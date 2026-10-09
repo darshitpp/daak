@@ -2238,7 +2238,12 @@ impl Engine {
         );
         // Manual-code pairing: no QR bundle was offered, so the peer's identity
         // arrives in-band and is authenticated by the SPAKE2-mixed prologue.
-        if let Some(code) = pending_code.lock().await.take() {
+        //
+        // The code is INSPECTED here and taken only after the peer proved its
+        // identity binding, like the QR arm below. A stray connection must not
+        // burn the one-shot code.
+        let armed_code = pending_code.lock().await.clone();
+        if armed_code.is_some() {
             let peer_public = read_identity_public(conn).await?;
             if hello.device_id != peer_public.device_id {
                 return Err(CoreError::Protocol(
@@ -2254,6 +2259,9 @@ impl Engine {
                     "code pairing peer identity binding failed".into(),
                 ));
             }
+            let Some(code) = pending_code.lock().await.take() else {
+                return Err(CoreError::Protocol("pairing code already used".into()));
+            };
             conn.send(
                 0,
                 RecordType::Control,

@@ -553,9 +553,19 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             .ok_or_else(|| {
                 CoreError::Protocol(format!("chunk index {chunk_index} overflows file offset"))
             })?;
-        offset.checked_add(data.len() as u64).ok_or_else(|| {
+        let end = offset.checked_add(data.len() as u64).ok_or_else(|| {
             CoreError::Protocol(format!("chunk for item {item_index} overflows file size"))
         })?;
+        // A chunk longer than the chunk size overwrites its neighbours. A chunk
+        // that ends past the declared size grows the file. Both use disk that
+        // the manifest did not announce.
+        if data.len() as u64 > chunk_size as u64
+            || manifest.items[idx].size.is_some_and(|sz| end > sz)
+        {
+            return Err(CoreError::Protocol(format!(
+                "chunk {chunk_index} of item {item_index} exceeds the declared size"
+            )));
+        }
 
         let file = files
             .get_mut(idx)
@@ -1993,6 +2003,51 @@ mod tests {
         let res = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {}).await;
         sender.await.unwrap();
         assert!(matches!(res, Err(crate::CoreError::Protocol(_))));
+    }
+
+    /// A chunk longer than the item's chunk size would overwrite its neighbours
+    /// and grow the file past the declared size.
+    #[tokio::test]
+    async fn rejects_a_chunk_longer_than_the_chunk_size_without_writing() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("l.bin");
+        std::fs::write(&path, vec![4u8; 100_000]).unwrap();
+
+        let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+
+        let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+            conn.send(
+                CONTROL_STREAM,
+                RecordType::Manifest,
+                Bytes::from(m.to_cbor().unwrap()),
+            )
+            .await
+            .unwrap();
+            let body = encode_chunk_body(0, 0, &vec![1u8; 70_000]);
+            conn.send(100, RecordType::Chunk, Bytes::from(body))
+                .await
+                .unwrap();
+        });
+
+        let mut conn = tcp::dial(addr).await.unwrap();
+        let res = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {}).await;
+        sender.await.unwrap();
+        assert!(
+            matches!(res, Err(crate::CoreError::Protocol(_))),
+            "got {res:?}"
+        );
+        assert_eq!(
+            std::fs::metadata(dst.path().join("l.bin"))
+                .map(|m| m.len())
+                .unwrap_or(0),
+            0,
+            "no bytes may be written for an over-long chunk"
+        );
     }
 
     #[tokio::test]

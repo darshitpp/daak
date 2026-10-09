@@ -79,6 +79,9 @@ impl Db {
                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                ON CONFLICT(peer_device_id) DO UPDATE SET
                  state = excluded.state,
+                 paired_at = excluded.paired_at,
+                 verify_key = excluded.verify_key,
+                 static_dh_pub = excluded.static_dh_pub,
                  label = excluded.label"#,
             rusqlite::params![
                 &p.peer_device_id[..],
@@ -240,6 +243,20 @@ mod tests {
         let db = crate::store::Db::open_in_memory().unwrap();
         db.migrate().unwrap();
         let p = example(3);
+        db.upsert_pairing(&p).unwrap();
+        assert_eq!(db.get_pairing(&p.peer_device_id).unwrap().unwrap(), p);
+    }
+
+    #[test]
+    fn a_re_pair_replaces_the_stored_keys() {
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut p = example(5);
+        db.upsert_pairing(&p).unwrap();
+        // The peer reinstalled and now holds new keys. The new pairing was
+        // authenticated with them, so the old keys must not stay.
+        p.verify_key = [0xAA; 32];
+        p.static_dh_pub = [0xBB; 32];
         db.upsert_pairing(&p).unwrap();
         assert_eq!(db.get_pairing(&p.peer_device_id).unwrap().unwrap(), p);
     }

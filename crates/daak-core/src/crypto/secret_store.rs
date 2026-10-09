@@ -116,6 +116,17 @@ pub struct PersistentFileStore {
 impl PersistentFileStore {
     pub fn new(dir: impl Into<std::path::PathBuf>) -> Result<Self> {
         let dir = dir.into();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&dir)?;
+            // An existing directory keeps its old mode, so set it again.
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        #[cfg(not(unix))]
         std::fs::create_dir_all(&dir)?;
         Ok(Self { dir })
     }
@@ -143,7 +154,18 @@ impl SecretStore for PersistentFileStore {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let mut f = opts.open(self.path(key))?;
+        let path = self.path(key);
+        // Never write a key through a symlink that points elsewhere.
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(std::io::Error::other("key path is a symlink").into());
+        }
+        let mut f = opts.open(&path)?;
+        // The mode in `opts` applies only to a new file, so fix an old file too.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
         f.write_all(value)?;
         Ok(())
     }
@@ -169,5 +191,45 @@ mod tests {
         assert_eq!(s.get("k").unwrap().as_deref(), Some(&b"v"[..]));
         s.delete("k").unwrap();
         assert!(s.get("k").unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    mod file_modes {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn mode(p: &std::path::Path) -> u32 {
+            std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+        }
+
+        #[test]
+        fn the_key_directory_is_private() {
+            let root = tempfile::tempdir().unwrap();
+            let dir = root.path().join("a").join("keys");
+            PersistentFileStore::new(&dir).unwrap();
+            assert_eq!(mode(&dir), 0o700);
+        }
+
+        #[test]
+        fn set_makes_an_existing_loose_file_private() {
+            let root = tempfile::tempdir().unwrap();
+            let store = PersistentFileStore::new(root.path().join("keys")).unwrap();
+            let file = root.path().join("keys").join("k");
+            std::fs::write(&file, b"old").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+            store.set("k", b"new").unwrap();
+            assert_eq!(mode(&file), 0o600);
+        }
+
+        #[test]
+        fn set_refuses_to_write_through_a_symlink() {
+            let root = tempfile::tempdir().unwrap();
+            let store = PersistentFileStore::new(root.path().join("keys")).unwrap();
+            let target = root.path().join("elsewhere");
+            std::fs::write(&target, b"keep").unwrap();
+            std::os::unix::fs::symlink(&target, root.path().join("keys").join("k")).unwrap();
+            assert!(store.set("k", b"new").is_err());
+            assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        }
     }
 }
