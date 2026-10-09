@@ -46,9 +46,23 @@ impl<T: FrameTransport + Send + ?Sized> FrameTransport for &mut T {
     }
 }
 
+/// A peer that connects and goes silent must not hold a handshake open. The
+/// handshake is 3 small messages, so 15 s covers a slow LAN and a busy phone.
+pub const HANDSHAKE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Runs the Noise XX handshake. Returns the send key, the receive key, the
 /// public handshake hash (the SAS input), and the secret key for `confirm_keys`.
 pub async fn complete_handshake<T: FrameTransport>(
+    conn: &mut T,
+    driver: HandshakeDriver,
+    initiator: bool,
+) -> Result<([u8; 32], [u8; 32], Vec<u8>, [u8; 32])> {
+    tokio::time::timeout(HANDSHAKE_DEADLINE, run_handshake(conn, driver, initiator))
+        .await
+        .map_err(|_| crate::CoreError::Protocol("handshake timed out".into()))?
+}
+
+async fn run_handshake<T: FrameTransport>(
     conn: &mut T,
     mut driver: HandshakeDriver,
     initiator: bool,
@@ -80,6 +94,20 @@ pub async fn complete_handshake<T: FrameTransport>(
 /// and abort on mismatch. `confirm_key` comes from the secret split keys, so a
 /// peer that did not complete the handshake cannot compute the tag.
 pub async fn confirm_keys<T: FrameTransport>(
+    conn: &mut T,
+    hash: &[u8],
+    confirm_key: &[u8; 32],
+    initiator: bool,
+) -> Result<()> {
+    tokio::time::timeout(
+        HANDSHAKE_DEADLINE,
+        exchange_confirm(conn, hash, confirm_key, initiator),
+    )
+    .await
+    .map_err(|_| crate::CoreError::Protocol("key confirmation timed out".into()))?
+}
+
+async fn exchange_confirm<T: FrameTransport>(
     conn: &mut T,
     hash: &[u8],
     confirm_key: &[u8; 32],
