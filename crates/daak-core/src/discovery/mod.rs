@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "ios", all(test, target_os = "macos")))]
+pub mod dnssd;
 pub mod mdns;
 pub mod naming;
 pub mod presence;
