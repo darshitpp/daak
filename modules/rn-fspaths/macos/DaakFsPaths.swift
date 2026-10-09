@@ -39,7 +39,7 @@ class DaakFsPaths: NSObject {
   @objc func appGroupDir(_ resolve: @escaping RCTPromiseResolveBlock,
                          reject: @escaping RCTPromiseRejectBlock) {
     let container = FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: "group.dev.darshit.daak")
+      forSecurityApplicationGroupIdentifier: "J6NNRLDUG4.group.dev.darshit.daak")
     // "" is an answer, not a failure: a relative path would be worse than none.
     resolve(container?.path ?? "")
   }
