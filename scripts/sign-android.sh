@@ -45,6 +45,10 @@ export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
 # The version stamp must match release/version.json before the build.
 ( cd "$(dirname "$0")/.." && node scripts/stamp-version.mjs --check )
 
+# Gradle does not rebuild the Rust library. Without this step a release can
+# ship the libdaak_ffi.so of an earlier build.
+"$(dirname "$0")/../apps/mobile/scripts/gen-android-ffi.sh"
+
 cd "$(dirname "$0")/../apps/mobile/android"
 ./gradlew :app:assembleRelease --offline
 
