@@ -466,6 +466,7 @@
 		DA0AB0341A68108700A75B9A /* Generate UniFFI bindings + Rust staticlib */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
+			alwaysOutOfDate = 1;
 			files = (
 			);
 			inputPaths = (
