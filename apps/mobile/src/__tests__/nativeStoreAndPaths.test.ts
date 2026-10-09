@@ -57,7 +57,7 @@ describe.each(MODULES)('modules/$dir has the full rn-share shape', (m) => {
   it('applies com.facebook.react so codegen registers the library', () => {
     const gradle = read(base + 'android/build.gradle');
     expect(gradle).toMatch(/apply plugin: 'com\.facebook\.react'/);
-    expect(gradle).toMatch(/minSdkVersion 24/);
+    expect(gradle).toMatch(/minSdkVersion 26/);
     expect(gradle).toContain("namespace '" + m.pkg + "'");
   });
 

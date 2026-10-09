@@ -16,7 +16,7 @@ repositories { google(); mavenCentral() }
 android {
   namespace 'dev.darshit.daak.qrscanner'
   compileSdkVersion 35
-  defaultConfig { minSdkVersion 24 }
+  defaultConfig { minSdkVersion 26 }
 }
 
 dependencies {

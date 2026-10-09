@@ -29,7 +29,7 @@ of `darshitpp/daak`. Windows and Linux are not released.
 
 ### Android
 
-The package is `dev.darshit.daak`. The version name is 0.1.0. The version code
+Android 8.0 or newer is required. The package is `dev.darshit.daak`. The version name is 0.1.0. The version code
 is 1. Three APK files are available.
 
 | APK | Use |

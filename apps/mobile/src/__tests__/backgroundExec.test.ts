@@ -82,7 +82,7 @@ describe('rn-bgsched has the full rn-share shape', () => {
   it('applies com.facebook.react so codegen registers the library', () => {
     const gradle = stripComments(read(bg + 'android/build.gradle'));
     expect(gradle).toMatch(/apply plugin: 'com\.facebook\.react'/);
-    expect(gradle).toMatch(/minSdkVersion 24/);
+    expect(gradle).toMatch(/minSdkVersion 26/);
     expect(gradle).toContain("namespace 'dev.darshit.daak.bgsched'");
   });
 
@@ -262,7 +262,7 @@ describe('the Android foreground service', () => {
   });
 
   // API 34+ THROWS ForegroundServiceStartException if a dataSync service starts
-  // without this permission. minSdk is 24 and the permission is a normal one,
+  // without this permission. minSdk is 26 and the permission is a normal one,
   // so it is declared unconditionally in the library manifest.
   it('declares FOREGROUND_SERVICE_DATA_SYNC, which API 34+ enforces', () => {
     expect(libManifest).toMatch(

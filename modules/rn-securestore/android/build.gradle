@@ -14,7 +14,7 @@ repositories { google(); mavenCentral() }
 android {
   namespace 'dev.darshit.daak.securestore'
   compileSdkVersion 35
-  defaultConfig { minSdkVersion 24 }
+  defaultConfig { minSdkVersion 26 }
 }
 
 dependencies {

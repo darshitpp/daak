@@ -71,7 +71,7 @@ describe('rn-qrscanner has the full module shape', () => {
   it('applies com.facebook.react so library codegen registers the spec', () => {
     const gradle = stripComments(read(qr + 'android/build.gradle'));
     expect(gradle).toMatch(/apply plugin: 'com\.facebook\.react'/);
-    expect(gradle).toMatch(/minSdkVersion 24/);
+    expect(gradle).toMatch(/minSdkVersion 26/);
     expect(gradle).toContain("namespace 'dev.darshit.daak.qrscanner'");
   });
 });

@@ -248,7 +248,7 @@ dependencies {
     // this reason; 5.14.0 is the current release and ships
     // Cleaner.getCleaner() plus Cleaner$Cleanable.clean(), the precise API the
     // template calls. Bytecode is major version 52 (Java 8), so it is safe on
-    // minSdk 24.
+    // minSdk 26.
     //
     // @aar is LOAD-BEARING, not decoration. jna 5.14.0's POM declares
     // <packaging>jar</packaging>, and that jar carries aix/darwin/linux/sunos/

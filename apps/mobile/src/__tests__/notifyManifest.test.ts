@@ -53,9 +53,9 @@ describe('rn-notify Android library build', () => {
     expect(gradle).toMatch(/apply plugin: 'com\.facebook\.react'/);
   });
 
-  it('uses the notify namespace, minSdk 24 and a repositories block', () => {
+  it('uses the notify namespace, minSdk 26 and a repositories block', () => {
     expect(gradle).toMatch(/namespace 'dev\.darshit\.daak\.notify'/);
-    expect(gradle).toMatch(/minSdkVersion 24/);
+    expect(gradle).toMatch(/minSdkVersion 26/);
     expect(gradle).toMatch(/^repositories \{ google\(\); mavenCentral\(\) \}/m);
   });
 });

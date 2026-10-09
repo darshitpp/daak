@@ -64,4 +64,11 @@ for apk in "$PWD"/app/build/outputs/apk/release/daak-*-arm64-v8a.apk \
   # The certificate digest is public. It is the same value the release README
   # prints, so a user can compare a downloaded APK against it.
   "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
+
+  # The Android floor is 8.0, API 26 (plan Global Constraints). Stop when an APK
+  # declares a lower one, because it would install on a version nobody tested.
+  if ! "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | grep -q "^sdkVersion:'26'"; then
+    echo "sign-android: $apk does not declare minSdk 26." >&2
+    exit 1
+  fi
 done
