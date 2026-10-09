@@ -343,10 +343,13 @@ pub(crate) fn is_own_advertisement(
 /// `mdns-sd` 0.11.5 never lists a loopback interface, so no loopback-only
 /// setting exists. Zero interfaces is the nearest setting.
 /// A unit test then cannot advertise a fake peer on the real LAN.
+///
+/// An integration test binary links the library without `cfg(test)`. It sets
+/// `DAAK_MDNS_OFF_LAN` to get the same setting. Without it, the engines that the
+/// `daakd` tests start announce `daak-test` services to every device on the LAN.
 fn new_daemon() -> Result<ServiceDaemon> {
     let daemon = ServiceDaemon::new().map_err(|e| CoreError::Discovery(e.to_string()))?;
-    #[cfg(test)]
-    {
+    if cfg!(test) || std::env::var_os("DAAK_MDNS_OFF_LAN").is_some() {
         daemon
             .disable_interface(mdns_sd::IfKind::All)
             .map_err(|e| CoreError::Discovery(e.to_string()))?;

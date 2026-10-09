@@ -61,6 +61,9 @@ struct Daemon {
 
 impl Daemon {
     async fn spawn() -> Self {
+        // These tests start real engines. Without this, each one announces a
+        // fake `daak-test` device to every phone on the LAN.
+        std::env::set_var("DAAK_MDNS_OFF_LAN", "1");
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("daakd.sock");
         let (events, _rx) = broadcast::channel::<IpcEvent>(64);
