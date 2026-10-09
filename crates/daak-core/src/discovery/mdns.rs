@@ -110,7 +110,7 @@ impl Advertiser {
         status: &str,
         bind_ip: Option<IpAddr>,
     ) -> Result<Self> {
-        let daemon = ServiceDaemon::new().map_err(|e| CoreError::Discovery(e.to_string()))?;
+        let daemon = new_daemon()?;
         let mut props = HashMap::new();
         props.insert("id".to_string(), hex::encode(device_id));
         props.insert("name".to_string(), name.to_string());
@@ -325,6 +325,23 @@ pub(crate) fn is_own_advertisement(
     }
 }
 
+/// Start one `mdns-sd` daemon.
+///
+/// In a unit test build, the daemon has no enabled interface.
+/// `mdns-sd` 0.11.5 never lists a loopback interface, so no loopback-only
+/// setting exists. Zero interfaces is the nearest setting.
+/// A unit test then cannot advertise a fake peer on the real LAN.
+fn new_daemon() -> Result<ServiceDaemon> {
+    let daemon = ServiceDaemon::new().map_err(|e| CoreError::Discovery(e.to_string()))?;
+    #[cfg(test)]
+    {
+        daemon
+            .disable_interface(mdns_sd::IfKind::All)
+            .map_err(|e| CoreError::Discovery(e.to_string()))?;
+    }
+    Ok(daemon)
+}
+
 pub struct Browser {
     daemon: ServiceDaemon,
     rx: mdns_sd::Receiver<ServiceEvent>,
@@ -333,7 +350,7 @@ pub struct Browser {
 
 impl Browser {
     pub fn start() -> Result<Self> {
-        let daemon = ServiceDaemon::new().map_err(|e| CoreError::Discovery(e.to_string()))?;
+        let daemon = new_daemon()?;
         let rx = daemon
             .browse(SERVICE_TYPE)
             .map_err(|e| CoreError::Discovery(e.to_string()))?;
@@ -1202,6 +1219,31 @@ mod tests {
         assert_eq!(
             pick_addr(lan.into_iter(), 4_000).unwrap().ip().to_string(),
             "192.168.0.226"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daemons_do_not_use_a_lan_interface() {
+        let id: [u8; 16] = rand::random();
+        let name = format!("loopback-only-{}", hex::encode(&id[..4]));
+        let adv = Advertiser::start(&name, 40_123, id).unwrap();
+        let browser = Browser::start().unwrap();
+        // A browser finds this advertiser only through a real interface.
+        // The test passes when no Found event with this device id arrives.
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while let Some(event) = browser.recv().await {
+                if matches!(&event, DiscoveryEvent::Found(a) if a.device_id == id) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await;
+        adv.stop();
+        browser.stop();
+        assert!(
+            !matches!(seen, Ok(true)),
+            "the browser found the advertiser"
         );
     }
 }
