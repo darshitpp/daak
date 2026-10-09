@@ -12,7 +12,7 @@ use crate::error::Result;
 use crate::framing::{Frame, RecordType};
 use crate::manifest::Manifest;
 use crate::store::Db;
-use crate::transfer::{receive_transfer, send_transfer};
+use crate::transfer::{receive_transfer_from, send_transfer};
 
 use super::connection::Connection;
 
@@ -82,6 +82,7 @@ async fn run_handshake<T: FrameTransport>(
         let m3 = recv_handshake(conn).await?;
         driver.read(&m3)?;
     }
+    driver.check_remote_static()?;
     let hash = driver.handshake_hash();
     let (i2r, r2i) = driver.raw_split();
     let confirm_key = crate::crypto::keys::derive_key(&i2r, b"confirm", 0);
@@ -206,7 +207,8 @@ pub async fn open_secure<T: FrameTransport + Send>(
         .await?;
 
     let prologue = session_prologue(&x25519_public(static_secret), peer_static);
-    let driver = HandshakeDriver::initiator(static_secret, &prologue)?;
+    let driver =
+        HandshakeDriver::initiator(static_secret, &prologue)?.pin_remote_static(*peer_static);
     let (tx, rx, _hash, _confirm) = complete_handshake(&mut conn, driver, true).await?;
     Ok(SecureConnection::new(conn, tx, rx))
 }
@@ -215,15 +217,17 @@ pub async fn recv_secure_transfer<T: FrameTransport + Send>(
     conn: &mut T,
     static_secret: &[u8; 32],
     initiator_static: &[u8; 32],
+    expected_sender: Option<[u8; 16]>,
     out_dir: &Path,
     db: Option<&Db>,
     on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
     let prologue = session_prologue(&x25519_public(static_secret), initiator_static);
-    let driver = HandshakeDriver::responder(static_secret, &prologue)?;
+    let driver =
+        HandshakeDriver::responder(static_secret, &prologue)?.pin_remote_static(*initiator_static);
     let (tx, rx, _hash, _confirm) = complete_handshake(conn, driver, false).await?;
     let mut secure = SecureConnection::new(conn, tx, rx);
-    receive_transfer(&mut secure, out_dir, |_| {}, db, on_item).await
+    receive_transfer_from(&mut secure, expected_sender, out_dir, |_| {}, db, on_item).await
 }
 
 fn x25519_public(secret: &[u8; 32]) -> [u8; 32] {
@@ -429,9 +433,17 @@ mod tests {
                 .unwrap();
         });
 
-        let got = recv_secure_transfer(&mut mine, &b_secret, &a_pub, dst.path(), Some(&db), |_| {})
-            .await
-            .unwrap();
+        let got = recv_secure_transfer(
+            &mut mine,
+            &b_secret,
+            &a_pub,
+            None,
+            dst.path(),
+            Some(&db),
+            |_| {},
+        )
+        .await
+        .unwrap();
         sender.await.unwrap();
 
         assert_eq!(got.payload_id, manifest.payload_id);
@@ -463,6 +475,34 @@ mod tests {
         async fn recv(&mut self) -> crate::Result<Option<Frame>> {
             self.inner.recv().await
         }
+    }
+
+    /// The prologue holds two PUBLIC keys. A device that knows both can build the
+    /// same prologue and still handshake with a random static key of its own.
+    /// The responder must compare the key the remote side presents with the
+    /// stored key and refuse the session.
+    #[tokio::test]
+    async fn a_remote_static_key_that_is_not_the_stored_key_is_refused() {
+        let a_secret = [1u8; 32];
+        let b_secret = [2u8; 32];
+        let a_pub = x25519_public(&a_secret);
+        let b_pub = x25519_public(&b_secret);
+        let attacker_secret = [9u8; 32];
+
+        let (mut attacker_io, mut b_io) = channel_pair();
+        let prologue = session_prologue(&a_pub, &b_pub);
+        let attacker = HandshakeDriver::initiator(&attacker_secret, &prologue).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (_, victim) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                complete_handshake(&mut attacker_io, attacker, true),
+                recv_secure_transfer(&mut b_io, &b_secret, &a_pub, None, out.path(), None, |_| {}),
+            )
+        })
+        .await
+        .expect("the responder accepted the session and waits for a manifest");
+        let err = victim.unwrap_err().to_string();
+        assert!(err.contains("peer static key"), "unexpected error: {err}");
     }
 
     #[tokio::test]

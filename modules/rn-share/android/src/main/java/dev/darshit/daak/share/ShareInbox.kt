@@ -31,6 +31,14 @@ object ShareInbox {
   private fun intentSendsDir(ctx: Context): File = File(dir(ctx), "intent-sends").apply { mkdirs() }
 
   fun copyToCache(ctx: Context, uri: Uri): File {
+    // Another app picks this uri (the share target is exported), and the read
+    // runs in this process. A file:// uri, or a uri on a provider of this app,
+    // would copy a private Daak file into the share inbox.
+    if (uri.scheme != ContentResolver.SCHEME_CONTENT ||
+      uri.authority?.startsWith(ctx.packageName) == true
+    ) {
+      throw SecurityException("refused uri: $uri")
+    }
     // R42m: the name used to come from `uri.lastPathSegment`, which for a
     // content URI is `image:1000196782`. No extension travelled with it, so the
     // receiving device stored an unopenable file. The provider knows the real

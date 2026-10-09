@@ -326,6 +326,19 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
 pub async fn receive_transfer<T: FrameTransport>(
     conn: &mut T,
     out_dir: &Path,
+    on_progress: impl FnMut(u64),
+    db: Option<&Db>,
+    on_item: impl FnMut(EngineEvent),
+) -> Result<Manifest> {
+    receive_transfer_from(conn, None, out_dir, on_progress, db, on_item).await
+}
+
+/// Like `receive_transfer`. With `Some(id)`, the manifest must name `id` as its
+/// sender. The caller passes the device id of the authenticated peer.
+pub async fn receive_transfer_from<T: FrameTransport>(
+    conn: &mut T,
+    expected_sender: Option<[u8; 16]>,
+    out_dir: &Path,
     mut on_progress: impl FnMut(u64),
     db: Option<&Db>,
     mut on_item: impl FnMut(EngineEvent),
@@ -346,6 +359,11 @@ pub async fn receive_transfer<T: FrameTransport>(
     };
 
     validate_manifest(&manifest)?;
+    if expected_sender.is_some_and(|id| id != manifest.sender.device_id) {
+        return Err(CoreError::Protocol(
+            "manifest sender is not the authenticated peer".into(),
+        ));
+    }
 
     // D23: a re-delivery of a payload_id that is already in the inbox must not
     // write into the real destination. A half-written duplicate would truncate
@@ -761,6 +779,38 @@ mod tests {
         let res = receive_transfer(&mut conn, out, |_| {}, None, |_| {}).await;
         sender.await.unwrap();
         res
+    }
+
+    /// The manifest names its own sender. A paired peer must not name another
+    /// paired device there: the inbox and the quarantine report would show it.
+    #[tokio::test]
+    async fn a_manifest_that_names_another_sender_is_refused() {
+        let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![peer_item(0, "a.bin")]);
+        for (expected, ok) in [([8u8; 16], false), ([7u8; 16], true)] {
+            let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+            let m = manifest.clone();
+            let sender = tokio::spawn(async move {
+                let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+                conn.send(
+                    CONTROL_STREAM,
+                    RecordType::Manifest,
+                    Bytes::from(m.to_cbor().unwrap()),
+                )
+                .await
+                .unwrap();
+            });
+            let mut conn = tcp::dial(addr).await.unwrap();
+            let dst = tempfile::tempdir().unwrap();
+            let res =
+                receive_transfer_from(&mut conn, Some(expected), dst.path(), |_| {}, None, |_| {})
+                    .await;
+            sender.await.unwrap();
+            if ok {
+                assert!(!matches!(res, Err(CoreError::Protocol(ref m)) if m.contains("sender")));
+            } else {
+                assert!(matches!(res, Err(CoreError::Protocol(m)) if m.contains("sender")));
+            }
+        }
     }
 
     // ---- R116: the per-item EngineEvent the UI's ReceivedItemRow renders ----

@@ -26,6 +26,9 @@ fn params() -> Result<NoiseParams> {
 
 pub struct HandshakeDriver {
     state: HandshakeState,
+    /// The static key that the remote side must present. The prologue holds only
+    /// public keys, so it does not prove that the remote side owns a private key.
+    expected_remote: Option<[u8; 32]>,
 }
 
 impl HandshakeDriver {
@@ -39,7 +42,30 @@ impl HandshakeDriver {
             builder.build_responder()
         }
         .map_err(|e| CoreError::Protocol(format!("noise build: {e}")))?;
-        Ok(Self { state })
+        Ok(Self {
+            state,
+            expected_remote: None,
+        })
+    }
+
+    /// Requires the remote static key to equal `key` when the handshake ends.
+    pub fn pin_remote_static(mut self, key: [u8; 32]) -> Self {
+        self.expected_remote = Some(key);
+        self
+    }
+
+    /// Fails when the remote side presented a static key other than the pinned key.
+    /// Call it only after `is_finished`.
+    pub fn check_remote_static(&self) -> Result<()> {
+        let Some(expected) = self.expected_remote else {
+            return Ok(());
+        };
+        match self.state.get_remote_static() {
+            Some(got) if got == expected.as_slice() => Ok(()),
+            _ => Err(CoreError::Protocol(
+                "peer static key does not match the stored key".into(),
+            )),
+        }
     }
 
     pub fn initiator(static_secret: &[u8; 32], prologue: &[u8]) -> Result<Self> {

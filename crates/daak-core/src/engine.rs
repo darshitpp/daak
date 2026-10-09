@@ -1919,9 +1919,12 @@ impl Engine {
     pub async fn enqueue_outbox_send(
         &self,
         peer_device_id: [u8; 16],
-        manifest: Manifest,
+        mut manifest: Manifest,
         paths: Vec<PathBuf>,
     ) -> Result<[u8; 16]> {
+        // The receiver refuses a manifest whose sender is not the authenticated
+        // peer. Callers may pass a placeholder, so the engine writes its own id.
+        manifest.sender.device_id = self.pairing_bundle().await.identity.device_id;
         let payload_id = manifest.payload_id;
         crate::outbox::enqueue(&self.db, &self.staging, &peer_device_id, &manifest, &paths)?;
         // Try immediately in case the peer is already online; harmless if not.
@@ -2437,6 +2440,7 @@ impl Engine {
             conn,
             &static_secret,
             &pairing.static_dh_pub,
+            Some(hello.device_id),
             out_dir,
             Some(db),
             |ev| {
