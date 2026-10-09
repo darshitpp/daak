@@ -129,13 +129,18 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Build a TXT record: one length byte, then `key=value`, for each pair.
 /// A pair longer than 255 bytes is cut so the length byte stays valid.
+/// The cut lands on a character boundary, so the value stays valid UTF-8.
 pub(crate) fn txt_record(pairs: &[(&str, &str)]) -> Vec<u8> {
     let mut out = Vec::new();
     for (k, v) in pairs {
-        let mut entry = format!("{k}={v}").into_bytes();
-        entry.truncate(255);
+        let mut entry = format!("{k}={v}");
+        let mut end = entry.len().min(255);
+        while !entry.is_char_boundary(end) {
+            end -= 1;
+        }
+        entry.truncate(end);
         out.push(entry.len() as u8);
-        out.extend(entry);
+        out.extend(entry.into_bytes());
     }
     out
 }
@@ -160,6 +165,48 @@ pub(crate) fn parse_txt(bytes: &[u8]) -> HashMap<String, String> {
     map
 }
 
+/// The longest DNS-SD instance name, in bytes.
+const MAX_INSTANCE_BYTES: usize = 63;
+
+/// The service instance name for a display name.
+/// A name with no ASCII letter or digit gives `daak-` and 8 hex digits of the
+/// device id. The result has at most 63 bytes and no trailing `-`.
+fn instance_name(display_name: &str, device_id: [u8; 16]) -> String {
+    let mut name = sanitize_host(display_name);
+    if name.is_empty() {
+        name = format!("daak-{}", &hex::encode(device_id)[..8]);
+    }
+    let mut end = name.len().min(MAX_INSTANCE_BYTES);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    name.truncate(end);
+    name.trim_end_matches('-').to_string()
+}
+
+/// What `pump` does after one `poll` wake.
+#[derive(Debug, PartialEq, Eq)]
+enum PollAction {
+    Process,
+    Stop,
+    Idle,
+}
+
+/// Choose the action for the `revents` of the connection fd.
+/// Data to read always comes first, so a final event is not lost when the
+/// peer closes. `POLLERR` or `POLLHUP` with no data to read stops the loop.
+fn poll_action(revents: i16) -> PollAction {
+    if revents & libc::POLLNVAL != 0 {
+        PollAction::Stop
+    } else if revents & libc::POLLIN != 0 {
+        PollAction::Process
+    } else if revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+        PollAction::Stop
+    } else {
+        PollAction::Idle
+    }
+}
+
 /// Run `DNSServiceProcessResult` until `stop` is set or the connection fails.
 /// `after` runs once per wake. The wake interval is 200 ms.
 fn pump(root: SdRef, stop: &AtomicBool, mut after: impl FnMut()) {
@@ -176,12 +223,35 @@ fn pump(root: SdRef, stop: &AtomicBool, mut after: impl FnMut()) {
         };
         // SAFETY: p is a valid pollfd and the count is 1.
         let n = unsafe { libc::poll(&mut p, 1, 200) };
-        if n < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-            break;
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() != std::io::ErrorKind::Interrupted {
+                tracing::warn!(%err, "poll failed. Discovery stops for this connection.");
+                break;
+            }
         }
-        // SAFETY: root is live. The callbacks run here, on this thread.
-        if n > 0 && unsafe { DNSServiceProcessResult(root) } != 0 {
-            break;
+        if n > 0 {
+            match poll_action(p.revents) {
+                PollAction::Process => {
+                    // SAFETY: root is live. The callbacks run here, on this thread.
+                    let rc = unsafe { DNSServiceProcessResult(root) };
+                    if rc != 0 {
+                        tracing::warn!(
+                            code = rc,
+                            "DNSServiceProcessResult failed. Discovery stops for this connection."
+                        );
+                        break;
+                    }
+                }
+                PollAction::Stop => {
+                    tracing::warn!(
+                        revents = p.revents,
+                        "The connection to the system failed. Discovery stops for this connection."
+                    );
+                    break;
+                }
+                PollAction::Idle => {}
+            }
         }
         after();
     }
@@ -284,7 +354,7 @@ impl Advertiser {
         pairs.push(("st", status));
         let txt = txt_record(&pairs);
 
-        let instance = CString::new(sanitize_host(name))
+        let instance = CString::new(instance_name(name, device_id))
             .map_err(|e| RegisterError::Other(CoreError::Discovery(e.to_string())))?;
         let regtype = CString::new(SERVICE_TYPE).expect("constant has no NUL");
         let conflict = Arc::new(AtomicI32::new(0));
@@ -709,7 +779,9 @@ fn restart_addr_lookups(state: &mut State) {
         svc.restart_addr = false;
         // SAFETY: the old ref is live and this thread created it. No callback runs
         // now, so none can use the Key through the old ref after this call.
-        unsafe { DNSServiceRefDeallocate(svc.addr) };
+        if !svc.addr.is_null() {
+            unsafe { DNSServiceRefDeallocate(svc.addr) };
+        }
         svc.addr = std::ptr::null_mut();
         svc.addrs.clear();
         let Ok(host_c) = CString::new(svc.host.as_str()) else {
@@ -878,8 +950,6 @@ impl Browser {
 }
 
 /// Peers seen in `window`, minus the record of `own`. Blocking.
-// The name collision check of a later task calls this. Only tests use it now.
-#[allow(dead_code)]
 pub(crate) fn observed(window: Duration, own: Option<[u8; 16]>) -> Vec<PeerAnnounce> {
     let (tx, rx) = std::sync::mpsc::channel();
     let Ok(b) = spawn_browse(Box::new(move |e| {
@@ -1147,6 +1217,58 @@ mod pure_tests {
         let map = parse_txt(&rec);
         assert_eq!(map.get("id").map(String::as_str), Some("ab"));
         assert_eq!(map.get("st").map(String::as_str), Some("online"));
+    }
+
+    #[test]
+    fn a_normal_name_is_the_instance() {
+        assert_eq!(
+            instance_name("Kitchen Tablet", [7; 16]),
+            sanitize_host("Kitchen Tablet")
+        );
+    }
+
+    #[test]
+    fn a_non_ascii_name_falls_back_to_the_device_id() {
+        let id = [0xab; 16];
+        let a = instance_name("ダーシット", id);
+        assert_eq!(a, "daak-abababab");
+        assert_eq!(a, instance_name("ダーシット", id));
+    }
+
+    #[test]
+    fn a_long_name_fits_the_63_byte_limit() {
+        let name = "a".repeat(62) + &"b".repeat(138);
+        let got = instance_name(&name, [1; 16]);
+        assert!(got.len() <= 63 && !got.is_empty());
+        assert!(!got.ends_with('-'));
+        let spaced = "a".repeat(62) + " " + &"b".repeat(137);
+        let got = instance_name(&spaced, [1; 16]);
+        assert_eq!(got, "a".repeat(62));
+    }
+
+    #[test]
+    fn a_multibyte_txt_value_is_cut_on_a_char_boundary() {
+        // The prefix "nam=" has 4 bytes. 251 bytes remain, which is inside a char.
+        let v = "é".repeat(200);
+        let rec = txt_record(&[("nam", &v)]);
+        assert_eq!(rec[0] as usize, rec.len() - 1);
+        let map = parse_txt(&rec);
+        let got = map.get("nam").expect("the pair survives the cut");
+        assert_eq!(got, &"é".repeat(125));
+        assert_eq!(got.len(), 250);
+    }
+
+    #[test]
+    fn poll_events_map_to_one_action() {
+        use libc::{POLLERR, POLLHUP, POLLIN, POLLNVAL};
+        assert_eq!(poll_action(POLLIN), PollAction::Process);
+        assert_eq!(poll_action(POLLIN | POLLHUP), PollAction::Process);
+        assert_eq!(poll_action(POLLIN | POLLERR), PollAction::Process);
+        assert_eq!(poll_action(POLLHUP), PollAction::Stop);
+        assert_eq!(poll_action(POLLERR), PollAction::Stop);
+        assert_eq!(poll_action(POLLNVAL), PollAction::Stop);
+        assert_eq!(poll_action(POLLIN | POLLNVAL), PollAction::Stop);
+        assert_eq!(poll_action(0), PollAction::Idle);
     }
 
     #[test]
