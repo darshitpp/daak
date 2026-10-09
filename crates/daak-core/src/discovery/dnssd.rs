@@ -11,12 +11,15 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rand::Rng;
+
 use crate::error::{CoreError, Result};
 
 use super::mdns::{
     announce_from_props, is_own_advertisement, sanitize_host, txt_short, PeerAnnounce,
     PROTO_VERSION,
 };
+use super::naming::resolve_name;
 
 type SdRef = *mut c_void;
 
@@ -296,6 +299,56 @@ impl Advertiser {
             conflict,
             thread: Mutex::new(Some(thread)),
         })
+    }
+
+    pub fn start_resolving(
+        base_name: &str,
+        port: u16,
+        device_id: [u8; 16],
+        rng: &mut impl Rng,
+    ) -> Result<(Self, String)> {
+        Self::start_resolving_on(base_name, port, device_id, rng, None)
+    }
+
+    /// Choose a display name that no other peer uses, then advertise it.
+    /// A taken name arrives in two ways. A local-only registration fails at
+    /// once with NameConflict. A LAN registration reports it later, through
+    /// `conflicted`. Both ways pick a new name. Any other error propagates.
+    pub fn start_resolving_on(
+        base_name: &str,
+        port: u16,
+        device_id: [u8; 16],
+        rng: &mut impl Rng,
+        bind_ip: Option<IpAddr>,
+    ) -> Result<(Self, String)> {
+        // The filter by `device_id` keeps our own fresh record out of the list.
+        let names = |w| {
+            observed(w, Some(device_id))
+                .into_iter()
+                .map(|a| a.name)
+                .collect::<Vec<_>>()
+        };
+        let start =
+            |name: &str| Self::start_with_meta(name, port, device_id, "", "", 0, "online", bind_ip);
+        let mut seen = names(super::mdns::BROWSE_WINDOW);
+        let mut name = resolve_name(base_name, &seen, rng);
+        for _ in 0..2 {
+            match start(&name) {
+                Ok(adv) => {
+                    let late = names(super::mdns::RECHECK_WINDOW);
+                    if !late.contains(&name) && !adv.conflicted() {
+                        return Ok((adv, name));
+                    }
+                    adv.stop();
+                    seen.extend(late);
+                }
+                Err(e) if e.to_string().contains(&ERR_NAME_CONFLICT.to_string()) => {}
+                Err(e) => return Err(e),
+            }
+            seen.push(name.clone());
+            name = resolve_name(base_name, &seen, rng);
+        }
+        Ok((start(&name)?, name))
     }
 
     /// True when the system reported a name conflict for this registration.
@@ -848,6 +901,42 @@ mod tests {
             }
         }
         false
+    }
+
+    #[test]
+    fn a_taken_display_name_gets_a_new_name() {
+        let base = format!("Kitchen-{}", hex::encode(&unique_id()[..4]));
+        let squatter_id = unique_id();
+        let squatter = Advertiser::start_with_meta(
+            &base,
+            unique_port(),
+            squatter_id,
+            "",
+            "",
+            0,
+            "online",
+            None,
+        )
+        .unwrap();
+        assert!(wait_for(squatter_id, true));
+        let mut rng = rand::thread_rng();
+        let (adv, name) =
+            Advertiser::start_resolving_on(&base, unique_port(), unique_id(), &mut rng, None)
+                .unwrap();
+        assert_ne!(name, base);
+        adv.stop();
+        squatter.stop();
+    }
+
+    #[test]
+    fn a_free_display_name_is_kept() {
+        let base = format!("Free-{}", hex::encode(&unique_id()[..4]));
+        let mut rng = rand::thread_rng();
+        let (adv, name) =
+            Advertiser::start_resolving_on(&base, unique_port(), unique_id(), &mut rng, None)
+                .unwrap();
+        assert_eq!(name, base);
+        adv.stop();
     }
 
     #[test]
