@@ -117,6 +117,21 @@ impl Db {
 
     /// The number of rows for one peer that are not yet sent. Used by the
     /// presence queue-depth signal, so the UI can show "N queued".
+    /// The payload ids of every outbox row that is not delivered. Their staged
+    /// files must survive the startup sweep: a `failed` row can still be retried.
+    pub fn live_outbox_payload_ids(&self) -> Result<Vec<[u8; 16]>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT payload_id FROM outbox WHERE state != 'done'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Ok(id) = <[u8; 16]>::try_from(r?.as_slice()) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn count_outbox_for_peer(&self, peer: &[u8; 16]) -> Result<u64> {
         let n: i64 = self.conn().query_row(
             "SELECT COUNT(1) FROM outbox WHERE peer_device_id = ?1 AND state IN ('pending','sending')",
@@ -317,6 +332,20 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         }
+    }
+
+    #[test]
+    fn live_outbox_payload_ids_skips_delivered_rows() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut live = row();
+        live.state = "failed".into();
+        db.enqueue_outbox(&live).unwrap();
+        let mut done = row_for(9, 3);
+        done.payload_id = [8u8; 16];
+        done.state = "done".into();
+        db.enqueue_outbox(&done).unwrap();
+        assert_eq!(db.live_outbox_payload_ids().unwrap(), vec![[2u8; 16]]);
     }
 
     #[test]

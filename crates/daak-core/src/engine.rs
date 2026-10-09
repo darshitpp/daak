@@ -720,6 +720,15 @@ impl Engine {
             std::fs::create_dir_all(&dir)?;
             Arc::new(Staging::new(dir))
         };
+        // Spec 7.1: a crash can leave staged files with no live outbox row.
+        // A failed sweep is logged, not fatal, like reconciliation above.
+        match db
+            .live_outbox_payload_ids()
+            .and_then(|ids| staging.sweep_orphans(&ids.into_iter().collect()))
+        {
+            Ok(n) => tracing::info!(removed = n, "startup staging sweep complete"),
+            Err(e) => tracing::warn!("startup staging sweep failed: {e}"),
+        }
         // The accept loop needs the RESOLVED name to answer a pairing, and a
         // rename takes this same lock, so hand the loop a shared handle rather
         // than the frozen startup copy. Built HERE (before the accept task) so
