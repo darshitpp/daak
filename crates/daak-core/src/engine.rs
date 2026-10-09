@@ -504,9 +504,22 @@ impl Engine {
                     e.get_mut().paired = true;
                 }
                 std::collections::hash_map::Entry::Vacant(e) => {
+                    // R73: seed the name the pairing bundle carried, not the
+                    // hex id. A QR pairing learns the peer's advertised
+                    // display name before any mDNS announce, so a peer whose
+                    // discovery never resolves is named correctly at once. An
+                    // empty label (a code pairing, which carries no name)
+                    // keeps the hex fallback, matching `Engine::start`.
+                    let name = pairing
+                        .label
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| hex::encode(pairing.peer_device_id));
                     e.insert(DeviceInfo {
                         device_id: pairing.peer_device_id,
-                        name: hex::encode(pairing.peer_device_id),
+                        name,
                         addr,
                         paired: true,
                     });
@@ -2890,6 +2903,71 @@ mod tests {
         assert!(accept_error_is_fatal(&crate::error::CoreError::Io(
             std::io::Error::other("boom")
         )));
+    }
+
+    /// R73: a QR pairing carries the peer's display name in its bundle, and
+    /// the in-RAM device map must show that name at once. The vacant entry was
+    /// seeded with the hex device id, so a peer whose discovery never resolves
+    /// stayed a UUID on screen until a restart read the name back from the
+    /// devices row.
+    #[tokio::test]
+    async fn commit_pairing_seeds_the_bundle_name_not_the_hex_id() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id: [u8; 16] = hex::decode("00112233445566778899aabbccddeeff")
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let pairing = Pairing {
+            peer_device_id: id,
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [0u8; 32],
+            static_dh_pub: [0u8; 32],
+            label: Some("Halley's Mac".into()),
+        };
+        let devices: SharedDevices = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = broadcast::channel(8);
+        let addr: SocketAddr = "192.168.0.5:40000".parse().unwrap();
+        Engine::commit_pairing(&db, &pairing, &tx, Some((&devices, addr)))
+            .await
+            .unwrap();
+        let entry = devices
+            .lock()
+            .await
+            .get(&id)
+            .cloned()
+            .expect("the pairing must seed the device map");
+        assert_eq!(
+            entry.name, "Halley's Mac",
+            "the bundle name must win over the hex id"
+        );
+        assert!(entry.paired);
+    }
+
+    /// The fallback stays: a code pairing learns no name, so its empty label
+    /// must still render as the hex device id rather than a blank row.
+    #[tokio::test]
+    async fn commit_pairing_falls_back_to_the_hex_id_for_an_empty_label() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [7u8; 16];
+        let pairing = Pairing {
+            peer_device_id: id,
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [0u8; 32],
+            static_dh_pub: [0u8; 32],
+            label: None,
+        };
+        let devices: SharedDevices = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = broadcast::channel(8);
+        let addr: SocketAddr = "192.168.0.5:40001".parse().unwrap();
+        Engine::commit_pairing(&db, &pairing, &tx, Some((&devices, addr)))
+            .await
+            .unwrap();
+        let entry = devices.lock().await.get(&id).cloned().unwrap();
+        assert_eq!(entry.name, hex::encode(id));
     }
 
     // B2 (4): the FAILURE path was the one settle round 2 left ungated. A
