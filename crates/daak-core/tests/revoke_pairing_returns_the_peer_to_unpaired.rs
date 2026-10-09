@@ -109,3 +109,60 @@ async fn a_revoked_peer_leaves_the_map_and_stays_gone_after_a_restart() {
         "a revoked peer must not come back on the next launch"
     );
 }
+
+// An unpaired peer still announces itself over mDNS. A revoked pairing row must
+// not make that announce read as "paired": the UI would show a device the user
+// just removed, and again on every later launch.
+#[tokio::test]
+async fn a_revoked_peer_that_announces_again_is_not_marked_paired() {
+    let joiner_dir = tempfile::tempdir().unwrap();
+    let host_dir = tempfile::tempdir().unwrap();
+    let joiner_db = Arc::new(Db::open(&joiner_dir.path().join("daak.db")).unwrap());
+    joiner_db.migrate().unwrap();
+    let joiner = engine_on(
+        joiner_dir.path(),
+        "joiner",
+        joiner_db,
+        Arc::new(MemorySecretStore::default()),
+    )
+    .await;
+    let host_db = Arc::new(Db::open(&host_dir.path().join("daak.db")).unwrap());
+    host_db.migrate().unwrap();
+    let host = Arc::new(
+        engine_on(
+            host_dir.path(),
+            "host",
+            host_db,
+            Arc::new(MemorySecretStore::default()),
+        )
+        .await,
+    );
+
+    let joiner_id = joiner.pairing_bundle().await.identity.device_id;
+    let host_addr = host.local_addr();
+    host.offer_inbound_pairing(PairMode::Qr).await.unwrap();
+    let accepted = tokio::spawn({
+        let host = host.clone();
+        async move { host.accept_pairing_once().await.unwrap() }
+    });
+    joiner
+        .pair_with(host_addr, host.pairing_bundle().await)
+        .await
+        .unwrap();
+    accepted.await.unwrap();
+
+    host.revoke_pairing(joiner_id).await.unwrap();
+    host.note_peer(joiner_id, "Joiner", "192.168.0.50:4000".parse().unwrap())
+        .await;
+
+    let seen = host
+        .devices()
+        .await
+        .into_iter()
+        .find(|d| d.device_id == joiner_id)
+        .expect("an announce puts the peer back in the map");
+    assert!(
+        !seen.paired,
+        "a revoked peer must read as unpaired when it announces again"
+    );
+}

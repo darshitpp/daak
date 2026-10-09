@@ -962,7 +962,7 @@ impl Engine {
                         // R42g: an announce is DISCOVERY, not trust. A peer
                         // seen only over mDNS stays unpaired until a pairing
                         // row exists, and the UI offers Pair for it.
-                        paired: db.get_pairing(&device_id).ok().flatten().is_some(),
+                        paired: db.is_trusted(&device_id),
                     };
                     let is_new = {
                         let mut map = devices.lock().await;
@@ -1377,7 +1377,7 @@ impl Engine {
         // R42g: read the pairing row BEFORE taking the map lock. This is a
         // discovery path; trust comes from the store, and a store read under
         // the map lock would hold it across a disk access.
-        let paired = self.db.get_pairing(&peer).ok().flatten().is_some();
+        let paired = self.db.is_trusted(&peer);
         let mut devices = self.devices.lock().await;
         // None unless an EXISTING entry changed address. `and_modify` cannot
         // report "changed" vs "left alone" without a captured flag, so the

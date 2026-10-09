@@ -105,6 +105,15 @@ impl Db {
         }
     }
 
+    /// True only for a live pairing. A revoked row still exists, so a bare
+    /// "has a row" check reads a removed peer as paired.
+    pub fn is_trusted(&self, id: &[u8; 16]) -> bool {
+        self.get_pairing(id)
+            .ok()
+            .flatten()
+            .is_some_and(|p| p.state == "trusted")
+    }
+
     pub fn list_pairings(&self) -> Result<Vec<Pairing>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
