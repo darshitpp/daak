@@ -166,3 +166,59 @@ async fn a_revoked_peer_that_announces_again_is_not_marked_paired() {
         "a revoked peer must read as unpaired when it announces again"
     );
 }
+
+// After an unpair, both devices hold a revoked row. The host armed for a new
+// QR pairing must still accept the same device. The routing step used to treat
+// any existing row as "this is a transfer", so the revoked peer was refused and
+// the joiner saw "connection closed during handshake".
+#[tokio::test]
+async fn a_revoked_peer_can_pair_again_through_the_open_arm() {
+    let joiner_dir = tempfile::tempdir().unwrap();
+    let host_dir = tempfile::tempdir().unwrap();
+    let joiner_db = Arc::new(Db::open(&joiner_dir.path().join("daak.db")).unwrap());
+    joiner_db.migrate().unwrap();
+    let joiner = engine_on(
+        joiner_dir.path(),
+        "joiner",
+        joiner_db,
+        Arc::new(MemorySecretStore::default()),
+    )
+    .await;
+    let host_db = Arc::new(Db::open(&host_dir.path().join("daak.db")).unwrap());
+    host_db.migrate().unwrap();
+    let host = Arc::new(
+        engine_on(
+            host_dir.path(),
+            "host",
+            host_db.clone(),
+            Arc::new(MemorySecretStore::default()),
+        )
+        .await,
+    );
+
+    let joiner_id = joiner.pairing_bundle().await.identity.device_id;
+    let host_addr = host.local_addr();
+    for round in 0..2 {
+        host.offer_inbound_pairing(PairMode::Qr).await.unwrap();
+        let accepted = tokio::spawn({
+            let host = host.clone();
+            async move { host.accept_pairing_once().await.unwrap() }
+        });
+        joiner
+            .pair_with(host_addr, host.pairing_bundle().await)
+            .await
+            .unwrap_or_else(|e| panic!("pairing round {round} failed: {e}"));
+        accepted.await.unwrap();
+        assert_eq!(
+            host_db.get_pairing(&joiner_id).unwrap().unwrap().state,
+            "trusted"
+        );
+        if round == 0 {
+            host.revoke_pairing(joiner_id).await.unwrap();
+            assert_eq!(
+                host_db.get_pairing(&joiner_id).unwrap().unwrap().state,
+                "revoked"
+            );
+        }
+    }
+}

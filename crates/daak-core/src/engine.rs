@@ -2202,8 +2202,10 @@ impl Engine {
             // unreadable store answers `false`, so the open arm is offered the
             // connection and the failure lands where it belongs -- in the
             // commit, after the handshake.
+            // Only a LIVE pairing means "this is a transfer". A revoked row
+            // stays in the table, and its owner must be able to pair again.
             Some(p) if p.arm == PendingArm::Open => {
-                if db.get_pairing(&hello.device_id).ok().flatten().is_some() {
+                if db.is_trusted(&hello.device_id) {
                     None
                 } else {
                     Some(p)
