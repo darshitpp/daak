@@ -105,6 +105,23 @@ impl Db {
         }
     }
 
+    fn unpair_notice_key(id: &[u8; 16]) -> String {
+        format!("unpair_notice:{}", hex::encode(id))
+    }
+
+    /// Remember that this device unpaired `id` and the peer has not heard yet.
+    pub fn add_unpair_notice(&self, id: &[u8; 16]) -> Result<()> {
+        self.set_setting(&Self::unpair_notice_key(id), b"1")
+    }
+
+    pub fn has_unpair_notice(&self, id: &[u8; 16]) -> bool {
+        matches!(self.get_setting(&Self::unpair_notice_key(id)), Ok(Some(_)))
+    }
+
+    pub fn clear_unpair_notice(&self, id: &[u8; 16]) -> Result<()> {
+        self.delete_setting(&Self::unpair_notice_key(id))
+    }
+
     /// Pending to trusted. True when a pending row existed.
     pub fn trust_pending_pairing(&self, id: &[u8; 16]) -> Result<bool> {
         let n = self.conn().execute(

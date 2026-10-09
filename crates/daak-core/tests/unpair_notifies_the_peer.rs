@@ -116,3 +116,101 @@ async fn unpairing_an_unreachable_peer_still_completes_locally() {
         "revoked"
     );
 }
+
+fn notice_key(peer: &[u8; 16]) -> String {
+    format!("unpair_notice:{}", hex::encode(peer))
+}
+
+#[tokio::test]
+async fn an_unpair_for_an_offline_peer_is_delivered_when_it_returns() {
+    use daak_core::crypto::secret_store::MemorySecretStore;
+    let (d1, d2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (joiner, joiner_db) = engine("joiner", d1.keep()).await;
+    // The host keeps its store and database so it can restart as the same device.
+    let host_store = Arc::new(MemorySecretStore::default());
+    let host_db = Arc::new(Db::open_in_memory().unwrap());
+    host_db.migrate().unwrap();
+    let start_host = |dir: PathBuf| {
+        let store = host_store.clone();
+        let db = host_db.clone();
+        async move {
+            Arc::new(
+                Engine::start(EngineConfig {
+                    display_name: "host".into(),
+                    listen_addr: "127.0.0.1:0".parse().unwrap(),
+                    out_dir: dir,
+                    identity: import_from_store(store.as_ref()).unwrap(),
+                    db,
+                })
+                .await
+                .unwrap(),
+            )
+        }
+    };
+    let host = start_host(d2.keep()).await;
+    let joiner_id = joiner.pairing_bundle().await.identity.device_id;
+    let host_id = host.pairing_bundle().await.identity.device_id;
+    host.offer_inbound_pairing(PairMode::Qr).await.unwrap();
+    let accept = tokio::spawn({
+        let host = host.clone();
+        async move { host.accept_pairing_once().await.unwrap() }
+    });
+    joiner
+        .pair_with(host.local_addr(), host.pairing_bundle().await)
+        .await
+        .unwrap();
+    accept.await.unwrap();
+
+    // The host goes offline. The joiner unpairs anyway.
+    host.shutdown().await.unwrap();
+    drop(host);
+    joiner.revoke_pairing(host_id).await.unwrap();
+    assert!(
+        joiner_db
+            .get_setting(&notice_key(&host_id))
+            .unwrap()
+            .is_some(),
+        "an undelivered unpair notice must be kept"
+    );
+    assert_eq!(
+        host_db.get_pairing(&joiner_id).unwrap().unwrap().state,
+        "trusted",
+        "the offline host has not heard yet"
+    );
+
+    // The host returns on a new port and the joiner sees it again.
+    let host = start_host(tempfile::tempdir().unwrap().keep()).await;
+    joiner.note_peer(host_id, "host", host.local_addr()).await;
+
+    let revoked = async {
+        loop {
+            if host_db
+                .get_pairing(&joiner_id)
+                .unwrap()
+                .is_some_and(|p| p.state == "revoked")
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), revoked)
+        .await
+        .expect("the returning peer must receive the notice");
+    // The notice is cleared once it is delivered.
+    let cleared = async {
+        loop {
+            if joiner_db
+                .get_setting(&notice_key(&host_id))
+                .unwrap()
+                .is_none()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), cleared)
+        .await
+        .expect("a delivered notice must be cleared");
+}

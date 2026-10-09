@@ -504,6 +504,9 @@ impl Engine {
         }
         let pairing = &stored;
         db.upsert_pairing(pairing)?;
+        // A new pairing replaces an undelivered unpair notice. Delivering the
+        // old one later would unpair the new pairing.
+        db.clear_unpair_notice(&pairing.peer_device_id)?;
         if let Some((devices, addr)) = devices {
             // R42d: the device map is RAM and starts empty on every launch, so
             // a paired peer had no address after a restart and every send failed
@@ -942,6 +945,7 @@ impl Engine {
             let db = db.clone();
             let me = device_id;
             let outbox = outbox.clone();
+            let identity = identity.clone();
             tokio::spawn(async move {
                 while let Some(event) = browser.recv().await {
                     let PeerAnnounce {
@@ -997,6 +1001,7 @@ impl Engine {
                     // dropped off the map and reappeared is exactly the
                     // reconnect case the outbox drain exists for.
                     outbox.notify_peer_online(device_id);
+                    Self::deliver_pending_unpair(&db, &identity, device_id, addr);
                 }
             })
         };
@@ -1329,20 +1334,35 @@ impl Engine {
     }
 
     /// Tell a peer that this device is unpairing it. Best effort: the local
-    /// revoke must finish whether or not the peer is reachable, so every failure
-    /// is logged and none is returned.
-    async fn notify_unpaired(&self, peer: [u8; 16]) {
+    /// revoke must finish whether or not the peer is reachable. Returns true
+    /// when the peer received the notice.
+    async fn notify_unpaired(&self, peer: [u8; 16]) -> bool {
         let Some(addr) = self.devices.lock().await.get(&peer).map(|d| d.addr) else {
-            return;
+            return false;
         };
-        let Ok(Some(pairing)) = self.db.get_pairing(&peer) else {
-            return;
+        Self::send_unpair_notice(&self.identity, &self.db, peer, addr, false).await
+    }
+
+    /// Dial `addr`, open the secure session, and send one `Unpair` control
+    /// frame. The session pins the stored static key, so only the paired device
+    /// can receive it. A live pairing is required, or a revoked one when a
+    /// pending notice is being delivered. Every failure is logged.
+    async fn send_unpair_notice(
+        identity: &Identity,
+        db: &Db,
+        peer: [u8; 16],
+        addr: SocketAddr,
+        allow_revoked: bool,
+    ) -> bool {
+        let Ok(Some(pairing)) = db.get_pairing(&peer) else {
+            return false;
         };
-        if pairing.state != "trusted" {
-            return;
+        let state_ok = pairing.state == "trusted" || (allow_revoked && pairing.state == "revoked");
+        if !state_ok {
+            return false;
         }
-        let secret = zeroize::Zeroizing::new(self.identity.static_secret().to_bytes());
-        let device_id = self.identity.device_id();
+        let secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
+        let device_id = identity.device_id();
         let send = async {
             let conn = tcp::dial(addr).await?;
             let mut secure =
@@ -1353,10 +1373,35 @@ impl Engine {
                 .await
         };
         match tokio::time::timeout(std::time::Duration::from_secs(3), send).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(peer = %hex::encode(peer), "unpair notice failed: {e}"),
-            Err(_) => tracing::warn!(peer = %hex::encode(peer), "unpair notice timed out"),
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => {
+                tracing::warn!(peer = %hex::encode(peer), "unpair notice failed: {e}");
+                false
+            }
+            Err(_) => {
+                tracing::warn!(peer = %hex::encode(peer), "unpair notice timed out");
+                false
+            }
         }
+    }
+
+    /// The peer is reachable again. If an unpair notice is waiting for it,
+    /// deliver it in the background and clear it on success.
+    fn deliver_pending_unpair(
+        db: &Arc<Db>,
+        identity: &Arc<Identity>,
+        peer: [u8; 16],
+        addr: SocketAddr,
+    ) {
+        if !db.has_unpair_notice(&peer) {
+            return;
+        }
+        let (db, identity) = (db.clone(), identity.clone());
+        tokio::spawn(async move {
+            if Self::send_unpair_notice(&identity, &db, peer, addr, true).await {
+                let _ = db.clear_unpair_notice(&peer);
+            }
+        });
     }
 
     /// Unpair one peer from THIS device.
@@ -1376,8 +1421,10 @@ impl Engine {
     /// trusts. `DeviceState { online: false }` tells the UI the peer is gone.
     pub async fn revoke_pairing(&self, peer_device_id: [u8; 16]) -> Result<()> {
         // Tell the peer first, while the pairing still counts as trusted. The
-        // notice is best effort and never blocks the revoke below.
-        self.notify_unpaired(peer_device_id).await;
+        // notice is best effort and never blocks the revoke below. An
+        // undelivered notice is kept and sent when the peer returns.
+        let was_trusted = self.db.is_trusted(&peer_device_id);
+        let delivered = self.notify_unpaired(peer_device_id).await;
         // Collect BEFORE the delete: the payload ids name the staging dirs.
         let payloads: Vec<[u8; 16]> = self
             .db
@@ -1387,6 +1434,9 @@ impl Engine {
             .collect();
 
         self.db.revoke_pairing(&peer_device_id)?;
+        if was_trusted && !delivered {
+            self.db.add_unpair_notice(&peer_device_id)?;
+        }
         self.db.delete_outbox_for_peer(&peer_device_id)?;
         for payload_id in &payloads {
             if let Err(e) = self.staging.cleanup(payload_id) {
@@ -1513,6 +1563,7 @@ impl Engine {
         // for the 5s poll tick and its backoff, and the reconnect this method
         // exists to enable would land up to one backoff late.
         self.outbox.notify_peer_online(peer);
+        Self::deliver_pending_unpair(&self.db, &self.identity, peer, addr);
     }
 
     pub fn identity(&self) -> &Identity {
@@ -3154,6 +3205,31 @@ mod tests {
             clean_peer_name("x".repeat(200)).unwrap().chars().count(),
             64
         );
+    }
+
+    // An undelivered unpair notice is stale once the user pairs the device again.
+    // Sending it later would unpair the new pairing.
+    #[tokio::test]
+    async fn a_new_pairing_clears_a_stale_unpair_notice() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let (tx, _rx) = broadcast::channel(8);
+        let peer = [7u8; 16];
+        db.add_unpair_notice(&peer).unwrap();
+        assert!(db.has_unpair_notice(&peer));
+
+        let pairing = Pairing {
+            peer_device_id: peer,
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [1u8; 32],
+            static_dh_pub: [2u8; 32],
+            label: Some("peer".into()),
+        };
+        Engine::commit_pairing(&db, &pairing, &tx, None, false)
+            .await
+            .unwrap();
+        assert!(!db.has_unpair_notice(&peer));
     }
 
     #[tokio::test]
