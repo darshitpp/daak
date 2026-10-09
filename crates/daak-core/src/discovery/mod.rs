@@ -3,6 +3,7 @@ pub mod dnssd;
 pub mod mdns;
 pub mod naming;
 pub mod presence;
+pub mod records;
 
 pub mod beacon;
 pub mod status;
@@ -24,3 +25,4 @@ pub use dnssd::{Advertiser, Browser};
 pub use mdns::{Advertiser, Browser};
 pub use naming::{default_display_name, resolve_name, unique_display_name};
 pub use presence::{Presence, PresenceSocket, PresenceState, PRESENCE_GROUP, PRESENCE_PORT};
+pub use records::{DiscoveryEvent, RecordTracker};

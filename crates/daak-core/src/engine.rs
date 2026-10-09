@@ -11,7 +11,8 @@ use crate::crypto::identity::{verify_static_binding, Identity, IdentityPublic};
 use crate::discovery::beacon::{pairing_presence_key, SealedBeacon};
 use crate::discovery::status::{Liveness, StatusChange};
 use crate::discovery::{
-    advertise_bind_ip, Advertiser, Browser, PeerAnnounce, Presence, PresenceSocket, PresenceState,
+    advertise_bind_ip, Advertiser, Browser, DiscoveryEvent, PeerAnnounce, Presence, PresenceSocket,
+    PresenceState,
 };
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
@@ -329,6 +330,22 @@ pub(crate) struct PendingPairing {
     arm: PendingArm,
     mode: PairMode,
     code: Option<String>,
+}
+
+/// Drop the live row of a device that left the network.
+/// Only the live row goes. The stored pairing, the outbox, and the session stay.
+async fn handle_lost(
+    devices: &Mutex<HashMap<[u8; 16], DeviceInfo>>,
+    tx: &broadcast::Sender<EngineEvent>,
+    me: [u8; 16],
+    id: [u8; 16],
+) {
+    if id == me {
+        return;
+    }
+    if devices.lock().await.remove(&id).is_some() {
+        let _ = tx.send(EngineEvent::DeviceLost(id));
+    }
 }
 
 /// The discovered-peer map, shared by name because `Engine` holds it and the
@@ -887,14 +904,20 @@ impl Engine {
             let me = device_id;
             let outbox = outbox.clone();
             tokio::spawn(async move {
-                while let Some(PeerAnnounce {
-                    device_id,
-                    name,
-                    addr,
-                    proto_version,
-                    ..
-                }) = browser.recv().await
-                {
+                while let Some(event) = browser.recv().await {
+                    let PeerAnnounce {
+                        device_id,
+                        name,
+                        addr,
+                        proto_version,
+                        ..
+                    } = match event {
+                        DiscoveryEvent::Found(announce) => announce,
+                        DiscoveryEvent::Lost(id) => {
+                            handle_lost(&devices, &tx, me, id).await;
+                            continue;
+                        }
+                    };
                     if device_id == me {
                         continue;
                     }
@@ -2782,6 +2805,43 @@ async fn read_identity_public(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_device(id: [u8; 16]) -> DeviceInfo {
+        DeviceInfo {
+            device_id: id,
+            name: "peer".into(),
+            addr: "127.0.0.1:9".parse().unwrap(),
+            paired: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn lost_removes_the_row_and_sends_device_lost() {
+        let id = [7u8; 16];
+        let devices = Mutex::new(HashMap::from([(id, test_device(id))]));
+        let (tx, mut rx) = broadcast::channel(8);
+        handle_lost(&devices, &tx, [9u8; 16], id).await;
+        assert!(devices.lock().await.get(&id).is_none());
+        assert!(matches!(rx.try_recv(), Ok(EngineEvent::DeviceLost(got)) if got == id));
+    }
+
+    #[tokio::test]
+    async fn lost_for_an_unknown_device_is_silent() {
+        let devices = Mutex::new(HashMap::new());
+        let (tx, mut rx) = broadcast::channel(8);
+        handle_lost(&devices, &tx, [9u8; 16], [7u8; 16]).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn lost_for_the_own_device_is_ignored() {
+        let me = [9u8; 16];
+        let devices = Mutex::new(HashMap::from([(me, test_device(me))]));
+        let (tx, mut rx) = broadcast::channel(8);
+        handle_lost(&devices, &tx, me, me).await;
+        assert!(devices.lock().await.contains_key(&me));
+        assert!(rx.try_recv().is_err());
+    }
 
     /// D10/D11: the beacon must derive from the CURRENT profile fields.
     ///

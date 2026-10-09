@@ -7,6 +7,7 @@ use rand::Rng;
 use crate::error::{CoreError, Result};
 
 use super::naming::resolve_name;
+use super::records::{DiscoveryEvent, RecordTracker};
 
 pub const SERVICE_TYPE: &str = "_daak._tcp.local.";
 pub const PROTO_VERSION: u16 = 1;
@@ -327,6 +328,7 @@ pub(crate) fn is_own_advertisement(
 pub struct Browser {
     daemon: ServiceDaemon,
     rx: mdns_sd::Receiver<ServiceEvent>,
+    tracker: std::sync::Mutex<RecordTracker>,
 }
 
 impl Browser {
@@ -335,16 +337,31 @@ impl Browser {
         let rx = daemon
             .browse(SERVICE_TYPE)
             .map_err(|e| CoreError::Discovery(e.to_string()))?;
-        Ok(Self { daemon, rx })
+        Ok(Self {
+            daemon,
+            rx,
+            tracker: std::sync::Mutex::default(),
+        })
     }
 
-    pub async fn recv(&self) -> Option<PeerAnnounce> {
+    /// The next found or lost device. `None` after `stop`.
+    pub async fn recv(&self) -> Option<DiscoveryEvent> {
         loop {
             let event = self.rx.recv_async().await.ok()?;
-            if let ServiceEvent::ServiceResolved(info) = event {
-                if let Ok(a) = announce_from_service(&info) {
-                    return Some(a);
+            let mut tracker = self.tracker.lock().unwrap_or_else(|e| e.into_inner());
+            match event {
+                ServiceEvent::ServiceResolved(info) => {
+                    if let Ok(a) = announce_from_service(&info) {
+                        tracker.found(info.get_fullname(), a.device_id);
+                        return Some(DiscoveryEvent::Found(a));
+                    }
                 }
+                ServiceEvent::ServiceRemoved(_, fullname) => {
+                    if let Some(id) = tracker.removed(&fullname) {
+                        return Some(DiscoveryEvent::Lost(id));
+                    }
+                }
+                _ => {}
             }
         }
     }

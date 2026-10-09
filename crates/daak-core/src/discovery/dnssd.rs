@@ -20,6 +20,7 @@ use super::mdns::{
     PROTO_VERSION,
 };
 use super::naming::resolve_name;
+use super::records::DiscoveryEvent;
 
 type SdRef = *mut c_void;
 
@@ -759,8 +760,8 @@ impl Browser {
     }
 
     /// The next peer record. `None` after `stop`.
-    pub async fn recv(&self) -> Option<PeerAnnounce> {
-        self.rx.lock().await.recv().await
+    pub async fn recv(&self) -> Option<DiscoveryEvent> {
+        self.rx.lock().await.recv().await.map(DiscoveryEvent::Found)
     }
 
     pub fn stop(&self) {
@@ -813,7 +814,9 @@ mod tests {
         let browser = Browser::start().unwrap();
         let found = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
-                let a = browser.recv().await.unwrap();
+                let Some(DiscoveryEvent::Found(a)) = browser.recv().await else {
+                    panic!("the browse must report a found record");
+                };
                 if a.device_id == id {
                     return a;
                 }
