@@ -1325,6 +1325,7 @@ impl Engine {
     ) -> Result<()> {
         db.revoke_pairing(&peer)?;
         db.delete_outbox_for_peer(&peer)?;
+        db.cancel_outbound_transfers_for_peer(&peer)?;
         if devices.lock().await.remove(&peer).is_some() {
             let _ = tx.send(EngineEvent::DeviceLost(peer));
         }
@@ -1418,7 +1419,9 @@ impl Engine {
     /// Revocation is TERMINAL. The peer's queued outbox rows and their staged
     /// bytes are purged, its live session is dropped, and its liveness state is
     /// forgotten, so no later drain can deliver to a peer this device no longer
-    /// trusts. `DeviceState { online: false }` tells the UI the peer is gone.
+    /// trusts. The open outbound transfers rows of the peer become canceled;
+    /// the rows stay as history. `DeviceState { online: false }` tells the UI
+    /// the peer is gone.
     pub async fn revoke_pairing(&self, peer_device_id: [u8; 16]) -> Result<()> {
         // Tell the peer first, while the pairing still counts as trusted. The
         // notice is best effort and never blocks the revoke below. An
@@ -1438,6 +1441,11 @@ impl Engine {
             self.db.add_unpair_notice(&peer_device_id)?;
         }
         self.db.delete_outbox_for_peer(&peer_device_id)?;
+        // The transfers rows stay as history, but the open outbound ones can
+        // never move now that the outbox rows are gone. Close them.
+        let canceled = self
+            .db
+            .cancel_outbound_transfers_for_peer(&peer_device_id)?;
         for payload_id in &payloads {
             if let Err(e) = self.staging.cleanup(payload_id) {
                 // A staging dir already gone is not a failed revoke, but a real
@@ -1463,6 +1471,7 @@ impl Engine {
         tracing::info!(
             peer = %hex::encode(peer_device_id),
             purged = payloads.len(),
+            canceled,
             "pairing revoked"
         );
         Ok(())

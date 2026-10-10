@@ -159,6 +159,20 @@ impl Db {
         Ok(())
     }
 
+    // Close the open outbound transfers of one peer. The pairing is revoked,
+    // so these sends can never move: the outbox rows are gone. The rows stay
+    // as history and read canceled with one l. Final rows, inbound rows, and
+    // rows of other peers do not change. Returns the changed row count.
+    pub fn cancel_outbound_transfers_for_peer(&self, peer: &[u8; 16]) -> Result<usize> {
+        let n = self.conn().execute(
+            "UPDATE transfers SET state = 'canceled', error = 'unpaired', updated_at = ?2
+              WHERE peer_device_id = ?1 AND direction = 'out'
+                AND state IN ('queued','active','paused','awaiting_ack')",
+            rusqlite::params![&peer[..], now()],
+        )?;
+        Ok(n)
+    }
+
     pub fn add_bytes_done(&self, id: &[u8; 16], delta: u64) -> Result<()> {
         self.conn().execute(
             "UPDATE transfers SET bytes_done = bytes_done + ?2, updated_at = ?3 WHERE transfer_id = ?1",
@@ -457,6 +471,49 @@ mod tests {
             .list_peer_transfers_page(&[3u8; 16], None, 0)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn cancel_outbound_transfers_for_peer_closes_only_the_open_outbound_rows_of_that_peer() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let put = |id: u8, peer: u8, direction: &str, state: &str| {
+            let mut r = row();
+            r.transfer_id = [id; 16];
+            r.payload_id = [id.wrapping_add(100); 16];
+            r.peer_device_id = [peer; 16];
+            r.direction = direction.into();
+            r.state = state.into();
+            db.upsert_transfer(&r).unwrap();
+        };
+        put(1, 3, "out", "queued");
+        put(2, 3, "out", "active");
+        put(3, 3, "out", "paused");
+        put(4, 3, "out", "awaiting_ack");
+        put(5, 3, "out", "done");
+        put(6, 3, "out", "failed");
+        put(7, 3, "in", "queued");
+        put(8, 9, "out", "queued");
+
+        let n = db.cancel_outbound_transfers_for_peer(&[3u8; 16]).unwrap();
+        assert_eq!(n, 4, "queued, active, paused, and awaiting_ack");
+
+        for id in 1u8..=4 {
+            let r = db.get_transfer(&[id; 16]).unwrap().unwrap();
+            assert_eq!(r.state, "canceled", "row {id}");
+            assert_eq!(r.error.as_deref(), Some("unpaired"), "row {id}");
+            assert!(r.updated_at > 1, "row {id} must get a new updated_at");
+        }
+        for (id, state) in [(5u8, "done"), (6, "failed"), (7, "queued"), (8, "queued")] {
+            let r = db.get_transfer(&[id; 16]).unwrap().unwrap();
+            assert_eq!(r.state, state, "row {id} must not change");
+            assert_eq!(r.error, None, "row {id} must not change");
+            assert_eq!(r.updated_at, 1, "row {id} must not change");
+        }
+        assert_eq!(
+            db.cancel_outbound_transfers_for_peer(&[3u8; 16]).unwrap(),
+            0
+        );
     }
 }
 
