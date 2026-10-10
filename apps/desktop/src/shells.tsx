@@ -114,6 +114,7 @@ export function DaakPopoverShell({ engine, runtime }: {
           alertRouteToken={blockers.alertRouteToken}
           settingsRouteToken={blockers.settingsRouteToken}
           onCheckConnection={blockers.onCheckConnection}
+          deviceNoun="Mac"
           onExpand={() => {
             closePopover();
             openDashboard();

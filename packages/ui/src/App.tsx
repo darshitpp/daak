@@ -91,6 +91,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             onPickFiles={onPickFiles}
             alert={alert}
             alertRouteToken={alertRouteToken}
+            deviceNoun={deviceNoun}
           />
         : <Dashboard
             state={state}

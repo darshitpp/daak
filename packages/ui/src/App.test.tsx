@@ -15,7 +15,7 @@ describe('DaakUiApp', () => {
     const runtime = createUiRuntime(engine);
     render(<DaakUiApp mode="popover" engine={engine} runtime={runtime} />);
     act(() => {
-      bus.forEach((h) => h({ type: 'device.discovered', device: { deviceId: 'a', name: 'A', addr: '1.2.3.4:1' } }));
+      bus.forEach((h) => h({ type: 'device.discovered', device: { deviceId: 'a', name: 'A', addr: '1.2.3.4:1', paired: true } }));
     });
     // The device name and the avatar initial are the same letter here, so this
     // pins the row rather than counting name matches.

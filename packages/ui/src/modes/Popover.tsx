@@ -1,55 +1,88 @@
 import React, { useState } from 'react';
-import { Text, View } from 'react-native';
-import type { DeviceInfo } from '@daak/core';
-import type { TransferRow, UiState } from '../state/store';
-import { DeviceCard } from '../components/DeviceCard';
-import { ProgressRow } from '../components/ProgressRow';
-import { Btn, Note, Status, Wordmark } from '../components/ds';
-import { control, colors, ui } from '../theme';
-
-/** The last segment of a path: what a person recognises a file by. */
-const tail = (p: string): string => p.split('/').pop() || p;
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import type { DaakEngine, DeviceInfo, QuarantineReport } from '@daak/core';
+import type { UiState } from '../state/store';
+import { useConnection } from '../state/useConnection';
+import {
+  Avatar,
+  Btn,
+  Empty,
+  Note,
+  ProgressBar,
+  Status,
+  Wordmark,
+  deviceLabel,
+  presenceOf,
+  type DeviceNoun,
+} from '../components/ds';
+import { NOT_RECORDED, fingerprintGroups, humanBytes } from '../screens/quarantine-facts';
+import { colors, spacing, ui } from '../theme';
+import { isSelectable, panelDevices, percent, sendLine, sendViewOf, tail } from './panel-model';
+import { useHeldBack } from './useHeldBack';
+import { usePanelTransfer } from './usePanelTransfer';
 
 /**
- * Menu-bar popover, the prototype's 320px panel: wordmark + connection state,
- * the nearby devices, whatever is moving, and one way out to the real window.
+ * The menu-bar panel (design `macos-menubar.html`), 320 px wide.
  *
- * The panel's two steps are the prototype's: pick a device, then pick a file
- * and send. `onExpand` opens the dashboard WINDOW, which is the host shell's
- * business -- the engine has no such verb, so this must never be wired to
- * engine.start().
+ * Panes: the device list, the send pane for one device, the sending pane, the
+ * done pane, and the failed pane. A queued send to an offline device does not
+ * take a pane. It shows as a note above the panes, so the user can still pick
+ * another device. The held-back card and the "Open the full app" button show on
+ * every pane. A blocking alert replaces the panes.
  *
- * "Sent" here means what the engine means by it: engine.send resolves when the
- * outbox has durably accepted the batch (queued != delivered), so the note says
- * queued and the live transfer keeps moving in the row below.
+ * `onExpand` opens the dashboard WINDOW. That is the host shell's job. The
+ * engine has no such verb, so this must never call `engine.start()`.
  *
- * `onPickFiles` is the NSOpenPanel-backed picker, injected by the desktop shell
- * exactly as the dashboard gets it. Without one the file step is not rendered:
- * a picker button that opens nothing is a dead control.
+ * "Sent" has the engine meaning: `engine.send` resolves when the outbox has
+ * accepted the batch. The sending pane then follows the real transfer. The
+ * panel does not cancel a transfer when it closes (see `usePanelTransfer`).
+ *
+ * The panel sends one file at a time, as the design does. The thread sends several files at once.
  */
-export function Popover({ state, engine, onExpand, onPickFiles, alert, alertRouteToken }: {
+export function Popover({
+  state,
+  engine,
+  onExpand,
+  onPickFiles,
+  alert,
+  alertRouteToken,
+  deviceNoun = 'device',
+}: {
   state: UiState;
-  engine: {
-    send(req: { peerDeviceId: string; files?: string[] }): Promise<{ transferId: string; queued: boolean }>;
-  };
+  engine: DaakEngine;
   onExpand: () => void;
+  /** The native file panel. Without one, the send pane has no picker button. */
   onPickFiles?: () => Promise<string[]>;
-  /* See DaakUiApp. R43: the popover is a WINDOW the user opens from the menu
-     bar, and it dropped both props while the dashboard branch kept them, so a
-     peer on another protocol version reached the dashboard and never reached
-     the panel. Both halves are needed: AppShell treats the pair as the whole
-     decision, because an `alert` with no token is the resting state of every
-     healthy launch and must render nothing. */
+  /*
+   * See DaakUiApp. The popover is a window that the user opens from the menu
+   * bar. An `alert` with no token is the resting state of a healthy launch and
+   * must render nothing, so AppShell and this panel treat the pair as one
+   * decision.
+   */
   alert?: React.ReactNode;
   alertRouteToken?: string;
+  /** The word for this device in the held-back text. The host sets it. */
+  deviceNoun?: DeviceNoun | 'device';
 }) {
   const blocking = alertRouteToken !== undefined && alert;
-  const devices = state.devices.slice(0, 3);
-  const transfer = state.transfers.find((t: TransferRow) => t.state === 'active');
+  const connection = useConnection(engine);
+  const transfer = usePanelTransfer(engine);
+  const held = useHeldBack(engine);
   const [target, setTarget] = useState<DeviceInfo | null>(null);
   const [files, setFiles] = useState<string[]>([]);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [note, setNote] = useState('');
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ tone: 'ok' | 'err'; title: string; body: string } | null>(null);
+
+  const devices = panelDevices(state.devices);
+  // One note for every pane. `stop` and `retry` set `result` while a transfer
+  // pane shows, so the running, done, and failed panes must render it too.
+  const resultNote = result ? (
+    <Note tone={result.tone} title={result.title} body={result.body} testID="popover-result" />
+  ) : null;
+  const peerOf = (id: string) => state.devices.find((d) => d.deviceId === id);
+  const nameOf = (id: string) => deviceLabel(peerOf(id) ?? { name: '', deviceId: id });
 
   const choose = (d: DeviceInfo) => {
     setTarget(d);
@@ -58,126 +91,311 @@ export function Popover({ state, engine, onExpand, onPickFiles, alert, alertRout
   const back = () => {
     setTarget(null);
     setFiles([]);
+    setChosen(null);
+    setNote('');
     setResult(null);
   };
-  // A cancelled native picker resolves EMPTY; a rejection means the panel
-  // broke. Both leave the step usable rather than killing the popover.
+  // A cancelled native picker resolves EMPTY. A rejection means the panel broke.
+  // Both leave the pane usable.
   const pick = () => {
     if (!onPickFiles) return;
     void onPickFiles()
-      .then((picked) => setFiles((f) => [...f, ...picked]))
+      .then((picked) => {
+        if (picked.length === 0) return;
+        setFiles((f) => [...f, ...picked.filter((p) => !f.includes(p))]);
+        setChosen(picked[0]);
+      })
       .catch(() => setResult({ tone: 'err', title: 'The file panel did not open', body: 'Try again in a moment.' }));
   };
-  const send = () => {
-    if (target === null || files.length === 0 || sending) return;
+  const submit = async () => {
+    const text = note.trim();
+    if (target === null || sending || (chosen === null && text === '')) return;
     setSending(true);
     setResult(null);
-    void engine
-      .send({ peerDeviceId: target.deviceId, files })
-      .then(
-        () => {
-          setResult({
-            tone: 'ok',
-            title: `Queued for ${target.name}`,
-            body: `${files.map(tail).join(', ')} goes over your own Wi-Fi. Watch it below.`,
-          });
-          setFiles([]);
-        },
-        (e: unknown) =>
-          setResult({
-            tone: 'err',
-            title: 'That send did not go through',
-            body: e instanceof Error ? e.message : 'The engine refused the send.',
-          }),
-      )
-      .finally(() => setSending(false));
+    try {
+      if (chosen !== null) {
+        const r = await engine.send({ peerDeviceId: target.deviceId, files: [chosen] });
+        transfer.begin({ transferId: r.transferId, peerDeviceId: target.deviceId, label: tail(chosen) });
+        setFiles([]);
+        setChosen(null);
+        if (text !== '') {
+          // The file leaves first, then the note, as 2 transfers (the engine
+          // accepts text or files in one request, not both).
+          try {
+            await engine.send({ peerDeviceId: target.deviceId, text });
+            setNote('');
+          } catch (e) {
+            setResult({
+              tone: 'err',
+              title: 'The note did not go through',
+              body: e instanceof Error ? e.message : 'The engine refused the note.',
+            });
+          }
+        }
+      } else {
+        const r = await engine.send({ peerDeviceId: target.deviceId, text });
+        transfer.begin({ transferId: r.transferId, peerDeviceId: target.deviceId, label: text });
+        setNote('');
+      }
+    } catch (e) {
+      setResult({
+        tone: 'err',
+        title: 'That send did not go through',
+        body: e instanceof Error ? e.message : 'The engine refused the send.',
+      });
+    } finally {
+      setSending(false);
+    }
+  };
+  // "Back to sending" leaves the transfer. A note about it must go too.
+  const leaveTransfer = () => {
+    transfer.clear();
+    setResult(null);
+  };
+  const stop = () => {
+    setResult(null);
+    void transfer.stop().then((message) => {
+      if (message !== null) setResult({ tone: 'err', title: 'Sending did not stop', body: message });
+    });
+  };
+  const retry = () => {
+    setResult(null);
+    void transfer.retry().then((message) => {
+      if (message !== null) setResult({ tone: 'err', title: 'That send did not start again', body: message });
+    });
   };
 
-  return (
-    <View style={{ width: 320, padding: 16, gap: 12, backgroundColor: colors.bg }}>
-      {/* REPLACES the panel, not a layer over it. The dashboard branch drops the
-          tab bar and the sidebar for the same reason: both blocking screens say
-          Daak cannot proceed, and a tappable Send control beside that claim is a
-          lie about what works. The wordmark is kept so the panel still reads as
-          Daak rather than as a foreign dialog. */}
-      {blocking ? (
-        <>
-          <View style={ui.row}>
-            <Wordmark size="sm" />
+  // What the transfer pane shows. A transfer with no row yet is a running one
+  // that the engine has not listed.
+  const view =
+    transfer.send === null
+      ? null
+      : transfer.row === null
+        ? ({ kind: 'running', waiting: false, done: 0, total: 0 } as const)
+        : sendViewOf(transfer.row, peerOf(transfer.send.peerDeviceId));
+
+  const conn =
+    connection.wifi === 'connected'
+      ? { tone: 'ok' as const, label: 'On this network' }
+      : connection.wifi === 'not-connected'
+        ? { tone: 'off' as const, label: 'No device found on this Wi-Fi' }
+        : { tone: 'off' as const, label: 'Looking for devices' };
+
+  // A queued send to an offline or unknown device does not take over the panel.
+  // The user must still be able to pick another device, so the waiting transfer
+  // shows as a note above the panes, with its own stop control.
+  const waiting = view !== null && view.kind === 'running' && view.waiting;
+  const waitingNote =
+    transfer.send !== null && view !== null && view.kind === 'running' && view.waiting ? (
+      <View style={ui.stackSm} testID="popover-waiting">
+        <Note
+          tone="warn"
+          title={`Will send when ${nameOf(transfer.send.peerDeviceId)} is back`}
+          body={sendLine(transfer.send.label, view.total) || 'It stays queued until then.'}
+        />
+        <Btn variant="ghost" block testID="popover-stop" label="Stop sending" onPress={stop} />
+        {/* A failed stop sets `result`. The pane below renders it, so this view does not. */}
+      </View>
+    ) : null;
+
+  let pane: React.ReactNode;
+  if (transfer.send !== null && view !== null && view.kind !== 'stopped' && !waiting) {
+    const who = nameOf(transfer.send.peerDeviceId);
+    const label = transfer.send.label;
+    if (view.kind === 'running') {
+      const pct = percent(view.done, view.total);
+      pane = (
+        <View style={ui.stackSm} testID="popover-sending">
+          <Text style={ui.h3}>{`Sending to ${who}`}</Text>
+          {sendLine(label, view.total) === '' ? null : (
+            <Text style={ui.hint} numberOfLines={1}>{sendLine(label, view.total)}</Text>
+          )}
+          <ProgressBar pct={pct ?? 0} />
+          <View style={ui.progMeta}>
+            <Text style={ui.hint}>Sending over your Wi-Fi</Text>
+            {pct === null ? null : <Text style={ui.progN}>{pct + '%'}</Text>}
           </View>
-          {alert}
-        </>
+          <Btn variant="ghost" block testID="popover-stop" label="Stop sending" onPress={stop} />
+          {resultNote}
+        </View>
+      );
+    } else if (view.kind === 'done') {
+      pane = (
+        <View style={ui.stackSm} testID="popover-done">
+          <Text style={ui.h3}>{`Sent to ${who}`}</Text>
+          {sendLine(label, view.total) === '' ? null : (
+            <Text style={ui.hint} numberOfLines={1}>{sendLine(label, view.total)}</Text>
+          )}
+          <Btn variant="ghost" block testID="popover-done-back" label="Back to sending" onPress={leaveTransfer} />
+          {resultNote}
+        </View>
+      );
+    } else {
+      pane = (
+        <View style={ui.stackSm} testID="popover-failed">
+          <Note
+            tone="err"
+            title="That send did not go through"
+            body={transfer.failure ?? 'The transfer failed.'}
+          />
+          <Btn variant="quiet" block testID="popover-retry" label="Try again" onPress={retry} />
+          <Btn variant="ghost" block testID="popover-done-back" label="Back to sending" onPress={leaveTransfer} />
+          {resultNote}
+        </View>
+      );
+    }
+  } else if (target !== null) {
+    pane = (
+      <View style={ui.stackSm}>
+        <Btn label="Devices" variant="ghost" block testID="popover-back" onPress={back} />
+        <Text style={ui.h3}>{deviceLabel(target)}</Text>
+        {onPickFiles ? (
+          <Btn label="Add files" variant="quiet" block testID="popover-pick" onPress={pick} />
+        ) : null}
+        {files.length > 0 ? (
+          <View accessibilityRole="radiogroup" accessibilityLabel="Add files" style={ui.list}>
+            {files.map((p) => (
+              <Pressable
+                key={p}
+                accessibilityRole="radio"
+                accessibilityLabel={'popover-file-' + tail(p)}
+                accessibilityState={{ checked: chosen === p }}
+                onPress={() => setChosen(p)}
+                style={({ pressed }) => [ui.listRow, pressed ? ui.pressed : null]}
+              >
+                <Text style={[ui.rowTitle, ui.fill]} numberOfLines={1}>{tail(p)}</Text>
+                {chosen === p ? <Text style={ui.rowTitle}>{'✓'}</Text> : null}
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        <TextInput
+          value={note}
+          onChangeText={setNote}
+          placeholder="Or type a note"
+          placeholderTextColor={colors.meta}
+          accessibilityLabel="Type a note"
+          testID="popover-note"
+          autoCorrect={false}
+          style={ui.input}
+        />
+        <Btn
+          variant="primary"
+          block
+          testID="popover-send"
+          disabled={sending || (chosen === null && note.trim() === '')}
+          onPress={() => void submit()}
+          label={chosen !== null ? `Send to ${deviceLabel(target)}` : 'Send'}
+        />
+        {resultNote}
+      </View>
+    );
+  } else {
+    pane = (
+      <View style={ui.stackSm}>
+        <Text style={ui.sectionT}>Devices</Text>
+        {devices.map((d) => (
+          <DeviceRow key={d.deviceId} d={d} onChoose={choose} />
+        ))}
+        {devices.length === 0 ? (
+          <Empty title="No paired devices yet" body="Pair a device on your Wi-Fi and it will show up here." />
+        ) : null}
+        {resultNote}
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ width: 320, flex: 1, backgroundColor: colors.bg }} testID="popover-root">
+      <View style={{ padding: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm }}>
+        <Wordmark size="sm" />
+        {blocking ? null : <Status tone={conn.tone} label={conn.label} />}
+      </View>
+      {blocking ? (
+        // REPLACES the panes. Both blocking screens say Daak cannot proceed, and
+        // a Send control beside that claim would contradict it.
+        <View style={{ padding: spacing.lg }}>{alert}</View>
       ) : (
         <>
-          <View style={ui.row}>
-            <Wordmark size="sm" />
-            <View style={ui.fill}>
-              <Status tone={transfer ? 'warn' : 'ok'} label={transfer ? 'Sending right now' : 'Ready to send'} />
-            </View>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}
+            keyboardShouldPersistTaps="handled"
+          >
+            {waitingNote}
+            {pane}
+            {held ? <HeldCard report={held} deviceNoun={deviceNoun} /> : null}
+          </ScrollView>
+          <View style={{ padding: spacing.lg }}>
+            <Btn variant="ghost" block testID="open-dashboard" label="Open the full app" onPress={onExpand} />
           </View>
-
-          {target === null ? (
-            <View style={ui.stackSm}>
-              <Text style={ui.sectionT}>Send to</Text>
-              {devices.map((d) => (
-                <DeviceCard
-                  key={d.deviceId}
-                  device={d}
-                  queued={state.queueDepth[d.deviceId] ?? 0}
-                  onOpen={choose}
-                  openLabel={'send-to-' + d.deviceId}
-                />
-              ))}
-              {devices.length === 0 ? (
-                <Text style={ui.muted}>No devices nearby. Both devices need the same Wi-Fi.</Text>
-              ) : null}
-            </View>
-          ) : (
-            <View style={ui.stackSm}>
-              <Btn label="All devices" variant="ghost" block testID="popover-back" onPress={back} />
-              <Text style={ui.sectionT}>What should go to {target.name}?</Text>
-              {files.map((p) => (
-                <View key={p} style={[ui.row, { minHeight: control.minHeight }]}>
-                  <Text style={[ui.rowTitle, ui.fill]} numberOfLines={1}>{tail(p)}</Text>
-                  <Btn
-                    label="Remove"
-                    variant="ghost"
-                    testID={'popover-remove-' + tail(p)}
-                    onPress={() => setFiles((f) => f.filter((x) => x !== p))}
-                  />
-                </View>
-              ))}
-              {onPickFiles ? (
-                <Btn
-                  label={files.length === 0 ? 'Choose a file' : 'Add another'}
-                  variant="quiet"
-                  block
-                  testID="popover-pick"
-                  onPress={pick}
-                />
-              ) : null}
-              {files.length > 0 ? (
-                <Btn
-                  variant="primary"
-                  block
-                  testID="popover-send"
-                  disabled={sending}
-                  onPress={send}
-                  label={sending ? 'Queueing' : 'Send'}
-                />
-              ) : null}
-              {result ? <Note tone={result.tone} title={result.title} body={result.body} testID="popover-result" /> : null}
-            </View>
-          )}
-
-          {transfer ? (
-            <ProgressRow name={transfer.transferId} bytesDone={transfer.bytesDone}
-              bytesTotal={transfer.bytesTotal} state={transfer.state} />
-          ) : null}
-
-          <Btn variant="ghost" block testID="open-dashboard" label="Open the full app" onPress={onExpand} />
         </>
       )}
+    </View>
+  );
+}
+
+/**
+ * A device row. An offline device shows and cannot be chosen (design:
+ * `aria-disabled`). An away device can be chosen, because it holds the item.
+ */
+function DeviceRow({ d, onChoose }: { d: DeviceInfo; onChoose: (d: DeviceInfo) => void }) {
+  const view = presenceOf(d);
+  const selectable = isSelectable(d);
+  const label = deviceLabel(d);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={'send-to-' + d.deviceId}
+      disabled={!selectable}
+      onPress={() => onChoose(d)}
+      style={({ pressed }) => [ui.listRow, selectable ? null : { opacity: 0.55 }, pressed ? ui.pressed : null]}
+    >
+      <Avatar letter={label} />
+      <View style={ui.fill}>
+        <Text style={ui.rowTitle} numberOfLines={1}>{label}</Text>
+        <Status tone={view.tone} label={view.label} />
+      </View>
+    </Pressable>
+  );
+}
+
+/** The newest held-back item. Its facts are the ones the engine recorded. */
+function HeldCard({ report, deviceNoun }: { report: QuarantineReport; deviceNoun: string }) {
+  const [open, setOpen] = useState(false);
+  const name = report.name ?? NOT_RECORDED;
+  const line = report.size === null ? name : `${name} · ${humanBytes(report.size)}`;
+  return (
+    <View style={ui.stackSm} testID="popover-held">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="popover-held-toggle"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((v) => !v)}
+        style={({ pressed }) => [ui.cardTight, { flexDirection: 'row', alignItems: 'flex-start' }, pressed ? ui.pressed : null]}
+      >
+        <View style={[ui.dot, { backgroundColor: colors.warn, marginTop: 6 }]} />
+        <View style={ui.fill}>
+          <Text style={ui.rowTitle}>Held back</Text>
+          <Text style={ui.rowSub} numberOfLines={1}>{line}</Text>
+        </View>
+        <Text style={ui.hint}>What does this mean?</Text>
+      </Pressable>
+      {open ? (
+        <View style={ui.cardTight} testID="popover-held-why">
+          <Text style={ui.hint}>
+            {`Its check did not match what the sender promised, so it was not opened. Nothing was deleted and nothing left this ${deviceNoun}.`}
+          </Text>
+          <View style={[ui.kv, ui.kvFirst]}>
+            <Text style={ui.kvK}>Fingerprint it should have</Text>
+            <Text style={[ui.kvV, ui.nowrap, ui.mono]}>{fingerprintGroups(report.expected)}</Text>
+          </View>
+          <View style={[ui.kv, ui.kvFirst]}>
+            <Text style={ui.kvK}>Fingerprint it has</Text>
+            <Text style={[ui.kvV, ui.nowrap, ui.mono]}>{fingerprintGroups(report.actual)}</Text>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
