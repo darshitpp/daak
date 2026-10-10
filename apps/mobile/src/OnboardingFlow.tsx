@@ -14,7 +14,6 @@ import {
 } from '@daak/ui';
 import {
   INITIAL_ONBOARDING,
-  permissionRows,
   chooseDownloadFolder,
   clearDownloadFolder,
   downloadFolderName,
@@ -250,7 +249,6 @@ export function OnboardingFlow({ onComplete, onReady }: {
   }
 
   if (step === 'permissions') {
-    const { stillNeeded } = permissionRows({ notificationsGranted: granted });
     const rows: PermissionRowSpec[] = withNotificationReask(
       { notificationsGranted: granted },
       // Recorded in bootstrap as well as in local state: startup reads the
@@ -264,7 +262,6 @@ export function OnboardingFlow({ onComplete, onReady }: {
     return (
       <PermissionsScreen
         rows={rows}
-        stillNeeded={stillNeeded}
         onBack={() => setStep('name')}
         // R42p: the SAME row Settings renders, on the step that is already "the
         // things Daak needs before it is useful". Both platforms now pick a

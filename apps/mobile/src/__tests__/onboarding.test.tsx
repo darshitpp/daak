@@ -24,18 +24,13 @@ let mockGranted: boolean | undefined = true;
 let mockAskAnswer: boolean = true;
 const mockPermissionRows = (facts: { notificationsGranted?: boolean }) => ({
   rows: [
-    // Discovery and local network are reported, not switchable: no JS API can
-    // query or change either, so the flow must render them unavailable.
-    { key: 'nearby', title: 'Nearby devices', sub: 'on', state: 'unavailable' as const },
-    { key: 'network', title: 'Local network', sub: 'on', state: 'unavailable' as const },
     {
       key: 'alerts',
       title: 'Alerts when a file arrives',
-      sub: facts.notificationsGranted === true ? 'granted' : 'not granted',
+      sub: 'A short banner so you know something came in.',
       state: facts.notificationsGranted === true ? ('on' as const) : ('off' as const),
     },
   ],
-  stillNeeded: facts.notificationsGranted === true ? [] : ['Alerts when a file arrives'],
 });
 jest.mock('@daak/platform', () => ({
   pickFiles: jest.fn(async () => []),
@@ -137,10 +132,27 @@ describe('first launch', () => {
     fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
     fireEvent.press(screen.getByLabelText('name-next'));
 
-    // The rows are the host's real capability facts, not three switches that
-    // all claim to be on.
-    await waitFor(() => expect(screen.getByText('Nearby devices')).toBeTruthy());
-    expect(screen.getByText('Local network')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Optional alerts')).toBeTruthy());
+    expect(screen.getByText('Alerts when a file arrives')).toBeTruthy();
+    expect(screen.queryByText('Local network')).toBeNull();
+  });
+
+  it('lets the user continue with alerts off', async () => {
+    mockReadOnboarding.mockResolvedValue(firstLaunch);
+    render(<App />);
+    await waitFor(() => screen.getByLabelText('welcome-get-started'));
+    fireEvent.press(screen.getByLabelText('welcome-get-started'));
+    await waitFor(() => screen.getByTestId('name-input'));
+    fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
+    fireEvent.press(screen.getByLabelText('name-next'));
+    await waitFor(() => screen.getByLabelText('permissions-continue'));
+    expect(screen.getByTestId('permissions-hint').props.children).toBe('Alerts are off. You can continue without them.');
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('permissions-continue'));
+    });
+    await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
+    const written = (mockWriteOnboarding.mock.calls[0] as unknown[])[0] as { alerts?: boolean };
+    expect(written.alerts).toBe(false);
   });
 
   it('does not write anything until the user has actually answered', async () => {
@@ -199,18 +211,7 @@ describe('first launch', () => {
     fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
     fireEvent.press(screen.getByLabelText('name-next'));
     await waitFor(() => screen.getByLabelText('permissions-continue'));
-    // mockGranted starts UNDEFINED here, which is the honest first-launch state
-    // (initNotifications has not run, because the engine has not started).
-    // So the prototype's own perm-go rule holds Continue closed until the user
-    // answers the one askable row -- drive it the way a user would, rather than
-    // reaching past the gate.
-    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).toBe(true);
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('perm-alerts'));
-    });
-    await waitFor(() =>
-      expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).toBe(false),
-    );
+    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).not.toBe(true);
     // The press starts a durable write, so the step change is a promise rather
     // than an immediate one.
     await act(async () => {
@@ -325,10 +326,7 @@ describe('every launch after the first', () => {
     fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
     fireEvent.press(screen.getByLabelText('name-next'));
 
-    await waitFor(() => screen.getByText('Nearby devices'));
-    // Continue is gated until the one askable row has been answered, which is
-    // the honest first-launch state: initNotifications has not run because the
-    // engine has not started. Drive it the way a user would.
+    await waitFor(() => screen.getByText('Optional alerts'));
     await act(async () => {
       fireEvent.press(screen.getByTestId('perm-alerts'));
     });
@@ -355,9 +353,7 @@ describe('every launch after the first', () => {
     await act(async () => {
       fireEvent.press(screen.getByTestId('perm-alerts'));
     });
-    await waitFor(() =>
-      expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).toBe(false),
-    );
+    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).not.toBe(true);
     await act(async () => {
       fireEvent.press(screen.getByLabelText('permissions-continue'));
     });

@@ -8,85 +8,40 @@ vi.mock('@daak/rn-notify', () => ({
 }));
 
 import NativeDaakNotify from '@daak/rn-notify';
-import {
-  ALERTS_TITLE,
-  DISCOVERY_TITLE,
-  NETWORK_TITLE,
-  permissionRows,
-  withNotificationReask,
-} from './permission-rows';
+import { ALERTS_SUB, ALERTS_TITLE, permissionRows, withNotificationReask } from './permission-rows';
 
 const notify = vi.mocked(NativeDaakNotify);
 
-describe('permission rows are only as switchable as the platform really is', () => {
-  // The two rows this build cannot change are the ones a reviewer will look at
-  // first: there is no JS API for either, and a Pressable on them would be a
-  // control that changes nothing.
-  it('reports discovery and local network instead of offering a switch for them', () => {
+describe('permission rows', () => {
+  // The design has one row on the Permissions step. Discovery and local network
+  // are not user choices, so the step does not list them.
+  it('has one row, the alerts row, with the words of the design', () => {
     const { rows } = permissionRows({ notificationsGranted: true });
-    const nearby = rows.find((r) => r.key === 'nearby');
-    const network = rows.find((r) => r.key === 'network');
-    expect(nearby?.title).toBe(DISCOVERY_TITLE);
-    expect(network?.title).toBe(NETWORK_TITLE);
-    // The engine starts discovery inside engine.start() and DaakEngine has no
-    // stopDiscovery, so these are facts rather than grants.
-    expect(nearby?.onPress).toBeUndefined();
-    expect(network?.onPress).toBeUndefined();
-    // And UNAVAILABLE rather than ON, which is the substantive change: an iOS
-    // local-network refusal cannot be queried from JS, so a switch rendered ON
-    // would claim a grant the user may have refused in the system prompt.
-    expect(nearby?.state).toBe('unavailable');
-    expect(network?.state).toBe('unavailable');
-    // The subtitle has to carry the reason, because the control itself cannot.
-    expect(nearby?.sub).toContain('cannot turn this off');
-    expect(network?.sub).toContain('cannot check the answer');
-  });
-
-  // The prototype's third switch is titled "Sound when a file arrives". There
-  // is no sound preference anywhere in this codebase, and naming one would
-  // promise a setting Daak does not have.
-  it('does not claim a sound preference this build cannot grant', () => {
-    expect(ALERTS_TITLE).not.toContain('Sound');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.key).toBe('alerts');
+    expect(rows[0]?.title).toBe('Alerts when a file arrives');
+    expect(rows[0]?.sub).toBe('A short banner so you know something came in.');
     expect(ALERTS_TITLE).toBe('Alerts when a file arrives');
+    expect(ALERTS_SUB).toBe('A short banner so you know something came in.');
   });
 
-  it('renders the alerts row from the real OS answer, not a guess', () => {
-    expect(permissionRows({ notificationsGranted: true }).rows[2]?.state).toBe('on');
-    expect(permissionRows({ notificationsGranted: false }).rows[2]?.state).toBe('off');
-    // "Not asked yet" is a first-launch state and must not render as granted.
-    expect(permissionRows({}).rows[2]?.state).toBe('off');
-  });
-
-  // NOTHING blocks Continue. The other two rows are facts the user cannot change
-  // here, and the alerts row is OPTIONAL. Gating on it dead-ended onboarding on
-  // iOS, which never re-prompts after a denial: a user who tapped "Don't Allow"
-  // could never leave this step.
-  it('never blocks Continue on an optional permission', () => {
-    expect(permissionRows({ notificationsGranted: true }).stillNeeded).toEqual([]);
-    expect(permissionRows({ notificationsGranted: false }).stillNeeded).toEqual([]);
-    expect(permissionRows({}).stillNeeded).toEqual([]);
-  });
-
-  // A declined notification permission is an ORDINARY answer (R36), not an
-  // error: the inbox is the source of truth, so a denied permission costs a
-  // banner and never a transfer.
-  it('says a denied banner costs nothing but the banner', () => {
-    const row = permissionRows({ notificationsGranted: false }).rows[2];
-    expect(row?.sub).toContain('Files still arrive');
+  it('renders the alerts row from the real OS answer', () => {
+    expect(permissionRows({ notificationsGranted: true }).rows[0]?.state).toBe('on');
+    expect(permissionRows({ notificationsGranted: false }).rows[0]?.state).toBe('off');
+    // "Not asked yet" is a first-launch state. It must not read as granted.
+    expect(permissionRows({}).rows[0]?.state).toBe('off');
   });
 
   it('re-asks for real and reports the answer the platform gives back', async () => {
     const answers: boolean[] = [];
     const rows = withNotificationReask({ notificationsGranted: false }, (a) => answers.push(a));
-    const alerts = rows.find((r) => r.key === 'alerts');
     notify.requestPermission.mockResolvedValueOnce(true);
-    alerts?.onPress?.();
+    rows.find((r) => r.key === 'alerts')?.onPress?.();
     await vi.waitFor(() => expect(answers).toEqual([true]));
-    // The value rendered afterwards is the OS's own, not a local guess.
     expect(notify.requestPermission).toHaveBeenCalledTimes(1);
   });
 
-  it('reports a rejected ask as a denial rather than throwing into the render', async () => {
+  it('reports a rejected ask as a denial and does not throw into the render', async () => {
     const answers: boolean[] = [];
     const rows = withNotificationReask({}, (a) => answers.push(a));
     notify.requestPermission.mockRejectedValueOnce(new Error('no foreground activity'));
@@ -94,3 +49,4 @@ describe('permission rows are only as switchable as the platform really is', () 
     await vi.waitFor(() => expect(answers).toEqual([false]));
   });
 });
+

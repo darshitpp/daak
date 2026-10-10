@@ -72,53 +72,50 @@ describe('Name this device', () => {
   });
 });
 describe('Permissions', () => {
-  const rows = [
-    { key: 'nearby', title: 'Nearby devices', sub: 'on', state: 'unavailable' as const },
-    { key: 'alerts', title: 'Alerts when a file arrives', sub: 'off', state: 'off' as const },
-  ];
+  const off = { key: 'alerts', title: 'Alerts when a file arrives', sub: 'A short banner so you know something came in.', state: 'off' as const };
+  const noop = () => {};
 
-  // The prototype's own perm-go rule: Continue is enabled exactly when the
-  // "still needed" list is empty.
-  it('gates Continue on what is still needed, and names it', () => {
-    render(
-      <PermissionsScreen
-        rows={rows}
-        stillNeeded={['Alerts when a file arrives']}
-        onContinue={() => {}}
-      />,
-    );
-    expect(screen.getByTestId('permissions-hint').props.children).toContain('Alerts when a file arrives');
-    fireEvent.press(screen.getByLabelText('permissions-continue'));
-    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).toBe(true);
+  it('shows the words of the design and one row', () => {
+    render(<PermissionsScreen rows={[off]} onContinue={noop} />);
+    expect(screen.getByText('Optional alerts')).toBeTruthy();
+    expect(
+      screen.getByText('Daak finds other devices on your Wi-Fi by itself. Alerts are optional — skip them or turn them on now.'),
+    ).toBeTruthy();
+    expect(screen.getByText('Alerts when a file arrives')).toBeTruthy();
+    expect(screen.getByText('A short banner so you know something came in.')).toBeTruthy();
+    expect(screen.getByText('You can change this later in Settings.')).toBeTruthy();
+    expect(screen.queryByText('Step 2 of 3')).toBeNull();
+    expect(screen.queryByText('Two quick permissions')).toBeNull();
   });
 
-  it('enables Continue once nothing is outstanding', () => {
+  it('never blocks Continue', () => {
     const next = jest.fn();
-    render(<PermissionsScreen rows={rows} stillNeeded={[]} onContinue={next} />);
-    expect(screen.getByTestId('permissions-hint').props.children).toContain('All set');
+    render(<PermissionsScreen rows={[off]} onContinue={next} />);
+    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).not.toBe(true);
     fireEvent.press(screen.getByLabelText('permissions-continue'));
     expect(next).toHaveBeenCalledTimes(1);
   });
 
-  // A row with no onPress is inert. The reason it has none is the platform's,
-  // so the subtitle has to carry it rather than the control pretending.
-  it('does not make a row pressable unless the platform can act on it', () => {
-    render(<PermissionsScreen rows={rows} stillNeeded={[]} onContinue={() => {}} />);
-    fireEvent.press(screen.getByTestId('perm-nearby'));
-    expect(screen.getByTestId('perm-nearby').props.onPress).toBeUndefined();
+  it('says whether alerts are on or off', () => {
+    const { rerender } = render(<PermissionsScreen rows={[off]} onContinue={noop} />);
+    expect(screen.getByTestId('permissions-hint').props.children).toBe('Alerts are off. You can continue without them.');
+    rerender(<PermissionsScreen rows={[{ ...off, state: 'on' }]} onContinue={noop} />);
+    expect(screen.getByTestId('permissions-hint').props.children).toBe('Alerts are on.');
   });
 
-  // A row the platform cannot query is UNAVAILABLE, not on. Rendering it on
-  // claims a grant -- on iOS the user may have refused local-network access in
-  // the system prompt an hour ago, and nothing in JS can find that out. The
-  // consequence is also that such a row must not gate Continue, which the real
-  // stillNeeded list (packages/platform/src/permission-rows.ts) enforces.
-  it('shows a row the platform cannot query as unavailable, not granted', () => {
-    render(<PermissionsScreen rows={rows} stillNeeded={[]} onContinue={() => {}} />);
-    const row = screen.getByTestId('perm-nearby');
-    expect(row.props.accessibilityRole).toBeUndefined();
-    expect(row.props.accessibilityLabel).toBe('Nearby devices');
-    expect(screen.getByLabelText('Nearby devices')).toBeTruthy();
+  // A host that cannot change the grant sets the row to 'unavailable'. The
+  // screen then makes no claim about the state.
+  it('shows no on or off sentence for a row the host cannot change', () => {
+    render(<PermissionsScreen rows={[{ ...off, state: 'unavailable' }]} onContinue={noop} />);
+    expect(screen.queryByTestId('permissions-hint')).toBeNull();
+    expect(screen.getByTestId('perm-alerts').props.onPress).toBeUndefined();
+  });
+
+  it('makes a row pressable only when the host gives it a handler', () => {
+    const press = jest.fn();
+    render(<PermissionsScreen rows={[{ ...off, onPress: press }]} onContinue={noop} />);
+    fireEvent.press(screen.getByTestId('perm-alerts'));
+    expect(press).toHaveBeenCalledTimes(1);
   });
 });
 

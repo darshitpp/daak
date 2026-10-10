@@ -1,14 +1,5 @@
-import React, { useCallback, useState } from 'react';
-import { Text, View } from 'react-native';
-import {
-  Btn,
-  NameDeviceScreen,
-  OnboardingScreen,
-  SwitchRow,
-  WelcomeScreen,
-  ui,
-  type PermissionRowSpec,
-} from '@daak/ui';
+import React, { useState } from 'react';
+import { NameDeviceScreen, PermissionsScreen, WelcomeScreen } from '@daak/ui';
 import { desktopPermissionRows, type DesktopCapability } from './onboarding';
 
 /**
@@ -80,86 +71,12 @@ export function DesktopOnboardingFlow({
     );
   }
 
-  const { rows, stillNeeded } = desktopPermissionRows({ notifications: alerts });
-  const specs: PermissionRowSpec[] = rows.map((row) => ({
-    key: row.key,
-    title: row.title,
-    sub: row.sub,
-    state: row.state,
-  }));
   return (
-    <DesktopPermissionsStep
-      rows={specs}
-      stillNeeded={stillNeeded}
+    <PermissionsScreen
+      rows={desktopPermissionRows().rows}
       onBack={() => setStep('name')}
       onContinue={() => onComplete({ name: name.trim(), alerts })}
     />
   );
 }
 
-/**
- * sc-permissions, with the prototype's own Continue gate.
- *
- * Split out only so the hint string is a named function that a test can read,
- * and so the flow above stays about ORDER. The gate is the prototype's perm-go
- * rule verbatim: Continue is enabled exactly when nothing is still needed.
- *
- * The rows are NOT switchable here, and that is the honest outcome rather than
- * a missing feature: on a Mac, discovery is a side effect of start(), receiving
- * has no preference, and the alert state belongs to the OS. A switch that
- * flips into a state nothing implements is a lie with a control on it. So the
- * Continue gate is real, and it is never actually blocked -- which is exactly
- * what desktopPermissionRows returns `stillNeeded: []` for.
- */
-export function DesktopPermissionsStep({
-  rows,
-  stillNeeded,
-  onContinue,
-  onBack,
-}: {
-  rows: PermissionRowSpec[];
-  stillNeeded: string[];
-  onContinue: () => void;
-  onBack?: () => void;
-}) {
-  const blocked = stillNeeded.length > 0;
-  return (
-    <OnboardingScreen
-      title="Two quick permissions"
-      onBack={onBack}
-      backLabel="Back to naming this Mac"
-      testID="screen-permissions"
-      actions={
-        <Btn
-          variant="primary"
-          block
-          label="Continue"
-          testID="permissions-continue"
-          disabled={blocked}
-          onPress={onContinue}
-        />
-      }
-    >
-      <Text style={ui.h1}>Let Daak find nearby devices</Text>
-      <Text style={ui.lead}>
-        Daak looks for other devices on your Wi-Fi and talks to them directly. It needs these on.
-      </Text>
-
-      <View style={ui.card}>
-        {rows.map((row) => (
-          <SwitchRow
-            key={row.key}
-            title={row.title}
-            sub={row.sub}
-            state={row.state}
-            testID={'perm-' + row.key}
-          />
-        ))}
-      </View>
-
-      <Text style={ui.hint} testID="permissions-hint">
-        {blocked ? 'Still needed: ' + stillNeeded.join(', ') + '.' : 'All set. Daak only looks on this Wi-Fi.'}
-      </Text>
-    </OnboardingScreen>
-  );
-}

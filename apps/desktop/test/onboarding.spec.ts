@@ -743,29 +743,15 @@ describe('what a desktop window draws for each phase and fault', () => {
 });
 
 describe('desktop permission rows', () => {
-  // The prototype's sc-permissions has three switches and gates Continue on two
-  // of them. On a Mac none of the three can be changed: discovery is a side
-  // effect of start(), receiving has no preference, and the banner belongs to
-  // the OS. So every row is 'unavailable' -- a rendered switch that flips into
-  // a state nothing implements is a lie with a control on it.
-  it('reports every capability rather than offering a switch that changes nothing', () => {
-    const { rows } = desktopPermissionRows({});
-    expect(rows.map((r) => r.key)).toEqual(['show-on-network', 'accept-files', 'alerts']);
-    expect(rows.every((r) => r.state === 'unavailable')).toBe(true);
-    // Nothing can be acted on, so Continue is never gated.
-    expect(desktopPermissionRows({}).stillNeeded).toEqual([]);
-  });
-
-  it('reports the real banner answer when the host knows it', () => {
-    expect(desktopPermissionRows({ notifications: true }).rows[2].sub)
-      .toContain('will show a banner');
-    expect(desktopPermissionRows({ notifications: false }).rows[2].sub)
-      .toContain('Turned off');
-  });
-
-  it('never claims a sound preference, which this build does not have', () => {
-    const titles = desktopPermissionRows({}).rows.map((r) => r.title.toLowerCase()).join(' ');
-    expect(titles).not.toContain('sound');
+  // The design shows one alerts row. A Mac has no way to change the grant from
+  // this step, so the row is 'unavailable'. A switch that flips into a state
+  // that nothing implements would be a lie with a control on it.
+  it('has one alerts row that the step cannot change', () => {
+    const { rows } = desktopPermissionRows();
+    expect(rows.map((r) => r.key)).toEqual(['alerts']);
+    expect(rows[0].state).toBe('unavailable');
+    expect(rows[0].title).toBe('Alerts when a file arrives');
+    expect(rows[0].sub).toBe('A short banner so you know something came in.');
   });
 });
 

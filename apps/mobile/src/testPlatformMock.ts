@@ -38,7 +38,7 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     INITIAL_ONBOARDING: { complete: false, discovery: false, alerts: false },
     permissionRows: jest.fn((facts: { notificationsGranted?: boolean }) => ({
       rows: [],
-      stillNeeded: facts.notificationsGranted === true ? [] : ['Alerts when a file arrives'],
+      notificationsGranted: facts.notificationsGranted,
     })),
     withNotificationReask: jest.fn(() => []),
     // The four native facades the app's non-mocked modules call.

@@ -5,98 +5,61 @@ import { OnboardingScreen, SwitchRow, type SwitchState } from '../components/Onb
 import { ui } from '../theme';
 
 /**
- * One capability as this build can actually report it.
+ * One capability as this build can report it.
  *
- * The prototype's screen has three switches and gates Continue on two of
- * them. This app cannot gate on two of them, because it cannot ask for them:
- * there is no JS API that queries or requests iOS local-network permission,
- * and no sound preference anywhere in the codebase. Rendering a switch that
- * flips into a state nothing implements is a lie with a control on it, so this
- * screen renders whatever the host says is true and shows an unavailable row
- * as unavailable.
+ * Omitting `onPress` locks the row. A locked row is the same signal that makes a
+ * `SwitchRow` not pressable, so no second flag can disagree with the control.
+ * A row in the state `unavailable` makes no claim about the grant.
  */
 export interface PermissionRowSpec {
-  /** Stable id, used for the row's testID. */
+  /** Stable id, used for the row testID. */
   key: string;
   title: string;
   sub: string;
   state: SwitchState;
-  /**
-   * Omitted means LOCKED: this build reports the capability but cannot change
-   * it from here. That is the same signal that makes a SwitchRow non-
-   * pressable, so there is no second flag that could disagree with the
-   * control.
-   */
   onPress?: () => void;
 }
 
+const LEAD = 'Daak finds other devices on your Wi-Fi by itself. Alerts are optional — skip them or turn them on now.';
+
 /**
- * The prototype's screen 3 (sc-permissions), with its Continue gate intact.
+ * The Permissions step (design route `permissions`, titled "Optional alerts").
  *
- * stillNeeded is a list of row TITLES, not a boolean, because the prototype's
- * hint names what is missing ("Still needed: Nearby devices, and Local
- * network") and a hint that cannot name anything is not the same screen. It is
- * empty whenever every row is settled, and Continue is enabled exactly when it
- * is empty -- which is the prototype's own perm-go rule.
+ * The design has one row and does not block Continue. The hint under the row
+ * states the grant when the host can read it.
  */
 export function PermissionsScreen({
   rows,
-  stillNeeded,
   onContinue,
   onBack,
   folder,
 }: {
   rows: PermissionRowSpec[];
-  /** Titles of the rows that still need the user, in the order given. */
-  stillNeeded: string[];
   onContinue: () => void;
   onBack?: () => void;
-  /**
-   * R42p: an optional slot for the destination-folder row. It sits on THIS step
-   * because the step is already "the things Daak needs before it can be useful",
-   * and because the row is the same component Settings renders -- one row, one
-   * set of verbs, so the two cannot disagree about where files go.
-   */
+  /** The destination-folder row. Task 5 of plan P4 removes this slot. */
   folder?: React.ReactNode;
 }) {
-  const blocked = stillNeeded.length > 0;
-  let hint: string;
-  if (stillNeeded.length === 0) {
-    hint = 'All set. Daak will only ever look on this Wi-Fi.';
-  } else if (stillNeeded.length === 1) {
-    hint = 'Still needed: ' + stillNeeded[0] + '.';
-  } else {
-    hint =
-      'Still needed: ' +
-      stillNeeded.slice(0, -1).join(', ') +
-      ', and ' +
-      stillNeeded[stillNeeded.length - 1] +
-      '.';
-  }
+  const alerts = rows.find((row) => row.key === 'alerts');
+  const hint =
+    alerts?.state === 'on'
+      ? 'Alerts are on.'
+      : alerts?.state === 'off'
+        ? 'Alerts are off. You can continue without them.'
+        : null;
   return (
     <OnboardingScreen
-      title="Step 2 of 3"
+      title="Optional alerts"
       onBack={onBack}
-      backLabel="Back to naming this device"
       testID="screen-permissions"
       actions={
-        <Btn
-          variant="primary"
-          block
-          label="Continue"
-          testID="permissions-continue"
-          disabled={blocked}
-          onPress={onContinue}
-        />
+        <>
+          <Btn variant="primary" block label="Continue" testID="permissions-continue" onPress={onContinue} />
+          <Text style={ui.hint}>You can change this later in Settings.</Text>
+        </>
       }
     >
-      <View style={ui.stack}>
-        <Text style={ui.h1}>Two quick permissions</Text>
-        <Text style={ui.lead}>
-          Daak finds other devices on your Wi-Fi and talks to them directly. It needs these switched on.
-        </Text>
-      </View>
-
+      <Text style={ui.lead}>{LEAD}</Text>
       <View style={ui.card}>
         {rows.map((row) => (
           <SwitchRow
@@ -109,11 +72,13 @@ export function PermissionsScreen({
           />
         ))}
       </View>
-
-      <Text style={ui.hint} testID="permissions-hint">
-        {hint}
-      </Text>
+      {hint === null ? null : (
+        <Text style={ui.hint} testID="permissions-hint">
+          {hint}
+        </Text>
+      )}
       {folder}
     </OnboardingScreen>
   );
 }
+

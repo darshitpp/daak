@@ -502,27 +502,7 @@ export function once(work: () => void | Promise<void>): () => boolean | Promise<
   };
 }
 
-/**
- * What a desktop engine can actually do during onboarding.
- *
- * The prototype's desktop permissions screen offers three switches: show this
- * Mac on the network, accept files, and play a sound. This build cannot honour
- * any of them as a user choice:
- *
- *  - Discovery is not a grant. It is a side effect of engine.start(), and
- *    DaakEngine exposes no stopDiscovery, so there is nothing to switch off and
- *    nothing truthful to render ON.
- *  - Receiving has no preference anywhere in the engine or the daemon.
- *  - There is no sound preference at all.
- *
- * So the desktop flow does NOT reuse the mobile permission rows: those carry a
- * real, switchable alerts row backed by initNotifications(), which is a MOBILE
- * native module and is not registered in the macOS host. Rendering it here
- * would render a switch that cannot change anything.
- *
- * Kept next to the gate rather than in the component so the rule is visible
- * where the ordering is decided.
- */
+/** What the desktop host can report during onboarding. */
 export interface DesktopCapability {
   /** Whether the OS will post an arrival banner, or undefined if never asked. */
   notifications?: boolean;
@@ -532,49 +512,26 @@ export interface DesktopPermissionRow {
   key: string;
   title: string;
   sub: string;
-  /** 'unavailable' means reported, with nothing on this screen able to change it. */
+  /** 'unavailable' means reported, with nothing on this step able to change it. */
   state: 'on' | 'off' | 'unavailable';
 }
 
-export function desktopPermissionRows(
-  capabilities: DesktopCapability,
-): { rows: DesktopPermissionRow[]; stillNeeded: string[] } {
-  const alerts = capabilities.notifications;
+/**
+ * The one row of the Permissions step on a Mac (design: "Alerts when a file
+ * arrives"). The state is 'unavailable', because the desktop host has no
+ * `requestPermission` surface. The preference lives in Settings (plan P2). The
+ * words equal `ALERTS_TITLE` and `ALERTS_SUB` in `@daak/platform`. This file
+ * must not import that barrel (see `onboarding-flow.tsx`).
+ */
+export function desktopPermissionRows(): { rows: DesktopPermissionRow[] } {
   return {
     rows: [
       {
-        key: 'show-on-network',
-        title: 'Show this Mac on your network',
-        sub: 'On as soon as Daak starts, so other devices can see the name you chose. Daak cannot turn this off.',
-        // REPORTED, NOT SWITCHABLE. See above: discovery is a consequence of
-        // start(), and no API stops it.
-        state: 'unavailable',
-      },
-      {
-        key: 'accept-files',
-        title: 'Accept files sent to this Mac',
-        sub: 'Always on. Anything sent to you appears in your Inbox.',
-        state: 'unavailable',
-      },
-      {
         key: 'alerts',
         title: 'Alerts when a file arrives',
-        sub:
-          alerts === undefined
-            ? 'A short banner so you know something came in.'
-            : alerts
-              ? 'Daak will show a banner when a file arrives.'
-              : 'Turned off, so nothing will pop up. Files still arrive either way.',
-        // Also not switchable HERE: the desktop host registers DaakSystemNotify
-        // for BANNERS, but this app has no requestPermission surface, so the
-        // state is reported from what the engine knows and cannot be changed
-        // from this screen.
+        sub: 'A short banner so you know something came in.',
         state: 'unavailable',
       },
     ],
-    // Nothing on this screen can be changed, so nothing is ever "still needed".
-    // Gating Continue on a row the user cannot act on is a dead button, which
-    // is the one part of the prototype's rule that does NOT carry over.
-    stillNeeded: [],
   };
 }
