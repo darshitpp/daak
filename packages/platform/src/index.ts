@@ -5,6 +5,7 @@ export * from './daemon';
 export * from './fspaths';
 export * from './inbound';
 export * from './notify';
+export * from './notify-prefs';
 export * from './onboarding';
 export * from './onboarding-copy';
 export * from './permission-rows';
