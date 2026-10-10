@@ -2,7 +2,9 @@ import React, { useCallback, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 import type { DaakEngine, DeviceInfo } from '@daak/core';
 import type { AppMode, UiRuntime } from './headless';
-import type { InboxActions } from './screens/HistoryScreen';
+import type { InboxActions } from './inbox-actions';
+import { ToastProvider } from './components/Toast';
+import type { DeviceNoun } from './components/ds';
 import { Popover } from './modes/Popover';
 import { Dashboard } from './modes/Dashboard';
 
@@ -23,7 +25,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -56,6 +58,14 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
   };
+  /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
+  deviceNoun?: DeviceNoun;
+  /** The desktop window header text. */
+  windowChrome?: { title: string; version?: string };
+  /** Lift the composer above the keyboard. The iOS host sets it. */
+  keyboardAvoiding?: boolean;
+  /** The Mac design puts the toast nearer the bottom edge than the phone design does. */
+  toastBottomOffset?: number;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -68,6 +78,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
     () => runtime.getState(),
   );
   return (
+    <ToastProvider bottomOffset={toastBottomOffset}>
     <View style={{ flex: 1 }}>
       {mode === 'popover'
         ? <Popover
@@ -91,7 +102,11 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             onCheckConnection={onCheckConnection}
             onUnpair={onUnpair}
             downloadFolder={downloadFolder}
+            deviceNoun={deviceNoun}
+            windowChrome={windowChrome}
+            keyboardAvoiding={keyboardAvoiding}
           />}
     </View>
+    </ToastProvider>
   );
 }

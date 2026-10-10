@@ -65,12 +65,9 @@ describe('App', () => {
   // assertion itself is unchanged; what it waits for is the keystore.
   it('boots and renders the tab shell', async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getAllByText('Send').length).toBeGreaterThan(0));
-    expect(screen.getAllByText('Send').length).toBeGreaterThan(0);
-    expect(screen.getByText('Devices')).toBeTruthy();
-    expect(screen.getByText('Inbox')).toBeTruthy();
-    expect(screen.getByText('Transfers')).toBeTruthy();
-    expect(screen.getByText('Settings')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('tab-devices')).toBeTruthy());
+    expect(screen.getByTestId('tab-settings')).toBeTruthy();
+    for (const gone of ['tab-send', 'tab-inbox', 'tab-transfers']) expect(screen.queryByTestId(gone)).toBeNull();
   });
 
   it('drains the staged share inbox only AFTER the engine is up', async () => {
@@ -141,14 +138,16 @@ describe('App', () => {
     expect(screen.getByText(/keystore rejected the key/)).toBeTruthy();
     // And the app still renders, rather than taking the whole UI down over a
     // fault the user may be able to fix.
-    expect(screen.getByText('Devices')).toBeTruthy();
+    expect(screen.getByTestId('tab-devices')).toBeTruthy();
   });
 
   // The gap this closes: a share-sheet text/file item was staged natively and
   // nothing ever drained it, so sharing into Daak did nothing at all. Now both
   // arms land in the composer and the engine gets the real paths.
-  it('routes a shared text and file into the Send composer', async () => {
-    const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: true });
+  it('holds a shared text and file on Devices, then seeds the thread the user picks', async () => {
+    const pixel = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true };
+    const devices = jest.spyOn(engine, 'devices').mockResolvedValue([pixel]);
+    const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: false });
     drainInbound.mockImplementationOnce(async (onItems: (i: unknown[]) => void) =>
       onItems([
         { kind: 'text', text: 'from the share sheet' },
@@ -158,24 +157,26 @@ describe('App', () => {
       ]),
     );
     render(<App />);
-    await waitFor(() => expect(screen.getByDisplayValue('from the share sheet')).toBeTruthy());
+    expect(await screen.findByText('Pick a device for what you shared')).toBeTruthy();
+    fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
+    expect(await screen.findByDisplayValue('from the share sheet')).toBeTruthy();
     expect(screen.getByText('photo.png')).toBeTruthy();
     fireEvent.press(await screen.findByLabelText('send'));
-    await waitFor(() =>
-      expect(send).toHaveBeenCalledWith({
-        peerDeviceId: expect.any(String),
-        text: 'from the share sheet',
-        files: ['/Documents/photo.png'],
-      }),
-    );
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(send).toHaveBeenNthCalledWith(1, { peerDeviceId: pixel.deviceId, files: ['/Documents/photo.png'] });
+    expect(send).toHaveBeenNthCalledWith(2, { peerDeviceId: pixel.deviceId, text: 'from the share sheet' });
     // The intent-send arm is bootstrap's, not a draft: no 'sent already' note.
     expect(screen.queryByDisplayValue('sent already')).toBeNull();
+    devices.mockRestore();
+    send.mockRestore();
   });
 
   // [Open] and [Share] were INSTALLED by initNotifications with nothing behind
   // them, so a tap was silently dropped. This drives the real App: the tap has
   // to reach the shell's Inbox route, not merely be dispatched in bootstrap.
-  it('routes a tapped [Open] notification to the Inbox', async () => {
+  it('routes a tapped [Open] notification to the sender thread, or to Devices when no sender is named', async () => {
+    const pixel = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true };
+    const devices = jest.spyOn(engine, 'devices').mockResolvedValue([pixel]);
     let open: ((payload: string) => void) | undefined;
     wireNotificationActions.mockImplementationOnce(
       (_reveal: (p: string) => void, o: (p: string) => void) => {
@@ -186,15 +187,21 @@ describe('App', () => {
     render(<App />);
     await act(async () => {});
 
-    // Away from the Inbox, so arriving there is the assertion.
-    fireEvent.press(screen.getByText('Transfers'));
-    expect(await screen.findByText('No transfers yet')).toBeTruthy();
+    // Away from Devices, so arriving is the assertion.
+    fireEvent.press(screen.getByTestId('tab-settings'));
+    expect(await screen.findByLabelText('save-name')).toBeTruthy();
 
     expect(open).toBeDefined();
     await act(async () => {
+      open!(JSON.stringify({ peerDeviceId: pixel.deviceId }));
+    });
+    expect(await screen.findByLabelText('thread-back')).toBeTruthy();
+
+    await act(async () => {
       open!(JSON.stringify({ transferId: 'aa'.repeat(16) }));
     });
-    expect(screen.getByText('Search what arrived')).toBeTruthy();
+    expect(await screen.findByText('Your devices')).toBeTruthy();
+    devices.mockRestore();
   });
 
 });

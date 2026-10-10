@@ -1,87 +1,86 @@
 import React from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { ui } from '../theme';
+import { colors, ui } from '../theme';
+import { Wordmark } from './ds';
 
 /**
- * The five destinations the Open Design prototypes actually ship. Pairing is
- * NOT one of them: it is a route out of Devices, so a six-item bar would be
- * wider than the phone allows and wider than the sidebar needs.
+ * The two destinations the design ships. Thread, pair, and held are routes
+ * above these, owned by AppShell. They are not tabs.
  */
-export type Tab = 'send' | 'devices' | 'history' | 'transfers' | 'settings' | 'pair';
+export type Tab = 'devices' | 'settings';
 
 const TABS: { id: Tab; label: string; glyph: string }[] = [
-  { id: 'send', label: 'Send', glyph: '↑' },
   { id: 'devices', label: 'Devices', glyph: '▣' },
-  { id: 'history', label: 'Inbox', glyph: '✉' },
-  { id: 'transfers', label: 'Transfers', glyph: '⇄' },
   { id: 'settings', label: 'Settings', glyph: '⚙' },
 ];
 
-function TabButton({ tab, on, onChange, layout }: {
-  tab: { id: Tab; label: string; glyph: string };
-  on: boolean;
-  onChange: (t: Tab) => void;
-  layout: 'mobile' | 'desktop';
-}) {
+function Tabs({ tab, onChange, layout }: { tab: Tab; onChange: (t: Tab) => void; layout: 'mobile' | 'desktop' }) {
   const desktop = layout === 'desktop';
   return (
-    <Pressable
-      // `button`, NOT `tab`. React Native maps `tab` to UIAccessibilityTraitNone
-      // on iOS (RCTViewManager.m), exactly like `none`: a trait of None is not
-      // an accessibility element, so the destination never reaches VoiceOver
-      // or any automation surface. A tab IS a control the user activates, and
-      // accessibilityState.selected carries the tab meaning on top of it.
-      accessibilityRole="button"
-      // A role alone is not a name. Without the label the control is announced
-      // as an unlabelled button.
-      accessibilityLabel={tab.label}
-      // The Inbox destination is the `history` SLOT, so the id comes from the
-      // label. `tab-history` would name a destination the user never sees.
-      testID={`tab-${tab.label.toLowerCase()}`}
-      accessibilityState={{ selected: on }}
-      onPress={() => onChange(tab.id)}
-      style={({ pressed }) => [
-        desktop ? ui.sideitem : ui.tab,
-        on ? (desktop ? ui.sideitemOn : ui.tabOn) : null,
-        pressed ? ui.pressed : null,
-      ]}
-    >
-      {desktop ? null : <Text style={[ui.tabGlyph, on ? ui.tabGlyphOn : null]}>{tab.glyph}</Text>}
-      <Text style={desktop ? [ui.sideLabel, on ? ui.sideLabelOn : null] : [ui.tabLabel, on ? ui.tabLabelOn : null]}>
-        {tab.label}
-      </Text>
-    </Pressable>
+    <>
+      {TABS.map((t) => {
+        const on = tab === t.id;
+        return (
+          <Pressable
+            key={t.id}
+            // `button`, not `tab`. React Native maps `tab` to
+            // UIAccessibilityTraitNone on iOS, so the control never reaches
+            // VoiceOver. `selected` carries the tab meaning.
+            accessibilityRole="button"
+            accessibilityLabel={t.label}
+            testID={`tab-${t.label.toLowerCase()}`}
+            accessibilityState={{ selected: on }}
+            onPress={() => onChange(t.id)}
+            style={({ pressed }) => [
+              desktop ? ui.segTab : ui.tab,
+              on ? (desktop ? ui.segItemOn : ui.tabOn) : null,
+              pressed ? ui.pressed : null,
+            ]}
+          >
+            {desktop ? null : <Text style={[ui.tabGlyph, on ? ui.tabGlyphOn : null]}>{t.glyph}</Text>}
+            <Text
+              style={
+                desktop
+                  ? { fontSize: 14, color: on ? colors.onAccent : colors.fg }
+                  : [ui.tabLabel, on ? ui.tabLabelOn : null]
+              }
+            >
+              {t.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </>
   );
 }
 
-export function TabBar({ tab, onChange, layout = 'mobile' }: {
+export function TabBar({ tab, onChange, layout = 'mobile', title, trailing }: {
   tab: Tab;
   onChange: (t: Tab) => void;
   layout?: 'mobile' | 'desktop';
+  title?: string;
+  trailing?: string;
 }) {
   if (layout === 'desktop') {
+    // No accessibilityRole on the containers. `tabbar` exists on iOS only, and
+    // the Android enum has no TABBAR member, so fromValue would throw.
     return (
-      // The rail carries NO accessibilityRole. `tabbar` is an iOS-only trait
-      // (RCTViewManager.m). The Android AccessibilityRole enum has no TABBAR
-      // member, so fromValue throws IllegalArgumentException and Android shows
-      // a redbox. No container role both groups on iOS and survives Android,
-      // and this package must hold no platform conditional.
-      <View style={ui.sidenav}>
-        {TABS.map((t) => (
-          <TabButton key={t.id} tab={t} on={tab === t.id} onChange={onChange} layout="desktop" />
-        ))}
+      <View style={ui.deskbar}>
+        <View testID="window-wordmark"><Wordmark size="sm" /></View>
+        <Text style={ui.deskTitle} accessibilityRole="header">{title ?? ''}</Text>
+        <View style={ui.seg}>
+          <Tabs tab={tab} onChange={onChange} layout="desktop" />
+        </View>
+        {trailing ? <Text style={ui.deskVer}>{trailing}</Text> : null}
       </View>
     );
   }
   return (
-    // The rail carries NO accessibilityRole, for the same reason as the
-    // desktop rail above.
     <View style={ui.tabbar}>
-      {TABS.map((t) => (
-        <TabButton key={t.id} tab={t} on={tab === t.id} onChange={onChange} layout="mobile" />
-      ))}
+      <Tabs tab={tab} onChange={onChange} layout="mobile" />
     </View>
   );
 }
 
 export const TAB_LABELS = TABS.map((t) => t.label);
+

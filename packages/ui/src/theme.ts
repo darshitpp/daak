@@ -204,28 +204,20 @@ export const ui = StyleSheet.create({
   tabLabel: { fontSize: type.xs, lineHeight: 14, color: colors.muted },
   tabLabelOn: { color: colors.fg, fontWeight: '600' },
 
-  desk: { flexDirection: 'row', flex: 1 },
-  sidebar: {
-    width: control.sidebarWidth,
-    gap: spacing.xl,
-    paddingVertical: spacing.xl,
-    paddingHorizontal: spacing.md,
-    borderRightWidth: 1,
-    borderRightColor: colors.border,
-  },
-  sidenav: { gap: 2 },
-  sideitem: {
-    minHeight: control.minHeight,
+  // Window header (desktop layout): title, a two-segment control, a trailing line.
+  deskbar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.bg,
   },
-  sideitemOn: { backgroundColor: colors.hover },
-  sideLabel: { fontSize: type.body, color: colors.fg2 },
-  sideLabelOn: { color: colors.fg, fontWeight: '600' },
-  sidefoot: { marginTop: 'auto', paddingHorizontal: spacing.md, fontSize: type.xs, color: colors.muted },
+  deskTitle: { flex: 1, fontSize: type.lg, fontWeight: '600', color: colors.fg },
+  deskVer: { fontSize: type.xs, color: colors.muted },
+  segTab: { minHeight: control.minHeight, minWidth: 96, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg, borderRadius: radius.pill },
 
   // The device picker rail. The desktop prototype's chips are 176x72 cards;
   // the phone prototype's are the same idea as pills. One shape, one style.

@@ -4,6 +4,7 @@ import { act, render, screen } from '@testing-library/react-native';
 import { DaakUiApp } from './App';
 import { createUiRuntime } from './headless';
 import { fakeEngine } from './testing/fakeEngine';
+import { useToast } from './components/Toast';
 import type { UiState } from './state/store';
 import type { DaakEvent } from '@daak/core';
 
@@ -104,3 +105,31 @@ describe('DaakUiApp', () => {
     expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
   });
 });
+
+// A child inside the tree that DaakUiApp renders. It calls the hook once.
+function ToastProbe() {
+  const toast = useToast();
+  React.useEffect(() => {
+    toast.show('Copied');
+  }, [toast]);
+  return <Text testID="toast-probe">probe</Text>;
+}
+
+describe('DaakUiApp mounts the shared toast', () => {
+  it.each(['dashboard', 'popover'] as const)('shows a toast that a child raises in %s mode', async (mode) => {
+    const engine = fakeEngine();
+    render(
+      <DaakUiApp
+        mode={mode}
+        engine={engine}
+        runtime={createUiRuntime(engine)}
+        alert={<ToastProbe />}
+        alertRouteToken="probe-1"
+      />,
+    );
+    expect(await screen.findByTestId('toast-probe')).toBeTruthy();
+    expect(await screen.findByText('Copied')).toBeTruthy();
+    expect(screen.getByTestId('toast')).toBeTruthy();
+  });
+});
+

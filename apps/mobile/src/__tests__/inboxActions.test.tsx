@@ -30,7 +30,8 @@ jest.mock('../BackgroundSyncNotice', () => ({ BackgroundSyncNotice: () => null }
 jest.mock('../PairingFlow', () => ({ PairingFlow: () => null }));
 
 import App from '../App';
-import { openFile, presentShare } from '@daak/platform';
+import { openFile, presentShare, copyToClipboard } from '@daak/platform';
+import { threadItem, threadPage } from '@daak/ui';
 
 const { engine } = jest.requireMock('../bootstrap');
 
@@ -45,33 +46,43 @@ const ENTRY: InboxEntry = {
   savedPaths: ['/Users/d/Documents/report.pdf'],
 };
 
-beforeEach(() => jest.clearAllMocks());
+const DEVICE = { deviceId: ENTRY.peerDeviceId, name: 'Pixel 9', addr: '', online: true, presence: 'online' as const, paired: true };
+const FILE = threadItem({
+  transferId: ENTRY.transferId, type: 'file', text: null, name: 'report.pdf',
+  destPath: '/Users/d/Documents/report.pdf',
+});
 
-it('shows a received file and reaches the native reveal and share sheet', async () => {
-  jest.spyOn(engine, 'listInbox').mockResolvedValue([ENTRY]);
+beforeEach(() => {
+  jest.clearAllMocks();
+  jest.spyOn(engine, 'devices').mockResolvedValue([DEVICE]);
+});
+afterEach(() => jest.restoreAllMocks());
+
+it('shows a received file in its thread and reaches the native open, share, and copy', async () => {
+  jest.spyOn(engine, 'listThread').mockResolvedValue(
+    threadPage([threadItem({ text: 'a note', transferId: 'dd'.repeat(16) }), FILE]),
+  );
   render(<App />);
-  // The tab bar exists only once App's durable onboarding read has resolved and
-  // the shell has replaced the onboarding flow, so the press that navigates
-  // cannot be synchronous any more.
-  fireEvent.press(await screen.findByText('Inbox'));
+  fireEvent.press(await screen.findByTestId('open-' + DEVICE.deviceId));
   expect(await screen.findByText('report.pdf')).toBeTruthy();
 
-  fireEvent.press(screen.getByLabelText('open-' + ENTRY.payloadId));
+  fireEvent.press(screen.getByLabelText('Preview report.pdf'));
   await waitFor(() => expect(openFile).toHaveBeenCalledWith('/Users/d/Documents/report.pdf'));
-  fireEvent.press(screen.getByLabelText('share-' + ENTRY.payloadId));
+  fireEvent.press(screen.getByLabelText('Share report.pdf'));
   expect(presentShare).toHaveBeenCalledWith({ urls: ['/Users/d/Documents/report.pdf'] });
+  fireEvent.press(screen.getByLabelText('Copy text'));
+  expect(copyToClipboard).toHaveBeenCalledWith('a note');
+  // The shared toast is mounted in App.tsx, so the design toast "Copied" shows.
+  expect(await screen.findByText('Copied')).toBeTruthy();
 });
 
 // iOS reveal resolves false by design (R41). A silent no-op is the failure a
-// user reports, so the row has to say so.
-it('warns when this device cannot reveal a file', async () => {
-  jest.spyOn(engine, 'listInbox').mockResolvedValue([ENTRY]);
+// user reports, so the thread has to say so.
+it('warns when this device cannot open a file', async () => {
+  jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([FILE]));
   (openFile as jest.Mock).mockResolvedValueOnce(false);
   render(<App />);
-  // The tab bar exists only once App's durable onboarding read has resolved and
-  // the shell has replaced the onboarding flow, so the press that navigates
-  // cannot be synchronous any more.
-  fireEvent.press(await screen.findByText('Inbox'));
-  fireEvent.press(await screen.findByLabelText('open-' + ENTRY.payloadId));
-  expect(await screen.findByLabelText('inbox-no-reveal')).toBeTruthy();
+  fireEvent.press(await screen.findByTestId('open-' + DEVICE.deviceId));
+  fireEvent.press(await screen.findByLabelText('Preview report.pdf'));
+  expect(await screen.findByTestId('thread-no-open')).toBeTruthy();
 });

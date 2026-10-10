@@ -5,6 +5,7 @@ import {
   BackgroundHint,
   EngineProvider,
   Note,
+  ToastProvider,
   type IncompatiblePeer,
   useBlockers,
 } from '@daak/ui';
@@ -27,6 +28,7 @@ import { BackgroundSyncNotice } from './BackgroundSyncNotice';
 import { pickAttachedFiles } from './SendFlow';
 import { mobileInboxActions } from './inbox-actions';
 import { onDeepLink, type DeepLink } from './deeplink';
+import { peerOfPayload } from './notification-route';
 
 // R44: one bundle ships iOS and Android, and each system decides background
 // work through a different mechanism, so the admission sentence differs. The
@@ -83,6 +85,7 @@ export default function App() {
   // because the same row tapped twice must land on Inbox twice and a payload
   // string would make the second tap a no-op.
   const [inboxRouteToken, setInboxRouteToken] = useState(0);
+  const [inboxPeer, setInboxPeer] = useState<string | undefined>(undefined);
 
   /**
    * THE TWO BLOCKING SCREENS, ONCE, FOR BOTH HOSTS (R43c).
@@ -301,7 +304,10 @@ export default function App() {
     () =>
       wireNotificationActions(
         (path) => void mobileInboxActions.open?.(path),
-        () => setInboxRouteToken((n) => n + 1),
+        (payload) => {
+          setInboxPeer(peerOfPayload(payload));
+          setInboxRouteToken((n) => n + 1);
+        },
       ),
     [],
   );
@@ -309,6 +315,7 @@ export default function App() {
   return (
     <SafeAreaView style={{ flex: 1 }}>
       <EngineProvider engine={engine}>
+        <ToastProvider>
         {fault === null ? null : (
           <View style={{ padding: 16, paddingBottom: 0 }}>
             <Note
@@ -404,8 +411,12 @@ export default function App() {
           alertRouteToken={blockers.alertRouteToken}
           settingsRouteToken={blockers.settingsRouteToken}
           inboxRouteToken={inboxRouteToken === 0 ? undefined : String(inboxRouteToken)}
+          inboxPeerDeviceId={inboxPeer}
+          deviceNoun="phone"
+          keyboardAvoiding={Platform.OS === 'ios'}
         />
         ) : null}
+        </ToastProvider>
       </EngineProvider>
     </SafeAreaView>
   );

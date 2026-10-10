@@ -11,6 +11,7 @@ import App from '../App';
 // "parses correctly" was never the same as "does anything". deeplink.test.ts
 // pins the parser; this pins the effect on screen.
 const PEER = 'aa'.repeat(16);
+const OTHER = 'cc'.repeat(16);
 const BUNDLE = JSON.stringify({ cbor: 'aabbcc', name: 'Pixel 9', device_id: PEER });
 
 jest.mock('../bootstrap', () => ({
@@ -56,7 +57,10 @@ let emit: (url: string) => void;
 
 beforeEach(() => {
   jest.clearAllMocks();
-  jest.spyOn(engine, 'devices').mockResolvedValue([{ deviceId: PEER, name: 'Pixel 9', addr: '192.168.1.9:40001' }]);
+  jest.spyOn(engine, 'devices').mockResolvedValue([
+    { deviceId: PEER, name: 'Pixel 9', addr: '192.168.1.9:40001', online: true, presence: 'online' as const, paired: true },
+    { deviceId: OTHER, name: 'ThinkPad', addr: '', online: true, presence: 'online' as const, paired: true },
+  ]);
   // No cold-launch URL: every test here arrives through the event, which is the
   // half getInitialURL never reached anyway (it fired before the first render).
   jest.spyOn(Linking, 'getInitialURL').mockResolvedValue(null);
@@ -73,27 +77,33 @@ async function openThenLink(url: string) {
   emit(url);
 }
 
-it('routes a send link to the composer, prefilled and pointed at that peer', async () => {
+it('routes a send link to the thread, prefilled and pointed at that peer', async () => {
   await openThenLink('daak://send?deviceId=' + PEER + '&text=from%20a%20link');
   expect(await screen.findByDisplayValue('from a link')).toBeTruthy();
-  const sent = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: true });
-  fireEvent.press(screen.getByLabelText('send'));
-  await waitFor(() =>
-    expect(sent).toHaveBeenCalledWith({ peerDeviceId: PEER, text: 'from a link', files: [] }),
-  );
+  const sent = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: false });
+  fireEvent.press(await screen.findByLabelText('send'));
+  await waitFor(() => expect(sent).toHaveBeenCalledWith({ peerDeviceId: PEER, text: 'from a link' }));
 });
 
-// Routing is the half no existing test could see: the parser test proved the
-// deviceId came out, this proves a link arriving while the user sits on
-// Devices actually moves them to the composer.
-it('pulls the Devices tab to Send', async () => {
+// A link is a request from another app or a web page. It prefills the note and
+// opens the thread. It never sends: only the user's tap on Send sends.
+it('does not send when a send link opens the thread', async () => {
+  const sent = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: false });
+  await openThenLink('daak://send?deviceId=' + PEER + '&text=from%20a%20link');
+  expect(await screen.findByDisplayValue('from a link')).toBeTruthy();
+  expect(sent).not.toHaveBeenCalled();
+});
+
+// Routing is the half no parser test could see: a link that arrives while the
+// user sits on Devices must move them into the thread.
+it('moves the user from Devices into the thread', async () => {
   render(<App />);
-    // The shell replaces the onboarding flow only once App's durable read has
-    // resolved, so the tab that navigates cannot be pressed synchronously.
-    fireEvent.press(await screen.findByText('Devices'));
+  fireEvent.press(await screen.findByTestId('tab-devices'));
   expect(screen.getByLabelText('pair-a-device')).toBeTruthy();
-  emit('daak://send?deviceId=' + PEER);
-  expect(await screen.findByPlaceholderText('Message')).toBeTruthy();
+  await act(async () => {
+    emit('daak://send?deviceId=' + PEER);
+  });
+  expect(await screen.findByPlaceholderText('Or type a note')).toBeTruthy();
 });
 
 it('opens pairing from a pair link and joins with its bundle, no camera', async () => {
@@ -136,37 +146,32 @@ it('says so when a pair link is not a bundle', async () => {
 it('does not join when the pair route is opened by hand', async () => {
   const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: 'x' });
   render(<App />);
-  fireEvent.press(await screen.findByText('Devices'));
+  fireEvent.press(await screen.findByTestId('tab-devices'));
   fireEvent.press(screen.getByLabelText('pair-a-device'));
   expect(screen.getByText('Show QR')).toBeTruthy();
   expect(pair).not.toHaveBeenCalled();
 });
 
-// Same for the send route: App starts ON Send, and a seeding effect keyed on
-// nothing would wipe the composer of anything typed there.
-it('does not fight a hand-typed note on a plain mount', async () => {
+// A hand-typed note must survive a re-render on a plain mount.
+it('does not fight a hand-typed note once the thread is open', async () => {
   render(<App />);
-  fireEvent.changeText(await screen.findByPlaceholderText('Message'), 'mine');
-  expect(screen.getByDisplayValue('mine')).toBeTruthy();
-});
-
-// The leak: a send link that names NO text left initialText undefined, and
-// SendScreen only seeded on a TRUTHY value, so the note typed for the previous
-// target survived -- and went out attached to the files on a peer the user's
-// own tap never chose. A textless link must CLEAR the box, not merge with it.
-it('does not carry an earlier note to a later send link with no text', async () => {
-  render(<App />);
-  fireEvent.changeText(await screen.findByPlaceholderText('Message'), 'for the old peer');
-  // React 19: an update driven from the Linking listener is outside act, so it
-  // is not flushed by the time the assertions run. Wrap it, like the other
-  // tests in this file already do.
   await act(async () => {
     emit('daak://send?deviceId=' + PEER);
   });
-  expect(await screen.findByText('Send to Pixel 9')).toBeTruthy();
-  // React 19 flushes the link's state update on a later tick, and this file
-  // runs beside 30 others in the gate. 1s was not enough there.
-  await waitFor(() => expect(screen.queryByDisplayValue('for the old peer')).toBeNull(), {
-    timeout: 5000,
+  fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'mine');
+  expect(screen.getByDisplayValue('mine')).toBeTruthy();
+});
+
+// A send link with NO text must clear the box. The old note belongs to the
+// previous target and must not go to a peer the user did not choose.
+it('does not carry an earlier note to a later send link with no text', async () => {
+  render(<App />);
+  await act(async () => {
+    emit('daak://send?deviceId=' + OTHER + '&text=for%20the%20old%20peer');
   });
+  expect(await screen.findByDisplayValue('for the old peer')).toBeTruthy();
+  await act(async () => {
+    emit('daak://send?deviceId=' + PEER);
+  });
+  await waitFor(() => expect(screen.queryByDisplayValue('for the old peer')).toBeNull(), { timeout: 5000 });
 });

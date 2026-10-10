@@ -52,6 +52,7 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     revealInFileManager: jest.fn(async () => true),
     openFile: jest.fn(async () => true),
     presentShare: jest.fn(async () => true),
+    copyToClipboard: jest.fn(async () => {}),
     requestBatteryExemption: jest.fn(async () => false),
     pairingBundle: jest.fn(async () => ''),
     generateQr: jest.fn(async () => ''),

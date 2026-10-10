@@ -2,8 +2,9 @@ import React from 'react';
 import { View } from 'react-native';
 import type { DaakEngine, DeviceInfo } from '@daak/core';
 import type { UiState } from '../state/store';
-import type { InboxActions } from '../screens/HistoryScreen';
+import type { InboxActions } from '../inbox-actions';
 import { AppShell } from '../components/AppShell';
+import type { DeviceNoun } from '../components/ds';
 import { EngineProvider } from '../EngineContext';
 import { ui } from '../theme';
 
@@ -12,7 +13,7 @@ import { ui } from '../theme';
  * screens own their own engine subscriptions, so the only thing this layer
  * adds is the EngineProvider they read from.
  *
- * The desktop gets the 248px sidebar, and it gets the SAME Send tab every
+ * The desktop gets the window header, and it gets the SAME route stack every
  * other surface has -- there is no window-only composer and no first-active-
  * transfer shortcut, so one send surface and one transfer list exist.
  *
@@ -20,7 +21,7 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
@@ -39,6 +40,12 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
   };
+  /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
+  deviceNoun?: DeviceNoun;
+  /** The desktop window header text. */
+  windowChrome?: { title: string; version?: string };
+  /** Lift the composer above the keyboard. The iOS host sets it. */
+  keyboardAvoiding?: boolean;
 }) {
   void state;
   return (
@@ -56,6 +63,9 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           onCheckConnection={onCheckConnection}
           onUnpair={onUnpair}
           downloadFolder={downloadFolder}
+          deviceNoun={deviceNoun}
+          windowChrome={windowChrome}
+          keyboardAvoiding={keyboardAvoiding}
         />
       </View>
     </EngineProvider>

@@ -183,13 +183,13 @@ describe('first launch', () => {
     await act(async () => {
       fireEvent.press(screen.getByLabelText('welcome-skip'));
     });
-    expect(screen.queryByText('Devices')).toBeNull();
+    expect(screen.queryByTestId('tab-devices')).toBeNull();
 
     await act(async () => {
       startup.release();
       await startup.promise;
     });
-    await waitFor(() => expect(screen.getByText('Devices')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('tab-devices')).toBeTruthy());
   });
 
   // REGRESSION, and the one that mattered most. Reaching the pairing step
@@ -303,7 +303,7 @@ describe('every launch after the first', () => {
     const setDisplayName = jest.spyOn(engine, 'setDisplayName');
     render(<App />);
     await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText('Devices')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('tab-devices')).toBeTruthy());
     expect(screen.queryByText('Send photos, files, and text')).toBeNull();
     // R42: the keychain name is NOT replayed. The engine read the real name out
     // of SQLite during start, so applying the first-run copy here would undo

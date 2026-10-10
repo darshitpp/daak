@@ -210,7 +210,7 @@ describe('the connection check opens the cannot-reach screen on the phone', () =
 
     // The Devices tab, then the affordance the prototype puts there. The
     // button is a real Btn, so its testID is its accessibility label.
-    fireEvent.press(await screen.findByText('Devices'));
+    fireEvent.press(await screen.findByTestId('tab-devices'));
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
     fireEvent.press(screen.getByLabelText('devices-check-connection'));
 
@@ -229,7 +229,7 @@ describe('the connection check opens the cannot-reach screen on the phone', () =
   it('shows nothing before the user asks for a check', async () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([]);
     render(<App />);
-    await waitFor(() => expect(screen.getByText('Devices')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('tab-devices')).toBeTruthy());
     await act(async () => {});
     expect(screen.queryByTestId('screen-cant-reach')).toBeNull();
   });

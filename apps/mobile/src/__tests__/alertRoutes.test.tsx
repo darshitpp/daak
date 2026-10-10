@@ -77,7 +77,7 @@ describe('update-required', () => {
   // from nobody being home.
   it('opens when the engine reports an incompatible peer', async () => {
     render(<App />);
-    await screen.findByText('Devices');
+    await screen.findByTestId('tab-devices');
     await announce(outOfStep());
     expect(await screen.findByText('Daak needs a quick update')).toBeTruthy();
     // The REAL numbers, not the prototype's "0.4.2 (build 1180)".
@@ -90,7 +90,7 @@ describe('update-required', () => {
   // dismissal at all.
   it('does not re-open for a peer the user already dismissed', async () => {
     render(<App />);
-    await screen.findByText('Devices');
+    await screen.findByTestId('tab-devices');
     await announce(outOfStep());
     fireEvent.press(await screen.findByLabelText('update-dismiss'));
     expect(screen.queryByText('Daak needs a quick update')).toBeNull();
@@ -104,7 +104,7 @@ describe('update-required', () => {
   // dead markup because nothing ever produced a second entry.
   it('opens again for a different peer, and lists both', async () => {
     render(<App />);
-    await screen.findByText('Devices');
+    await screen.findByTestId('tab-devices');
     await announce(outOfStep());
     fireEvent.press(await screen.findByLabelText('update-dismiss'));
 
@@ -117,10 +117,10 @@ describe('update-required', () => {
   // user is told to go to Settings and stays where they were.
   it('routes Open Settings to the Settings tab', async () => {
     render(<App />);
-    await screen.findByText('Devices');
+    await screen.findByTestId('tab-devices');
     await announce(outOfStep());
     fireEvent.press(await screen.findByLabelText('update-settings'));
-    expect(await screen.findByText('Save name')).toBeTruthy();
+    expect(await screen.findByLabelText('save-name')).toBeTruthy();
     expect(screen.queryByText('Daak needs a quick update')).toBeNull();
   });
 });
@@ -133,7 +133,7 @@ describe('cant-reach', () => {
   it('is not shown just because nobody is on the network', async () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([]);
     render(<App />);
-    await screen.findByText('Devices');
+    await screen.findByTestId('tab-devices');
     await act(async () => {});
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
   });
@@ -158,7 +158,7 @@ describe('cant-reach', () => {
     fireEvent.press(await screen.findByLabelText('settings-check-connection'));
     await act(async () => {});
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
-    expect(screen.getByText('Save name')).toBeTruthy();
+    expect(screen.getByLabelText('save-name')).toBeTruthy();
   });
 
   // "Nobody is home" and "the check itself failed" are different problems, and
@@ -258,7 +258,7 @@ describe('cant-reach', () => {
     fireEvent.press(await screen.findByLabelText('settings-check-connection'));
     await screen.findByText("Daak can't reach any devices");
     fireEvent.press(screen.getByLabelText('cant-reach-settings'));
-    expect(await screen.findByText('Save name')).toBeTruthy();
+    expect(await screen.findByLabelText('save-name')).toBeTruthy();
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
   });
 

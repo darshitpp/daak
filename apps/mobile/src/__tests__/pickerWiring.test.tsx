@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { mockPlatformHost } from '../testPlatformMock';
 import App from '../App';
 
-// The Send tab's picker is INJECTED, and the injection point is
+// The thread's picker is INJECTED, and the injection point is
 // apps/mobile/src/SendFlow.tsx -- the one module in the app that is allowed to
 // import @daak/platform for it. If that import, or the prop that carries it,
 // ever goes missing, "Add files" renders exactly as it does when it works and
@@ -52,11 +52,11 @@ beforeEach(() => {
 // not already fired at mount), then the exact call the tap produces, then the
 // answer coming back out to the screen.
 it('reaches the platform picker from a tap on Add files', async () => {
-  jest.spyOn(engine, 'devices').mockResolvedValue([
-    { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001' },
-  ]);
+  const pixel = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true, presence: 'online' as const, paired: true };
+  jest.spyOn(engine, 'devices').mockResolvedValue([pixel]);
   render(<App />);
-  await waitFor(() => expect(screen.getByText('Pixel 9')).toBeTruthy());
+  fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
+  await waitFor(() => expect(screen.getByLabelText('pick-files')).toBeTruthy());
   expect(pickFiles).not.toHaveBeenCalled();
   fireEvent.press(screen.getByLabelText('pick-files'));
   // And what the picker returned has to reach the composer -- a picker that
