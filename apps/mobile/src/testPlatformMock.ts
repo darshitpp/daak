@@ -41,12 +41,6 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
       stillNeeded: facts.notificationsGranted === true ? [] : ['Alerts when a file arrives'],
     })),
     withNotificationReask: jest.fn(() => []),
-    // The welcome screen's per-platform copy. Real implementation in
-    // packages/platform/src/onboarding-copy.ts. The mock returns the shared
-    // screen's defaults, which are the Android words, because jest's
-    // react-native preset reports Platform.OS as 'ios' -- returning the iOS
-    // words here would make every onboarding test assert the wrong surface.
-    welcomeCopyFor: jest.fn(() => ({})),
     // The four native facades the app's non-mocked modules call.
     pickFiles: jest.fn(async () => [] as string[]),
     revealInFileManager: jest.fn(async () => true),

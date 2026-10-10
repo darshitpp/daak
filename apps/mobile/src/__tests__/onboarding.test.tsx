@@ -43,13 +43,6 @@ jest.mock('@daak/platform', () => ({
   writeOnboarding: (...args: unknown[]) => mockWriteOnboarding(...(args as [])),
   INITIAL_ONBOARDING: { complete: false, discovery: false, alerts: false },
   permissionRows: (facts: { notificationsGranted?: boolean }) => mockPermissionRows(facts),
-  // The welcome screen's per-platform copy, from
-  // packages/platform/src/onboarding-copy.ts. This returns the shared screen's
-  // DEFAULTS, which are the Android words, because the tests below assert
-  // 'Send photos, files, and text'. Returning the iOS words here would make
-  // this file assert a surface it is not testing. The iOS branch itself is
-  // pinned by packages/platform/src/onboarding-copy.test.ts.
-  welcomeCopyFor: jest.fn(() => ({})),
   // R42p: the download folder. An unset folder answers null, and the move
   // returns its input unchanged -- which is the real no-op path, not a stub
   // that hides a difference.
@@ -126,7 +119,7 @@ describe('first launch', () => {
   it('asks to name the device before it starts an engine', async () => {
     mockReadOnboarding.mockResolvedValue(firstLaunch);
     render(<App />);
-    await waitFor(() => expect(screen.getByText('Send photos, files, and text')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Send anything to a phone next door')).toBeTruthy());
     // Nothing may publish an engine-backed name before the user chose one.
     expect(startEngineOnce).not.toHaveBeenCalled();
   });
@@ -304,7 +297,7 @@ describe('every launch after the first', () => {
     render(<App />);
     await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId('tab-devices')).toBeTruthy());
-    expect(screen.queryByText('Send photos, files, and text')).toBeNull();
+    expect(screen.queryByText('Send anything to a phone next door')).toBeNull();
     // R42: the keychain name is NOT replayed. The engine read the real name out
     // of SQLite during start, so applying the first-run copy here would undo
     // every rename the user has made in Settings since -- on every launch.

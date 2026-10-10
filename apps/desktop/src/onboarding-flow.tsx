@@ -13,15 +13,15 @@ import { desktopPermissionRows, type DesktopCapability } from './onboarding';
 
 /**
  * The prototype's DESKTOP first-run flow: sc-welcome -> sc-name-device ->
- * sc-permissions, from app/prototypes/macos.html:605 onwards.
+ * sc-permissions, from the design file macos.html onwards.
  *
  * WHY THIS IS NOT apps/mobile/src/OnboardingFlow.tsx, which it otherwise
  * mirrors step for step:
  *
  *  - That flow embeds <PairingFlow/>, which arms a pairing slot and renders a QR
  *    scanned by the device CAMERA. macOS has neither: this app registers no
- *    camera module and the prototype's desktop step is "Look around first",
- *    not a scan. Importing it would pull TurboModuleRegistry.getEnforcing
+ *    camera module, and the design has no scan step on the desktop. Importing
+ *    it would pull TurboModuleRegistry.getEnforcing
  *    calls for modules the macOS host does not register.
  *  - That flow's permissions rows come from @daak/platform's permissionRows,
  *    whose switchable alerts row is backed by initNotifications(), a MOBILE
@@ -35,56 +35,6 @@ import { desktopPermissionRows, type DesktopCapability } from './onboarding';
  */
 
 export type DesktopOnboardingStep = 'welcome' | 'name' | 'permissions';
-
-/**
- * The desktop prototype's naming step, verbatim (macos.html:626-652).
- *
- * The closing note is omitted because it is the one line that cannot be
- * reused: "Only on your Wi-Fi / People on your network can see this
- * name" is true and also redundant on a Mac, where the user is looking at
- * the machine they are sitting at. The prototype's own desktop step has no
- * such note -- it has the error block and the character hint instead.
- */
-const DESKTOP_NAME_COPY = {
-  heading: 'Name this Mac',
-  lead:
-    'This name appears on the other device when it asks to receive a file. Something like a computer name works well.',
-  hint: 'A computer name works well, like "Darshit\'s MacBook".',
-  error: 'Type something like Darshit\'s MacBook, then move on.',
-  note: null,
-};
-
-/**
- * The desktop prototype's welcome copy (macos.html:612-624).
- *
- * THIS COPY IS DUPLICATED, NOT IMPORTED, and the duplication is deliberate.
- * @daak/platform exports the same macOS words in MACOS_WELCOME_COPY, but its
- * barrel re-exports every mobile facade, and each of those imports a module
- * that calls TurboModuleRegistry.getEnforcing at module-eval time:
- * DaakBgSched, DaakClipboard, DaakFsPaths, DaakNotify, DaakQrScanner,
- * DaakSecureStore, DaakShare. The macOS host registers none of them, so the
- * import throws while the bundle is still evaluating and the app never
- * renders. This is the same reason this file does not import the mobile
- * PairingFlow, and it is why the words live here instead.
- *
- * The two copies must agree. apps/desktop/test/name-step.spec.ts pins the
- * words this file puts on screen.
- */
-const DESKTOP_WELCOME_COPY = {
-  eyebrow: 'Welcome',
-  heading: 'Send a file to the room next door',
-  lead:
-    'Photos, videos, documents and text go straight to another device on the same Wi-Fi. Nothing leaves your home network, and no account is needed.',
-  // The Mac welcome has no three-things card. Rendering the phone's promises
-  // here would put words the reference never shows this surface on a Mac.
-  bulletsTitle: null,
-  bullets: null,
-  note: { title: 'No internet, no sign-up, no waiting.', body: '' },
-  skipLabel: 'Look around first',
-  // The sidebar already carries the wordmark; the reference notes that putting
-  // it in both places showed "Daak" twice in one viewport.
-  wordmark: false,
-} as const;
 
 export interface CompletedOnboarding {
   name?: string;
@@ -107,22 +57,9 @@ export function DesktopOnboardingFlow({
   const [name, setName] = useState(initialName ?? '');
   const [alerts, setAlerts] = useState(capabilities.notifications === true);
 
-  // The prototype's welcome screen is sc-welcome in the mobile shell and the
-  // same screen with a Mac sidebar in the desktop shell. The COPY is the
-  // desktop one (macos.html:612-624): "Send a file to the room next door" and a
-  // "Look around first" exit, because a Mac user is at a keyboard with a Send
-  // tab one click away and a phone user is not.
   if (step === 'welcome') {
     return (
-      <WelcomeScreen
-        onGetStarted={() => setStep('name')}
-        onSkip={() => onComplete({ alerts })}
-        // The desktop prototype's own words for this step (macos.html:612-624):
-        // "Send a file to the room next door", an eyebrow, no three-things
-        // card, and a "Look around first" exit, because a Mac user is at a
-        // keyboard with a Send tab one click away and a phone user is not.
-        copy={DESKTOP_WELCOME_COPY}
-      />
+      <WelcomeScreen onGetStarted={() => setStep('name')} onSkip={() => onComplete({ alerts })} />
     );
   }
 
@@ -132,12 +69,9 @@ export function DesktopOnboardingFlow({
         name={name}
         onNameChange={setName}
         onBack={() => setStep('welcome')}
-        // The desktop prototype's own words for this step (macos.html:626-652):
-        // "Name this Mac", what other devices should call you, and a
-        // computer name as the example. The shared component's defaults are
-        // the phone's ("Name this device", a Pixel). Layout is shared; the
-        // nouns are not, and a Mac is not a phone.
-        copy={DESKTOP_NAME_COPY}
+        // One step remains at this commit (alerts), so the design sentence
+        // "Three quick steps left." would be false. Task 5 sets the final one.
+        footer={null}
         onContinue={() => {
           if (name.trim() === '') return;
           setStep('permissions');

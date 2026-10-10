@@ -1,118 +1,76 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { WelcomeScreen } from './WelcomeScreen';
 import { NameDeviceScreen } from './NameDeviceScreen';
 import { PermissionsScreen } from './PermissionsScreen';
 import { CantReachScreen } from './CantReachScreen';
 import { UpdateRequiredScreen } from './UpdateRequiredScreen';
 
-describe('Welcome', () => {
-  it('keeps the three promises the prototype makes, and both exits work', () => {
-    const started = jest.fn();
-    const skip = jest.fn();
-    render(<WelcomeScreen onGetStarted={started} onSkip={skip} />);
-    expect(screen.getByText('Send photos, files, and text')).toBeTruthy();
-    expect(screen.getByText('No account, no sign-up, no cloud.')).toBeTruthy();
-    expect(screen.getByText('Works with the internet off')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('welcome-get-started'));
-    fireEvent.press(screen.getByLabelText('welcome-skip'));
-    expect(started).toHaveBeenCalledTimes(1);
-    expect(skip).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe('Name this device', () => {
-  // A disabled Next is how the user learns the field is required; the line
-  // under the field is how they learn what to do about it.
-  it('refuses an empty name and says why', () => {
+  const noop = () => {};
+
+  it('shows the design words and the hint before the user touches the field', () => {
+    render(<NameDeviceScreen name="" onNameChange={noop} onContinue={noop} />);
+    expect(screen.getByText('Name this device')).toBeTruthy();
+    expect(screen.getByText('Other devices on your Wi-Fi will see this name so you can pick the right one.')).toBeTruthy();
+    expect(screen.getByText('Device name')).toBeTruthy();
+    expect(screen.getByText('Short names are easier to spot. You can change this later.')).toBeTruthy();
+    expect(screen.getByText('Three quick steps left.')).toBeTruthy();
+    // The design checks the name on blur and on Continue, not on first render.
+    expect(screen.queryByTestId('name-error')).toBeNull();
+    expect(screen.queryByText('Step 1 of 3')).toBeNull();
+  });
+
+  it('keeps Continue enabled, shows the error, and does not continue with a blank name', () => {
     const next = jest.fn();
-    render(<NameDeviceScreen name="   " onNameChange={() => {}} onContinue={next} />);
-    expect(screen.getByTestId('name-error')).toBeTruthy();
-    expect(screen.getByText('Type a name so people know which device is yours.')).toBeTruthy();
+    render(<NameDeviceScreen name="   " onNameChange={noop} onContinue={next} />);
+    expect(screen.getByLabelText('name-next').props.accessibilityState?.disabled).not.toBe(true);
     fireEvent.press(screen.getByLabelText('name-next'));
+    expect(screen.getByTestId('name-error')).toBeTruthy();
+    expect(screen.getByText('Give this device a name so people can tell it apart.')).toBeTruthy();
+    expect(screen.queryByText('Short names are easier to spot. You can change this later.')).toBeNull();
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('accepts a typed name and passes the keystrokes up', () => {
+  it('shows the error when the field loses focus while it is blank', () => {
+    render(<NameDeviceScreen name="" onNameChange={noop} onContinue={noop} />);
+    fireEvent(screen.getByTestId('name-input'), 'blur');
+    expect(screen.getByTestId('name-error')).toBeTruthy();
+  });
+
+  it('clears the error as soon as the user types', () => {
+    const { rerender } = render(<NameDeviceScreen name="" onNameChange={noop} onContinue={noop} />);
+    fireEvent(screen.getByTestId('name-input'), 'blur');
+    expect(screen.getByTestId('name-error')).toBeTruthy();
+    rerender(<NameDeviceScreen name="S" onNameChange={noop} onContinue={noop} />);
+    expect(screen.queryByTestId('name-error')).toBeNull();
+    expect(screen.getByText('Short names are easier to spot. You can change this later.')).toBeTruthy();
+  });
+
+  it('passes the keystrokes up and continues with a typed name', () => {
     const change = jest.fn();
     const next = jest.fn();
     render(<NameDeviceScreen name="Seawood Otter" onNameChange={change} onContinue={next} />);
-    expect(screen.queryByTestId('name-error')).toBeNull();
     fireEvent.changeText(screen.getByTestId('name-input'), 'Study Pi');
     fireEvent.press(screen.getByLabelText('name-next'));
     expect(change).toHaveBeenCalledWith('Study Pi');
     expect(next).toHaveBeenCalledTimes(1);
   });
 
-  // The desktop prototype calls this step `Name this Mac` and suggests a
-  // computer name. Reusing the phone's nouns on a Mac reads as a leftover, so
-  // the desktop flow passes `copy`. The mobile caller passes nothing and
-  // must be unaffected -- these four pin that.
-  it(`takes platform copy for the heading, lead, and hint`, () => {
-    render(
-      <NameDeviceScreen
-        name="Darshit's MacBook"
-        onNameChange={() => {}}
-        onContinue={() => {}}
-        copy={{
-          heading: 'Name this Mac',
-          lead: 'This name appears on the other device when it asks to receive a file.',
-          hint: 'A computer name works well.',
-        }}
-      />
-    );
-    expect(screen.getByText('Name this Mac')).toBeTruthy();
-    expect(
-      screen.getByText('This name appears on the other device when it asks to receive a file.'),
-    ).toBeTruthy();
-    expect(screen.getByText('A computer name works well.')).toBeTruthy();
-    // The phone's own words must be gone, not merely joined by the Mac's.
-    expect(screen.queryByText('Name this device')).toBeNull();
+  it('limits the name to 18 characters', () => {
+    render(<NameDeviceScreen name="" onNameChange={noop} onContinue={noop} />);
+    expect(screen.getByTestId('name-input').props.maxLength).toBe(18);
   });
 
-  it(`uses the overridden error line on an empty name`, () => {
-    render(
-      <NameDeviceScreen
-        name=""
-        onNameChange={() => {}}
-        onContinue={() => {}}
-        copy={{ error: 'Type something like a MacBook name, then move on.' }}
-      />
+  it('lets the host replace or remove the footer sentence', () => {
+    const { rerender } = render(
+      <NameDeviceScreen name="" onNameChange={noop} onContinue={noop} footer="Two quick steps left." />,
     );
-    expect(screen.getByText('Type something like a MacBook name, then move on.')).toBeTruthy();
-    expect(screen.queryByText('Type a name so people know which device is yours.')).toBeNull();
-  });
-
-  // The one override that removes a line entirely. The phone's closing note
-  // (`Only on your Wi-Fi`) is true everywhere but redundant on a Mac, and
-  // the desktop prototype's own step has no equivalent.
-  it(`omits the closing note when copy sets it to null`, () => {
-    render(
-      <NameDeviceScreen
-        name="Darshit's MacBook"
-        onNameChange={() => {}}
-        onContinue={() => {}}
-        copy={{ note: null }}
-      />
-    );
-    expect(screen.queryByText('Only on your Wi-Fi')).toBeNull();
-  });
-
-  // Per-field fallback: an override that does not mention the note must leave
-  // the default note in place, not silently drop it.
-  it(`keeps the default note when copy omits it`, () => {
-    render(
-      <NameDeviceScreen
-        name="Darshit's MacBook"
-        onNameChange={() => {}}
-        onContinue={() => {}}
-        copy={{ heading: 'Name this Mac' }}
-      />
-    );
-    expect(screen.getByText('Only on your Wi-Fi')).toBeTruthy();
+    expect(screen.getByText('Two quick steps left.')).toBeTruthy();
+    expect(screen.queryByText('Three quick steps left.')).toBeNull();
+    rerender(<NameDeviceScreen name="" onNameChange={noop} onContinue={noop} footer={null} />);
+    expect(screen.queryByText('Two quick steps left.')).toBeNull();
   });
 });
-
 describe('Permissions', () => {
   const rows = [
     { key: 'nearby', title: 'Nearby devices', sub: 'on', state: 'unavailable' as const },

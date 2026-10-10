@@ -307,7 +307,7 @@ describe('a first launch that the user finishes', () => {
     expect(calls).toEqual([]);
   });
 
-  // "Look around first" is a real exit, and it exits the same way: it writes, it
+  // The Welcome skip is a real exit, and it exits the same way: it writes, it
   // starts, it primes -- with NO name, because the user never gave one. A path
   // that published an empty string here would rename the Mac to nothing on the
   // next launch.
@@ -1073,7 +1073,7 @@ describe('index.js routes both paths through the gate', () => {
 
   // DEFECT 4: the gate had NO one-shot guard, where apps/mobile's OnboardingFlow
   // has had one all along (OnboardingFlow.tsx:101, `completed = useRef(false)`).
-  // Both desktop exits are Pressables -- "Look around first" on welcome and
+  // Both desktop exits are Pressables -- the Welcome skip and
   // "Continue" on permissions -- and a double tap fires BOTH. claimEngineStart
   // only guards the START half: two writes with two different names could still
   // land, and the last one would win silently.

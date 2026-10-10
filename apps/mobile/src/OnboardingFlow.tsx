@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import {
   Btn,
   NameDeviceScreen,
@@ -19,7 +19,6 @@ import {
   clearDownloadFolder,
   downloadFolderName,
   readOnboarding,
-  welcomeCopyFor,
   withNotificationReask,
   writeOnboarding,
   type OnboardingState,
@@ -221,10 +220,6 @@ export function OnboardingFlow({ onComplete, onReady }: {
     return (
       <WelcomeScreen
         onGetStarted={() => setStep('name')}
-        // The iPhone and Android references disagree about every line of this
-        // screen. One bundle ships both, so the choice is made here, in the
-        // app layer, and packages/ui keeps zero platform conditionals.
-        copy={welcomeCopyFor(Platform.OS)}
         onSkip={() => {
           // "I already paired this phone" on a fresh install with no record:
           // the user is telling us the questions are answered. Written, not
@@ -245,6 +240,7 @@ export function OnboardingFlow({ onComplete, onReady }: {
         name={name}
         onNameChange={setName}
         onBack={() => setStep('welcome')}
+        footer="Two quick steps left."
         onContinue={() => {
           if (name.trim() === '') return;
           setStep('permissions');

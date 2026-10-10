@@ -53,60 +53,29 @@ async function type(tree: ReactTestRenderer, testID: string, value: string): Pro
     await Promise.resolve();
   });
 }
-
-/**
- * THE MACOS WELCOME COPY.
- *
- * These words are DUPLICATED in apps/desktop/src/onboarding-flow.tsx rather
- * than imported from @daak/platform, because that barrel reaches
- * TurboModuleRegistry.getEnforcing for seven mobile modules the macOS host
- * does not register. Duplication without a test is drift with extra steps, so
- * these pin the copy, and the last case pins the reason the import is not made.
- */
-describe('the welcome screen shows the macOS words, not the phone ones', () => {
-  it('uses the desktop heading, eyebrow, and lead', () => {
+describe('the welcome screen shows the words of the design', () => {
+  it('uses the one heading, lead, and exits of the design', () => {
     const shown = text(renderFlow());
-    expect(shown).toContain('Send a file to the room next door');
-    expect(shown).toContain('Welcome');
-    expect(shown).toContain('Nothing leaves your home network, and no account is needed.');
+    expect(shown).toContain('Send anything to a phone next door');
+    expect(shown).toContain('Photos, videos, documents and text go straight to another device on the same Wi-Fi.');
+    expect(shown).toContain('Three things to know');
+    expect(shown).toContain('It works offline');
+    expect(shown).toContain('I already set this up');
   });
 
-  // The load-bearing one. The shared screen's DEFAULTS are the Android words,
-  // so a copy prop that is dropped silently puts the phone's three promises on
-  // a Mac, which is the exact divergence this change exists to remove.
-  it('shows neither the phone heading nor the phone promises', () => {
+  it('shows none of the old macOS words', () => {
     const shown = text(renderFlow());
-    expect(shown).not.toContain('Send photos, files, and text');
-    expect(shown).not.toContain('Both devices sit on the same Wi-Fi.');
-    expect(shown).not.toContain('No account, no sign-up, no cloud.');
-    expect(shown).not.toContain('Files travel straight between the two devices.');
-    expect(shown).not.toContain('Three things to know');
+    expect(shown).not.toContain('Send a file to the room next door');
+    expect(shown).not.toContain('Look around first');
+    expect(shown).not.toContain('No internet, no sign-up, no waiting.');
   });
 
-  it('exits with "Look around first", not the phone skip', () => {
-    const shown = text(renderFlow());
-    expect(shown).toContain('Look around first');
-    expect(shown).not.toContain('I already paired this phone');
+  // The design shows the wordmark on macOS too (macos.html, sc-welcome).
+  it('shows the wordmark', () => {
+    expect(text(renderFlow())).toContain('aak');
   });
 
-  // The reference note is ONE sentence. A title with a body would render a
-  // second, empty line under it.
-  it('shows the note as a single line with no empty body', () => {
-    const shown = text(renderFlow());
-    expect(shown).toContain('No internet, no sign-up, no waiting.');
-    // The phone note must not appear, and neither must a body under the Mac one.
-    expect(shown).not.toContain('Airplane mode is fine');
-  });
-
-  // The reference has no wordmark on this screen: the sidebar already carries
-  // it, and the prototype comments that showing it twice read as a bug.
-  it('shows no wordmark, because the sidebar has one', () => {
-    expect(text(renderFlow())).not.toContain('aak');
-  });
-
-  // The structural guard for the duplication above: if someone moves the copy
-  // to a shared module, these two facts must still hold.
-  it('never imports the @daak/platform barrel for its copy', async () => {
+  it('never imports the @daak/platform barrel', async () => {
     const source = readFileSync(join(__dirname, '..', 'src', 'onboarding-flow.tsx'), 'utf8');
     expect(source).not.toMatch(/from '@daak\/platform'/);
   });
