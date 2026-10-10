@@ -36,6 +36,21 @@ export async function revealInFileManager(path: string): Promise<boolean> {
 }
 
 /**
+ * Opens a received file in the OS viewer. This is the Preview verb of the
+ * thread. `revealInFileManager` is a different verb: it shows the file in the
+ * file manager, and iOS has no such API (R41). Resolves false when no viewer
+ * started, and also when the native call rejects, because the caller is a
+ * button handler that must not die on an unhandled rejection.
+ */
+export async function openFile(path: string): Promise<boolean> {
+  try {
+    return (await NativeDaakFsPaths.openFile(path)) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * R42p: where received files should end up, and the move that puts them there.
  *
  * The engine writes into its own app-storage folder and the platform moves the

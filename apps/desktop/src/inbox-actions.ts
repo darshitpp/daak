@@ -1,17 +1,19 @@
 import { shareViaSystem } from '@daak/rn-share/js/system-share';
+import { openFile } from '@daak/platform/src/fspaths';
 import type { InboxActions } from '@daak/ui';
 
-// Deep import for the same reason src/picker.ts records: the @daak/rn-share
-// barrel default-exports a TurboModuleRegistry.getEnforcing('DaakShare') call,
-// and macOS registers 'DaakSystemShare' instead. This module loads the one
-// that does exist here (RNShare.mm: NSSharingServicePicker).
+// Deep imports for the reason src/picker.ts records: the @daak/rn-share barrel
+// default-exports a TurboModuleRegistry.getEnforcing('DaakShare') call, and
+// macOS registers 'DaakSystemShare' instead. The fspaths facade is a deep
+// import for the same reason shells.tsx uses one. The DaakFsPaths pod IS linked
+// on macOS (apps/desktop/macos/Podfile.lock).
 //
-// Only Share. "Show in folder" has no macOS implementation in this pass
-// (there is no rn-fspaths for macOS), so HistoryScreen simply does not render
-// that button rather than shipping a reveal that quietly does nothing.
-// ponytail: add reveal via NSWorkspace activateFileViewerSelectingURLs when a
-// desktop Inbox row demonstrably needs it.
+// open: NSWorkspace opens the file in its default app (Preview for a PDF).
+// share: NSSharingServicePicker (RNShare.mm).
+// ponytail: add "show in Finder" through revealInFileManager when a desktop
+// row demonstrably needs it.
 export const desktopInboxActions: InboxActions = {
+  open: (path) => openFile(path),
   share: (paths) => {
     void shareViaSystem({ files: paths }).catch(() => {});
   },
@@ -21,3 +23,4 @@ export const desktopInboxActions: InboxActions = {
   // button stays hidden here (HistoryScreen renders it only when the host
   // supplies the verb) until the pod is added and the app is rebuilt.
 };
+

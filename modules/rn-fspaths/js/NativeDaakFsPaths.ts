@@ -14,6 +14,13 @@ export interface Spec extends TurboModule {
   /** Reveals a saved file in the OS file manager. `false` = not supported here. */
   reveal(path: string): Promise<boolean>;
   /**
+   * Opens a received file in the OS viewer: QuickLook on iOS, the default app
+   * on macOS, `ACTION_VIEW` through the file provider on Android. `false` means
+   * no viewer started (no such file, no app for the type). It is an answer and
+   * not an error.
+   */
+  openFile(path: string): Promise<boolean>;
+  /**
    * Whether a path exists. Resolves false, never rejects, for a path that is
    * not there: "no such file" is an answer here, and a reveal action must not
    * die on an unhandled rejection.

@@ -30,7 +30,7 @@ jest.mock('../BackgroundSyncNotice', () => ({ BackgroundSyncNotice: () => null }
 jest.mock('../PairingFlow', () => ({ PairingFlow: () => null }));
 
 import App from '../App';
-import { revealInFileManager, presentShare } from '@daak/platform';
+import { openFile, presentShare } from '@daak/platform';
 
 const { engine } = jest.requireMock('../bootstrap');
 
@@ -57,7 +57,7 @@ it('shows a received file and reaches the native reveal and share sheet', async 
   expect(await screen.findByText('report.pdf')).toBeTruthy();
 
   fireEvent.press(screen.getByLabelText('open-' + ENTRY.payloadId));
-  await waitFor(() => expect(revealInFileManager).toHaveBeenCalledWith('/Users/d/Documents/report.pdf'));
+  await waitFor(() => expect(openFile).toHaveBeenCalledWith('/Users/d/Documents/report.pdf'));
   fireEvent.press(screen.getByLabelText('share-' + ENTRY.payloadId));
   expect(presentShare).toHaveBeenCalledWith({ urls: ['/Users/d/Documents/report.pdf'] });
 });
@@ -66,7 +66,7 @@ it('shows a received file and reaches the native reveal and share sheet', async 
 // user reports, so the row has to say so.
 it('warns when this device cannot reveal a file', async () => {
   jest.spyOn(engine, 'listInbox').mockResolvedValue([ENTRY]);
-  (revealInFileManager as jest.Mock).mockResolvedValueOnce(false);
+  (openFile as jest.Mock).mockResolvedValueOnce(false);
   render(<App />);
   // The tab bar exists only once App's durable onboarding read has resolved and
   // the shell has replaced the onboarding flow, so the press that navigates

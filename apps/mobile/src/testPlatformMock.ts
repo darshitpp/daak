@@ -50,6 +50,7 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     // The four native facades the app's non-mocked modules call.
     pickFiles: jest.fn(async () => [] as string[]),
     revealInFileManager: jest.fn(async () => true),
+    openFile: jest.fn(async () => true),
     presentShare: jest.fn(async () => true),
     requestBatteryExemption: jest.fn(async () => false),
     pairingBundle: jest.fn(async () => ''),
