@@ -160,6 +160,21 @@ describe('AppShell held route', () => {
     expect(await screen.findByDisplayValue('half written')).toBeTruthy();
     expect(screen.getByText('a.pdf')).toBeTruthy();
   });
+
+  // P4 Task 8. The delete sentence names the device noun the shell was given.
+  it('gives the held screen the shell device noun', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ type: 'file', text: null, name: 'bad.jpg', state: 'quarantined', transferId: TID, itemIndex: 1 }),
+    ]));
+    shell(engine, { initialPeerDeviceId: peer.deviceId, deviceNoun: 'Mac' });
+    fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
+    expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
+    expect(screen.getByLabelText('Back to conversation')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('quarantine-delete'));
+    fireEvent.press(screen.getByLabelText('quarantine-delete-confirm'));
+    expect(await screen.findByText('The held-back file is gone. Nothing else on this Mac changed.')).toBeTruthy();
+  });
 });
 
 describe('AppShell tokens', () => {

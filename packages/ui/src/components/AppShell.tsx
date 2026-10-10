@@ -232,7 +232,12 @@ export function AppShell({
           {layout === 'mobile' && atRoot ? <TabBar tab={root} onChange={goRoot} layout="mobile" /> : null}
           {held ? (
             <View style={[StyleSheet.absoluteFill, ui.screen]} testID="quarantine-route">
-              <QuarantineScreen transferId={held.transferId} itemIndex={held.itemIndex} onBack={pop} />
+              <QuarantineScreen
+                transferId={held.transferId}
+                itemIndex={held.itemIndex}
+                onBack={pop}
+                deviceNoun={deviceNoun}
+              />
             </View>
           ) : null}
         </>

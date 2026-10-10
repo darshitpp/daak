@@ -3,59 +3,50 @@ import { ScrollView, Text, View } from 'react-native';
 import type { QuarantineReport } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { AppBar } from '../components/Onboarding';
-import { Btn, Empty, Note } from '../components/ds';
+import { Btn, Empty, Note, type DeviceNoun } from '../components/ds';
+import { Sheet } from '../components/Sheet';
 import { ui } from '../theme';
 import { NOT_RECORDED, arrivedAt, fingerprintGroups, humanBytes, senderLabel } from './quarantine-facts';
 
 function noop(): void {
-  // A host may omit onBack; a Pressable still needs SOME function, and crashing
-  // a security screen because a route had no exit is worse than an inert one.
-  // AppShell always supplies it.
+  // A host may omit onBack. A Pressable still needs a function, and a crash on a
+  // security screen is worse than an inert button. AppShell always supplies it.
 }
 
 /**
- * The prototype's "Held back" screen (sc-quarantine), with its fabricated data
- * replaced by facts.
+ * The Held-back screen (design route `quarantine`), with real data in place of
+ * the mock values.
  *
- * THE PROTOTYPE'S FOUR VALUES AND ITS PRIMARY BUTTON ARE ALL LIES. Its card
- * reads `harbor-lighthouse.jpg` / `4.2 MB` / `Kitchen Tablet` / `2 minutes ago`,
- * pairs `7f3a 91c2 04be` against `7f3a 91c2 04c9`, and its primary button says
- * "Ask the sender again". None of that can be rendered as written:
+ * What is real: the file name, the size, the sender, the arrival time, and both
+ * fingerprints. A value the device did not record shows "Not recorded". The two
+ * fingerprints are a pair and never a verdict. The engine does not decide which
+ * one a person should believe, so the screen has no "corrupt" badge.
  *
- *   - The name, size, sender and arrival time are only whatever this device
- *     RECORDED. A sender that was never paired has no stored label, and an item
- *     sent with no size has no size. Each of those renders as an explicit
- *     "Not recorded", because filling them in would be a fabricated fact on the
- *     one screen whose whole job is telling the user not to trust a file.
- *   - The two fingerprints are REAL and are shown as a PAIR, never as a
- *     verdict. The engine computed one from the bytes on this disk; it does not
- *     and must not decide which of the two a person should believe. So there is
- *     no "corrupt" badge: the comparison is the user's to make.
- *   - "Ask the sender again" is not wired, and could not be. Daak's wire
- *     protocol is PUSH-ONLY -- a receiver has no message it can send a sender
- *     to request a file -- and the held bytes are the exact bytes that just
- *     failed this comparison, so re-reading them can only reproduce the same
- *     mismatch. A button here would promise what the engine cannot do.
+ * "Ask the sender again" is absent (ruling D1). The wire protocol is push-only,
+ * so a receiver has no message that asks a sender for a file. The held bytes are
+ * the bytes that failed the check, so reading them again gives the same result.
  *
- * What IS real, and therefore rendered: both fingerprints, everything the item
- * row recorded, and a delete that removes the held bytes for good.
+ * Delete is irreversible, so it asks first. The question is a sheet, as in the
+ * design.
  */
 export function QuarantineScreen({
   transferId,
   itemIndex,
   onBack,
   onDeleted,
+  deviceNoun = 'device',
 }: {
   transferId: string;
   itemIndex: number;
-  /** Closes the screen. The shell owns the route, exactly as for pairing. */
+  /** Closes the screen. The shell owns the route. */
   onBack?: () => void;
   /**
-   * Called after the held bytes are really gone, so the LIST this was opened
-   * from can drop the row. Without it the Inbox keeps offering a row for a file
-   * that no longer exists, and re-opening it shows an error.
+   * Called after the held bytes are gone, so the list that opened this screen
+   * can drop the row.
    */
   onDeleted?: () => void;
+  /** The word for this device. The host sets it, because ui has no platform check. */
+  deviceNoun?: DeviceNoun | 'device';
 }) {
   const engine = useEngine();
   const [report, setReport] = useState<QuarantineReport | null>(null);
@@ -64,8 +55,8 @@ export function QuarantineScreen({
   const [deleting, setDeleting] = useState(false);
   const [gone, setGone] = useState(false);
 
-  // A READ. `quarantineReport` mutates nothing, so opening this screen cannot
-  // change what is being held.
+  // A read. `quarantineReport` changes nothing, so opening this screen cannot
+  // change what is held.
   useEffect(() => {
     let live = true;
     void engine.quarantineReport(transferId, itemIndex).then(
@@ -91,11 +82,13 @@ export function QuarantineScreen({
     void engine.deleteQuarantined(transferId, itemIndex).then(
       () => {
         setDeleting(false);
+        setConfirming(false);
         setGone(true);
         onDeleted?.();
       },
       (e: unknown) => {
         setDeleting(false);
+        setConfirming(false);
         setError(e instanceof Error ? e.message : 'the held-back file could not be deleted');
       },
     );
@@ -104,16 +97,16 @@ export function QuarantineScreen({
   if (gone) {
     return (
       <View style={ui.screen} testID="screen-quarantine">
-        <AppBar title="Held back" onBack={onBack} backLabel="Back to Inbox" />
+        <AppBar title="Held back" onBack={onBack} backLabel="Back to conversation" />
         <ScrollView contentContainerStyle={ui.pad}>
           <Empty
             title="Deleted"
-            body="The held-back file is gone. Nothing else on this device changed."
+            body={`The held-back file is gone. Nothing else on this ${deviceNoun} changed.`}
           />
           <Btn
             variant="ghost"
             block
-            label="Back to Inbox"
+            label="Back to conversation"
             onPress={onBack ?? noop}
             testID="quarantine-gone-back"
           />
@@ -124,7 +117,7 @@ export function QuarantineScreen({
 
   return (
     <View style={ui.screen} testID="screen-quarantine">
-      <AppBar title="Held back" onBack={onBack} backLabel="Back to Inbox" />
+      <AppBar title="Held back" onBack={onBack} backLabel="Back to conversation" />
       <ScrollView contentContainerStyle={ui.pad}>
         <View style={ui.stack}>
           <Text style={ui.h1}>This file didn't pass its check</Text>
@@ -156,42 +149,12 @@ export function QuarantineScreen({
           <Note
             tone="err"
             title="Nothing was changed"
-            body="It is still in Daak's holding area and has not been opened. Nothing else on this device was touched."
+            body={`It is still in Daak's holding area and has not been opened. Nothing else on this ${deviceNoun} was touched.`}
           />
         )}
 
-        {report === null ? null : confirming ? (
-          <View style={ui.stackSm} testID="quarantine-confirm">
-            <Text style={ui.h3}>Delete this held-back file for good?</Text>
-            <Text style={ui.hint}>
-              It is still held back and not opened, so nothing you can see is lost.
-              There is no way to get these bytes back.
-            </Text>
-            <Btn
-              variant="danger"
-              block
-              label={deleting ? 'Deleting' : 'Yes, delete it'}
-              disabled={deleting}
-              onPress={remove}
-              testID="quarantine-delete-confirm"
-            />
-            <Btn
-              variant="ghost"
-              block
-              label="Keep it"
-              onPress={() => setConfirming(false)}
-              testID="quarantine-delete-cancel"
-            />
-          </View>
-        ) : (
+        {report === null ? null : (
           <View style={ui.stackSm}>
-            {/*
-              The prototype's PRIMARY action here is "Ask the sender again",
-              and it is deliberately absent. The engine has no re-fetch: the
-              protocol is push-only, so there is no message to send a sender
-              asking. What remains is the delete, which is real -- and it gets a
-              confirmation step, because it is irreversible.
-            */}
             <Btn
               variant="danger"
               block
@@ -204,13 +167,42 @@ export function QuarantineScreen({
 
         <WhyExplained />
       </ScrollView>
+
+      <Sheet
+        open={confirming}
+        title="Delete this file?"
+        onClose={() => setConfirming(false)}
+        actions={
+          <>
+            <Btn
+              variant="danger"
+              block
+              label={deleting ? 'Deleting' : 'Delete it'}
+              disabled={deleting}
+              onPress={remove}
+              testID="quarantine-delete-confirm"
+            />
+            <Btn
+              variant="ghost"
+              block
+              label="Keep it"
+              onPress={() => setConfirming(false)}
+              testID="quarantine-delete-cancel"
+            />
+          </>
+        }
+      >
+        <Text style={ui.lead}>
+          {`It was never opened. Deleting it only clears the holding area on this ${deviceNoun}.`}
+        </Text>
+      </Sheet>
     </View>
   );
 }
 
 /**
- * The prototype's disclosure, kept in substance: this explanation is true of
- * the real fingerprint check, unlike most of the prototype's hardcoded values.
+ * The design disclosure, kept in substance. The explanation is true of the real
+ * fingerprint check.
  */
 function WhyExplained() {
   const [open, setOpen] = useState(false);
