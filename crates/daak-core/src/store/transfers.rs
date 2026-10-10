@@ -127,6 +127,30 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    // One page holds the transfers of one peer, newest first.
+    // After holds the position of the last row of the prior page.
+    // The tiebreak matches list_transfers, so no row repeats on 2 pages.
+    pub fn list_peer_transfers_page(
+        &self,
+        peer: &[u8; 16],
+        after: Option<(i64, [u8; 16])>,
+        limit: u32,
+    ) -> Result<Vec<TransferRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT transfer_id, payload_id, peer_device_id, direction, kind, state, bytes_total, bytes_done, item_count, created_at, updated_at, manifest, error FROM transfers WHERE peer_device_id = ?1 AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND transfer_id > ?3)) ORDER BY created_at DESC, transfer_id LIMIT ?4",
+        )?;
+        let (at, id) = match after {
+            Some((at, id)) => (Some(at), Some(id.to_vec())),
+            None => (None, None),
+        };
+        let rows = stmt.query_map(
+            rusqlite::params![&peer[..], at, id, limit as i64],
+            row_to_transfer,
+        )?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn set_transfer_state(&self, id: &[u8; 16], state: &str) -> Result<()> {
         self.conn().execute(
             "UPDATE transfers SET state = ?2, updated_at = ?3 WHERE transfer_id = ?1",
@@ -372,6 +396,67 @@ mod tests {
             .is_empty());
         assert_eq!(db.list_transfers(None, Some(&[11u8; 16])).unwrap().len(), 1);
         assert!(db.list_transfers(Some("nope"), None).unwrap().is_empty());
+    }
+
+    fn put(db: &Db, id: u8, peer: u8, created_at: i64) {
+        let mut t = row();
+        t.transfer_id = [id; 16];
+        t.payload_id = [id; 16];
+        t.peer_device_id = [peer; 16];
+        t.created_at = created_at;
+        t.updated_at = created_at;
+        db.upsert_transfer(&t).unwrap();
+    }
+
+    #[test]
+    fn peer_page_is_newest_first_and_ignores_other_peers() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        put(&db, 1, 3, 10);
+        put(&db, 2, 3, 30);
+        put(&db, 3, 3, 20);
+        put(&db, 4, 7, 99);
+        let page = db.list_peer_transfers_page(&[3u8; 16], None, 10).unwrap();
+        let ids: Vec<u8> = page.iter().map(|t| t.transfer_id[0]).collect();
+        assert_eq!(ids, vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn peer_pages_join_without_gap_or_overlap_on_equal_timestamps() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        put(&db, 1, 3, 10);
+        put(&db, 2, 3, 20);
+        put(&db, 3, 3, 20);
+        put(&db, 4, 3, 20);
+        put(&db, 5, 3, 30);
+        let first = db.list_peer_transfers_page(&[3u8; 16], None, 2).unwrap();
+        let last = first.last().unwrap();
+        let second = db
+            .list_peer_transfers_page(&[3u8; 16], Some((last.created_at, last.transfer_id)), 2)
+            .unwrap();
+        let last = second.last().unwrap();
+        let third = db
+            .list_peer_transfers_page(&[3u8; 16], Some((last.created_at, last.transfer_id)), 2)
+            .unwrap();
+        let ids: Vec<u8> = first
+            .iter()
+            .chain(second.iter())
+            .chain(third.iter())
+            .map(|t| t.transfer_id[0])
+            .collect();
+        assert_eq!(ids, vec![5, 2, 3, 4, 1]);
+    }
+
+    #[test]
+    fn peer_page_with_zero_limit_is_empty() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        put(&db, 1, 3, 10);
+        assert!(db
+            .list_peer_transfers_page(&[3u8; 16], None, 0)
+            .unwrap()
+            .is_empty());
     }
 }
 
