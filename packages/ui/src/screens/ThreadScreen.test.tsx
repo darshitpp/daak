@@ -310,7 +310,9 @@ describe('ThreadScreen', () => {
     });
     spy.mockResolvedValueOnce(threadPage([], null));
     fireEvent.press(screen.getByLabelText('thread-load-older'));
-    await waitFor(() => expect(screen.queryByLabelText('thread-load-older')).toBeNull());
+    // 1 s is the default and this file runs beside 36 others in the gate. The
+    // assertion is unchanged; only the wait is longer.
+    await waitFor(() => expect(screen.queryByLabelText('thread-load-older')).toBeNull(), { timeout: 5000 });
     toEnd.mockClear();
     to.mockClear();
     spy.mockResolvedValueOnce(threadPage([

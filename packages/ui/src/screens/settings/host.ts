@@ -15,5 +15,7 @@ export interface SettingsHost {
   notifyPrefs?: { load: () => Promise<NotifyPrefsLike>; save: (p: NotifyPrefsLike) => Promise<void> };
   /** The OS grant. `granted()` undefined means "not asked yet". */
   osAlerts?: { granted: () => Promise<boolean | undefined>; openSettings?: () => void };
+  /** Label of the network row in Connection. Default 'This Wi-Fi'. The macOS host passes 'Network'. */
+  networkLabel?: string;
 }
 

@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
 import { SettingsScreen } from './SettingsScreen';
+import { ToastProvider } from '../components/Toast';
 
 // The background-sync affordance is a SLOT, not a hard import. packages/ui
 // depends on @daak/core and nothing else: requestBatteryExemption is a
@@ -29,7 +30,7 @@ describe('SettingsScreen background-sync slot', () => {
         <SettingsScreen />
       </EngineProvider>,
     );
-    expect(screen.getByText('Save name')).toBeTruthy();
+    expect(screen.getByLabelText('save-name')).toBeTruthy();
   });
 });
 
@@ -184,6 +185,129 @@ describe('SettingsScreen shows the name the user typed', () => {
     await waitFor(() => expect(nameBox().props.value).toBe('Pixel 9'));
   });
 });
+
+describe('SettingsScreen sections', () => {
+  const dev = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online' as const, paired: true };
+
+  it('shows the seven sections in the design order', async () => {
+    render(
+      <EngineProvider engine={fakeEngine([dev])}>
+        <SettingsScreen
+          downloadFolder={{ load: async () => null, choose: async () => null }}
+          settingsHost={{ notifyPrefs: { load: async () => ({ arrival: true }), save: async () => {} } }}
+          onCheckConnection={() => {}}
+        />
+      </EngineProvider>,
+    );
+    const titles = ['Device name', 'This device', 'Save files to', 'Arrival messages', 'Paired devices', 'Connection', 'About Daak'];
+    await screen.findByText('Pixel 9');
+    const tree = JSON.stringify(screen.toJSON());
+    const at = titles.map((t) => tree.indexOf(JSON.stringify(t).slice(1, -1)));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+  });
+
+  it('toasts "Saved · {name}" after a save and "Type a name first" for a blank box', async () => {
+    const engine = fakeEngine([]);
+    let current = 'Desk';
+    engine.selfProfile = async () => ({ name: current, baseName: current, deviceId: 'dd'.repeat(16) });
+    const set = jest.spyOn(engine, 'setDisplayName').mockImplementation(async (n: string) => { current = n; });
+    render(
+      <EngineProvider engine={engine}>
+        <ToastProvider>
+          <SettingsScreen />
+        </ToastProvider>
+      </EngineProvider>,
+    );
+    const box = await screen.findByPlaceholderText('Display name');
+    await waitFor(() => expect(box.props.value).toBe('Desk'));
+    // Design: a blank box toasts and saves nothing.
+    fireEvent.changeText(box, '   ');
+    fireEvent.press(screen.getByLabelText('save-name'));
+    expect(await screen.findByText('Type a name first')).toBeTruthy();
+    expect(set).not.toHaveBeenCalled();
+    // Design: a save toasts "Saved · {name}". It shows no inline success note.
+    fireEvent.changeText(box, '  Study Room ');
+    fireEvent.press(screen.getByLabelText('save-name'));
+    await waitFor(() => expect(set).toHaveBeenCalledWith('Study Room'));
+    expect(await screen.findByText('Saved · Study Room')).toBeTruthy();
+    expect(screen.queryByText('Saved on this device.')).toBeNull();
+    expect(await screen.findByText('Saved as Study Room')).toBeTruthy();
+  });
+
+  it('keeps an error note and shows no toast when the name does not save', async () => {
+    const engine = fakeEngine([]);
+    engine.selfProfile = async () => ({ name: 'Desk', baseName: 'Desk', deviceId: 'dd'.repeat(16) });
+    jest.spyOn(engine, 'setDisplayName').mockRejectedValue(new Error('disk full'));
+    render(
+      <EngineProvider engine={engine}>
+        <ToastProvider>
+          <SettingsScreen />
+        </ToastProvider>
+      </EngineProvider>,
+    );
+    const box = await screen.findByPlaceholderText('Display name');
+    await waitFor(() => expect(box.props.value).toBe('Desk'));
+    fireEvent.changeText(box, 'Study Room');
+    fireEvent.press(screen.getByLabelText('save-name'));
+    expect(await screen.findByText('Name did not save')).toBeTruthy();
+    expect(screen.getByText('disk full')).toBeTruthy();
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('shows the saved name and the presence switch in This device', async () => {
+    const engine = fakeEngine([]);
+    engine.selfProfile = async () => ({ name: 'Desk', baseName: 'Desk', deviceId: 'dd'.repeat(16) });
+    render(
+      <EngineProvider engine={engine}>
+        <SettingsScreen deviceNoun="Mac" />
+      </EngineProvider>,
+    );
+    expect(await screen.findByText('Saved as Desk')).toBeTruthy();
+    expect(screen.getByText('This device')).toBeTruthy();
+    expect(screen.getByText('Are you using this device right now?')).toBeTruthy();
+    expect(screen.getByText('Other devices see this Mac as On this network.')).toBeTruthy();
+  });
+
+  // Design v2: macOS keeps "Change folder". iPhone has no picker in the
+  // prototype, but both mobile hosts pass `choose` (Open question 14).
+  it('shows Change folder when the host can choose a folder, and the no-picker words when it cannot', async () => {
+    const { unmount } = render(
+      <EngineProvider engine={fakeEngine([])}>
+        <SettingsScreen downloadFolder={{ load: async () => null, choose: async () => null }} />
+      </EngineProvider>,
+    );
+    expect(await screen.findByText('Change folder')).toBeTruthy();
+    unmount();
+    render(
+      <EngineProvider engine={fakeEngine([])}>
+        <SettingsScreen downloadFolder={{ load: async () => null }} />
+      </EngineProvider>,
+    );
+    expect(await screen.findByText('Daak · On My iPhone')).toBeTruthy();
+    expect(screen.queryByText('Change folder')).toBeNull();
+  });
+
+  it('shows the connection facts from the engine', async () => {
+    render(
+      <EngineProvider engine={fakeEngine([dev])}>
+        <SettingsScreen />
+      </EngineProvider>,
+    );
+    expect(await screen.findByText('Connected')).toBeTruthy();
+    expect(screen.getByText('Working')).toBeTruthy();
+  });
+
+  it('shows the version from the host', async () => {
+    render(
+      <EngineProvider engine={fakeEngine([])}>
+        <SettingsScreen settingsHost={{ appInfo: async () => ({ version: '1.2.3', build: '45' }) }} />
+      </EngineProvider>,
+    );
+    expect(await screen.findByText('Version 1.2.3 (build 45)')).toBeTruthy();
+  });
+});
+
 
 describe('SettingsScreen paired devices', () => {
   it('shows the paired devices and removes one through the engine', async () => {

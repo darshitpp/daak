@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Btn, Note, Section } from './ds';
+import { useToast } from './Toast';
 import { ui } from '../theme';
 
 /**
@@ -15,14 +16,19 @@ import { ui } from '../theme';
  * `load` resolves the remembered folder's display name, or null when none was
  * chosen. `choose` resolves the new name, or null when the user cancelled -- a
  * cancelled picker is an ANSWER, not an error, and the row must not change.
+ * `choose` absent means the host has no picker: the row shows the iPhone
+ * prototype words and no button.
  */
-export function DownloadFolderRow({ load, choose, reset }: {
+export function DownloadFolderRow({ load, choose, reset, title, chooseLabel }: {
   load: () => Promise<string | null>;
-  choose: () => Promise<string | null>;
+  choose?: () => Promise<string | null>;
   reset?: () => Promise<void>;
+  title?: string;
+  chooseLabel?: string;
 }) {
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -41,8 +47,26 @@ export function DownloadFolderRow({ load, choose, reset }: {
     };
   }, [load]);
 
+  if (choose === undefined) {
+    return (
+      <Section title={title ?? 'Where received files go'}>
+        <View style={ui.card}>
+          <View style={[ui.kv, ui.kvFirst]}>
+            <Text style={ui.kvK}>Saved to</Text>
+            <Text style={ui.kvV} testID="download-folder-name" numberOfLines={2}>
+              {name ?? 'Daak · On My iPhone'}
+            </Text>
+          </View>
+        </View>
+        <Text style={ui.hint}>
+          {"iOS keeps received files in Daak's own folder. There's no folder to pick."}
+        </Text>
+      </Section>
+    );
+  }
+
   return (
-    <Section title="Where received files go">
+    <Section title={title ?? 'Where received files go'}>
       <View style={ui.card}>
         <View style={[ui.kv, ui.kvFirst]}>
           <Text style={ui.kvK}>Folder</Text>
@@ -52,7 +76,7 @@ export function DownloadFolderRow({ load, choose, reset }: {
         </View>
       </View>
       <Btn
-        label="Choose a folder"
+        label={chooseLabel ?? 'Choose a folder'}
         testID="download-folder-choose"
         block
         disabled={busy}
@@ -61,7 +85,12 @@ export function DownloadFolderRow({ load, choose, reset }: {
           void choose()
             .then(
               (chosen) => {
-                if (chosen !== null) setName(chosen);
+                if (chosen !== null) {
+                  setName(chosen);
+                  // Design `showToast('Files save to ' + savePath)`. A
+                  // cancelled picker shows nothing.
+                  toast.show(`Files save to ${chosen}`);
+                }
               },
               () => {},
             )
@@ -89,3 +118,4 @@ export function DownloadFolderRow({ load, choose, reset }: {
     </Section>
   );
 }
+

@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { DownloadFolderRow } from './DownloadFolderRow';
+import { ToastProvider } from './Toast';
 
 // R42p: the row shows where received files go, and a CANCELLED picker must not
 // change what it says. `null` is an answer -- the user closed the panel -- not
@@ -33,3 +34,42 @@ it('adopts a chosen folder and can reset it', async () => {
   fireEvent.press(screen.getByLabelText('download-folder-reset'));
   expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
 });
+
+it('takes a title and a button label from the caller', async () => {
+  render(<DownloadFolderRow load={async () => null} choose={async () => null} title="Save files to" chooseLabel="Change folder" />);
+  expect(await screen.findByText('Save files to')).toBeTruthy();
+  expect(screen.getByText('Change folder')).toBeTruthy();
+});
+
+// Design `showToast('Files save to ' + savePath)` after the folder changes.
+it('toasts where files save after a folder is chosen', async () => {
+  render(
+    <ToastProvider>
+      <DownloadFolderRow load={async () => null} choose={async () => 'Photos'} title="Save files to" chooseLabel="Change folder" />
+    </ToastProvider>,
+  );
+  fireEvent.press(await screen.findByLabelText('download-folder-choose'));
+  expect(await screen.findByText('Files save to Photos')).toBeTruthy();
+});
+
+it('shows no toast when the picker is cancelled', async () => {
+  render(
+    <ToastProvider>
+      <DownloadFolderRow load={async () => 'Downloads'} choose={async () => null} />
+    </ToastProvider>,
+  );
+  fireEvent.press(await screen.findByLabelText('download-folder-choose'));
+  await waitFor(() => expect(screen.getByLabelText('download-folder-choose')).not.toBeDisabled());
+  expect(screen.queryByTestId('toast')).toBeNull();
+});
+
+// Fallback for a host with no picker. The iPhone prototype words (design v2).
+it('shows the no-picker words and no button when the host gives no choose', async () => {
+  render(<DownloadFolderRow load={async () => null} title="Save files to" />);
+  expect(await screen.findByText('Saved to')).toBeTruthy();
+  expect(screen.getByText('Daak · On My iPhone')).toBeTruthy();
+  expect(screen.getByText("iOS keeps received files in Daak's own folder. There's no folder to pick.")).toBeTruthy();
+  expect(screen.queryByLabelText('download-folder-choose')).toBeNull();
+  expect(screen.queryByText('Files are moved, not copied')).toBeNull();
+});
+

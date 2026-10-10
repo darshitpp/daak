@@ -5,6 +5,11 @@ import { Btn, Note, Section } from '../components/ds';
 import { DownloadFolderRow } from '../components/DownloadFolderRow';
 import { PairedSection } from './settings/PairedSection';
 import { ArrivalSection } from './settings/ArrivalSection';
+import { ConnectionSection } from './settings/ConnectionSection';
+import { AboutSection } from './settings/AboutSection';
+import { PresenceSection } from './settings/PresenceSection';
+import { useConnection } from '../state/useConnection';
+import { useToast } from '../components/Toast';
 import type { SettingsHost } from './settings/host';
 import type { DeviceNoun } from '../components/ds';
 import type { DeviceInfo } from '@daak/core';
@@ -43,7 +48,7 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
    */
   downloadFolder?: {
     load: () => Promise<string | null>;
-    choose: () => Promise<string | null>;
+    choose?: () => Promise<string | null>;
     reset?: () => Promise<void>;
   };
   /** R42g. PairedSection revokes the pairing itself and then calls this hook. */
@@ -61,8 +66,10 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
   onCheckConnection?: () => void;
 }) {
   const engine = useEngine();
+  const toast = useToast();
+  const connection = useConnection(engine);
   const [name, setName] = useState('');
-  const [away, setAway] = useState(false);
+  const [savedAs, setSavedAs] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Feedback>(null);
   // What the box holds RIGHT NOW, readable from the retry closure without
@@ -119,6 +126,7 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
             nameRef.current = p.baseName;
             setName(p.baseName);
           }
+          setSavedAs(p.name);
           // The complaint is dropped either way: the engine can answer now,
           // and a note about a load that has since succeeded is a stale fault.
           setNote(null);
@@ -151,7 +159,17 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
 
   // Every engine call here is awaited and reported. The old screen fired and
   // forgot, so a rejected setDisplayName looked exactly like a successful one.
-  const run = async (what: string, verb: () => Promise<void>) => {
+  // Design `#set-save`: a blank box answers with a toast and saves nothing.
+  const saveName = () => {
+    const typed = name.trim();
+    if (typed === '') {
+      toast.show('Type a name first');
+      return;
+    }
+    void run('Name', () => engine.setDisplayName(typed), `Saved · ${typed}`);
+  };
+
+  const run = async (what: string, verb: () => Promise<void>, saved: string) => {
     setBusy(true);
     setNote(null);
     try {
@@ -165,11 +183,13 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
           // and a later retry could mistake this box for one the user owns.
           nameRef.current = p.baseName;
           setName(p.baseName);
+          setSavedAs(p.name);
         },
         (e: unknown) => {
         },
       );
-      setNote({ tone: 'ok', title: what, body: 'Saved on this device.' });
+      // Design `#set-save`: a save is a toast. It is not an inline note.
+      toast.show(saved);
     } catch (e) {
       setNote({
         tone: 'err',
@@ -187,8 +207,9 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
         <Text style={ui.appbarTitle}>Settings</Text>
       </View>
       <ScrollView contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
-        <Section title="What other devices call this">
+        <Section title="Device name">
           <View style={ui.stackSm}>
+            {savedAs ? <Text style={ui.hint}>{'Saved as ' + savedAs}</Text> : null}
             <TextInput
               value={name}
               // THE ONE place the box is written by hand. nameRef follows it
@@ -205,99 +226,40 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
             />
             <Text style={ui.hint}>Short names are easier to spot. You can change this later.</Text>
             <Btn
-              label="Save name"
+              label="Save"
               testID="save-name"
-              disabled={busy || name.trim() === ''}
-              onPress={() => void run('Name', () => engine.setDisplayName(name.trim()))}
-              block
-            />
-          </View>
-        </Section>
-
-        <Section title="Are you using this device right now">
-          <View style={ui.stackSm}>
-            <View style={ui.seg}>
-              {(['online', 'away'] as const).map((state) => {
-                const on = (state === 'away') === away;
-                return (
-                  <Pressable
-                    key={state}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: on }}
-                    onPress={() => setAway(state === 'away')}
-                    style={[ui.segItem, on ? ui.segItemOn : null]}
-                  >
-                    <Text style={on ? { color: colors.onAccent, fontSize: 14 } : { color: colors.fg, fontSize: 14 }}>
-                      {state === 'online' ? 'Available' : 'Set as away'}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Text style={ui.hint}>
-              {away
-                ? 'Other devices hold anything they try to send.'
-                : 'Other devices can send to this device now.'}
-            </Text>
-            <Btn
-              label={away ? 'Set as away' : 'Set as Available'}
-              testID="apply-presence"
               disabled={busy}
-              onPress={() => void run('Presence', () => engine.setPresence(away ? 'away' : 'online'))}
+              onPress={saveName}
               block
             />
           </View>
         </Section>
 
-        {/* The prototype's Connection section. The prototype fills it with a
-            Status row reading "Working" and a "This Wi-Fi" row reading
-            "Home-5G" (prototypes/index.html:1229-1234); neither is available
-            here. Nothing in this codebase knows whether the engine is reachable
-            -- that is the host's real devices() answer, not a constant -- and
-            nothing knows the name of the network this device is on: there is no
-            API for it on iOS and no permission for it on Android. So both rows
-            are gone and only the button survives, because the button is the
-            part that leads somewhere real. */}
-        <PairedSection onUnpair={onUnpair} />
-        <ArrivalSection host={settingsHost} deviceNoun={deviceNoun} />
+        <PresenceSection deviceNoun={deviceNoun} />
 
-        <Section title="Connection">
-          {onCheckConnection ? (
-            <Btn
-              variant="quiet"
-              block
-              label="Something not working? See what to check"
-              testID="settings-check-connection"
-              onPress={onCheckConnection}
-            />
-          ) : null}
-        </Section>
-
-        <Section title="About Daak">
-          <View style={ui.card}>
-            <View style={[ui.kv, ui.kvFirst]}>
-              <Text style={ui.kvK}>Works on</Text>
-              <Text style={ui.kvV}>This Wi-Fi only</Text>
-            </View>
-            <View style={ui.kv}>
-              <Text style={ui.kvK}>Account needed</Text>
-              <Text style={ui.kvV}>No account, none</Text>
-            </View>
-            <View style={ui.kv}>
-              <Text style={ui.kvK}>Where files are kept</Text>
-              <Text style={ui.kvV}>On your devices</Text>
-            </View>
-          </View>
-        </Section>
-
-        {note ? <Note tone={note.tone} title={note.title} body={note.body} testID="settings-result" /> : null}
         {downloadFolder ? (
           <DownloadFolderRow
+            title="Save files to"
+            chooseLabel="Change folder"
             load={downloadFolder.load}
             choose={downloadFolder.choose}
             reset={downloadFolder.reset}
           />
         ) : null}
+
+        <ArrivalSection host={settingsHost} deviceNoun={deviceNoun} />
+
+        <PairedSection onUnpair={onUnpair} />
+
+        <ConnectionSection
+          connection={connection}
+          networkLabel={settingsHost?.networkLabel}
+          onCheckConnection={onCheckConnection}
+        />
+
+        <AboutSection appInfo={settingsHost?.appInfo} />
+
+        {note ? <Note tone={note.tone} title={note.title} body={note.body} testID="settings-result" /> : null}
         {background}
       </ScrollView>
     </View>
