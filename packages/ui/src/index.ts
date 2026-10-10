@@ -10,7 +10,6 @@ export { QrView } from './components/QrView';
 export { ComposerBar } from './components/ComposerBar';
 export { Avatar, Btn, Empty, Note, ProgressBar, Section, Status, Wordmark, byPresence, deviceLabel, devicePresence, presenceOf, type DeviceNoun, type PeerPresenceView } from './components/ds';
 export { DashboardScreen } from './screens/DashboardScreen';
-export { DevicesScreen } from './screens/DevicesScreen';
 export { SendScreen } from './screens/SendScreen';
 export { PairingScreen } from './screens/PairingScreen';
 export { ComposerScreen } from './screens/ComposerScreen';

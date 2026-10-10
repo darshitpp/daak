@@ -219,10 +219,8 @@ export function AppShell({
       />
     ) : tab === 'devices' ? (
       <DashboardScreen
-        onSend={routeSend}
+        onOpenThread={routeSend}
         onPair={openPair}
-        onUnpair={onUnpair}
-        onCompose={() => setTab('send')}
         onCheckConnection={onCheckConnection}
       />
     ) : tab === 'transfers' ? (
