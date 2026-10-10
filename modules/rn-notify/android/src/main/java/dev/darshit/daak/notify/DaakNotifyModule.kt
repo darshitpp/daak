@@ -14,6 +14,7 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.pm.PackageInfoCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -271,6 +272,25 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
    * taps an action with the app killed sees nothing happen at all.
    */
   override fun consumePendingAction(promise: Promise) = promise.resolve(NotifyStash.take(ctx))
+
+  /**
+   * The version and build of the installed app, as JSON. A library module cannot
+   * read the app BuildConfig, so the answer comes from PackageManager, which
+   * holds the same versionName and versionCode that build.gradle sets.
+   */
+  @Suppress("DEPRECATION")
+  override fun appInfo(promise: Promise) {
+    try {
+      val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+      promise.resolve(
+          JSONObject()
+              .put("version", info.versionName ?: "")
+              .put("build", PackageInfoCompat.getLongVersionCode(info).toString())
+              .toString())
+    } catch (t: Throwable) {
+      promise.reject("E_APPINFO", t)
+    }
+  }
 
   // The body tap launches an activity directly. A receiver that a notification
   // tap triggers cannot start an activity when the app targets Android 12 or

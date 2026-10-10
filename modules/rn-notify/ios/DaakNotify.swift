@@ -156,6 +156,26 @@ final class DaakNotify: RCTEventEmitter {
     }
   }
 
+  /// The version and build of the installed app, as JSON. Both values come from
+  /// the app bundle. The keys hold $(MARKETING_VERSION) and
+  /// $(CURRENT_PROJECT_VERSION) in the project, so a version bump needs no edit
+  /// here.
+  @objc func appInfo(_ resolve: @escaping RCTPromiseResolveBlock,
+                     reject: @escaping RCTPromiseRejectBlock) {
+    let info = Bundle.main.infoDictionary ?? [:]
+    let body: [String: String] = [
+      "version": info["CFBundleShortVersionString"] as? String ?? "",
+      "build": info["CFBundleVersion"] as? String ?? "",
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: body),
+          let json = String(data: data, encoding: .utf8)
+    else {
+      reject("E_APPINFO", "the bundle info is not valid JSON", nil)
+      return
+    }
+    resolve(json)
+  }
+
   @objc func cancel(_ id: String,
                     resolve: @escaping RCTPromiseResolveBlock,
                     reject: @escaping RCTPromiseRejectBlock) {

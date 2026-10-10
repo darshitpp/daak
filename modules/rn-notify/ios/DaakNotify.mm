@@ -30,5 +30,8 @@ RCT_EXTERN_METHOD(cancel:(NSString *)id
 RCT_EXTERN_METHOD(consumePendingAction:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(appInfo:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 @end
 

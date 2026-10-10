@@ -404,3 +404,32 @@ describe('the Android banner carries no action buttons', () => {
     expect(post).toContain('setContentIntent(openPending(id, payloadJson))');
   });
 });
+
+describe('the notify modules answer appInfo from the app bundle', () => {
+  const kt = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt',
+  );
+  const swift = read('../../../../modules/rn-notify/ios/DaakNotify.swift');
+  const mm = read('../../../../modules/rn-notify/ios/DaakNotify.mm');
+  const mac = read('../../../../modules/rn-notify/macos/RNNotify.mm');
+
+  it('reads versionName and the long versionCode on Android', () => {
+    const fn = kt.slice(kt.indexOf('override fun appInfo('), kt.indexOf('private fun openPending('));
+    expect(fn).toContain('versionName');
+    expect(fn).toContain('PackageInfoCompat.getLongVersionCode');
+    expect(fn).toContain('promise.reject("E_APPINFO"');
+  });
+
+  it('reads the two bundle keys on iOS and declares the method in the table', () => {
+    expect(swift).toContain('func appInfo(');
+    expect(swift).toContain('"CFBundleShortVersionString"');
+    expect(swift).toContain('"CFBundleVersion"');
+    expect(mm).toMatch(/RCT_EXTERN_METHOD\(appInfo:/);
+  });
+
+  it('reads the two bundle keys on macOS', () => {
+    expect(mac).toContain('RCT_EXPORT_METHOD(appInfo');
+    expect(mac).toContain('CFBundleShortVersionString');
+    expect(mac).toContain('CFBundleVersion');
+  });
+});

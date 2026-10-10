@@ -250,6 +250,26 @@ RCT_EXPORT_MODULE(DaakSystemNotify)
   }
 }
 
+// The version and build of the installed app, as JSON. The plist keys hold
+// $(MARKETING_VERSION) and $(CURRENT_PROJECT_VERSION), so a version bump in the
+// project needs no edit here.
+RCT_EXPORT_METHOD(appInfo : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
+  NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
+  id version = info[@"CFBundleShortVersionString"];
+  id build = info[@"CFBundleVersion"];
+  NSDictionary *body = @{
+    @"version" : [version isKindOfClass:[NSString class]] ? version : @"",
+    @"build" : [build isKindOfClass:[NSString class]] ? build : @"",
+  };
+  NSError *error = nil;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:body options:0 error:&error];
+  if (data == nil) {
+    reject(@"E_APPINFO", error.localizedDescription ?: @"the bundle info is not valid JSON", error);
+    return;
+  }
+  resolve([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+}
+
 RCT_EXPORT_METHOD(notify : (NSString *)payloadJson resolve : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
   NSData *data = [payloadJson dataUsingEncoding:NSUTF8StringEncoding];
   NSError *error = nil;
