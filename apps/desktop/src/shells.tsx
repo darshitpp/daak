@@ -54,6 +54,15 @@ function useIncompatible(runtime: UiRuntime) {
   );
 }
 
+// R42p: the download folder verbs. VERBS only. The row in packages/ui owns the
+// state, because a state update here would run the tray overlay hook again. One
+// module constant serves the onboarding step and the Settings row.
+const DOWNLOAD_FOLDER = {
+  load: downloadFolderName,
+  choose: chooseDownloadFolder,
+  reset: clearDownloadFolder,
+};
+
 function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {
     closePopover,
@@ -91,7 +100,7 @@ export function DaakPopoverShell({ engine, runtime }: {
   // device list with nothing explaining why.
   return (
     <View style={{ flex: 1 }}>
-      <DesktopOnboardingGate>
+      <DesktopOnboardingGate downloadFolder={DOWNLOAD_FOLDER}>
         <StartFaultNote />
         <DaakUiApp
           mode="popover"
@@ -127,14 +136,6 @@ export function DaakDashboardShell({ engine, runtime }: {
     [],
   );
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
-  // R42p: the download folder. VERBS only -- the row in packages/ui owns the
-  // state, because a state update here would re-run the tray overlay hook and
-  // this shell is the tray's owner.
-  const downloadFolder = {
-    load: downloadFolderName,
-    choose: chooseDownloadFolder,
-    reset: clearDownloadFolder,
-  };
   // appInfo is async (P2). The window header reads it in an effect and shows
   // the version line after the answer. The About row reads it on its own.
   // Memoized: a new host object on every render would be harmless to
@@ -187,7 +188,7 @@ export function DaakDashboardShell({ engine, runtime }: {
   return (
     <>
       <TrayOverlay runtime={runtime} />
-      <DesktopOnboardingGate>
+      <DesktopOnboardingGate downloadFolder={DOWNLOAD_FOLDER}>
         <StartFaultNote />
         <DaakUiApp
           mode="dashboard"
@@ -206,7 +207,7 @@ export function DaakDashboardShell({ engine, runtime }: {
           alertRouteToken={blockers.alertRouteToken}
           settingsRouteToken={blockers.settingsRouteToken}
           onCheckConnection={blockers.onCheckConnection}
-          downloadFolder={downloadFolder}
+          downloadFolder={DOWNLOAD_FOLDER}
           settingsHost={settingsHost}
           deviceNoun="Mac"
           windowChrome={windowChrome}

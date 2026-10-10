@@ -6,7 +6,7 @@ import {
   Note,
   PairFirstDeviceScreen,
   PermissionsScreen,
-  DownloadFolderRow,
+  SaveLocationScreen,
   WelcomeScreen,
   useEngine,
   ui,
@@ -25,7 +25,7 @@ import {
 import { notificationGrant, recordNotificationGrant } from './bootstrap';
 import { PairingFlow } from './PairingFlow';
 
-type Step = 'loading' | 'welcome' | 'name' | 'permissions' | 'starting' | 'pair' | 'done' | 'fault';
+type Step = 'loading' | 'welcome' | 'name' | 'permissions' | 'save' | 'starting' | 'pair' | 'done' | 'fault';
 
 /**
  * The prototype's first-run flow, wired to the real keystore and the real
@@ -239,7 +239,6 @@ export function OnboardingFlow({ onComplete, onReady }: {
         name={name}
         onNameChange={setName}
         onBack={() => setStep('welcome')}
-        footer="Two quick steps left."
         onContinue={() => {
           if (name.trim() === '') return;
           setStep('permissions');
@@ -263,17 +262,6 @@ export function OnboardingFlow({ onComplete, onReady }: {
       <PermissionsScreen
         rows={rows}
         onBack={() => setStep('name')}
-        // R42p: the SAME row Settings renders, on the step that is already "the
-        // things Daak needs before it is useful". Both platforms now pick a
-        // real folder -- a SAF tree on Android, a document picker in folder mode
-        // on iOS -- so this is no longer gated on the platform.
-        folder={
-          <DownloadFolderRow
-            load={downloadFolderName}
-            choose={chooseDownloadFolder}
-            reset={clearDownloadFolder}
-          />
-        }
         onContinue={() => {
           void (async () => {
             const next: OnboardingState = {
@@ -290,38 +278,45 @@ export function OnboardingFlow({ onComplete, onReady }: {
               return;
             }
             setState(next);
-            // THE ENGINE MAY NOW START, and the step below WAITS for it to have
-            // actually started. The name is durable, which was the one thing
-            // that had to be true before any engine published anything -- App
-            // starts it and applies this exact name as its first act. Writing
-            // before starting means a relaunch never re-asks, even if the
-            // engine then refuses the name.
-            //
-            // 'starting' rather than straight to 'pair': PairingFlow arms a
-            // real accept slot through the engine, so rendering it against an
-            // engine that has not finished starting is the bug this whole
-            // shape exists to remove. The old version moved to 'pair' in the
-            // same tick as the onReady() call that only ENABLED App's startup
-            // effect -- so the effect ran after this render, and the user could
-            // tap "Show my code" against nothing.
-            setStep('starting');
-            // THE NAME IS PASSED HERE, and this is the only call site that
-            // passes one. A first run has no stored name, so the engine came
-            // up with the machine default and the user's typed name must be
-            // applied explicitly. A relaunch never renders this flow, so it
-            // can never replay the keychain copy over a later rename.
-            void (onReady?.(name.trim()) ?? Promise.resolve()).then(
-              () => setStep('pair'),
-              () => setStep('pair'),
-            );
+            setStep('save');
           })();
         }}
       />
     );
   }
 
+  if (step === 'save') {
+    return (
+      <SaveLocationScreen
+        // The same verbs Settings uses. The row in `packages/ui` owns the state.
+        folder={{
+          load: downloadFolderName,
+          choose: chooseDownloadFolder,
+          reset: clearDownloadFolder,
+        }}
+        onBack={() => setStep('permissions')}
+        onContinue={() => {
+          // THE ENGINE MAY NOW START, and the next step waits for it. The name is
+          // durable since Permissions, so no engine publishes a name that the
+          // user did not choose. App starts the engine and applies this name as
+          // its first act. This is the only call site that passes a name. A
+          // relaunch never renders this flow, so it cannot replay the keystore
+          // copy over a later rename.
+          //
+          // 'starting' and not 'pair': PairingFlow arms an accept slot through
+          // the engine, and an engine that is still starting would refuse it.
+          setStep('starting');
+          void (onReady?.(name.trim()) ?? Promise.resolve()).then(
+            () => setStep('pair'),
+            () => setStep('pair'),
+          );
+        }}
+      />
+    );
+  }
+
   return (
-    <PairFirstDeviceScreen onBack={() => setStep('permissions')}>
+    <PairFirstDeviceScreen onBack={() => setStep('save')}>
       <View style={ui.stack}>
         {/* The REAL pairing flow, embedded: the engine's own arm, the engine's
             own QR, the engine's own SAS and the real scanner. Nothing here is a

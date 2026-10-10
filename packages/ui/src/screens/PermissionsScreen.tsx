@@ -32,13 +32,10 @@ export function PermissionsScreen({
   rows,
   onContinue,
   onBack,
-  folder,
 }: {
   rows: PermissionRowSpec[];
   onContinue: () => void;
   onBack?: () => void;
-  /** The destination-folder row. Task 5 of plan P4 removes this slot. */
-  folder?: React.ReactNode;
 }) {
   const alerts = rows.find((row) => row.key === 'alerts');
   const hint =
@@ -77,7 +74,6 @@ export function PermissionsScreen({
           {hint}
         </Text>
       )}
-      {folder}
     </OnboardingScreen>
   );
 }

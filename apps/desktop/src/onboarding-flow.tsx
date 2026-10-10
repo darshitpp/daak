@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NameDeviceScreen, PermissionsScreen, WelcomeScreen } from '@daak/ui';
+import { NameDeviceScreen, PermissionsScreen, SaveLocationScreen, WelcomeScreen, type SaveLocationFolder } from '@daak/ui';
 import { desktopPermissionRows, type DesktopCapability } from './onboarding';
 
 /**
@@ -25,7 +25,7 @@ import { desktopPermissionRows, type DesktopCapability } from './onboarding';
  * before it had asked anything.
  */
 
-export type DesktopOnboardingStep = 'welcome' | 'name' | 'permissions';
+export type DesktopOnboardingStep = 'welcome' | 'name' | 'permissions' | 'save';
 
 export interface CompletedOnboarding {
   name?: string;
@@ -35,12 +35,15 @@ export interface CompletedOnboarding {
 export function DesktopOnboardingFlow({
   initialName,
   capabilities,
+  downloadFolder,
   onComplete,
 }: {
   /** Prefilled from the durable state, if it ever held one. */
   initialName?: string;
   /** What the desktop host can actually report. See desktopPermissionRows. */
   capabilities: DesktopCapability;
+  /** The folder verbs. A missing value gives the variant with no folder picker. */
+  downloadFolder?: SaveLocationFolder;
   /** Called ONCE, after the durable write has resolved true. Never before. */
   onComplete: (result: CompletedOnboarding) => void;
 }) {
@@ -62,7 +65,7 @@ export function DesktopOnboardingFlow({
         onBack={() => setStep('welcome')}
         // One step remains at this commit (alerts), so the design sentence
         // "Three quick steps left." would be false. Task 5 sets the final one.
-        footer={null}
+        footer="Two quick steps left."
         onContinue={() => {
           if (name.trim() === '') return;
           setStep('permissions');
@@ -71,10 +74,22 @@ export function DesktopOnboardingFlow({
     );
   }
 
+  if (step === 'permissions') {
+    return (
+      <PermissionsScreen
+        rows={desktopPermissionRows().rows}
+        onBack={() => setStep('name')}
+        onContinue={() => setStep('save')}
+      />
+    );
+  }
+
   return (
-    <PermissionsScreen
-      rows={desktopPermissionRows().rows}
-      onBack={() => setStep('name')}
+    <SaveLocationScreen
+      folder={downloadFolder ?? { load: async () => null }}
+      onBack={() => setStep('permissions')}
+      // Pairing stays on the Devices screen on a Mac, so no step remains here.
+      footer={null}
       onContinue={() => onComplete({ name: name.trim(), alerts })}
     />
   );

@@ -17,13 +17,16 @@ import { DesktopOnboardingFlow } from '../src/onboarding-flow';
  * keystroke and a click produce on the real runtime.
  */
 
-function renderFlow(): ReactTestRenderer {
+function renderFlow(
+  props: Partial<React.ComponentProps<typeof DesktopOnboardingFlow>> = {},
+): ReactTestRenderer {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
       React.createElement(DesktopOnboardingFlow, {
         capabilities: {},
         onComplete: () => {},
+        ...props,
       }),
     );
   });
@@ -111,3 +114,66 @@ describe('the naming step accepts a typed name and advances', () => {
     expect(tree.root.findByProps({ testID: 'screen-name-device' })).toBeTruthy();
   });
 });
+
+describe('the Save-location step ends the desktop flow', () => {
+  async function toSave(tree: ReactTestRenderer) {
+    await press(tree, 'welcome-get-started');
+    await type(tree, 'name-input', 'Darshit MacBook');
+    await press(tree, 'name-next');
+    await press(tree, 'permissions-continue');
+  }
+
+  it('shows the Save-location step after Permissions and does not complete there', async () => {
+    const done: unknown[] = [];
+    const tree = renderFlow({ onComplete: (r) => done.push(r) });
+    await toSave(tree);
+    expect(tree.root.findByProps({ testID: 'screen-save-location' })).toBeTruthy();
+    expect(done).toEqual([]);
+  });
+
+  it('completes with the trimmed name from the Save-location step', async () => {
+    const done: unknown[] = [];
+    const tree = renderFlow({ onComplete: (r) => done.push(r) });
+    await toSave(tree);
+    await press(tree, 'save-location-continue');
+    expect(done).toEqual([{ name: 'Darshit MacBook', alerts: false }]);
+  });
+
+  it('uses the variant with no folder picker when the host gives no verbs', async () => {
+    const tree = renderFlow();
+    await toSave(tree);
+    const shown = text(tree);
+    expect(shown).toContain("iOS saves the files you receive for you. There's no folder to pick.");
+    expect(shown).toContain('Daak · On My iPhone');
+    expect(shown).not.toContain('Change folder');
+  });
+
+  it('shows the folder picker when the host gives the verbs', async () => {
+    const tree = renderFlow({ downloadFolder: { load: async () => null, choose: async () => null } });
+    await toSave(tree);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(text(tree)).toContain('Change folder');
+  });
+
+  // Two steps remain after Name (alerts and save location). No step remains
+  // after Save location, because pairing stays on the Devices screen.
+  it('says two steps remain after Name and no sentence after Save location', async () => {
+    const tree = renderFlow();
+    await press(tree, 'welcome-get-started');
+    expect(text(tree)).toContain('Two quick steps left.');
+    await type(tree, 'name-input', 'Darshit MacBook');
+    await press(tree, 'name-next');
+    await press(tree, 'permissions-continue');
+    expect(text(tree)).not.toContain('One quick step left.');
+  });
+
+  it('goes back from Save location to Permissions', async () => {
+    const tree = renderFlow();
+    await toSave(tree);
+    await press(tree, 'onb-back');
+    expect(tree.root.findByProps({ testID: 'screen-permissions' })).toBeTruthy();
+  });
+});
+

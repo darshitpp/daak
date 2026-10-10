@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { View } from 'react-native';
-import { Note, ui } from '@daak/ui';
+import { Note, ui, type SaveLocationFolder } from '@daak/ui';
 import { DesktopOnboardingFlow, type CompletedOnboarding } from './onboarding-flow';
 import { completeOnboarding, currentOnboardingDecision, useOnboardingPhase } from './onboarding-store';
 import { shellViewFor } from './onboarding';
@@ -50,7 +50,7 @@ import { StartFaultNote, useStartFault } from './start-fault';
  * That is a terminal failure with no way out of it visible, so it draws the
  * start-fault note INSTEAD of the flow. See the branch below.
  */
-export function DesktopOnboardingGate({ children }: { children: React.ReactNode }) {
+export function DesktopOnboardingGate({ children, downloadFolder }: { children: React.ReactNode; downloadFolder?: SaveLocationFolder }) {
   const phase = useOnboardingPhase();
   const startFault = useStartFault();
   // Local state, not store state: this failure appears only after the user has
@@ -152,7 +152,7 @@ export function DesktopOnboardingGate({ children }: { children: React.ReactNode 
         {writeFailure === undefined ? null : (
           <WriteFailureNote body={writeFailure} />
         )}
-        <DesktopOnboardingFlow onComplete={onComplete} capabilities={{}} />
+        <DesktopOnboardingFlow onComplete={onComplete} capabilities={{}} downloadFolder={downloadFolder} />
       </View>
     );
   }

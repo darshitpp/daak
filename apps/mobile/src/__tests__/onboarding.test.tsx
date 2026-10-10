@@ -110,6 +110,30 @@ beforeEach(() => {
 const firstLaunch = { complete: false, discovery: false, alerts: false };
 const returning = { complete: true, name: 'Seawood Otter', discovery: true, alerts: true };
 
+/** Welcome, Name (typed), Permissions. Stops on the Save-location step. */
+async function reachSaveStep() {
+  mockReadOnboarding.mockResolvedValue(firstLaunch);
+  render(<App />);
+  await waitFor(() => screen.getByLabelText('welcome-get-started'));
+  fireEvent.press(screen.getByLabelText('welcome-get-started'));
+  await waitFor(() => screen.getByTestId('name-input'));
+  fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
+  fireEvent.press(screen.getByLabelText('name-next'));
+  await waitFor(() => screen.getByLabelText('permissions-continue'));
+  await act(async () => {
+    fireEvent.press(screen.getByLabelText('permissions-continue'));
+  });
+  await screen.findByLabelText('save-location-continue');
+}
+
+/** The same, then Continue on the Save-location step. */
+async function reachPairStep() {
+  await reachSaveStep();
+  await act(async () => {
+    fireEvent.press(screen.getByLabelText('save-location-continue'));
+  });
+}
+
 describe('first launch', () => {
   it('asks to name the device before it starts an engine', async () => {
     mockReadOnboarding.mockResolvedValue(firstLaunch);
@@ -150,7 +174,7 @@ describe('first launch', () => {
     await act(async () => {
       fireEvent.press(screen.getByLabelText('permissions-continue'));
     });
-    await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
+    await screen.findByLabelText('save-location-continue');
     const written = (mockWriteOnboarding.mock.calls[0] as unknown[])[0] as { alerts?: boolean };
     expect(written.alerts).toBe(false);
   });
@@ -203,20 +227,7 @@ describe('first launch', () => {
   // fix is structural: OnboardingFlow owns no engine and App.tsx has the only
   // start call site, so the engine is necessarily up before Pair renders.
   it('has a running engine by the time the pairing step is reachable', async () => {
-    mockReadOnboarding.mockResolvedValue(firstLaunch);
-    render(<App />);
-    await waitFor(() => screen.getByLabelText('welcome-get-started'));
-    fireEvent.press(screen.getByLabelText('welcome-get-started'));
-    await waitFor(() => screen.getByTestId('name-input'));
-    fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
-    fireEvent.press(screen.getByLabelText('name-next'));
-    await waitFor(() => screen.getByLabelText('permissions-continue'));
-    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).not.toBe(true);
-    // The press starts a durable write, so the step change is a promise rather
-    // than an immediate one.
-    await act(async () => {
-      fireEvent.press(screen.getByLabelText('permissions-continue'));
-    });
+    await reachPairStep();
 
     await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
     expect(await screen.findByLabelText('pair-skip')).toBeTruthy();
@@ -246,20 +257,7 @@ describe('first launch', () => {
   it('does not reach the pairing step while the engine is still starting', async () => {
     const startup = deferred();
     startEngineOnce.mockReturnValueOnce(startup.promise);
-    mockReadOnboarding.mockResolvedValue(firstLaunch);
-    render(<App />);
-    await waitFor(() => screen.getByLabelText('welcome-get-started'));
-    fireEvent.press(screen.getByLabelText('welcome-get-started'));
-    await waitFor(() => screen.getByTestId('name-input'));
-    fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
-    fireEvent.press(screen.getByLabelText('name-next'));
-    await waitFor(() => screen.getByLabelText('permissions-continue'));
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('perm-alerts'));
-    });
-    await act(async () => {
-      fireEvent.press(screen.getByLabelText('permissions-continue'));
-    });
+    await reachPairStep();
 
     // The write has landed and startup is genuinely in flight.
     await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
@@ -272,6 +270,80 @@ describe('first launch', () => {
       await startup.promise;
     });
     expect(await screen.findByLabelText('pair-skip')).toBeTruthy();
+  });
+});
+
+
+describe('the Save-location step', () => {
+  it('follows Permissions, writes the name there, and does not start the engine', async () => {
+    await reachSaveStep();
+    expect(screen.getByText('Where to save files')).toBeTruthy();
+    expect(screen.getByText('One quick step left.')).toBeTruthy();
+    expect(mockWriteOnboarding).toHaveBeenCalledTimes(1);
+    expect((mockWriteOnboarding.mock.calls[0] as unknown[])[0]).toMatchObject({ name: 'Seawood Otter', complete: false });
+    expect(startEngineOnce).not.toHaveBeenCalled();
+  });
+
+  it('starts the engine on Continue and then shows the pairing step', async () => {
+    await reachPairStep();
+    await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
+    expect(await screen.findByLabelText('pair-skip')).toBeTruthy();
+    expect(screen.getByText('Pair your first device')).toBeTruthy();
+  });
+
+  it('lets the user pick a folder with the platform verbs', async () => {
+    const { chooseDownloadFolder } = jest.requireMock('@daak/platform');
+    chooseDownloadFolder.mockResolvedValueOnce('Documents / Daak');
+    await reachSaveStep();
+    fireEvent.press(await screen.findByLabelText('download-folder-choose'));
+    expect(await screen.findByText('Documents / Daak')).toBeTruthy();
+    expect(chooseDownloadFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('goes back to Permissions without starting the engine', async () => {
+    await reachSaveStep();
+    fireEvent.press(screen.getByTestId('onb-back'));
+    expect(await screen.findByLabelText('permissions-continue')).toBeTruthy();
+    expect(startEngineOnce).not.toHaveBeenCalled();
+  });
+
+  // Review Focus 1. The keystore holds the name after Permissions. A kill on the
+  // Save-location step leaves { complete: false, name }. The next launch starts
+  // at Welcome with the name typed and the engine stopped.
+  it('resumes at Welcome with the saved name after an app kill', async () => {
+    mockReadOnboarding.mockResolvedValue({ complete: false, name: 'Seawood Otter', discovery: true, alerts: false });
+    render(<App />);
+    await waitFor(() => screen.getByLabelText('welcome-get-started'));
+    expect(startEngineOnce).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByLabelText('welcome-get-started'));
+    expect((await screen.findByTestId('name-input')).props.value).toBe('Seawood Otter');
+  });
+
+  it('shows no step counter on any step', async () => {
+    await reachSaveStep();
+    expect(screen.queryByText(/Step \d of \d/)).toBeNull();
+  });
+
+  // Commit 552459d. The engine keeps a new pairing pending until the user presses
+  // "They match" (`confirmPairing`). The SAS event is not a finished pairing,
+  // so the Pair step must stay open. Only `pairing.done` ends it (R42n).
+  it('keeps the Pair step open when a SAS arrives and ends it only on pairing.done', async () => {
+    await reachPairStep();
+    expect(await screen.findByLabelText('pair-skip')).toBeTruthy();
+    const handlers = (engine as unknown as { __handlers: Set<(e: unknown) => void> }).__handlers;
+    await act(async () => {
+      handlers.forEach((h) => h({ type: 'pairing.sas', peerDeviceId: 'aa'.repeat(16), sas: '482917' }));
+    });
+    const lastWrite = () => {
+      const last = mockWriteOnboarding.mock.calls.at(-1) as unknown[] | undefined;
+      return last?.[0] as { complete?: boolean } | undefined;
+    };
+    expect(lastWrite()?.complete).not.toBe(true);
+    expect(screen.getByLabelText('pair-skip')).toBeTruthy();
+    await act(async () => {
+      handlers.forEach((h) => h({ type: 'pairing.done', deviceId: 'aa'.repeat(16) }));
+    });
+    await waitFor(() => expect(lastWrite()?.complete).toBe(true));
   });
 });
 
@@ -318,21 +390,7 @@ describe('every launch after the first', () => {
   it('applies the name typed on a first run once the engine is up', async () => {
     mockReadOnboarding.mockResolvedValue(firstLaunch);
     const setDisplayName = jest.spyOn(engine, 'setDisplayName');
-    render(<App />);
-    await waitFor(() => screen.getByLabelText('welcome-get-started'));
-    fireEvent.press(screen.getByLabelText('welcome-get-started'));
-
-    await waitFor(() => screen.getByTestId('name-input'));
-    fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
-    fireEvent.press(screen.getByLabelText('name-next'));
-
-    await waitFor(() => screen.getByText('Optional alerts'));
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('perm-alerts'));
-    });
-    await act(async () => {
-      fireEvent.press(screen.getByLabelText('permissions-continue'));
-    });
+    await reachPairStep();
 
     await waitFor(() => expect(setDisplayName).toHaveBeenCalledWith('Seawood Otter'));
   });
@@ -342,21 +400,7 @@ describe('every launch after the first', () => {
   // step they had completed -- and the reported "scanning the QR puts me back on
   // the onboarding screen" was the same defect from the other side.
   it('finishes onboarding when a pairing completes, with no skip tap', async () => {
-    mockReadOnboarding.mockResolvedValue(firstLaunch);
-    render(<App />);
-    await waitFor(() => screen.getByLabelText('welcome-get-started'));
-    fireEvent.press(screen.getByLabelText('welcome-get-started'));
-    await waitFor(() => screen.getByTestId('name-input'));
-    fireEvent.changeText(screen.getByTestId('name-input'), 'Seawood Otter');
-    fireEvent.press(screen.getByLabelText('name-next'));
-    await waitFor(() => screen.getByLabelText('permissions-continue'));
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('perm-alerts'));
-    });
-    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).not.toBe(true);
-    await act(async () => {
-      fireEvent.press(screen.getByLabelText('permissions-continue'));
-    });
+    await reachPairStep();
     expect(await screen.findByLabelText('pair-skip')).toBeTruthy();
 
     // The engine's OWN event, driven through the live handlers the flow
