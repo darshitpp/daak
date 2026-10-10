@@ -69,6 +69,10 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     // It defaults ON, which is the real default.
     loadNotifyPrefs: jest.fn(async () => ({ arrival: true })),
     saveNotifyPrefs: jest.fn(async () => undefined),
+    appInfo: jest.fn(async () => ({ version: '0.1.0', build: '1' })),
+    formatAppInfo: jest.fn(
+      (i: { version: string; build: string }) => `Version ${i.version} (build ${i.build})`,
+    ),
     ...overrides,
   };
 }

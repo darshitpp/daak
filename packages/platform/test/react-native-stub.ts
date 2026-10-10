@@ -28,7 +28,11 @@ export class NativeEventEmitter {
 
 // `getEnforcing` must not throw at import time: NativeDaak.ts calls it on the
 // module body, and every test injects its own native double into createEngine.
-export const TurboModuleRegistry = { getEnforcing<T>(_name: string): T { return {} as T; } };
+export const TurboModuleRegistry = {
+  getEnforcing<T>(_name: string): T { return {} as T; },
+  // The real `get` returns null for a module that the host did not register.
+  get<T>(_name: string): T | null { return null; },
+};
 
 export const Linking = {
   getInitialURL(): Promise<string | null> { return Promise.resolve(null); },

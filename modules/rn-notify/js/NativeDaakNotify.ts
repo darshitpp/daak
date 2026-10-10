@@ -15,6 +15,12 @@ export interface Spec extends TurboModule {
    * it up here. JSON `{ action, payload }`, or `""` when there is nothing.
    */
   consumePendingAction(): Promise<string>;
+  /**
+   * JSON `{ "version": string, "build": string }` read from the app bundle:
+   * CFBundleShortVersionString and CFBundleVersion on iOS, versionName and
+   * versionCode on Android. A module that cannot read them rejects.
+   */
+  appInfo(): Promise<string>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }

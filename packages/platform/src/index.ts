@@ -1,4 +1,5 @@
 export * from './engine';
+export * from './appinfo';
 export * from './bgsched';
 export * from './clipboard';
 export * from './daemon';
