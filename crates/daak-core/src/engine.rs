@@ -179,6 +179,20 @@ pub struct EngineConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// One row of the device list the UI shows. See Engine::peer_views.
+pub struct PeerView {
+    pub device_id: [u8; 16],
+    /// The pairing label of a paired peer, empty when none is recorded. The
+    /// engine never invents a name from the id.
+    pub name: String,
+    pub addr: Option<SocketAddr>,
+    /// True only for a trusted pairing.
+    pub paired: bool,
+    /// Some for a paired peer only.
+    pub presence: Option<PresenceState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
     pub device_id: [u8; 16],
     pub name: String,
@@ -198,6 +212,12 @@ pub enum EngineEvent {
     DeviceLost([u8; 16]),
     /// A pairing was revoked: by this device, or by the peer's unpair notice.
     PairingRevoked([u8; 16]),
+    /// A trusted peer declared a new state in its sealed beacon. Emitted only
+    /// on a change. DeviceState keeps meaning on-network or not.
+    PeerPresence {
+        device_id: [u8; 16],
+        state: PresenceState,
+    },
     /// A paired peer crossed the online/offline boundary.
     ///
     /// This is the sealed-beacon liveness signal, not a discovery fact: it is
@@ -1063,12 +1083,23 @@ impl Engine {
                             outbox.notify_peer_online(p.device_id);
                         }
                         let now = crate::manifest::now_ms();
-                        if let Some(c) = status.lock().await.observe_session(
-                            p.device_id,
-                            beacon.session_id,
-                            beacon.seq,
-                            now,
-                        ) {
+                        let (change, declared_changed) =
+                            status.lock().await.observe_session_declared(
+                                p.device_id,
+                                beacon.session_id,
+                                beacon.seq,
+                                now,
+                                p.state,
+                            );
+                        // A declared Offline stores the value and emits no
+                        // event. The heartbeat then reports the peer offline.
+                        if declared_changed && p.state != PresenceState::Offline {
+                            let _ = tx.send(EngineEvent::PeerPresence {
+                                device_id: p.device_id,
+                                state: p.state,
+                            });
+                        }
+                        if let Some(c) = change {
                             announce_device_state(
                                 &tx,
                                 &announced_offline,
@@ -1239,11 +1270,19 @@ impl Engine {
             &pairing.static_dh_pub,
         );
         let p = b.open(&key)?;
-        let change =
-            self.status
-                .lock()
-                .await
-                .observe_session(p.device_id, b.session_id, b.seq, now_ms);
+        let (change, declared_changed) = self.status.lock().await.observe_session_declared(
+            p.device_id,
+            b.session_id,
+            b.seq,
+            now_ms,
+            p.state,
+        );
+        if declared_changed && p.state != PresenceState::Offline {
+            let _ = self.tx.send(EngineEvent::PeerPresence {
+                device_id: p.device_id,
+                state: p.state,
+            });
+        }
         if let Some(c) = &change {
             self.announce_device_state(c.device_id, c.state == Liveness::Online)
                 .await;
@@ -1290,6 +1329,71 @@ impl Engine {
 
     pub async fn devices(&self) -> Vec<DeviceInfo> {
         self.devices.lock().await.values().cloned().collect()
+    }
+    /// The device list the UI shows: the live map plus each trusted pairing
+    /// that is not in it.
+    ///
+    /// Trust comes from the pairings table. The paired flag of a live entry
+    /// is a cache that note_peer does not refresh, so it is not read here. A
+    /// pending pairing (not yet confirmed) and a revoked one are NOT paired:
+    /// a live entry for them reads paired false with no presence, and one
+    /// without a live entry is not listed.
+    ///
+    /// For a paired peer, presence is Offline when the tracker says it is not
+    /// on the network, else what the peer declared (Online when it declared
+    /// nothing).
+    pub async fn peer_views(&self) -> Result<Vec<PeerView>> {
+        let pairings = self.db.list_pairings()?;
+        let trusted = |id: &[u8; 16]| {
+            pairings
+                .iter()
+                .find(|p| &p.peer_device_id == id && p.state == "trusted")
+        };
+        let live = self.devices().await;
+        let status = self.status.lock().await;
+        let presence_of = |id: &[u8; 16]| {
+            if status.is_online(id) {
+                status.declared(id).unwrap_or(PresenceState::Online)
+            } else {
+                PresenceState::Offline
+            }
+        };
+        let mut out: Vec<PeerView> = Vec::new();
+        for d in &live {
+            out.push(match trusted(&d.device_id) {
+                // A live entry seeded at start-up carries the hex id as its
+                // name when the label is empty. The UI must not show an
+                // invented name, so a paired peer takes its name from the
+                // pairing label only.
+                Some(p) => PeerView {
+                    device_id: d.device_id,
+                    name: p.label.clone().unwrap_or_default(),
+                    addr: Some(d.addr),
+                    paired: true,
+                    presence: Some(presence_of(&d.device_id)),
+                },
+                None => PeerView {
+                    device_id: d.device_id,
+                    name: d.name.clone(),
+                    addr: Some(d.addr),
+                    paired: false,
+                    presence: None,
+                },
+            });
+        }
+        for p in pairings.iter().filter(|p| p.state == "trusted") {
+            if out.iter().any(|v| v.device_id == p.peer_device_id) {
+                continue;
+            }
+            out.push(PeerView {
+                device_id: p.peer_device_id,
+                name: p.label.clone().unwrap_or_default(),
+                addr: None,
+                paired: true,
+                presence: Some(presence_of(&p.peer_device_id)),
+            });
+        }
+        Ok(out)
     }
 
     /// Turn the confirmation gate on or off. On: a new pairing stays `pending`

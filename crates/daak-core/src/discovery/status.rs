@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use crate::crypto::replay::ReplayWindow;
 
+use super::presence::PresenceState;
+
 pub const BEACON_INTERVAL_MS: u64 = 2_000;
 pub const OFFLINE_MISSES: u32 = 3;
 pub const FLAP_DEBOUNCE_MS: u64 = 1_000;
@@ -70,6 +72,16 @@ pub struct PresenceTracker {
     cfg: PresenceConfig,
     peers: HashMap<[u8; 16], PeerStatus>,
     windows: HashMap<[u8; 16], ReplayWindow>,
+    declared: HashMap<[u8; 16], Declared>,
+}
+
+/// What a peer declared about itself in its latest accepted beacon, with the
+/// session and the sequence number that carried it.
+#[derive(Debug, Clone, Copy)]
+struct Declared {
+    state: PresenceState,
+    session_id: [u8; 16],
+    seq: u64,
 }
 
 impl Default for PresenceTracker {
@@ -84,6 +96,7 @@ impl PresenceTracker {
             cfg,
             peers: HashMap::new(),
             windows: HashMap::new(),
+            declared: HashMap::new(),
         }
     }
 
@@ -100,13 +113,14 @@ impl PresenceTracker {
     ///
     /// A new session id means the peer restarted. A restart is not a blip, so
     /// the replay window resets and the flap window does not absorb the event.
-    pub fn observe_session(
+    /// The outer None means the replay window rejected the beacon.
+    fn accept_beacon(
         &mut self,
         peer: [u8; 16],
         session_id: [u8; 16],
         seq: u64,
         now_ms: u64,
-    ) -> Option<StatusChange> {
+    ) -> Option<Option<StatusChange>> {
         let known = self
             .peers
             .get(&peer)
@@ -137,7 +151,7 @@ impl PresenceTracker {
             .or_insert_with(|| PeerStatus::new(peer, now_ms));
         s.session_id = session_id;
         s.last_seen_ms = now_ms;
-        match s.liveness {
+        Some(match s.liveness {
             Liveness::Online => None,
             Liveness::Offline => {
                 let briefly_offline = s
@@ -155,7 +169,58 @@ impl PresenceTracker {
                     })
                 }
             }
+        })
+    }
+
+    /// Accepts a fresh beacon with its per-process session id.
+    ///
+    /// A new session id means the peer restarted. A restart is not a blip, so
+    /// the replay window resets and the flap window does not absorb the event.
+    pub fn observe_session(
+        &mut self,
+        peer: [u8; 16],
+        session_id: [u8; 16],
+        seq: u64,
+        now_ms: u64,
+    ) -> Option<StatusChange> {
+        self.accept_beacon(peer, session_id, seq, now_ms).flatten()
+    }
+
+    /// Same as observe_session, and also records what the peer declared.
+    /// The value is stored only when the replay window accepted the beacon
+    /// and the beacon is newer than the stored one in the same session. The
+    /// window rejects a duplicate sequence number but accepts an older one
+    /// that it never saw, so the window alone does not stop an old beacon
+    /// from undoing a newer Away. True means the declared state changed, so a
+    /// caller emits one event for a change and none for a repeated beacon.
+    pub fn observe_session_declared(
+        &mut self,
+        peer: [u8; 16],
+        session_id: [u8; 16],
+        seq: u64,
+        now_ms: u64,
+        declared: PresenceState,
+    ) -> (Option<StatusChange>, bool) {
+        let Some(change) = self.accept_beacon(peer, session_id, seq, now_ms) else {
+            return (None, false);
+        };
+        let previous = self.declared.get(&peer).copied();
+        if previous.is_some_and(|d| d.session_id == session_id && seq <= d.seq) {
+            return (change, false);
         }
+        self.declared.insert(
+            peer,
+            Declared {
+                state: declared,
+                session_id,
+                seq,
+            },
+        );
+        (change, previous.map(|d| d.state) != Some(declared))
+    }
+
+    pub fn declared(&self, peer: &[u8; 16]) -> Option<PresenceState> {
+        self.declared.get(peer).map(|d| d.state)
     }
 
     /// Heartbeat: declares offline for peers whose last beacon is older than the timeout.
@@ -167,6 +232,7 @@ impl PresenceTracker {
             if s.liveness == Liveness::Online && stale {
                 s.liveness = Liveness::Offline;
                 s.last_change_ms = Some(now_ms);
+                self.declared.remove(&s.device_id);
                 changes.push(StatusChange {
                     device_id: s.device_id,
                     state: Liveness::Offline,
@@ -187,6 +253,7 @@ impl PresenceTracker {
     pub fn forget(&mut self, peer: &[u8; 16]) {
         self.peers.remove(peer);
         self.windows.remove(peer);
+        self.declared.remove(peer);
     }
 }
 
@@ -257,5 +324,79 @@ mod tests {
             flap_debounce_ms: 100,
         };
         assert_eq!(cfg.offline_timeout_ms(), 2_000);
+    }
+}
+
+#[cfg(test)]
+mod declared_tests {
+    use super::super::presence::PresenceState;
+    use super::PresenceTracker;
+
+    const P: [u8; 16] = [1u8; 16];
+    const S: [u8; 16] = [9u8; 16];
+
+    #[test]
+    fn a_replayed_or_older_beacon_does_not_change_the_declared_state() {
+        let mut t = PresenceTracker::default();
+        let (_, changed) = t.observe_session_declared(P, S, 5, 1_000, PresenceState::Away);
+        assert!(changed);
+        let (_, changed) = t.observe_session_declared(P, S, 5, 2_000, PresenceState::Online);
+        assert!(!changed);
+        let (_, changed) = t.observe_session_declared(P, S, 4, 3_000, PresenceState::Online);
+        assert!(!changed);
+        assert_eq!(t.declared(&P), Some(PresenceState::Away));
+        let (_, changed) = t.observe_session_declared(P, S, 6, 4_000, PresenceState::Online);
+        assert!(changed);
+        assert_eq!(t.declared(&P), Some(PresenceState::Online));
+    }
+
+    #[test]
+    fn a_new_session_restarts_the_declared_sequence() {
+        let mut t = PresenceTracker::default();
+        let p = [1u8; 16];
+        t.observe_session_declared(p, [9u8; 16], 50, 1_000, PresenceState::Away);
+        let (_, changed) =
+            t.observe_session_declared(p, [8u8; 16], 1, 2_000, PresenceState::Online);
+        assert!(changed);
+        assert_eq!(t.declared(&p), Some(PresenceState::Online));
+    }
+
+    #[test]
+    fn declared_presence_reports_a_change_once_and_is_forgotten() {
+        let mut t = PresenceTracker::default();
+        let p = [1u8; 16];
+        let s = [9u8; 16];
+        assert_eq!(t.declared(&p), None);
+        assert!(
+            t.observe_session_declared(p, s, 1, 1_000, PresenceState::Online)
+                .1
+        );
+        assert!(
+            !t.observe_session_declared(p, s, 2, 2_000, PresenceState::Online)
+                .1
+        );
+        assert!(
+            t.observe_session_declared(p, s, 3, 3_000, PresenceState::Away)
+                .1
+        );
+        assert_eq!(t.declared(&p), Some(PresenceState::Away));
+        t.forget(&p);
+        assert_eq!(t.declared(&p), None);
+    }
+
+    #[test]
+    fn declared_presence_is_cleared_when_the_peer_goes_offline() {
+        let mut t = PresenceTracker::default();
+        let p = [1u8; 16];
+        let s = [9u8; 16];
+        t.observe_session_declared(p, s, 5, 1_000, PresenceState::Away);
+        assert_eq!(
+            t.tick(1_000_000).len(),
+            1,
+            "the peer is offline after the timeout"
+        );
+        assert_eq!(t.declared(&p), None);
+        let (_, changed) = t.observe_session_declared(p, s, 6, 2_000_000, PresenceState::Away);
+        assert!(changed);
     }
 }

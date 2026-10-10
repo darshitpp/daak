@@ -32,6 +32,9 @@ export type IpcEventJSON =
     }
   | {
       QueueDepthEvent: QueueDepthEventJSON;
+    }
+  | {
+      DevicePresenceEvent: DevicePresenceEventJSON;
     };
 export type IpcMessageJSON =
   | {
@@ -151,6 +154,13 @@ export interface DeviceFoundArgsJSON {
 }
 export interface DeviceFoundEventJSON {
   device_found: DeviceFoundArgsJSON;
+}
+export interface DevicePresenceArgsJSON {
+  device_id: string;
+  presence: string;
+}
+export interface DevicePresenceEventJSON {
+  device_presence: DevicePresenceArgsJSON;
 }
 export interface DeviceStateArgsJSON {
   device_id: string;

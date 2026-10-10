@@ -52,6 +52,7 @@ callback interface SecureStore {
 interface FfiEvent {
   DeviceFound(DeviceFoundEvent data);
   DeviceState(DeviceStateEvent data);
+  DevicePresence(DevicePresenceEvent data);
   PairingSas(PairingSasEvent data);
   PairingDone(PairingDoneEvent data);
   PairingRevoked(PairingDoneEvent data);
@@ -70,6 +71,7 @@ interface FfiEvent {
 
 dictionary DeviceFoundEvent { string device_id; string name; string addr; boolean online; };
 dictionary DeviceStateEvent { string device_id; boolean online; };
+dictionary DevicePresenceEvent { string device_id; string presence; };
 dictionary PairingSasEvent { string peer_device_id; string sas; };
 dictionary PairingDoneEvent { string device_id; };
 dictionary ProgressEvent { string transfer_id; u64 bytes_done; u64 bytes_total; };

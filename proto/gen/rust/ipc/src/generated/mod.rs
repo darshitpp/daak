@@ -67,6 +67,32 @@ impl DeviceFoundEvent {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct DevicePresenceArgs {
+    pub device_id: String,
+    pub presence: String,
+}
+
+impl DevicePresenceArgs {
+    pub fn new(device_id: String, presence: String) -> Self {
+        Self {
+            device_id,
+            presence,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct DevicePresenceEvent {
+    pub device_presence: DevicePresenceArgs,
+}
+
+impl DevicePresenceEvent {
+    pub fn new(device_presence: DevicePresenceArgs) -> Self {
+        Self { device_presence }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct DeviceStateArgs {
     pub device_id: String,
     pub online: bool,
@@ -238,6 +264,7 @@ pub enum IpcEvent {
     InboxReceivedEvent(InboxReceivedEvent),
     IncompatiblePeerEvent(IncompatiblePeerEvent),
     QueueDepthEvent(QueueDepthEvent),
+    DevicePresenceEvent(DevicePresenceEvent),
 }
 
 impl IpcEvent {
@@ -283,6 +310,10 @@ impl IpcEvent {
 
     pub fn new_queue_depth_event(queue_depth_event: QueueDepthEvent) -> Self {
         Self::QueueDepthEvent(queue_depth_event)
+    }
+
+    pub fn new_device_presence_event(device_presence_event: DevicePresenceEvent) -> Self {
+        Self::DevicePresenceEvent(device_presence_event)
     }
 }
 

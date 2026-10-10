@@ -213,6 +213,7 @@ ipc-event =
   / inbox-received-event
   / incompatible-peer-event
   / queue-depth-event
+  / device-presence-event
 
 device-found-event      = { "DeviceFound": device-found-args }
 device-state-event      = { "DeviceState": device-state-args }
@@ -230,6 +231,8 @@ inbox-received-event    = { "InboxReceived": inbox-received-args }
 incompatible-peer-event = { "IncompatiblePeer": incompatible-peer-args }
 ; The unsent outbox count for a peer, so the UI can show "N queued".
 queue-depth-event = { "QueueDepth": queue-depth-args }
+; A trusted peer declared a new presence state in its sealed beacon.
+device-presence-event = { "DevicePresence": device-presence-args }
 
 device-found-args      = { "device_id": tstr, "name": tstr, "addr": tstr }
 device-state-args      = { "device_id": tstr, "online": bool }
@@ -250,4 +253,8 @@ incompatible-peer-args = {
 queue-depth-args = {
   "device_id": tstr,
   "queued":    uint,
+}
+device-presence-args = {
+  "device_id": tstr,
+  "presence":  tstr,
 }

@@ -62,6 +62,12 @@ pub struct DeviceStateEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevicePresenceEvent {
+    pub device_id: String,
+    pub presence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingSasEvent {
     pub peer_device_id: String,
     pub sas: String,
@@ -134,6 +140,7 @@ pub struct QueueDepthEvent {
 pub enum FfiEvent {
     DeviceFound { data: DeviceFoundEvent },
     DeviceState { data: DeviceStateEvent },
+    DevicePresence { data: DevicePresenceEvent },
     PairingSas { data: PairingSasEvent },
     PairingDone { data: PairingDoneEvent },
     PairingRevoked { data: PairingDoneEvent },
@@ -322,6 +329,29 @@ pub fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value 
         })
         .collect();
     serde_json::json!({ "items": items, "olderCursor": p.older_cursor })
+}
+
+/// One device as the DeviceInfo TS type. Shared in shape with daakd.
+pub fn peer_view_json(v: &daak_core::engine::PeerView) -> serde_json::Value {
+    let mut o = serde_json::json!({
+        "deviceId": to_hex(&v.device_id),
+        "name": v.name,
+        "addr": v.addr.map(|a| a.to_string()).unwrap_or_default(),
+        "paired": v.paired,
+    });
+    if let Some(p) = v.presence {
+        o["presence"] = serde_json::json!(presence_str(p));
+        o["online"] = serde_json::json!(p != PresenceState::Offline);
+    }
+    o
+}
+
+pub fn presence_str(p: PresenceState) -> &'static str {
+    match p {
+        PresenceState::Online => "online",
+        PresenceState::Away => "away",
+        PresenceState::Offline => "offline",
+    }
 }
 
 /// One inbox_history row as the InboxEntry TS type. saved_paths is a JSON
@@ -622,24 +652,13 @@ impl DaakEngine {
     }
 
     pub fn list_devices(&self) -> Result<String, FfiError> {
-        let devices = self.rt.block_on(self.engine()?.devices());
-        // SocketAddr and [u8; 16] have no serde impls, so build the shape by hand.
-        // No "online" key: the engine never prunes this map, so any value here
-        // would be fabricated. device.state events own liveness, and the TS
-        // DeviceInfo type leaves the field optional for exactly this reason.
-        let json: Vec<serde_json::Value> = devices
-            .iter()
-            .map(|d| {
-                serde_json::json!({
-                    "deviceId": to_hex(&d.device_id),
-                    "name": d.name,
-                    "addr": d.addr.to_string(),
-                    // R42g: discovery and trust are different facts. The UI
-                    // offers Send only for a paired peer and Pair otherwise.
-                    "paired": d.paired,
-                })
-            })
-            .collect();
+        let views = self
+            .rt
+            .block_on(self.engine()?.peer_views())
+            .map_err(engine_err)?;
+        // R42g: discovery and trust are different facts. Paired reads from the
+        // pairings table, so the UI offers Send only for a paired peer.
+        let json: Vec<serde_json::Value> = views.iter().map(peer_view_json).collect();
         serde_json::to_string(&json).map_err(protocol_err)
     }
 
@@ -915,6 +934,11 @@ pub fn ffi_event_json(ev: &FfiEvent) -> Result<String, FfiError> {
             // TS carries a string here, never a bool, so JS switches on one shape.
             "state": if data.online { "online" } else { "offline" },
         }),
+        FfiEvent::DevicePresence { data } => serde_json::json!({
+            "type": "device.presence",
+            "deviceId": data.device_id,
+            "presence": data.presence,
+        }),
         FfiEvent::PairingSas { data } => serde_json::json!({
             "type": "pairing.sas",
             "peerDeviceId": data.peer_device_id,
@@ -1050,6 +1074,12 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
         EngineEvent::PairingRevoked(id) => FfiEvent::PairingRevoked {
             data: PairingDoneEvent {
                 device_id: to_hex(&id),
+            },
+        },
+        EngineEvent::PeerPresence { device_id, state } => FfiEvent::DevicePresence {
+            data: DevicePresenceEvent {
+                device_id: to_hex(&device_id),
+                presence: presence_str(state).into(),
             },
         },
         EngineEvent::DeviceLost(id) => FfiEvent::DeviceState {

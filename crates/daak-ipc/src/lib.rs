@@ -287,6 +287,13 @@ pub enum IpcEvent {
         device_id: String,
         queued: u64,
     },
+    /// A trusted peer declared a new presence state ("online" or "away") in its
+    /// sealed beacon. Same fields and meaning as the FFI arm. A new EVENT
+    /// variant owes no IPC_MINOR bump (see IncompatiblePeer above).
+    DevicePresence {
+        device_id: String,
+        presence: String,
+    },
 }
 
 /// The whole frame: a schema version plus the message. The ABSENCE of

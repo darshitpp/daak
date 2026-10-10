@@ -29,6 +29,10 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::DeviceFoundArgs>();
     _assert_serialize::<crate::generated::DeviceFoundEvent>();
     _assert_deserialize::<crate::generated::DeviceFoundEvent>();
+    _assert_serialize::<crate::generated::DevicePresenceArgs>();
+    _assert_deserialize::<crate::generated::DevicePresenceArgs>();
+    _assert_serialize::<crate::generated::DevicePresenceEvent>();
+    _assert_deserialize::<crate::generated::DevicePresenceEvent>();
     _assert_serialize::<crate::generated::DeviceStateArgs>();
     _assert_deserialize::<crate::generated::DeviceStateArgs>();
     _assert_serialize::<crate::generated::DeviceStateEvent>();

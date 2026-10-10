@@ -178,6 +178,31 @@ fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> serd
     })
 }
 
+/// One device as the TS DeviceInfo. Same key set as peer_view_json in
+/// daak-ffi, kept here because the daemon must not depend on daak-ffi.
+/// The two shapes stay equal through the shared contract suite.
+fn peer_view_json(v: &daak_core::engine::PeerView) -> serde_json::Value {
+    let mut o = serde_json::json!({
+        "deviceId": hex::encode(v.device_id),
+        "name": v.name,
+        "addr": v.addr.map(|a| a.to_string()).unwrap_or_default(),
+        "paired": v.paired,
+    });
+    if let Some(p) = v.presence {
+        o["presence"] = serde_json::json!(presence_str(p));
+        o["online"] = serde_json::json!(p != PresenceState::Offline);
+    }
+    o
+}
+
+fn presence_str(p: PresenceState) -> &'static str {
+    match p {
+        PresenceState::Online => "online",
+        PresenceState::Away => "away",
+        PresenceState::Offline => "offline",
+    }
+}
+
 /// One thread page as the TS ThreadPage. Same key set as the free function
 /// in daak-ffi, kept here because the daemon must not depend on daak-ffi.
 /// The two shapes stay equal through the shared contract suite.
@@ -285,6 +310,10 @@ pub fn to_ipc_event(ev: EngineEvent) -> IpcEvent {
         EngineEvent::DeviceState { device_id, online } => IpcEvent::DeviceState {
             device_id: hex::encode(device_id),
             online,
+        },
+        EngineEvent::PeerPresence { device_id, state } => IpcEvent::DevicePresence {
+            device_id: hex::encode(device_id),
+            presence: presence_str(state).into(),
         },
         EngineEvent::TransferProgress {
             transfer_id,
@@ -626,21 +655,12 @@ async fn dispatch(
             listen_port,
         } => start_engine(state, sender, data_dir, display_name, listen_port).await,
         IpcRequest::Devices => match state.engine().await {
-            Ok(engine) => {
-                let devices = engine.devices().await;
-                json(serde_json::Value::Array(
-                    devices
-                        .iter()
-                        .map(|d| {
-                            serde_json::json!({
-                                "deviceId": hex::encode(d.device_id),
-                                "name": d.name,
-                                "addr": d.addr.to_string(),
-                            })
-                        })
-                        .collect(),
-                ))
-            }
+            Ok(engine) => match engine.peer_views().await {
+                Ok(views) => json(serde_json::Value::Array(
+                    views.iter().map(peer_view_json).collect(),
+                )),
+                Err(e) => err(e),
+            },
             Err(e) => e,
         },
         IpcRequest::Send {

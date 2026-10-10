@@ -645,6 +645,200 @@ impl Deserialize for DeviceFoundEvent {
     }
 }
 
+impl cbor_event::se::Serialize for DevicePresenceArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(2))?;
+        serializer.write_text("presence")?;
+        serializer.write_text(&self.presence)?;
+        serializer.write_text("device_id")?;
+        serializer.write_text(&self.device_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for DevicePresenceArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(2)?;
+            read_len.finish()?;
+            let mut presence = None;
+            let mut device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "presence" => {
+                            if presence.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "presence".into(),
+                                ))
+                                .into());
+                            }
+                            presence = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("presence"))?,
+                            );
+                        }
+                        "device_id" => {
+                            if device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "device_id".into(),
+                                ))
+                                .into());
+                            }
+                            device_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let device_id =
+                match device_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("device_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let presence =
+                match presence {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("presence"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self {
+                device_id,
+                presence,
+            })
+        })()
+        .map_err(|e| e.annotate("DevicePresenceArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for DevicePresenceEvent {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("DevicePresence")?;
+        self.device_presence.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for DevicePresenceEvent {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut device_presence = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "DevicePresence" => {
+                            if device_presence.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "DevicePresence".into(),
+                                ))
+                                .into());
+                            }
+                            device_presence = Some(
+                                DevicePresenceArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("device_presence"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let device_presence =
+                match device_presence {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("DevicePresence"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { device_presence })
+        })()
+        .map_err(|e| e.annotate("DevicePresenceEvent"))
+    }
+}
+
 impl cbor_event::se::Serialize for DeviceStateArgs {
     fn serialize<'se>(
         &self,
@@ -1811,6 +2005,9 @@ impl cbor_event::se::Serialize for IpcEvent {
                 incompatible_peer_event.serialize(serializer)
             }
             IpcEvent::QueueDepthEvent(queue_depth_event) => queue_depth_event.serialize(serializer),
+            IpcEvent::DevicePresenceEvent(device_presence_event) => {
+                device_presence_event.serialize(serializer)
+            }
         }
     }
 }
@@ -1915,6 +2112,16 @@ impl Deserialize for IpcEvent {
                 Ok(queue_depth_event) => return Ok(Self::QueueDepthEvent(queue_depth_event)),
                 Err(e) => {
                     errs.push(e.annotate("QueueDepthEvent"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = DevicePresenceEvent::deserialize(raw);
+            match deser_variant {
+                Ok(device_presence_event) => {
+                    return Ok(Self::DevicePresenceEvent(device_presence_event));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("DevicePresenceEvent"));
                     raw.set_position(initial_position).unwrap();
                 }
             };

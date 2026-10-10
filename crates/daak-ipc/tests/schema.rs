@@ -407,6 +407,10 @@ fn every_event_validates_against_the_cddl() {
             peer_version: 100,
             our_version: 1,
         }),
+        IpcMessage::Event(IpcEvent::DevicePresence {
+            device_id: "d1".into(),
+            presence: "away".into(),
+        }),
     ] {
         assert_valid(&m);
     }
