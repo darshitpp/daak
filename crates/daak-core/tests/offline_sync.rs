@@ -278,6 +278,15 @@ async fn revoking_purges_queue_clean_staging_and_blocks_reconnect() {
     .await
     .unwrap();
 
+    let before = db.list_transfers(None, Some(&peer)).unwrap();
+    assert_eq!(
+        before.len(),
+        1,
+        "enqueue writes one transfers row for the peer"
+    );
+    let state_before = before[0].state.clone();
+    eprintln!("transfers state before revoke: {state_before}");
+
     engine.revoke_pairing(peer).await.unwrap();
 
     assert!(db.is_revoked(&peer).unwrap(), "pairing state is revoked");
@@ -289,6 +298,27 @@ async fn revoking_purges_queue_clean_staging_and_blocks_reconnect() {
     assert!(
         engine.connection_allowed(&peer).await.is_err(),
         "reconnect refused"
+    );
+
+    // Revoke KEEPS the transfers row and CANCELS it. The plan expected the row
+    // to stay `queued`; it does not. P1 Task 3 (`cancel_outbound_for_peer`)
+    // moves every open outbound row of a revoked peer to `canceled` in the
+    // same call, so the row is kept and its state changes. Measured here on
+    // 2026-10-10: before `queued`, after `canceled`.
+    let kept = db.list_transfers(None, Some(&peer)).unwrap();
+    assert_eq!(kept.len(), 1, "revoke keeps the transfers row");
+    assert_eq!(
+        state_before, "queued",
+        "enqueue did not leave the row queued"
+    );
+    assert_eq!(kept[0].state, "canceled", "revoke cancels the kept row");
+    eprintln!("transfers state after revoke: {}", kept[0].state);
+    // HEAD 824b3d7: the peer is not on the network here, so the engine keeps an
+    // unpair notice and delivers it when the peer returns. Remove must stay
+    // possible for an offline device, and this line records why it is safe.
+    assert!(
+        db.has_unpair_notice(&peer),
+        "an undelivered unpair notice is kept"
     );
 
     engine.shutdown().await.unwrap();

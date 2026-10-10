@@ -182,9 +182,6 @@ export function DaakDashboardShell({ engine, runtime }: {
           alertRouteToken={blockers.alertRouteToken}
           settingsRouteToken={blockers.settingsRouteToken}
           onCheckConnection={blockers.onCheckConnection}
-          // R42g: unpair is local trust, so the host reaches the engine
-          // directly. packages/ui takes no engine and cannot call it.
-          onUnpair={(d) => void engine.revokePairing(d.deviceId)}
           downloadFolder={downloadFolder}
         />
       </DesktopOnboardingGate>

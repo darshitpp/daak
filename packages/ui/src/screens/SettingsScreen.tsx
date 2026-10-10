@@ -3,6 +3,8 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useEngine } from '../EngineContext';
 import { Btn, Note, Section } from '../components/ds';
 import { DownloadFolderRow } from '../components/DownloadFolderRow';
+import { PairedSection } from './settings/PairedSection';
+import type { DeviceInfo } from '@daak/core';
 import { colors, ui } from '../theme';
 
 type Feedback = { tone: 'ok' | 'err'; title: string; body: string } | null;
@@ -28,7 +30,7 @@ const NAME_READ_RETRY_MS = 1000;
  * time -- importing it here would invert the dependency direction and break
  * every ui test that renders this screen.
  */
-export function SettingsScreen({ background, onCheckConnection, downloadFolder }: {
+export function SettingsScreen({ background, onCheckConnection, downloadFolder, onUnpair }: {
   background?: React.ReactNode;
   /**
    * R42p: where received files go. Injected for the same reason `background`
@@ -41,6 +43,8 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder }
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
   };
+  /** R42g. PairedSection revokes the pairing itself and then calls this hook. */
+  onUnpair?: (d: DeviceInfo) => void;
   /**
    * The prototype's "Something not working? See what to check" button, in the
    * Connection section (prototypes/index.html:1237). Injected for the same
@@ -247,6 +251,8 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder }
             API for it on iOS and no permission for it on Android. So both rows
             are gone and only the button survives, because the button is the
             part that leads somewhere real. */}
+        <PairedSection onUnpair={onUnpair} />
+
         <Section title="Connection">
           {onCheckConnection ? (
             <Btn

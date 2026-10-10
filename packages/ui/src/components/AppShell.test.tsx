@@ -195,6 +195,19 @@ describe('AppShell tokens', () => {
     expect(screen.getByText('blocked')).toBeTruthy();
     expect(screen.queryByTestId('tab-devices')).toBeNull();
   });
+
+  // The host hook must be threaded through the shell to Settings.
+  it('threads onUnpair from the shell to the Settings remove sheet', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'revokePairing').mockResolvedValue();
+    const onUnpair = jest.fn();
+    shell(engine, { onUnpair });
+    fireEvent.press(screen.getByTestId('tab-settings'));
+    fireEvent.press(await screen.findByTestId('remove-' + peer.deviceId));
+    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(peer));
+  });
+
 });
 
 describe('AppShell desktop layout', () => {

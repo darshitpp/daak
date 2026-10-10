@@ -387,9 +387,6 @@ export default function App() {
           // opens the can't-reach screen, and it is the hook's own function, so
           // the phone and the desktop cannot disagree about when it opens (R43b).
           onCheckConnection={blockers.onCheckConnection}
-          // R42g: unpair is local trust, so the app reaches the engine
-          // directly. packages/ui takes no engine and cannot call it.
-          onUnpair={(d) => void engine.revokePairing(d.deviceId)}
           downloadFolder={downloadFolder}
           initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
           // ?? '' and not `link.text`: a send link with NO text is an

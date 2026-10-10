@@ -184,3 +184,22 @@ describe('SettingsScreen shows the name the user typed', () => {
     await waitFor(() => expect(nameBox().props.value).toBe('Pixel 9'));
   });
 });
+
+describe('SettingsScreen paired devices', () => {
+  it('shows the paired devices and removes one through the engine', async () => {
+    const d = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online' as const, paired: true };
+    const engine = fakeEngine([d]);
+    const revoke = jest.spyOn(engine, 'revokePairing').mockResolvedValue();
+    const onUnpair = jest.fn();
+    render(
+      <EngineProvider engine={engine}>
+        <SettingsScreen onUnpair={onUnpair} />
+      </EngineProvider>,
+    );
+    fireEvent.press(await screen.findByTestId('remove-' + d.deviceId));
+    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith(d.deviceId));
+    await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(d));
+  });
+});
+

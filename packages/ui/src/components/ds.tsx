@@ -28,6 +28,7 @@ export function Btn({ onPress, label, variant = 'quiet', block, disabled, testID
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={testID}
+      testID={testID}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [

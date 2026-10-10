@@ -43,6 +43,7 @@ export function AppShell({
   downloadFolder,
   onPickFiles,
   inboxActions,
+  onUnpair,
   initialPeerDeviceId,
   initialText,
   initialFiles,
@@ -191,7 +192,12 @@ export function AppShell({
     );
   } else {
     screen = (
-      <SettingsScreen background={background} onCheckConnection={onCheckConnection} downloadFolder={downloadFolder} />
+      <SettingsScreen
+        background={background}
+        onCheckConnection={onCheckConnection}
+        downloadFolder={downloadFolder}
+        onUnpair={onUnpair}
+      />
     );
   }
 
