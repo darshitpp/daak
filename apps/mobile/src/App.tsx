@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform, SafeAreaView, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Linking, Platform, SafeAreaView, View } from 'react-native';
 import {
   AppShell,
   BackgroundHint,
@@ -7,13 +7,17 @@ import {
   Note,
   ToastProvider,
   type IncompatiblePeer,
+  type SettingsHost,
   useBlockers,
 } from '@daak/ui';
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
   downloadFolderName,
+  appInfo,
+  loadNotifyPrefs,
   readOnboarding,
+  saveNotifyPrefs,
 } from '@daak/platform';
 import {
   drainInbound,
@@ -75,6 +79,25 @@ export default function App() {
     choose: chooseDownloadFolder,
     reset: clearDownloadFolder,
   };
+  // The Settings inputs that packages/ui may not import. The OS grant is the
+  // answer onboarding stored (readOnboarding().alerts). It does not change
+  // when the user flips the switch in system settings; see the open question
+  // in the P3 plan.
+  const settingsHost = useMemo<SettingsHost>(
+    () => ({
+      // Passed straight through. About reads it in an effect and hides the row
+      // when it rejects.
+      appInfo,
+      notifyPrefs: { load: loadNotifyPrefs, save: saveNotifyPrefs },
+      osAlerts: {
+        granted: () => readOnboarding().then((s) => s.alerts),
+        openSettings: () => {
+          void Promise.resolve(Linking.openSettings()).catch(() => {});
+        },
+      },
+    }),
+    [],
+  );
   // An OS share-sheet import. Held as state and handed to the shell, which
   // SEEDS it into Send -- the same route a daak://send link takes, because
   // from the app's side a shared file and a shared link are one instruction.
@@ -411,6 +434,7 @@ export default function App() {
           inboxPeerDeviceId={inboxPeer}
           deviceNoun="phone"
           keyboardAvoiding={Platform.OS === 'ios'}
+          settingsHost={settingsHost}
         />
         ) : null}
         </ToastProvider>

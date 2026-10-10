@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 import { DaakUiApp, useBlockers } from '@daak/ui';
-import type { IncompatiblePeer, UiRuntime } from '@daak/ui';
+import type { IncompatiblePeer, SettingsHost, UiRuntime } from '@daak/ui';
 // The @daak/core barrel re-exports NativeDaak, which calls
 // TurboModuleRegistry.getEnforcing('Daak') at module-eval time and throws in
 // Node. This specifier is a TYPE-only annotation, so it is erased at compile
@@ -14,6 +14,8 @@ import { applyTrayAction } from './tray-action';
 import { getDirectSharePeer, publishDevices, subscribeDirectSharePeer } from './direct-share';
 import { desktopPickFiles } from './picker';
 import { desktopInboxActions } from './inbox-actions';
+import { appInfo, formatAppInfo, type AppInfo } from '@daak/platform/src/appinfo';
+import { loadNotifyPrefs, saveNotifyPrefs } from '@daak/platform/src/notify-prefs';
 import { DesktopOnboardingGate } from './onboarding-gate';
 import { StartFaultNote } from './start-fault';
 import { DesktopPairing } from './pairing';
@@ -133,6 +135,28 @@ export function DaakDashboardShell({ engine, runtime }: {
     choose: chooseDownloadFolder,
     reset: clearDownloadFolder,
   };
+  // appInfo is async (P2). The window header reads it in an effect and shows
+  // the version line after the answer. The About row reads it on its own.
+  // Memoized: a new host object on every render would be harmless to
+  // ArrivalSection (it depends on the functions), but it costs a re-render
+  // of Settings for nothing. No osAlerts: the desktop has no stored OS answer
+  // for alerts yet (open question in the P3 plan).
+  const [info, setInfo] = useState<AppInfo | undefined>(undefined);
+  useEffect(() => {
+    void appInfo().then(setInfo, () => {});
+  }, []);
+  const settingsHost = useMemo<SettingsHost>(
+    // Design v2: the Mac Connection card labels the row "Network".
+    () => ({ appInfo, notifyPrefs: { load: loadNotifyPrefs, save: saveNotifyPrefs }, networkLabel: 'Network' }),
+    [],
+  );
+  const windowChrome = useMemo(
+    () => ({
+      title: 'Daak for Mac',
+      version: info !== undefined && info.version !== 'unknown' ? formatAppInfo(info) : undefined,
+    }),
+    [info],
+  );
   const incompatible = useIncompatible(runtime);
   const blockers = useBlockers(engine, incompatible);
   // The gate is a CONDITIONAL wrapper, not a boundary: both hooks above run
@@ -162,7 +186,7 @@ export function DaakDashboardShell({ engine, runtime }: {
   // the note above DaakPopoverShell.
   return (
     <>
-      <DaakTrayOverlay runtime={runtime} />
+      <TrayOverlay runtime={runtime} />
       <DesktopOnboardingGate>
         <StartFaultNote />
         <DaakUiApp
@@ -183,6 +207,10 @@ export function DaakDashboardShell({ engine, runtime }: {
           settingsRouteToken={blockers.settingsRouteToken}
           onCheckConnection={blockers.onCheckConnection}
           downloadFolder={downloadFolder}
+          settingsHost={settingsHost}
+          deviceNoun="Mac"
+          windowChrome={windowChrome}
+          toastBottomOffset={24}
         />
       </DesktopOnboardingGate>
     </>
@@ -198,6 +226,12 @@ export function DaakDashboardShell({ engine, runtime }: {
 // this subscriber re-renders on an engine event. DaakUiApp has its own
 // useSyncExternalStore; a second one in the shell would re-render the whole
 // dashboard on every transfer.item in addition to the one that already does.
+// Memoized at the call site. The version read in DaakDashboardShell re-renders
+// that shell ONCE, when appInfo answers, and the tray overlay must not render
+// with it: test/tray-survival.spec.ts counts its renders, and a re-render also
+// rebuilds the native menu for nothing. `runtime` is stable, so memo skips it.
+const TrayOverlay = React.memo(DaakTrayOverlay);
+
 export function DaakTrayOverlay({ runtime }: { runtime: UiRuntime }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore would resubscribe on every event it just delivered.
