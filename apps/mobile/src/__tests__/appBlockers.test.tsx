@@ -126,7 +126,7 @@ describe('the phone reads its blocking facts from the shared hook', () => {
   // handed to the hook must be that subscription's own state.
   it('hands the hook the incompatible peers its own subscription holds', () => {
     expect(appCode).toMatch(
-      /useBlockers\(\s*engine\s*,\s*incompatible\s*\)/,
+      /useBlockers\(\s*engine\s*,\s*incompatible\s*,\s*BLOCKER_HOST\s*\)/,
     );
     expect(appCode).toMatch(
       /const\s*\[\s*incompatible\s*,\s*setIncompatible\s*\]\s*=\s*useState<\s*IncompatiblePeer\[\]\s*>\s*\(/,

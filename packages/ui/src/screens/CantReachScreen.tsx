@@ -1,26 +1,23 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { Accordion, AppBar, Bullets, Hero, ONB_GLYPHS } from '../components/Onboarding';
-import { Btn, Note, Section } from '../components/ds';
+import { Btn, Note, Section, type DeviceNoun } from '../components/ds';
 import { ui } from '../theme';
+import { humanBytes } from './quarantine-facts';
 
 /**
- * The prototype's cant-reach screen (sc-cant-reach).
+ * The Cannot-reach screen (design route `cant-reach`).
  *
- * THE ONE PROTOTYPE SCREEN THAT HAD TO LOSE ITS COPY. The prototype's warning
- * note is titled with a Wi-Fi name -- "Looking on Home-5G" -- and its body
- * repeats it. Nothing in this codebase knows the name of the network this
- * device is on: there is no API for it on iOS and no permission for it on
- * Android. So the note cannot be a network name, and rendering one would name
- * a network Daak has never asked about. What replaces it is the fact that is
- * actually known: discovery found nobody.
+ * Ruling D6: nothing in this codebase reads the Wi-Fi name. The design shows a
+ * mock name ("Home-5G"). Every place that the design fills with the name reads
+ * "this Wi-Fi" here.
  *
- * The prototype's queue block ("Waiting to send") is a list of real outbox
- * transfers, handed in as a prop by the host. It is not synthesised here.
+ * The queue block ("Waiting to send") is a list of real outbox transfers. The
+ * host passes it in. This screen does not make rows.
  */
 export interface QueuedTransfer {
   transferId: string;
-  /** Whatever the transfer is labelled with, from the real engine list. */
+  /** What the transfer is labelled with, from the real engine list. */
   label: string;
   bytesTotal: number;
 }
@@ -32,6 +29,7 @@ export function CantReachScreen({
   onBack,
   retrying = false,
   error = '',
+  deviceNoun = 'device',
 }: {
   queued?: QueuedTransfer[];
   onRetry: () => void;
@@ -39,29 +37,29 @@ export function CantReachScreen({
   onBack?: () => void;
   retrying?: boolean;
   /**
-   * The real engine.devices() rejection, when the last attempt was the CHECK
-   * FAILING rather than the network coming back empty.
-   *
-   * This is the one screen state that had no truthful rendering. The engine
-   * SKIPS a peer whose protocol version it refuses, so a failing devices() is
-   * most often an out-of-step peer -- not an empty network and not a broken
-   * engine. Rendering "Discovery found no other Daak device" there names the
-   * wrong cause twice, and "Your paired devices are still paired" beside it is
-   * a claim Daak cannot make: the peer exists and Daak is refusing to talk to it.
-   *
-   * So a failed check leads with what IS known, and says the real next step --
-   * update whichever side is behind. It is the same advice Update Required
-   * gives, arrived at honestly, because the engine has no better fact to offer:
-   * the check failed and Daak cannot tell you which device is out of step.
+   * The real `engine.devices()` rejection, when the last attempt was the check
+   * failing and not the network coming back empty. The engine skips a peer whose
+   * protocol version it refuses, so a failing check is most often a peer that is
+   * out of step. The screen then leads with what is known and gives the real
+   * next step: update whichever device is behind.
    */
   error?: string;
+  /** The word for this device. The host sets it, because ui has no platform check. */
+  deviceNoun?: DeviceNoun | 'device';
 }) {
+  // The design shows a hint after the first retry that finds nobody. This
+  // screen unmounts when a retry finds a device, so a finished retry that
+  // leaves the screen mounted means "still nothing".
+  const [looked, setLooked] = useState(false);
+  const wasRetrying = useRef(false);
+  useEffect(() => {
+    if (wasRetrying.current && !retrying) setLooked(true);
+    wasRetrying.current = retrying;
+  }, [retrying]);
+
   return (
     <View style={ui.screen} testID="screen-cant-reach">
       <AppBar title="No connection" onBack={onBack} backLabel="Back to Settings" />
-      {/* Deliberately not a fit screen, so it uses AppBar + a padded
-          ScrollView rather than OnboardingScreen's centred column: this one
-          has real scrolling content and the actions belong after it. */}
       <ScrollView contentContainerStyle={ui.pad}>
         <Hero
           glyph={ONB_GLYPHS.noConnection}
@@ -69,15 +67,17 @@ export function CantReachScreen({
           lead={
             error === ''
               ? "Daak only works between devices on the same Wi-Fi. Right now it can't find one."
-              : "Daak looked for devices on this Wi-Fi and did not get an answer back, so it cannot tell you whether anyone is there."
+              : 'Daak looked for devices on this Wi-Fi and did not get an answer back, so it cannot tell you whether anyone is there.'
           }
         />
 
         {error === '' ? (
           <Note
             tone="warn"
-            title="Nothing on this Wi-Fi is answering"
-            body="Discovery found no other Daak device. If one is in the room, the two of you are probably on different networks."
+            title="Looking on this Wi-Fi"
+            body={`This ${deviceNoun} is on this Wi-Fi. The devices you paired need to be on ${
+              deviceNoun === 'Mac' ? 'the same network' : 'this Wi-Fi'
+            } too.`}
           />
         ) : (
           <>
@@ -101,7 +101,7 @@ export function CantReachScreen({
           <Bullets
             items={[
               'Your paired devices are still paired.',
-              'Everything already in your Inbox is untouched.',
+              'Everything already in your conversations is untouched.',
             ]}
           />
         </View>
@@ -117,11 +117,14 @@ export function CantReachScreen({
                 >
                   <View style={ui.fill}>
                     <Text style={ui.rowTitle}>{t.label}</Text>
-                    <Text style={ui.rowSub}>{t.bytesTotal} bytes, waiting for a device</Text>
+                    <Text style={ui.rowSub}>{humanBytes(t.bytesTotal)}</Text>
                   </View>
                 </View>
               ))}
             </View>
+            <Text style={ui.hint}>
+              {`${queued.length} ${queued.length === 1 ? 'item' : 'items'} will go by itself as soon as Daak finds the network again.`}
+            </Text>
           </Section>
         )}
 
@@ -129,12 +132,15 @@ export function CantReachScreen({
           <Btn
             variant="primary"
             block
-            label={retrying ? 'Looking again' : 'Try again'}
+            label={retrying ? 'Checking' : 'Try again'}
             testID="cant-reach-retry"
             disabled={retrying}
             onPress={onRetry}
           />
           <Btn variant="ghost" block label="Open Settings" testID="cant-reach-settings" onPress={onOpenSettings} />
+          {looked && error === '' ? (
+            <Text style={ui.hint}>Still nothing on this Wi-Fi. Wait a few seconds, then look again.</Text>
+          ) : null}
         </View>
 
         <Accordion label="If this keeps happening" testID="cant-reach-more">

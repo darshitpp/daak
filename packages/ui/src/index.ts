@@ -50,4 +50,4 @@ export { colors, control, radius, spacing, type, ui } from './theme';
 export type { DaakEngine, DaakEvent, DeviceInfo, InboxEntry, SendRequest } from '@daak/core';
 export type { AppMode, IncompatiblePeer, TransferRow, UiAction, UiState } from './state/store';
 export type { UiRuntime } from './headless';
-export { useBlockers } from './state/useBlockers';
+export { useBlockers, type BlockerHost } from './state/useBlockers';

@@ -115,14 +115,20 @@ describe('both desktop shells pass the blocking facts to DaakUiApp', () => {
     // to a local name and passes the name, and a shell that inlines the call,
     // are the same decision. The names below keep the two shells readable.
     expect(shellsCode).toMatch(
-      /useBlockers\(\s*engine\s*,\s*(incompatible\s*\)|useIncompatible\s*\(\s*runtime\s*\))/,
+      /useBlockers\(\s*engine\s*,\s*(incompatible\s*[,)]|useIncompatible\s*\(\s*runtime\s*\))/,
     );
     // The value must be bound to a name in each shell body, so the second
     // argument is not an unrelated expression that happens to compile.
     for (const body of [popoverBody, dashboardBody]) {
       expect(body).toMatch(/const\s+incompatible\s*=\s*useIncompatible\s*\(\s*runtime\s*\)/);
-      expect(body).toMatch(/useBlockers\(\s*engine\s*,\s*incompatible\s*\)/);
+      expect(body).toMatch(/useBlockers\(\s*engine\s*,\s*incompatible\s*,\s*BLOCKER_HOST\s*\)/);
     }
+  });
+
+  // The device noun reaches the copy through one module constant. A shell that
+  // forgets it shows "This device is on this Wi-Fi" on a Mac.
+  it('gives the hook a host object with the noun Mac', () => {
+    expect(shellsCode).toMatch(/const\s+BLOCKER_HOST\b[^=]*=\s*\{[^}]*deviceNoun:\s*'Mac'/);
   });
 
   // The negative half. Without it, a host that kept its own useState copies

@@ -2,6 +2,7 @@ import React, { createElement, useCallback, useEffect, useRef, useState } from '
 import type { DaakEngine } from '@daak/core';
 import { CantReachScreen, type QueuedTransfer } from '../screens/CantReachScreen';
 import { UpdateRequiredScreen } from '../screens/UpdateRequiredScreen';
+import type { DeviceNoun } from '../components/ds';
 import type { IncompatiblePeer } from './store';
 
 /**
@@ -24,9 +25,20 @@ import type { IncompatiblePeer } from './store';
  * two every DaakEngine already carries.
  */
 
+/**
+ * Facts that only the host knows. They enter as data because `packages/ui` has
+ * no platform check. A host builds one module constant and passes it, so the
+ * object keeps its identity between renders.
+ */
+export interface BlockerHost {
+  /** The word for this device in the copy. 'phone' on mobile, 'Mac' on desktop. Default 'device'. */
+  deviceNoun?: DeviceNoun;
+}
+
 export function useBlockers(
   engine: DaakEngine,
   incompatible: IncompatiblePeer[],
+  host?: BlockerHost,
 ): {
   alert: React.ReactNode | undefined;
   alertRouteToken: string | undefined;
@@ -211,6 +223,7 @@ export function useBlockers(
         error: noDevices.startsWith('failed:') ? noDevices.slice('failed:'.length) : '',
         onRetry: retryReachability,
         onOpenSettings: openSettingsFromAlert,
+        deviceNoun: host?.deviceNoun,
       })
     ) : undefined;
 

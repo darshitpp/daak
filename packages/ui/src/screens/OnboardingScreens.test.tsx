@@ -120,12 +120,39 @@ describe('Permissions', () => {
 });
 
 describe('Cant reach any devices', () => {
-  // The prototype's queue block names a Wi-Fi network this app cannot query.
-  // What must not come back is that invented network name.
-  it('never names a network it did not ask about', () => {
-    render(<CantReachScreen onRetry={() => {}} onOpenSettings={() => {}} />);
-    expect(screen.queryByText(/Home-5G/)).toBeNull();
+  const noop = () => {};
+
+  it('shows the design title, lead, and eyebrow', () => {
+    render(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
+    expect(screen.getByText('No connection')).toBeTruthy();
     expect(screen.getByText("Daak can't reach any devices")).toBeTruthy();
+    expect(screen.getByText("Daak only works between devices on the same Wi-Fi. Right now it can't find one.")).toBeTruthy();
+  });
+
+  // Ruling D6. Nothing in this codebase reads the Wi-Fi name. The design shows
+  // a mock name. The screen must say "this Wi-Fi".
+  it('never names a network', () => {
+    render(<CantReachScreen onRetry={noop} onOpenSettings={noop} deviceNoun="phone" />);
+    expect(screen.queryByText(/Home-5G/)).toBeNull();
+    expect(screen.getByText('Looking on this Wi-Fi')).toBeTruthy();
+    expect(
+      screen.getByText('This phone is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.'),
+    ).toBeTruthy();
+  });
+
+  it('uses the device noun the host gives, and "device" when it gives none', () => {
+    const { rerender } = render(<CantReachScreen onRetry={noop} onOpenSettings={noop} deviceNoun="Mac" />);
+    expect(screen.getByText('This Mac is on this Wi-Fi. The devices you paired need to be on the same network too.')).toBeTruthy();
+    rerender(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
+    expect(screen.getByText('This device is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.')).toBeTruthy();
+  });
+
+  it('says conversations and not Inbox in the reassurance', () => {
+    render(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
+    expect(screen.getByText('Still fine')).toBeTruthy();
+    expect(screen.getByText('Your paired devices are still paired.')).toBeTruthy();
+    expect(screen.getByText('Everything already in your conversations is untouched.')).toBeTruthy();
+    expect(screen.queryByText(/Inbox/)).toBeNull();
   });
 
   it('runs the retry and the settings route', () => {
@@ -138,19 +165,61 @@ describe('Cant reach any devices', () => {
     expect(settings).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a real engine error when the check itself failed', () => {
-    render(
-      <CantReachScreen onRetry={() => {}} onOpenSettings={() => {}} error="the engine did not answer" />,
-    );
-    // Note carries its testID as an accessibility label, not a testID.
-    expect(screen.getByLabelText('cant-reach-error')).toBeTruthy();
+  it('reads "Checking" on the button while a retry runs', () => {
+    render(<CantReachScreen onRetry={noop} onOpenSettings={noop} retrying />);
+    expect(screen.getByText('Checking')).toBeTruthy();
+    expect(screen.queryByText('Looking again')).toBeNull();
   });
 
-  it('mounts the troubleshooting body only once the disclosure is opened', () => {
-    render(<CantReachScreen onRetry={() => {}} onOpenSettings={() => {}} />);
+  // The design shows this hint after the first retry that finds nobody.
+  it('shows the still-nothing hint after the first retry ends, and not before', () => {
+    const hint = 'Still nothing on this Wi-Fi. Wait a few seconds, then look again.';
+    const { rerender } = render(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
+    expect(screen.queryByText(hint)).toBeNull();
+    rerender(<CantReachScreen onRetry={noop} onOpenSettings={noop} retrying />);
+    expect(screen.queryByText(hint)).toBeNull();
+    rerender(<CantReachScreen onRetry={noop} onOpenSettings={noop} retrying={false} />);
+    expect(screen.getByText(hint)).toBeTruthy();
+  });
+
+  it('shows the waiting rows with a size and the design hint', () => {
+    const one = [{ transferId: 't1', label: 'To aabbccdd', bytesTotal: 2048 }];
+    const { rerender } = render(<CantReachScreen onRetry={noop} onOpenSettings={noop} queued={one} />);
+    expect(screen.getByText('Waiting to send')).toBeTruthy();
+    expect(screen.getByText('To aabbccdd')).toBeTruthy();
+    expect(screen.getByText('2.0 KB')).toBeTruthy();
+    expect(screen.getByText('1 item will go by itself as soon as Daak finds the network again.')).toBeTruthy();
+    rerender(
+      <CantReachScreen
+        onRetry={noop}
+        onOpenSettings={noop}
+        queued={[...one, { transferId: 't2', label: 'To 11223344', bytesTotal: 10 }]}
+      />,
+    );
+    expect(screen.getByText('2 items will go by itself as soon as Daak finds the network again.')).toBeTruthy();
+  });
+
+  it('shows no waiting block when nothing waits', () => {
+    render(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
+    expect(screen.queryByText('Waiting to send')).toBeNull();
+  });
+
+  it('shows a real engine error when the check itself failed', () => {
+    render(<CantReachScreen onRetry={noop} onOpenSettings={noop} error="the engine did not answer" />);
+    expect(screen.getByLabelText('cant-reach-error')).toBeTruthy();
+    expect(screen.getByText('the engine did not answer')).toBeTruthy();
+    expect(screen.queryByText('Looking on this Wi-Fi')).toBeNull();
+  });
+
+  it('mounts the tips only once the disclosure is opened', () => {
+    render(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
     expect(screen.queryByTestId('cant-reach-more')).toBeNull();
     fireEvent.press(screen.getByTestId('cant-reach-more-toggle'));
     expect(screen.getByTestId('cant-reach-more')).toBeTruthy();
+    expect(screen.getByText('Turn Wi-Fi off, then back on.')).toBeTruthy();
+    expect(
+      screen.getByText('Check the other devices are on this Wi-Fi, not a guest network or mobile data.'),
+    ).toBeTruthy();
   });
 });
 

@@ -6,6 +6,7 @@ import {
   EngineProvider,
   Note,
   ToastProvider,
+  type BlockerHost,
   type IncompatiblePeer,
   type SettingsHost,
   useBlockers,
@@ -41,6 +42,10 @@ const backgroundHintBody =
   Platform.OS === 'android'
     ? 'Android decides when background sync runs, through its battery optimisation allowlist.'
     : 'iOS decides when background sync runs.';
+
+// Facts only this host knows. A module constant keeps its identity between
+// renders. The Mac host builds the same object with the noun 'Mac'.
+const BLOCKER_HOST: BlockerHost = { deviceNoun: 'phone' };
 
 export default function App() {
   // FIRST LAUNCH vs EVERY LAUNCH AFTER. Onboarding owns the engine start on a
@@ -128,7 +133,7 @@ export default function App() {
    * packages/ui gains no platform code from this: the hook's only engine calls
    * are devices() and listTransfers(), which every DaakEngine already carries.
    */
-  const blockers = useBlockers(engine, incompatible);
+  const blockers = useBlockers(engine, incompatible, BLOCKER_HOST);
 
   /**
    * THE engine start, memoized for the lifetime of the component and called

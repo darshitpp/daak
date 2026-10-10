@@ -272,7 +272,20 @@ describe('cant-reach', () => {
     fireEvent.press(await screen.findByText('Settings'));
     fireEvent.press(await screen.findByLabelText('settings-check-connection'));
     await screen.findByText("Daak can't reach any devices");
-    expect(screen.queryByText(/Looking on/)).toBeNull();
+    // The note title is "Looking on this Wi-Fi". Any other word after "Looking on" names a network.
+    expect(screen.queryByText(/Looking on (?!this Wi-Fi)/)).toBeNull();
     expect(screen.queryByText(/Home-5G/)).toBeNull();
+  });
+
+  // Ruling D6. The words say "this phone" and "this Wi-Fi", and never a name.
+  it('says this phone and this Wi-Fi', async () => {
+    jest.spyOn(engine, 'devices').mockResolvedValue([]);
+    render(<App />);
+    fireEvent.press(await screen.findByText('Settings'));
+    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    expect(await screen.findByText('Looking on this Wi-Fi')).toBeTruthy();
+    expect(
+      screen.getByText('This phone is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.'),
+    ).toBeTruthy();
   });
 });

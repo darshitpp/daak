@@ -197,7 +197,7 @@ describe('useBlockers, the reachability check', () => {
     render(<>{result.current.alert}</>);
     expect(screen.getAllByTestId('cant-reach-queued')).toHaveLength(1);
     expect(screen.getByText('To ccccdddd')).toBeTruthy();
-    expect(screen.getByText('900 bytes, waiting for a device')).toBeTruthy();
+    expect(screen.getByText('900 B')).toBeTruthy();
   });
 
   // A queue Daak cannot read is not evidence either way, so the screen says
@@ -327,7 +327,7 @@ describe('useBlockers, the retry on the cannot-reach screen', () => {
 
     h.press('cant-reach-retry');
     // The screen is still open and the button now reads as working.
-    expect(h.screen.getByText('Looking again')).toBeTruthy();
+    expect(h.screen.getByText('Checking')).toBeTruthy();
     expect(engine.devices).toHaveBeenCalledTimes(2);
 
     await act(async () => {
@@ -363,5 +363,27 @@ describe('useBlockers, the retry on the cannot-reach screen', () => {
     expect(engine.devices).toHaveBeenCalledTimes(3);
     expect(engine.listTransfers).toHaveBeenCalledTimes(3);
     expect(h.screen.getByText('To aaaaaaaa')).toBeTruthy();
+  });
+});
+
+describe('useBlockers, the host argument', () => {
+  it('gives the device noun to the cannot-reach screen', async () => {
+    const engine = stubEngine({ devices: jest.fn(async () => []) });
+    const { result } = renderHook(() => useBlockers(engine, [], { deviceNoun: 'Mac' }));
+    await act(async () => {
+      result.current.onCheckConnection();
+    });
+    render(<>{result.current.alert}</>);
+    expect(screen.getByText('This Mac is on this Wi-Fi. The devices you paired need to be on the same network too.')).toBeTruthy();
+  });
+
+  it('says "device" when the host gives no noun', async () => {
+    const engine = stubEngine({ devices: jest.fn(async () => []) });
+    const { result } = renderHook(() => useBlockers(engine, []));
+    await act(async () => {
+      result.current.onCheckConnection();
+    });
+    render(<>{result.current.alert}</>);
+    expect(screen.getByText('This device is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.')).toBeTruthy();
   });
 });

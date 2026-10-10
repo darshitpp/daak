@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 import { DaakUiApp, useBlockers } from '@daak/ui';
-import type { IncompatiblePeer, SettingsHost, UiRuntime } from '@daak/ui';
+import type { BlockerHost, IncompatiblePeer, SettingsHost, UiRuntime } from '@daak/ui';
 // The @daak/core barrel re-exports NativeDaak, which calls
 // TurboModuleRegistry.getEnforcing('Daak') at module-eval time and throws in
 // Node. This specifier is a TYPE-only annotation, so it is erased at compile
@@ -63,6 +63,9 @@ const DOWNLOAD_FOLDER = {
   reset: clearDownloadFolder,
 };
 
+// Facts only this host knows. A module constant keeps its identity between renders.
+const BLOCKER_HOST: BlockerHost = { deviceNoun: 'Mac' };
+
 function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {
     closePopover,
@@ -92,7 +95,7 @@ export function DaakPopoverShell({ engine, runtime }: {
   runtime: UiRuntime;
 }) {
   const incompatible = useIncompatible(runtime);
-  const blockers = useBlockers(engine, incompatible);
+  const blockers = useBlockers(engine, incompatible, BLOCKER_HOST);
   // BOTH roots go through the gate, not just the dashboard. The popover is
   // reachable only after install() runs, which is after the tray exists, and a
   // first launch has no tray content worth opening -- but if it IS reachable,
@@ -159,7 +162,7 @@ export function DaakDashboardShell({ engine, runtime }: {
     [info],
   );
   const incompatible = useIncompatible(runtime);
-  const blockers = useBlockers(engine, incompatible);
+  const blockers = useBlockers(engine, incompatible, BLOCKER_HOST);
   // The gate is a CONDITIONAL wrapper, not a boundary: both hooks above run
   // whether or not the dashboard is currently shown, and both read MODULE-level
   // stores rather than the engine. That is what lets the picker stay in this
