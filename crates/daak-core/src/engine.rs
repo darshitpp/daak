@@ -442,7 +442,10 @@ pub struct Engine {
     sessions: SharedSessions,
     pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
     pending_code: Arc<Mutex<Option<String>>>,
-    pairing_rx: Mutex<mpsc::Receiver<String>>,
+    /// The inbound pairing channel. It carries (sas, peer_device_id): the host
+    /// needs the peer id to offer its own SAS confirmation, and the id is
+    /// known here and nowhere later on this surface.
+    pairing_rx: Mutex<mpsc::Receiver<(String, [u8; 16])>>,
 }
 
 pub(crate) struct Profile {
@@ -1904,6 +1907,13 @@ impl Engine {
     }
 
     pub async fn accept_pairing_once(&self) -> Result<String> {
+        Ok(self.accept_pairing_once_with_peer().await?.0)
+    }
+
+    /// As `accept_pairing_once`, and also returns the peer that paired. The
+    /// host needs the id to confirm the SAS, and the id is available at this
+    /// point only.
+    pub async fn accept_pairing_once_with_peer(&self) -> Result<(String, [u8; 16])> {
         let mut rx = self.pairing_rx.lock().await;
         rx.recv()
             .await
@@ -2352,7 +2362,7 @@ impl Engine {
         profile: &Mutex<Profile>,
         pending_pairing: &Mutex<Option<PendingPairing>>,
         pending_code: &Mutex<Option<String>>,
-        pairing_tx: &mpsc::Sender<String>,
+        pairing_tx: &mpsc::Sender<(String, [u8; 16])>,
         tx: &broadcast::Sender<EngineEvent>,
         devices: &SharedDevices,
         confirm_required: bool,
@@ -2432,7 +2442,7 @@ impl Engine {
                 confirm_required,
             )
             .await?;
-            let _ = pairing_tx.send(sas).await;
+            let _ = pairing_tx.send((sas, pairing.peer_device_id)).await;
             return Ok(());
         }
         // The arm is a SINGLE slot, so it must not be consumed by a connection
@@ -2555,7 +2565,7 @@ impl Engine {
                 confirm_required,
             )
             .await?;
-            let _ = pairing_tx.send(sas).await;
+            let _ = pairing_tx.send((sas, pairing.peer_device_id)).await;
             return Ok(());
         }
         // Not a pairing dial, so this is the transfer path and the next step

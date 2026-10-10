@@ -76,6 +76,41 @@ fn state(db: &Db, id: &[u8; 16]) -> Option<String> {
     db.get_pairing(id).unwrap().map(|p| p.state)
 }
 
+// The host's own SAS confirmation needs the peer id, and the id exists only at
+// the moment the SAS arrives. Without it the host app renders no confirm
+// control, so a host-initiated pairing never becomes trusted on the host.
+#[tokio::test]
+async fn the_host_learns_the_joiner_id_with_the_sas() {
+    let (d1, d2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (joiner_db, host_db) = (db(), db());
+    let joiner = engine("joiner", d1.keep(), joiner_db.clone()).await;
+    let host = engine("host", d2.keep(), host_db.clone()).await;
+    joiner.set_pairing_confirmation_required(true);
+    host.set_pairing_confirmation_required(true);
+    let joiner_id = joiner.pairing_bundle().await.identity.device_id;
+    host.offer_inbound_pairing(PairMode::Qr).await.unwrap();
+    let accept = tokio::spawn({
+        let host = host.clone();
+        async move { host.accept_pairing_once_with_peer().await.unwrap() }
+    });
+    joiner
+        .pair_with(host.local_addr(), host.pairing_bundle().await)
+        .await
+        .unwrap();
+    let (sas, peer) = accept.await.unwrap();
+
+    assert_eq!(
+        peer, joiner_id,
+        "the host must learn the joiner id together with the SAS"
+    );
+    assert_eq!(sas.len(), 6, "a SAS is six digits");
+
+    // The id is the handle the app confirms with, and confirming makes the
+    // host trust the peer.
+    host.confirm_pairing(peer).await.unwrap();
+    assert!(host_db.is_trusted(&joiner_id));
+}
+
 #[tokio::test]
 async fn an_unconfirmed_pairing_is_pending_and_grants_no_trust() {
     let (d1, d2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());

@@ -510,10 +510,10 @@ impl DaakEngine {
         let pairing_engine = engine.clone();
         self.rt.spawn(async move {
             loop {
-                match pairing_engine.accept_pairing_once().await {
-                    Ok(sas) => {
+                match pairing_engine.accept_pairing_once_with_peer().await {
+                    Ok((sas, peer)) => {
                         let _ = sas_tx.send(sas.clone());
-                        sink.on_event(to_pairing_sas_event(sas));
+                        sink.on_event(to_pairing_sas_event(sas, to_hex(&peer)));
                     }
                     Err(_) => return,
                 }
@@ -1048,12 +1048,13 @@ pub fn pairing_bundle_json(
     serde_json::to_string(&json).map_err(protocol_err)
 }
 
-/// The SAS for an inbound pairing. accept_pairing_once() yields only the SAS
-/// string, so the peer id is unknown and left empty rather than invented.
-pub fn to_pairing_sas_event(sas: String) -> FfiEvent {
+/// The SAS for an inbound pairing, and the peer it belongs to. The host needs
+/// the id to offer its own SAS confirmation; without it the host can never
+/// trust the peer, because the app gates a new pairing on that press.
+pub fn to_pairing_sas_event(sas: String, peer_device_id: String) -> FfiEvent {
     FfiEvent::PairingSas {
         data: PairingSasEvent {
-            peer_device_id: String::new(),
+            peer_device_id,
             sas,
         },
     }

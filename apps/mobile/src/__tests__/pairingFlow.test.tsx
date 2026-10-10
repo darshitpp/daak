@@ -1,5 +1,7 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent } from '@daak/core';
 import { AppShell, EngineProvider, ToastProvider } from '@daak/ui';
@@ -577,6 +579,45 @@ describe('leaving the pair route rejects a pending pairing', () => {
     await act(async () => {
       await Promise.resolve();
     });
+  });
+});
+
+// The shared fixture is the FFI's REAL output: crates/daak-ffi/tests/smoke.rs
+// asserts that it equals ffi_event_json(to_pairing_sas_event(...)), so this
+// case fails if the native side ever sends an empty peer id again. That is
+// exactly what happened: the host rendered NO confirm control, and a
+// host-initiated QR pairing never became trusted on the host. No simulator or
+// emulator is needed to catch it now.
+describe('the FFI fixture drives the host half', () => {
+  it('confirms with the peer id that the native side actually sends', async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        join(__dirname, '..', '..', '..', '..', 'packages', 'core', 'test', 'fixtures', 'daak-events.json'),
+        'utf8',
+      ),
+    ) as { PairingSas: { peerDeviceId: string; sas: string } };
+    const event = fixture.PairingSas;
+    expect(event.peerDeviceId).not.toBe('');
+
+    await startEngine();
+    renderShell();
+    fireEvent.press(screen.getByTestId('tab-devices'));
+    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByText('Show my code'));
+    await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
+
+    const handlers = (
+      engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }
+    ).__handlers;
+    act(() => {
+      for (const h of handlers)
+        h({ type: 'pairing.sas', peerDeviceId: event.peerDeviceId, sas: event.sas });
+    });
+    // The control exists ONLY when the event named the peer.
+    await waitFor(() => expect(screen.getByLabelText('confirm')).toBeTruthy());
+    const confirmPairing = jest.spyOn(engine, 'confirmPairing');
+    fireEvent.press(screen.getByLabelText('confirm'));
+    await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith(event.peerDeviceId));
   });
 });
 

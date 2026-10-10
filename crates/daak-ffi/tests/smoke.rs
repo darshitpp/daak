@@ -411,12 +411,12 @@ fn a_pairing_bundle_omits_the_address_when_the_host_has_none() {
 
 #[test]
 fn an_inbound_pairing_sas_reaches_js_as_a_pairing_sas_event() {
-    // The core only surfaces the SAS string for an inbound pairing, so the
-    // event carries no peer id and the SAS is what JS must show the user.
-    match daak_ffi::to_pairing_sas_event("123456".into()) {
+    // The host needs the peer id to offer its OWN SAS confirmation: without it
+    // the host renders no confirm control and never trusts the peer.
+    match daak_ffi::to_pairing_sas_event("123456".into(), "aabb".repeat(16)) {
         FfiEvent::PairingSas { data } => {
             assert_eq!(data.sas, "123456");
-            assert!(data.peer_device_id.is_empty());
+            assert_eq!(data.peer_device_id, "aabb".repeat(16));
         }
         other => panic!("expected PairingSas, got {other:?}"),
     }
@@ -589,12 +589,10 @@ fn sample_events(hex: &str) -> Vec<(&'static str, FfiEvent)> {
         ),
         (
             "PairingSas",
-            FfiEvent::PairingSas {
-                data: daak_ffi::PairingSasEvent {
-                    peer_device_id: hex.into(),
-                    sas: "123456".into(),
-                },
-            },
+            // Through the PRODUCTION constructor, not a raw struct. A raw
+            // struct here is how an empty peer id shipped: the fixture test
+            // compared a value the app never receives.
+            daak_ffi::to_pairing_sas_event("123456".into(), hex.into()),
         ),
         (
             "PairingDone",
