@@ -1,16 +1,17 @@
 import React from 'react';
 import { Image, Text, View } from 'react-native';
 import { colors, ui } from '../theme';
-// Metro and the react-native jest preset both resolve a PNG import. Vitest in
-// apps/desktop does not, so Step 5b adds a plugin there.
-import MARK from '../assets/daak-mark.png';
+import { MARK_URI } from '../assets/mark';
 
 /**
- * The mark as a bundled PNG. react-native-svg is not a dependency of this
- * package, and a new native dependency needs the user's consent. The file
- * keeps the viewBox cut of the design (see scripts/gen-icons.swift), so the
- * lockup matches the design pages. The default import needs the
- * module declaration in `packages/ui/src/assets/png.d.ts` (Step 5b).
+ * The mark, from an inline PNG data URI. react-native-svg is not a dependency of
+ * this package, and a new native dependency needs the user's consent.
+ *
+ * It is NOT a file import, and `../assets/mark.ts` records the measurement: a
+ * `daak-mark.png` import from this package resolved to
+ * `httpServerLocation: "/assets/../../packages/ui/src/assets"` and Metro
+ * answered 404 for every URL it can build, so the Image painted nothing and the
+ * brand read "aak" on all three surfaces.
  */
 
 /** The `--wm-size` of the design: `.wordmark` 17, `.wordmark--lg` 22. */
@@ -28,7 +29,7 @@ export function Wordmark({ size = 'lg' }: { size?: number | 'sm' | 'lg' }) {
   return (
     <View style={ui.wordmark} accessibilityLabel="Daak" accessibilityRole="image" testID="wordmark">
       <Image
-        source={MARK}
+        source={{ uri: MARK_URI }}
         accessible={false}
         resizeMode="contain"
         testID="wordmark-mark"

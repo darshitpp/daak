@@ -18,6 +18,17 @@ describe('Wordmark', () => {
     expect(screen.queryByText('D')).toBeNull();
   });
 
+  // A bundler asset id is a NUMBER, and Metro never served this one: it
+  // registered the file under "/assets/../../packages/ui/src/assets" and
+  // answered 404, so the Image painted nothing and the brand read "aak" on
+  // every surface. The source must stay the inline data URI.
+  it('loads the mark from an inline data URI, not a bundler asset id', () => {
+    render(<Wordmark />);
+    const src = screen.getByTestId('wordmark-mark').props.source;
+    expect(typeof src).not.toBe('number');
+    expect(String(src?.uri)).toMatch(/^data:image\/png;base64,/);
+  });
+
   it('is 22 px by default, the large size of the design', () => {
     render(<Wordmark />);
     const mark = StyleSheet.flatten(screen.getByTestId('wordmark-mark').props.style);
