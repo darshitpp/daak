@@ -45,7 +45,7 @@ const backgroundHintBody =
 
 // Facts only this host knows. A module constant keeps its identity between
 // renders. The Mac host builds the same object with the noun 'Mac'.
-const BLOCKER_HOST: BlockerHost = { deviceNoun: 'phone' };
+const BLOCKER_HOST: BlockerHost = { deviceNoun: 'phone', appInfo: () => appInfo() };
 
 export default function App() {
   // FIRST LAUNCH vs EVERY LAUNCH AFTER. Onboarding owns the engine start on a

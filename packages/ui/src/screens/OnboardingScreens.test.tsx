@@ -223,51 +223,79 @@ describe('Cant reach any devices', () => {
   });
 });
 
-describe('Update needed', () => {
-  const peer = {
-    peerDeviceId: 'aa'.repeat(16),
-    peerName: "Darshit's Pixel",
-    peerVersion: 5,
-    ourVersion: 3,
-  };
+describe('Update available', () => {
+  const noop = () => {};
 
-  // The prototype's card reads "Version 0.4.2 (build 1180)". None of those
-  // numbers exist in this codebase, so their absence is the assertion.
-  it('shows the two real engine versions and none of the prototype build numbers', () => {
-    render(<UpdateRequiredScreen peers={[peer]} onDismiss={() => {}} onOpenSettings={() => {}} />);
-    expect(screen.getByText('File mover version 3')).toBeTruthy();
-    expect(screen.getByText('File mover version 5')).toBeTruthy();
+  it('shows the design words', () => {
+    render(<UpdateRequiredScreen onDismiss={noop} onOpenDownloadPage={noop} />);
+    expect(screen.getByText('Update available')).toBeTruthy();
+    expect(screen.getByText('A new version of Daak is available')).toBeTruthy();
+    expect(
+      screen.getByText("Daak updates happen in your browser. This version keeps working until you're ready."),
+    ).toBeTruthy();
+    expect(screen.getByText('Sending still works')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Your paired devices and everything already in your conversations are safe. Install when it suits you.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Opens the Daak releases page in your browser.')).toBeTruthy();
+  });
+
+  it('no longer claims a pause or offers an in-app update', () => {
+    render(<UpdateRequiredScreen onDismiss={noop} onOpenDownloadPage={noop} />);
+    expect(screen.queryByText(/Sending and receiving are paused/)).toBeNull();
+    expect(screen.queryByText('Daak needs a quick update')).toBeNull();
+    expect(screen.queryByText('Update and restart')).toBeNull();
+    expect(screen.queryByText('Open Settings to update')).toBeNull();
+    expect(screen.queryByText('Check for updates')).toBeNull();
+    expect(screen.queryByText('File mover')).toBeNull();
+    expect(screen.queryByText(/Takes about 10 seconds/)).toBeNull();
+  });
+
+  it('shows the app version in the "This app" row', () => {
+    render(<UpdateRequiredScreen onDismiss={noop} onOpenDownloadPage={noop} app={{ version: '1.2.3', build: '45' }} />);
+    expect(screen.getByText('This app')).toBeTruthy();
+    expect(screen.getByText('Version 1.2.3 (build 45)')).toBeTruthy();
+  });
+
+  // The app version loads after the screen opens, or never.
+  it('hides the "This app" row until the app version loads, and shows none of the mock numbers', () => {
+    render(<UpdateRequiredScreen onDismiss={noop} onOpenDownloadPage={noop} />);
+    expect(screen.queryByText('This app')).toBeNull();
     expect(screen.queryByText(/0\.4\.2/)).toBeNull();
     expect(screen.queryByText(/build 1180/)).toBeNull();
+    expect(screen.queryByText(/0\.5\.0/)).toBeNull();
   });
 
-  // Two directions, two different problems. Telling a user whose app is
-  // current to update the app would be wrong advice.
-  it('gives different advice depending on which side is behind', () => {
-    const { unmount } = render(
-      <UpdateRequiredScreen peers={[peer]} onDismiss={() => {}} onOpenSettings={() => {}} />,
-    );
-    expect(screen.getByText(/newer than this app/)).toBeTruthy();
-    unmount();
-    render(
-      <UpdateRequiredScreen
-        peers={[{ ...peer, peerVersion: 1, ourVersion: 9 }]}
-        onDismiss={() => {}}
-        onOpenSettings={() => {}}
-      />,
-    );
-    expect(screen.getByText(/This app is newer than the Daak on another device/)).toBeTruthy();
+  // User decision: the "Latest" row is removed. The card shows only "This app".
+  it('has no "Latest" row and no protocol number', () => {
+    render(<UpdateRequiredScreen onDismiss={noop} onOpenDownloadPage={noop} app={{ version: '1.2.3', build: '45' }} />);
+    expect(screen.queryByText('Latest')).toBeNull();
+    expect(screen.queryByText(/Protocol/)).toBeNull();
   });
 
-  it('lists every out-of-step peer, not only the first', () => {
-    render(
-      <UpdateRequiredScreen
-        peers={[peer, { ...peer, peerDeviceId: 'bb'.repeat(16), peerName: 'Study Pi' }]}
-        onDismiss={() => {}}
-        onOpenSettings={() => {}}
-      />,
-    );
-    expect(screen.getAllByTestId('update-required-peer')).toHaveLength(1);
-    expect(screen.getByText('Study Pi')).toBeTruthy();
+  // Ruling D2. The action opens the releases page. It does not update the app.
+  it('opens the download page, and "Remind me later" and the back arrow dismiss', () => {
+    const open = jest.fn();
+    const later = jest.fn();
+    render(<UpdateRequiredScreen onDismiss={later} onOpenDownloadPage={open} />);
+    fireEvent.press(screen.getByLabelText('update-open'));
+    expect(open).toHaveBeenCalledTimes(1);
+    fireEvent.press(screen.getByLabelText('update-dismiss'));
+    fireEvent.press(screen.getByLabelText('Back'));
+    expect(later).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Open the download page')).toBeTruthy();
+    expect(screen.getByText('Remind me later')).toBeTruthy();
+  });
+
+  it('shows a fallback note when the page cannot open', async () => {
+    const open = jest.fn(async () => {
+      throw new Error('no handler');
+    });
+    render(<UpdateRequiredScreen onDismiss={noop} onOpenDownloadPage={open} />);
+    fireEvent.press(screen.getByLabelText('update-open'));
+    expect(await screen.findByText('Daak could not open the page')).toBeTruthy();
+    expect(screen.getByText(/github\.com\/darshitpp\/daak\/releases/)).toBeTruthy();
   });
 });

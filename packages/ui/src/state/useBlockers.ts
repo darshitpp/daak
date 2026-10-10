@@ -1,7 +1,9 @@
 import React, { createElement, useCallback, useEffect, useRef, useState } from 'react';
+import { Linking } from 'react-native';
 import type { DaakEngine } from '@daak/core';
 import { CantReachScreen, type QueuedTransfer } from '../screens/CantReachScreen';
-import { UpdateRequiredScreen } from '../screens/UpdateRequiredScreen';
+import { UpdateRequiredScreen, type AppVersion } from '../screens/UpdateRequiredScreen';
+import { RELEASES_URL } from '../screens/about-links';
 import type { DeviceNoun } from '../components/ds';
 import type { IncompatiblePeer } from './store';
 
@@ -33,6 +35,10 @@ import type { IncompatiblePeer } from './store';
 export interface BlockerHost {
   /** The word for this device in the copy. 'phone' on mobile, 'Mac' on desktop. Default 'device'. */
   deviceNoun?: DeviceNoun;
+  /** Reads the app version. May be sync or async, and may reject. */
+  appInfo?: () => AppVersion | Promise<AppVersion>;
+  /** Opens a web page. Default: Linking.openURL. The app makes no request itself (ruling D2). */
+  openUrl?: (url: string) => void | Promise<unknown>;
 }
 
 export function useBlockers(
@@ -67,6 +73,13 @@ export function useBlockers(
   // condition, so two different failures do not collapse into one.
   const [noDevices, setNoDevices] = useState<string | undefined>(undefined);
   const [retrying, setRetrying] = useState(false);
+  // The host object can be a new value on every render. The effect below reads
+  // it through a ref, so a new identity never loads the version again. With the
+  // host in the dependency list, each load would call `setApp` with a new
+  // object, which renders again, which builds a new host, which loads again.
+  const hostRef = useRef(host);
+  hostRef.current = host;
+  const [app, setApp] = useState<AppVersion | undefined>(undefined);
   const [queued, setQueued] = useState<QueuedTransfer[]>([]);
   // Bumped when a blocking screen's "Open Settings" fires. The shell reads it
   // and selects the Settings tab, so the button lands where it says it does.
@@ -79,13 +92,36 @@ export function useBlockers(
   // dismiss -- the peer announces on a timer, so "Remind me later" would last a
   // few seconds. Every peer is recorded, whether or not it opened anything, so
   // a peer that arrives and leaves cannot slip past the set.
+  // The screen is a notice and not a blocker, because sending still works.
   useEffect(() => {
     for (const peer of incompatible) {
       if (shownPeers.current.has(peer.peerDeviceId)) continue;
       shownPeers.current.add(peer.peerDeviceId);
+      // A peer that is behind means this app is the newer one. No download
+      // exists for this user, so the notice stays closed.
+      // This comparison is the only use of `peerVersion` and `ourVersion`.
+      // The screen shows no protocol number.
+      if (peer.peerVersion <= peer.ourVersion) continue;
       setUpdateToken(peer.peerDeviceId);
     }
   }, [incompatible]);
+
+  // The app version loads when the screen opens. A missing or failing source
+  // leaves the "This app" row out. The screen is complete without it.
+  useEffect(() => {
+    if (updateToken === undefined) return;
+    let live = true;
+    void Promise.resolve()
+      .then(() => hostRef.current?.appInfo?.())
+      .catch(() => undefined)
+      .then((a) => {
+        if (live) setApp(a ?? undefined);
+      });
+    return () => {
+      live = false;
+    };
+    // `updateToken` is the only trigger. `hostRef` is stable.
+  }, [updateToken]);
 
   /**
    * The prototype's "Waiting to send" block, as the REAL outbox.
@@ -193,9 +229,9 @@ export function useBlockers(
    * together -- and bumps the TOKEN, so asking twice works twice, which a boolean
    * would refuse.
    *
-   * "Remind me later" on Update Required does only the first half: dismissing is
-   * not consent to be navigated, and the peer is already in shownPeers, so its
-   * next announcement will not put the screen back up.
+   * The update notice closes with onDismiss only. Dismissing is not consent to
+   * be navigated, and the peer is already in shownPeers, so its next
+   * announcement will not put the screen back up.
    */
   const openSettingsFromAlert = useCallback(() => {
     setUpdateToken(undefined);
@@ -212,9 +248,10 @@ export function useBlockers(
       // packages/ui puts JSX in a .ts file. ponytail: one line of ceremony is
       // cheaper than renaming a path three trees depend on.
       createElement(UpdateRequiredScreen, {
-        peers: incompatible,
+        app,
         onDismiss: () => setUpdateToken(undefined),
-        onOpenSettings: openSettingsFromAlert,
+        onOpenDownloadPage: () =>
+          host?.openUrl !== undefined ? host.openUrl(RELEASES_URL) : Linking.openURL(RELEASES_URL),
       })
     ) : noDevices !== undefined ? (
       createElement(CantReachScreen, {

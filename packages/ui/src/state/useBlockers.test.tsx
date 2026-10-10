@@ -112,9 +112,18 @@ describe('useBlockers, which screen opens', () => {
     const { result } = renderHook(() => useBlockers(stubEngine(), [outOfStep]));
     render(<>{result.current.alert}</>);
     expect(screen.getByTestId('screen-update-required')).toBeTruthy();
-    // The real numbers, both sides. One number cannot say which device is old.
-    expect(screen.getByText('File mover version 3')).toBeTruthy();
-    expect(screen.getByText('File mover version 5')).toBeTruthy();
+    // The card has no "Latest" row. The screen shows no protocol number.
+    expect(screen.queryByText('Latest')).toBeNull();
+    expect(screen.queryByText(/Protocol/)).toBeNull();
+  });
+
+  // A peer that is behind means this app is the newer one. No download exists
+  // for this user, and the screen says "a new version is available".
+  it('does not open update available for a peer that is behind this app', () => {
+    const behind = { ...outOfStep, peerDeviceId: 'cc'.repeat(16), peerVersion: 1, ourVersion: 3 };
+    const { result } = renderHook(() => useBlockers(stubEngine(), [behind]));
+    expect(result.current.alert).toBeUndefined();
+    expect(result.current.alertRouteToken).toBeUndefined();
   });
 
   // Update Required wins over Cant Reach: an incompatible peer is a fact the
@@ -261,36 +270,10 @@ describe('useBlockers, a peer that re-announces on a timer', () => {
 });
 
 describe('useBlockers, Open Settings', () => {
-  const mount = () => mountWithAlert(stubEngine());
-
-  // The dismissal and the tab switch must land in ONE render: a screen that
-  // closes a tick before Settings opens is a flash the user sees.
-  it('clears the alert and bumps the settings route together', () => {
-    const h = mount();
-    h.setPeers([outOfStep]);
-    h.press('update-settings');
-    expect(h.current().alert).toBeUndefined();
-    expect(h.current().alertRouteToken).toBeUndefined();
-    expect(h.current().settingsRouteToken).toBe('1');
-  });
-
-  // A boolean would make the second tap a no-op, and the user would be told to
-  // go to Settings and stay where they were. A counter fires every time.
-  it('fires the settings token again when asked twice in a row', () => {
-    const h = mount();
-    h.setPeers([outOfStep]);
-    h.press('update-settings');
-    expect(h.current().settingsRouteToken).toBe('1');
-
-    // A second blocking fact re-opens the screen, and Settings is asked again.
-    h.setPeers([outOfStep, secondPeer]);
-    h.press('update-settings');
-    expect(h.current().settingsRouteToken).toBe('2');
-  });
-
-  // The cannot-reach screen offers the same button and must clear the SAME two
-  // facts, so a hook that wired only the update half would leave the screen up.
-  it('clears the cannot-reach screen and routes to Settings from there too', async () => {
+  // The cannot-reach screen is the only blocking screen with this button. It
+  // must clear the alert and bump the settings route in ONE render, and the
+  // token must fire again when asked twice. A boolean would not.
+  it('clears the cannot-reach screen and routes to Settings, every time', async () => {
     const engine = stubEngine({ devices: jest.fn(async () => []) });
     const h = mountWithAlert(engine);
     await act(async () => {
@@ -300,6 +283,95 @@ describe('useBlockers, Open Settings', () => {
     expect(h.current().alert).toBeUndefined();
     expect(h.current().alertRouteToken).toBeUndefined();
     expect(h.current().settingsRouteToken).toBe('1');
+
+    await act(async () => {
+      h.current().onCheckConnection();
+    });
+    h.press('cant-reach-settings');
+    expect(h.current().settingsRouteToken).toBe('2');
+  });
+});
+
+describe('useBlockers, Update available', () => {
+  const info = { version: '1.2.3', build: '45' };
+
+  function mountHost(engine: DaakEngine, host: Parameters<typeof useBlockers>[2]) {
+    const seen = { current: undefined as ReturnType<typeof useBlockers> | undefined };
+    function Harness({ peers }: { peers: IncompatiblePeer[] }) {
+      seen.current = useBlockers(engine, peers, host);
+      return <>{seen.current.alert}</>;
+    }
+    const ui = render(<Harness peers={[]} />);
+    return {
+      current: () => seen.current as ReturnType<typeof useBlockers>,
+      setPeers: (peers: IncompatiblePeer[]) =>
+        act(() => {
+          ui.rerender(<Harness peers={peers} />);
+        }),
+    };
+  }
+
+  it('opens the releases page through the host opener and leaves the screen up', async () => {
+    const openUrl = jest.fn();
+    const h = mountHost(stubEngine(), { openUrl });
+    await h.setPeers([outOfStep]);
+    fireEvent.press(screen.getByLabelText('update-open'));
+    expect(openUrl).toHaveBeenCalledWith('https://github.com/darshitpp/daak/releases/latest');
+    expect(h.current().alert).not.toBeUndefined();
+    expect(h.current().settingsRouteToken).toBeUndefined();
+  });
+
+  // "Remind me later" and the back arrow both dismiss. Neither routes to Settings.
+  it('dismisses from the back arrow without routing', async () => {
+    const h = mountHost(stubEngine(), undefined);
+    await h.setPeers([outOfStep]);
+    fireEvent.press(screen.getByLabelText('Back'));
+    expect(h.current().alert).toBeUndefined();
+    expect(h.current().settingsRouteToken).toBeUndefined();
+  });
+
+  it('shows the app version once it loads', async () => {
+    const h = mountHost(stubEngine(), { appInfo: async () => info });
+    await h.setPeers([outOfStep]);
+    expect(await screen.findByText('Version 1.2.3 (build 45)')).toBeTruthy();
+  });
+
+  // The host may be a sync function, and it may fail. The screen must still
+  // open, with no "This app" row.
+  it('accepts a sync appInfo', async () => {
+    const h = mountHost(stubEngine(), { appInfo: () => info });
+    await h.setPeers([outOfStep]);
+    expect(await screen.findByText('Version 1.2.3 (build 45)')).toBeTruthy();
+  });
+
+  it('shows the screen with no app row when appInfo throws', async () => {
+    const h = mountHost(stubEngine(), {
+      appInfo: () => {
+        throw new Error('no native module');
+      },
+    });
+    await h.setPeers([outOfStep]);
+    await act(async () => {});
+    expect(screen.getByTestId('screen-update-required')).toBeTruthy();
+    expect(screen.queryByText('This app')).toBeNull();
+  });
+
+  // A host that builds its object inline gets a new identity on every render.
+  // The load must not run again for that, or the screen would loop.
+  it('loads the app version once for one open screen, even with a new host object on every render', async () => {
+    const appInfo = jest.fn(async () => info);
+    const engine = stubEngine();
+    const seen = { current: undefined as ReturnType<typeof useBlockers> | undefined };
+    function Harness({ peers }: { peers: IncompatiblePeer[] }) {
+      seen.current = useBlockers(engine, peers, { appInfo });
+      return <>{seen.current.alert}</>;
+    }
+    const ui = render(<Harness peers={[]} />);
+    await act(async () => {
+      ui.rerender(<Harness peers={[outOfStep]} />);
+    });
+    await act(async () => {});
+    expect(appInfo).toHaveBeenCalledTimes(1);
   });
 });
 

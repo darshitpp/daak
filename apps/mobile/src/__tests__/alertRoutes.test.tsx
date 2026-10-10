@@ -1,6 +1,8 @@
 import React from 'react';
+import { Linking } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine } from '@daak/core';
+import { RELEASES_URL } from '@daak/ui';
 import { mockPlatformHost } from '../testPlatformMock';
 import App from '../App';
 
@@ -79,10 +81,10 @@ describe('update-required', () => {
     render(<App />);
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
-    expect(await screen.findByText('Daak needs a quick update')).toBeTruthy();
-    // The REAL numbers, not the prototype's "0.4.2 (build 1180)".
-    expect(screen.getByText('File mover version 2')).toBeTruthy();
-    expect(screen.getByText('File mover version 1')).toBeTruthy();
+    expect(await screen.findByText('A new version of Daak is available')).toBeTruthy();
+    // The card has no "Latest" row and no protocol number.
+    expect(screen.queryByText('Latest')).toBeNull();
+    expect(screen.queryByText(/Protocol/)).toBeNull();
   });
 
   // A peer announces on a timer, so this event repeats for as long as the peer
@@ -93,35 +95,57 @@ describe('update-required', () => {
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
     fireEvent.press(await screen.findByLabelText('update-dismiss'));
-    expect(screen.queryByText('Daak needs a quick update')).toBeNull();
+    expect(screen.queryByText('A new version of Daak is available')).toBeNull();
 
     await announce(outOfStep());
-    expect(screen.queryByText('Daak needs a quick update')).toBeNull();
+    expect(screen.queryByText('A new version of Daak is available')).toBeNull();
   });
 
   // A second out-of-step peer is a NEW fact and does open the screen, and it
   // has to be LISTED -- the prototype's "Also out of step" block, which was
   // dead markup because nothing ever produced a second entry.
-  it('opens again for a different peer, and lists both', async () => {
+  it('opens again for a different peer', async () => {
     render(<App />);
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
     fireEvent.press(await screen.findByLabelText('update-dismiss'));
 
     await announce(outOfStep({ peerDeviceId: peerB.deviceId, peerName: peerB.name, peerVersion: 3 }));
-    expect(await screen.findByText('Also out of step')).toBeTruthy();
-    expect(screen.getByText('File mover version 3')).toBeTruthy();
+    expect(await screen.findByText('A new version of Daak is available')).toBeTruthy();
   });
 
-  // A button that only dismisses the screen it is on is a dead button: the
-  // user is told to go to Settings and stays where they were.
-  it('routes Open Settings to the Settings tab', async () => {
+  // Ruling D2. "Open the download page" opens the releases page in the system
+  // browser. The app makes no request itself.
+  it('opens the releases page from Open the download page', async () => {
+    const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
     render(<App />);
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
-    fireEvent.press(await screen.findByLabelText('update-settings'));
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
-    expect(screen.queryByText('Daak needs a quick update')).toBeNull();
+    fireEvent.press(await screen.findByLabelText('update-open'));
+    expect(open).toHaveBeenCalledWith(RELEASES_URL);
+    expect(RELEASES_URL).toBe('https://github.com/darshitpp/daak/releases/latest');
+    // The screen stays up. The button does not dismiss it.
+    expect(screen.getByText('A new version of Daak is available')).toBeTruthy();
+  });
+
+  it('shows the app version that the platform module reports', async () => {
+    render(<App />);
+    await screen.findByTestId('tab-devices');
+    await announce(outOfStep());
+    expect(await screen.findByText('This app')).toBeTruthy();
+    expect(await screen.findByText('Version 0.1.0 (build 1)')).toBeTruthy();
+  });
+
+  // Sending still works, so the notice must not trap the user.
+  it('closes from Remind me later and shows the app again', async () => {
+    render(<App />);
+    await screen.findByTestId('tab-devices');
+    await announce(outOfStep());
+    fireEvent.press(await screen.findByLabelText('update-dismiss'));
+    expect(screen.queryByText('A new version of Daak is available')).toBeNull();
+    // "Devices" is both the tab label and a section title, so the test id is
+    // the unambiguous proof that the shell is back.
+    expect(await screen.findByTestId('tab-devices')).toBeTruthy();
   });
 });
 

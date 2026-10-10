@@ -64,7 +64,7 @@ const DOWNLOAD_FOLDER = {
 };
 
 // Facts only this host knows. A module constant keeps its identity between renders.
-const BLOCKER_HOST: BlockerHost = { deviceNoun: 'Mac' };
+const BLOCKER_HOST: BlockerHost = { deviceNoun: 'Mac', appInfo: () => appInfo() };
 
 function onTrayAction(action: TrayAction): void {
   applyTrayAction(action, {

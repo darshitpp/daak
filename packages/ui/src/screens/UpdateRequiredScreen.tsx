@@ -1,95 +1,89 @@
-import React from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { ScrollView, View, Text } from 'react-native';
 import { AppBar, Hero, KvCard, ONB_GLYPHS } from '../components/Onboarding';
 import { Btn, Note } from '../components/ds';
 import { ui } from '../theme';
-import type { IncompatiblePeer } from '../state/store';
+
+/** The app version and build number, when the host can read them. */
+export interface AppVersion {
+  version: string;
+  build: string;
+}
 
 /**
- * The prototype's update-required screen (sc-update-required).
+ * The Update-available screen (design route `update-required`).
  *
- * THE OTHER SCREEN WHOSE PROTOTYPE NUMBERS ARE ALL LIES. The prototype's card
- * reads "Version 0.4.2 (build 1180)" against "Version 0.5.0 (build 1244)", and
- * its progress row animates through "Starting / Downloading / Almost done"
- * before claiming "Version 0.5.0 (build 1244). You can send again." None of
- * that exists: there is no updater, no download, no build number, and the
- * engine's own version is a single u16 manifest version (currently 1), not a
- * semver triple. A screen that animates a fake download to a fake version is
- * the single most damaging thing this integration could ship.
+ * Ruling D2: there is no updater and no update server. The primary action
+ * "Open the download page" opens the releases page through the host.
  *
- * So this screen reports the two REAL numbers the engine actually sends --
- * the peer's advertised protocol version and this build's manifest version --
- * and offers exactly the two things that exist: dismiss, and open Settings
- * where a real update would come from. The advice even branches on which side
- * is behind, because those need different words and the event carries both
- * numbers for exactly that reason.
+ * The screen does not block sending. It has two exits: the back arrow and
+ * "Remind me later". Both call `onDismiss`.
+ *
+ * The card has one row, "This app", with the real app version. The "Latest"
+ * row is removed (user decision; the design was edited to match). The screen
+ * takes no peers. `useBlockers` decides when it opens.
  */
 export function UpdateRequiredScreen({
-  peers,
   onDismiss,
-  onOpenSettings,
-  onBack,
+  onOpenDownloadPage,
+  app,
 }: {
-  /** Every peer currently announcing a version this build refuses. */
-  peers: IncompatiblePeer[];
   onDismiss: () => void;
-  onOpenSettings: () => void;
-  onBack?: () => void;
+  /** Opens the releases page. A rejection shows a fallback note. */
+  onOpenDownloadPage: () => void | Promise<unknown>;
+  app?: AppVersion;
 }) {
-  const first = peers[0];
-  // Two directions, two different problems. peer > ours means THEY moved on
-  // and this build is the old one; peer < ours means this build moved on and
-  // they have not. Saying "update Daak" for the second is wrong advice that
-  // would make the user update something already current.
-  const theyAreNewer = first !== undefined && first.peerVersion > first.ourVersion;
+  const [failed, setFailed] = useState(false);
+  const rows: { k: string; v: string; nowrap?: boolean }[] = [];
+  if (app !== undefined) {
+    rows.push({ k: 'This app', v: `Version ${app.version} (build ${app.build})`, nowrap: true });
+  }
   return (
     <View style={ui.screen} testID="screen-update-required">
-      <AppBar title="Update needed" onBack={onBack} backLabel="Back to Settings" />
+      <AppBar title="Update available" onBack={onDismiss} backLabel="Back" />
       <ScrollView contentContainerStyle={ui.pad}>
         <Hero
           glyph={ONB_GLYPHS.update}
-          title="Daak needs a quick update"
-          lead={
-            theyAreNewer
-              ? 'The part of Daak that moves your files is newer than this app. Update the app to go back to sending.'
-              : 'This app is newer than the Daak on another device. Update that one to pair with each other again.'
-          }
+          title="A new version of Daak is available"
+          lead="Daak updates happen in your browser. This version keeps working until you're ready."
         />
 
-        {first === undefined ? null : (
-          <KvCard
-            rows={[
-              { k: 'This app', v: `File mover version ${first.ourVersion}`, nowrap: true },
-              { k: first.peerName, v: `File mover version ${first.peerVersion}`, nowrap: true },
-            ]}
-          />
-        )}
+        {rows.length === 0 ? null : <KvCard rows={rows} />}
 
         <Note
-          tone="warn"
-          title="Sending and receiving are paused"
-          body="Your paired devices and everything already in your Inbox are safe."
+          tone="plain"
+          title="Sending still works"
+          body="Your paired devices and everything already in your conversations are safe. Install when it suits you."
         />
 
-        {peers.length < 2 ? null : (
-          <View style={ui.stackSm}>
-            <Text style={ui.sectionT}>Also out of step</Text>
-            {peers.slice(1).map((p) => (
-              <View key={p.peerDeviceId} style={[ui.kv, ui.kvFirst]} testID="update-required-peer">
-                <Text style={ui.kvK}>{p.peerName}</Text>
-                <Text style={[ui.kvV, ui.nowrap]}>{'File mover version ' + p.peerVersion}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
         <View style={ui.stackSm}>
-          <Btn variant="primary" block label="Open Settings to update" testID="update-settings" onPress={onOpenSettings} />
+          <Btn
+            variant="primary"
+            block
+            label="Open the download page"
+            testID="update-open"
+            onPress={() => {
+              setFailed(false);
+              // The call runs at once, so a test can see it. A sync throw and a
+              // rejected promise both show the fallback note.
+              try {
+                void Promise.resolve(onOpenDownloadPage()).catch(() => setFailed(true));
+              } catch {
+                setFailed(true);
+              }
+            }}
+          />
           <Btn variant="ghost" block label="Remind me later" testID="update-dismiss" onPress={onDismiss} />
-          <Text style={ui.hint}>
-            Daak has no updater of its own. Update through wherever you installed it.
-          </Text>
+          <Text style={ui.hint}>Opens the Daak releases page in your browser.</Text>
         </View>
+        {failed ? (
+          <Note
+            tone="warn"
+            title="Daak could not open the page"
+            body="Open github.com/darshitpp/daak/releases in a browser to find the newest version."
+            testID="update-open-failed"
+          />
+        ) : null}
       </ScrollView>
     </View>
   );

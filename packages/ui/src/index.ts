@@ -23,6 +23,7 @@ export { DownloadFolderRow } from './components/DownloadFolderRow';
 export { PairFirstDeviceScreen } from './screens/PairFirstDeviceScreen';
 export { CantReachScreen, type QueuedTransfer } from './screens/CantReachScreen';
 export { UpdateRequiredScreen } from './screens/UpdateRequiredScreen';
+export type { AppVersion } from './screens/UpdateRequiredScreen';
 export {
   Accordion,
   AppBar,
