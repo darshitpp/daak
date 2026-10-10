@@ -12,5 +12,7 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["js", "test"]
+  // ../../packages/ui/src/assets/png.d.ts declares `*.png`. This program
+  // follows @daak/ui into Wordmark.tsx, which imports a PNG.
+  "include": ["js", "test", "../../packages/ui/src/assets/png.d.ts"]
 }

@@ -134,3 +134,17 @@ describe('the welcome copy contract', () => {
     expect(screen.getByText('I already paired this phone')).toBeTruthy();
   });
 });
+
+describe('the welcome wordmark', () => {
+  it('shows the mark and the letters aak by default', () => {
+    render(<WelcomeScreen onGetStarted={() => {}} onSkip={() => {}} />);
+    expect(screen.getByTestId('wordmark-mark')).toBeTruthy();
+    expect(screen.getByText('aak')).toBeTruthy();
+  });
+
+  it('omits the wordmark when the copy sets wordmark to false', () => {
+    render(<WelcomeScreen onGetStarted={() => {}} onSkip={() => {}} copy={{ wordmark: false }} />);
+    expect(screen.queryByTestId('wordmark-mark')).toBeNull();
+  });
+});
+

@@ -90,7 +90,7 @@ export function AppBar({ title, onBack, backLabel = 'Go back', right }: {
           testID="onb-back"
         >
           {/* The prototype's chevron is an SVG and this package has no
-              react-native-svg (ds.tsx Wordmark says the same about the D), so
+              react-native-svg (Wordmark.tsx uses a bundled PNG for that reason), so
               the same mark as a character. No asset, same glyph. */}
           <Text style={[ui.appbarGlyph, { color: colors.fg }]}>‹</Text>
         </Pressable>

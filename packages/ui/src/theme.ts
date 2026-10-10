@@ -245,8 +245,6 @@ export const ui = StyleSheet.create({
   devchipS: { fontSize: type.xs, lineHeight: 16, color: colors.muted },
 
   wordmark: { flexDirection: 'row', alignItems: 'baseline' },
-  wmD: { fontSize: 30, lineHeight: 30, fontWeight: '700', color: colors.fg },
-  wmT: { fontSize: 20, lineHeight: 22, fontWeight: '600', color: colors.fg },
 
   search: { minHeight: control.minHeight, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, backgroundColor: colors.surface, color: colors.fg, fontSize: type.body },
   btnBlock: { alignSelf: 'stretch' },

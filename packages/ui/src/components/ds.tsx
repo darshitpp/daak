@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, Text, View, type ViewStyle } from 'react-native';
 import { colors, ui } from '../theme';
+export { Wordmark } from './Wordmark';
 
 /**
  * The handful of shapes the Open Design markup uses more than once. Not a
@@ -119,17 +120,3 @@ export function ProgressBar({ pct, failed }: { pct: number; failed?: boolean }) 
   );
 }
 
-/**
- * "D aak". The prototype's mark is one SVG glyph plus the word; React Native
- * has no SVG here (no react-native-svg in this pass), so the D is set as a
- * letter in the display weight and "aak" follows it. Same lockup, no asset.
- */
-export function Wordmark({ size = 'lg' }: { size?: 'sm' | 'lg' }) {
-  const s = size === 'lg' ? 1 : 0.72;
-  return (
-    <View style={ui.wordmark} accessibilityLabel="Daak" accessibilityRole="image">
-      <Text style={[ui.wmD, { fontSize: 30 * s, lineHeight: 30 * s }]}>D</Text>
-      <Text style={[ui.wmT, { fontSize: 20 * s, lineHeight: 22 * s }]}>aak</Text>
-    </View>
-  );
-}
