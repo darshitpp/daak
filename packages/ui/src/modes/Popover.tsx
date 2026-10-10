@@ -124,7 +124,8 @@ export function Popover({ state, engine, onExpand, onPickFiles, alert, alertRout
                   key={d.deviceId}
                   device={d}
                   queued={state.queueDepth[d.deviceId] ?? 0}
-                  onSend={choose}
+                  onOpen={choose}
+                  openLabel={'send-to-' + d.deviceId}
                 />
               ))}
               {devices.length === 0 ? (

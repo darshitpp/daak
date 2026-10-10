@@ -78,9 +78,8 @@ export function DashboardScreen({ onSend, onPair, onUnpair, onCompose, onCheckCo
                   key={d.deviceId}
                   device={d}
                   queued={queueDepth[d.deviceId] ?? 0}
-                  onSend={onSend}
+                  onOpen={onSend}
                   onPair={onPair}
-                  onUnpair={onUnpair}
                 />
               ))}
             </View>

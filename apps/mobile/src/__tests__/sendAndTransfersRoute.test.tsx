@@ -41,7 +41,7 @@ it('routes the device card Send into the Send tab for that peer', async () => {
   const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TRANSFER_ID, queued: true });
   render(<Shell />);
   fireEvent.press(screen.getByText('Devices'));
-  fireEvent.press(await screen.findByLabelText('send-to-' + device.deviceId));
+  fireEvent.press(await screen.findByTestId('open-' + device.deviceId));
   fireEvent.changeText(await screen.findByPlaceholderText('Message'), 'hello');
   fireEvent.press(screen.getByLabelText('send'));
   await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: device.deviceId, text: 'hello', files: [] }));

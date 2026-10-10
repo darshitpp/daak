@@ -23,7 +23,7 @@ export function DevicesScreen({ onSend }: { onSend?: (d: DeviceInfo) => void } =
   return (
     <View>
       {devices.map((d) => (
-        <DeviceCard key={d.deviceId} device={d} queued={queueDepth[d.deviceId] ?? 0} onSend={onSend} />
+        <DeviceCard key={d.deviceId} device={d} queued={queueDepth[d.deviceId] ?? 0} onOpen={onSend} />
       ))}
     </View>
   );

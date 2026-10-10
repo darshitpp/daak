@@ -58,7 +58,7 @@ it('opens on Send and routes a device card into that tab', async () => {
   // callback the host has to supply: the engine.send that follows proves it
   // landed on THAT peer and not on devices[0].
   fireEvent.press(screen.getByText('Devices'));
-  fireEvent.press(await screen.findByLabelText('send-to-' + peer.deviceId));
+  fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
   fireEvent.changeText(await screen.findByPlaceholderText('Message'), 'hi');
   fireEvent.press(screen.getByLabelText('send'));
   await waitFor(() => expect(sent).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, text: 'hi', files: [] }));
