@@ -359,4 +359,58 @@ export const ui = StyleSheet.create({
   mtSm: { marginTop: spacing.sm },
   /** `row-main`: the stacked title+sub column every switch/choice row uses. */
   rowMain: { flex: 1, minWidth: 0, gap: 2 },
+
+  // Sheet and scrim.
+  scrim: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(28, 28, 28, 0.4)' },
+  sheet: {
+    gap: spacing.lg,
+    padding: spacing.xl,
+    backgroundColor: colors.bg,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+  },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+
+  // Thread bubbles.
+  msg: { gap: spacing.xs, maxWidth: '88%' },
+  msgIn: { alignSelf: 'flex-start' },
+  msgOut: { alignSelf: 'flex-end' },
+  msgLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  bubble: {
+    gap: spacing.xs,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.paper,
+  },
+  bubbleOut: { backgroundColor: colors.hover },
+  // Failed and held bubbles (design: `.bubble-fail`, `.bubble-held`).
+  bubbleWarn: { backgroundColor: colors.warnTint, borderColor: colors.warn },
+  bubbleState: { fontSize: type.xs, lineHeight: 16, color: colors.warnInk },
+  bubbleTxt: { fontSize: type.body, lineHeight: 22, color: colors.fg },
+  msgWhen: { fontSize: type.xs, lineHeight: 16, color: colors.muted },
+  msgActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  quick: {
+    minHeight: control.minHeight,
+    minWidth: control.minHeight,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+  },
+  quickTxt: { fontSize: type.sm, color: colors.fg2 },
+
+  // Thread composer and the active transfer card.
+  composer: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm },
+  threadList: { padding: spacing.lg, gap: spacing.md },
+
 });

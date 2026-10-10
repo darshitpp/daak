@@ -15,7 +15,8 @@ export { PairingScreen } from './screens/PairingScreen';
 export { ComposerScreen } from './screens/ComposerScreen';
 export { TransferProgressScreen } from './screens/TransferProgressScreen';
 export { TransfersScreen } from './screens/TransfersScreen';
-export { HistoryScreen, type InboxActions } from './screens/HistoryScreen';
+export { HistoryScreen } from './screens/HistoryScreen';
+export type { InboxActions } from './inbox-actions';
 export { SettingsScreen } from './screens/SettingsScreen';
 export { QuarantineScreen } from './screens/QuarantineScreen';
 export { WelcomeScreen } from './screens/WelcomeScreen';
@@ -38,6 +39,12 @@ export {
   type SwitchState,
 } from './components/Onboarding';
 export { fakeEngine } from './testing/fakeEngine';
+
+export { Sheet } from './components/Sheet';
+export { Bubble } from './components/Bubble';
+export { ToastProvider, useToast } from './components/Toast';
+export { threadItem, threadPage } from './testing/threadFixtures';
+
 export { DaakUiApp } from './App';
 export { Popover } from './modes/Popover';
 export { Dashboard } from './modes/Dashboard';
