@@ -162,3 +162,31 @@ describe('parsePairingPayload', () => {
     ).toThrow();
   });
 });
+
+describe('joinWithScan onScanned', () => {
+  it('calls onScanned after the scan and before the engine call', async () => {
+    const engine = fakeEngine();
+    const order: string[] = [];
+    jest.spyOn(engine, 'pair').mockImplementation(async () => {
+      order.push('pair');
+      return { sas: '123456' };
+    });
+    mockedScan.mockImplementation(async () => {
+      order.push('scan');
+      return SCANNED;
+    });
+
+    await joinWithScan(engine, () => order.push('scanned'));
+    expect(order).toEqual(['scan', 'scanned', 'pair']);
+  });
+
+  it('does not call onScanned when the scan fails', async () => {
+    const engine = fakeEngine();
+    const onScanned = jest.fn();
+    mockedScan.mockRejectedValue(new Error('camera denied'));
+
+    await expect(joinWithScan(engine, onScanned)).rejects.toThrow('camera denied');
+    expect(onScanned).not.toHaveBeenCalled();
+  });
+});
+

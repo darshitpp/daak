@@ -303,7 +303,7 @@ export function OnboardingFlow({ onComplete, onReady }: {
             // shape exists to remove. The old version moved to 'pair' in the
             // same tick as the onReady() call that only ENABLED App's startup
             // effect -- so the effect ran after this render, and the user could
-            // tap "Show QR" against nothing.
+            // tap "Show my code" against nothing.
             setStep('starting');
             // THE NAME IS PASSED HERE, and this is the only call site that
             // passes one. A first run has no stored name, so the engine came
@@ -331,7 +331,7 @@ export function OnboardingFlow({ onComplete, onReady }: {
             screen already draws one. */}
         <PairingFlow embedded />
         <Text style={ui.hint}>
-          Pairing is optional. You can skip it and pair later from Devices.
+          You can skip this and pair later from Devices.
         </Text>
         <Btn
           variant="ghost"

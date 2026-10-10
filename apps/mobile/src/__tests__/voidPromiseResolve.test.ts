@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-// A user on Android tapped "Show QR" and the pairing screen rendered the error
+// A user on Android tapped "Show my code" and the pairing screen rendered the error
 // text `Cannot convert argument of type class kotlin.Unit` instead of a code.
 //
 // The cause is in DaakModule.kt, not in React Native. Every UniFFI method the

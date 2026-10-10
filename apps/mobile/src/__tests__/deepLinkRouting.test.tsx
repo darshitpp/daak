@@ -118,7 +118,7 @@ it('opens pairing from a pair link and joins with its bundle, no camera', async 
   // user first and joins nothing until the user taps Pair.
   fireEvent.press(await screen.findByLabelText('link-pair-confirm'));
   await waitFor(() => expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc', undefined));
-  expect(await screen.findByText('555666')).toBeTruthy();
+  expect(await screen.findByText('555 666')).toBeTruthy();
   expect(jest.requireMock('@daak/platform').scanQr).not.toHaveBeenCalled();
 });
 
@@ -148,7 +148,7 @@ it('does not join when the pair route is opened by hand', async () => {
   render(<App />);
   fireEvent.press(await screen.findByTestId('tab-devices'));
   fireEvent.press(screen.getByLabelText('pair-a-device'));
-  expect(screen.getByText('Show QR')).toBeTruthy();
+  expect(screen.getByText('Show my code')).toBeTruthy();
   expect(pair).not.toHaveBeenCalled();
 });
 

@@ -1,138 +1,150 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { View } from 'react-native';
-import { Btn, Note, PairingScreen, Section } from '@daak/ui';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Text, View } from 'react-native';
+import { Btn, Note, PairingScreen, ui, useToast } from '@daak/ui';
 import type { DaakEngine } from '@daak/core/src/engine/types';
 // Deep imports, NOT the @daak/platform barrel, for the reason index.js:14-22
 // already records: that barrel re-exports every platform module, each of which
-// runs TurboModuleRegistry.getEnforcing at module-eval time. The desktop
-// registers only Daak, DaakSystemShare, DaakSystemNotify, the window/tray
-// modules and -- from this task -- DaakQrScanner. Two named functions are
-// reached instead of pulling the whole surface in and throwing on the first
-// module that has no desktop implementation.
+// runs TurboModuleRegistry.getEnforcing at module-eval time.
 import { pairingBundle } from '@daak/platform/src/pairing';
 
-type Phase = { kind: 'idle' } | { kind: 'host'; qrUri: string };
+type Phase = { kind: 'idle' } | { kind: 'host'; qrUri: string; making: boolean };
 
 /**
  * The desktop HOST half of pairing, and only that half.
  *
  * The QR flow is asymmetric: only the JOINER scans. The Mac shows a code, the
  * phone scans it, and the host then arms its accept slot from that same display
- * -- no camera, and no scanned bundle, because only the joiner ever holds a
- * bundle. A camera permission prompt on a Mac that is only holding up a QR
- * would ask for a permission the app never uses, so scanQr() is never imported.
- *
- * Without this route the desktop could not pair at all: DaakDashboardShell
- * passes no `pair` slot, so AppShell's pair route renders nothing, and the
- * outbox drain then refuses every send at "peer is not paired"
- * (crates/daak-core/src/engine.rs). Nothing about the transport is wrong.
+ * -- no camera, and no scanned bundle.
  *
  * The SAS subscription is OWNED HERE, not in a second engine.on above: this
  * component mounts only while the pair route is open and unsubscribes on
- * unmount, so the subscription exists exactly when something reads it. The
- * desktop has no pairing fan-out registry because it has no second reader.
+ * unmount, so the subscription exists exactly when something reads it.
+ *
+ * The engine keeps a new pairing pending until `confirmPairing`. The
+ * `pairing.sas` event names the peer, so "They match" can confirm it and
+ * "Does not match" can revoke it.
+ *
+ * Leaving the route is "Does not match". `pendingRef` holds the peer id of a
+ * number that is on screen and that the user has not answered.
  */
 export function DesktopPairing({ engine }: { engine: DaakEngine }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [sas, setSas] = useState('');
   const [peerId, setPeerId] = useState('');
   const [error, setError] = useState('');
+  // A failed confirm has its own title. `error` is for the code-making steps.
+  const [confirmError, setConfirmError] = useState('');
+  const toast = useToast();
+  // The peer id of a number that is on screen and not yet answered.
+  const pendingRef = useRef('');
+  const engineRef = useRef(engine);
+  engineRef.current = engine;
 
   const onEvent = useCallback(
     (event: { type: string; sas?: string; peerDeviceId?: string }) => {
       if (event.type === 'pairing.sas' && typeof event.sas === 'string') {
         setSas(event.sas);
         // The engine keeps the pairing pending. The id lets the user confirm or reject it.
-        if (typeof event.peerDeviceId === 'string') setPeerId(event.peerDeviceId);
+        if (typeof event.peerDeviceId === 'string') {
+          setPeerId(event.peerDeviceId);
+          pendingRef.current = event.peerDeviceId;
+        }
       }
     },
     [],
   );
+  useEffect(() => engine.on(onEvent), [engine, onEvent]);
 
+  // Only an unmount of the pair route revokes. A re-render does not run this
+  // cleanup, and the app going to the background does not unmount the route.
+  useEffect(
+    () => () => {
+      const pending = pendingRef.current;
+      pendingRef.current = '';
+      if (pending) void engineRef.current.revokePairing(pending).catch(() => {});
+    },
+    [],
+  );
+
+  // "They match". The engine trusts the peer and emits `pairing.done`.
   const confirm = () => {
-    setError('');
-    void engine.confirmPairing(peerId).then(
+    const id = peerId;
+    setConfirmError('');
+    // The press answers the number. A failed confirm puts the id back below.
+    pendingRef.current = '';
+    void engine.confirmPairing(id).then(
       () => {
         setSas('');
         setPeerId('');
         setPhase({ kind: 'idle' });
       },
-      (e: unknown) => setError(e instanceof Error ? e.message : 'could not confirm the pairing'),
+      (e: unknown) => {
+        pendingRef.current = id;
+        setConfirmError(e instanceof Error ? e.message : 'could not confirm the pairing');
+      },
     );
   };
 
-  // The SAS did not match: remove the pending pairing.
+  // The numbers did not match: remove the pending pairing.
   const reject = () => {
     const id = peerId;
+    // The press answers the number. The unmount cleanup must not revoke again.
+    pendingRef.current = '';
     setSas('');
     setPeerId('');
     setPhase({ kind: 'idle' });
     setError('');
+    setConfirmError('');
+    toast.show('Pairing cancelled');
     if (id) {
       void engine.revokePairing(id).catch((e: unknown) =>
         setError(e instanceof Error ? e.message : 'could not remove the pairing'),
       );
     }
   };
-  useEffect(() => engine.on(onEvent), [engine, onEvent]);
 
   const showQr = () => {
     setSas('');
+    setPeerId('');
+    pendingRef.current = '';
     setError('');
-    // The qr module is required LAZILY, here, and not imported at the top. That
-    // import is not a type: js/NativeDaakQrScanner.ts calls
-    // TurboModuleRegistry.getEnforcing('DaakQrScanner') at MODULE EVAL, so a
-    // top-level import makes the WHOLE app fail to boot whenever that pod is
-    // not linked -- the same trap index.js:14-22 and notify.ts:110 both record.
-    // It would take the dashboard down with the pairing screen rather than the
-    // one button that needs the module.
-    //
-    // pairingBundle stays a top-level import on purpose: it is pure JS over the
-    // 'Daak' module, which this app already registers and already loads.
+    setConfirmError('');
+    // The qr module loads lazily. `js/NativeDaakQrScanner.ts` calls
+    // `TurboModuleRegistry.getEnforcing` at module eval, so a top-level import
+    // fails the whole app when the pod is not linked.
     const qr = require('@daak/platform/src/qr') as typeof import('@daak/platform/src/qr');
-    // Lazy: nothing fetches a bundle or renders a QR until the user asks, so a
-    // launch never pays for a code nobody looks at.
-    //
-    // The arm follows the QR rather than leading it, because arming is a local
-    // state change with no reply: a joiner that dials before the code is on
-    // screen is refused as unpaired and retries, which is the same window every
-    // engine-side arm has. A joiner can only scan a code that is already shown,
-    // so this order has no reachable race the other one would have avoided.
+    // The host phase starts at once, so "Making your code…" shows.
+    setPhase({ kind: 'host', qrUri: '', making: true });
     void pairingBundle()
       .then((bundle) => qr.generateQr(bundle, qr.PAIRING_QR_SIZE))
       .then(
         async (qrUri) => {
-          setPhase({ kind: 'host', qrUri });
+          setPhase({ kind: 'host', qrUri, making: false });
           await engine.armHostPairing();
         },
-        (e: unknown) => setError(e instanceof Error ? e.message : 'could not make a pairing code'),
+        (e: unknown) => {
+          setPhase({ kind: 'idle' });
+          setError(e instanceof Error ? e.message : 'could not make a pairing code');
+        },
       )
-      .catch((e: unknown) =>
-        setError(e instanceof Error ? e.message : 'could not arm pairing'),
-      );
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'could not arm pairing'));
   };
 
   if (phase.kind === 'idle') {
     return (
       <View style={{ padding: 16, gap: 24 }}>
-        <Section title="Pair with another Daak device">
-          <Btn variant="primary" block testID="host" label="Show QR" onPress={showQr} />
-          {error ? <Note tone="err" testID="pairing-error" body={error} /> : null}
-          <Note
-            title="Nothing here leaves the network"
-            body="Pairing shows a code on this Mac. The other device reads it with its camera. No account, no server."
-          />
-        </Section>
+        <View style={ui.stack}>
+          <Text style={ui.lead}>Open Daak on the other device and choose Scan a code. This Mac shows the code.</Text>
+          <Btn variant="primary" block testID="host" label="Show my code" onPress={showQr} />
+          {error ? <Note tone="err" body={error} testID="pairing-error" /> : null}
+          <Text style={ui.hint}>Both devices need to be on the same Wi-Fi.</Text>
+        </View>
       </View>
     );
   }
 
   return (
-    // flex: 1 is load-bearing. PairingScreen's own root IS ui.screen
-    // (flex: 1), and this view had automatic height, so the QR -- and the
-    // appbar above it -- resolved to zero pixels. The Mac showed the pair
-    // route with no code at all, which reads as a dead button. The parent
-    // in AppShell is flex: 1, so the flex has a space to fill.
+    // flex: 1 is load-bearing. PairingScreen's own root IS ui.screen (flex: 1).
     <View style={{ flex: 1 }}>
       <PairingScreen
         role="host"
@@ -141,15 +153,18 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
         sas={sas}
         onConfirm={peerId ? confirm : undefined}
         onReject={peerId ? reject : undefined}
+        busy={phase.making ? 'making' : undefined}
+        error={error || undefined}
+        onRetry={showQr}
       />
-      {/* The arm is ONE-SHOT: the engine takes it for the first joiner, and a
-          stray LAN connection can spend it without the user. One button
-          re-arms, which is the whole recovery path. Shown before any SAS has
-          arrived, because that is the state a spent arm leaves behind. */}
+      {/* The arm is one-shot. One button arms again. */}
       <View style={{ padding: 16, gap: 24 }}>
-        <Btn variant="quiet" block testID="host-retry" label="Show a new QR" onPress={showQr} />
-        {error ? <Note tone="err" testID="pairing-error" body={error} /> : null}
+        <Btn variant="quiet" block testID="host-retry" label="Show a new code" onPress={showQr} />
+        {confirmError ? (
+          <Note tone="err" title="We couldn't finish pairing." body={confirmError} testID="pairing-confirm-error" />
+        ) : null}
       </View>
     </View>
   );
 }
+

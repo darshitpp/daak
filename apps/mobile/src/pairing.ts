@@ -25,7 +25,7 @@ export async function hostPairingQr(): Promise<{ uri: string; bundle: string }> 
  * A native bridge that never settles its promise reaches the user as NOTHING:
  * no QR, no error, a button that looks dead. Every rejecting path already
  * shows a note, so the only unexplained failure is the one that never arrives.
- * Bound the wait and name it, so "Show QR" either works or says why.
+ * Bound the wait and name it, so "Show my code" either works or says why.
  *
  * Generous on purpose: a cold process can take a moment, and this catches a
  * promise that NEVER settles, not a slow one.
@@ -80,8 +80,11 @@ export async function armHostPairing(engine: DaakEngine): Promise<void> {
  */
 export async function joinWithScan(
   engine: DaakEngine,
+  onScanned?: () => void,
 ): Promise<{ sas: string; peerDeviceId: string }> {
   const scanned = await scanQr();
+  // The scanner has closed. What follows is reading the code and the engine call.
+  onScanned?.();
   const { deviceId, cbor, addr } = parsePairingPayload(scanned);
   const { sas } = await engine.pair(deviceId, 'qr', cbor, addr);
   return { sas, peerDeviceId: deviceId };

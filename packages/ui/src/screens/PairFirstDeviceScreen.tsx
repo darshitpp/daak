@@ -1,23 +1,18 @@
 import React from 'react';
-import { Text, View } from 'react-native';
 import { OnboardingScreen } from '../components/Onboarding';
-import { ui } from '../theme';
 
 /**
- * The prototype's screen 4 (sc-pair-first-device) as a FRAME, not a screen.
+ * The Pair-first-device step (design route `pair-first-device`) as a frame.
  *
- * The prototype's body is a working QR display, a scanner viewport, a
- * six-digit verification number, a check row and a Finish button -- all of
- * which are driven by that page's own JavaScript, and all of which would have
- * to be real to mean anything. Fabricating any of it is the one thing this
- * screen must not do: a QR drawn from no bundle is a code no device can scan,
- * and a six-digit number picked to look right is a security check the user
- * performs against nothing. Both would be worse than no screen.
+ * The body of the design step is a working QR, a scanner, a 6-digit number, and
+ * a Finish button. All of it is driven by the page script, and all of it must be
+ * real to mean anything. A QR drawn from no bundle is a code that no device can
+ * scan. A number picked to look right is a security check against nothing.
  *
- * So this renders only the prototype's own step chrome -- the appbar, the
- * heading, the lead -- and hands the flow to the app through children. The
- * mobile app passes its REAL PairingFlow (armHostPairing, the engine's own
- * QR, the engine's own SAS). No pairing code is generated in packages/ui.
+ * So this draws only the step chrome (appbar and back) and hands the flow to the
+ * host through `children`. The mobile app passes its real `PairingFlow`. No
+ * pairing code is made in `packages/ui`. The lead and the two choices belong to
+ * the flow, because the Devices route shows them too.
  */
 export function PairFirstDeviceScreen({
   onBack,
@@ -28,19 +23,9 @@ export function PairFirstDeviceScreen({
   children: React.ReactNode;
 }) {
   return (
-    <OnboardingScreen
-      title="Step 3 of 3"
-      onBack={onBack}
-      backLabel="Back to permissions"
-      testID="screen-pair-first-device"
-    >
-      <View style={ui.stack}>
-        <Text style={ui.h1}>Pair your first device</Text>
-        <Text style={ui.lead}>
-          Open Daak on the other device and choose Scan a code. Then check that both screens show the same six numbers.
-        </Text>
-      </View>
+    <OnboardingScreen title="Pair your first device" onBack={onBack} testID="screen-pair-first-device">
       {children}
     </OnboardingScreen>
   );
 }
+
