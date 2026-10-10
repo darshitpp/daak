@@ -326,11 +326,11 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
 pub async fn receive_transfer<T: FrameTransport>(
     conn: &mut T,
     out_dir: &Path,
-    on_progress: impl FnMut(u64),
+    mut on_progress: impl FnMut(u64),
     db: Option<&Db>,
     on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
-    receive_transfer_from(conn, None, out_dir, on_progress, db, on_item).await
+    receive_transfer_from(conn, None, out_dir, |_, n, _| on_progress(n), db, on_item).await
 }
 
 /// Like `receive_transfer`. With `Some(id)`, the manifest must name `id` as its
@@ -339,7 +339,10 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     conn: &mut T,
     expected_sender: Option<[u8; 16]>,
     out_dir: &Path,
-    mut on_progress: impl FnMut(u64),
+    // (payload id, chunk length, bytes total). The receiver knows the id and
+    // the total only after it parses the manifest, so both travel with each
+    // progress call (P4 Task 12).
+    mut on_progress: impl FnMut([u8; 16], u64, u64),
     db: Option<&Db>,
     mut on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
@@ -364,6 +367,10 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             "manifest sender is not the authenticated peer".into(),
         ));
     }
+
+    // One sum for the row and for the progress events. A non-binary item is
+    // never materialised, so its size must not count (B2).
+    let bytes_total: u64 = manifest.binary_items().filter_map(|i| i.size).sum();
 
     // D23: a re-delivery of a payload_id that is already in the inbox must not
     // write into the real destination. A half-written duplicate would truncate
@@ -402,7 +409,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             // size the peer attached to one must not be counted -- otherwise the
             // UI shows 100% for a file that does not exist. is_binary(), not
             // size.is_some(): any peer can put a size on a Text/Folder item.
-            bytes_total: manifest.binary_items().filter_map(|i| i.size).sum(),
+            bytes_total,
             bytes_done: 0,
             item_count: manifest.items.len() as u32,
             created_at: now,
@@ -573,7 +580,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             .ok_or_else(|| CoreError::Protocol(format!("chunk for unknown item {item_index}")))?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;
         file.write_all(&data).await?;
-        on_progress(data.len() as u64);
+        on_progress(manifest.payload_id, data.len() as u64, bytes_total);
         let bitmap = bitmaps[idx].as_mut().ok_or_else(|| {
             CoreError::Protocol(format!("chunk for non-binary item {item_index}"))
         })?;
@@ -707,7 +714,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             state: "done".into(),
             // Same rule as the initial upsert above: only materialised items
             // have bytes. item_count below still counts every item.
-            bytes_total: manifest.binary_items().filter_map(|i| i.size).sum(),
+            bytes_total,
             bytes_done,
             item_count: manifest.items.len() as u32,
             created_at: crate::manifest::now_ms() as i64 / 1000,
@@ -811,9 +818,15 @@ mod tests {
             });
             let mut conn = tcp::dial(addr).await.unwrap();
             let dst = tempfile::tempdir().unwrap();
-            let res =
-                receive_transfer_from(&mut conn, Some(expected), dst.path(), |_| {}, None, |_| {})
-                    .await;
+            let res = receive_transfer_from(
+                &mut conn,
+                Some(expected),
+                dst.path(),
+                |_, _, _| {},
+                None,
+                |_| {},
+            )
+            .await;
             sender.await.unwrap();
             if ok {
                 assert!(!matches!(res, Err(CoreError::Protocol(ref m)) if m.contains("sender")));

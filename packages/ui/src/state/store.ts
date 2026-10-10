@@ -150,10 +150,7 @@ export function reduceUiState(state: UiState, event: UiAction): UiState {
       // proving they are equal would mean walking every field.
       return sameDevices(state.devices, merged) ? state : { ...state, devices: merged };
     }
-    // ponytail: the engine declares TransferProgress with ZERO send sites
-    // (engine.rs:92), so a transfer row only ever appears if something else
-    // starts emitting it; done/failed then just update an existing row. Make
-    // the engine send progress and this ceiling goes away with no store change.
+    // The engine sends this event at most every 100 ms for each transfer.
     case 'transfer.progress': {
       const existing = state.transfers.find((t) => t.transferId === event.transferId);
       const row: TransferRow = existing

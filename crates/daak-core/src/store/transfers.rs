@@ -181,6 +181,14 @@ impl Db {
         Ok(())
     }
 
+    pub fn set_bytes_done(&self, id: &[u8; 16], value: u64) -> Result<()> {
+        self.conn().execute(
+            "UPDATE transfers SET bytes_done = ?2, updated_at = ?3 WHERE transfer_id = ?1",
+            rusqlite::params![&id[..], value as i64, now()],
+        )?;
+        Ok(())
+    }
+
     /// Crash recovery: a transfer left active (mid-receive) or awaiting_ack
     /// (mid-send, awaiting the peer Ack) on startup is reset to queued so the
     /// outbox can re-send it. queued is the engine re-queue sentinel (spec 4.2

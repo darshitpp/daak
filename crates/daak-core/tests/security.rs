@@ -91,9 +91,18 @@ async fn encrypted_transfer_roundtrips_and_writes_file() {
     let a_device_id = a.device_id();
     let server = tokio::spawn(async move {
         let (mut conn, _) = tcp::accept(&listener).await.unwrap();
-        recv_secure_transfer(&mut conn, &b_secret, &a_pub, None, &dst_path, None, |_| {})
-            .await
-            .unwrap()
+        recv_secure_transfer(
+            &mut conn,
+            &b_secret,
+            &a_pub,
+            None,
+            &dst_path,
+            None,
+            |_, _, _| {},
+            |_| {},
+        )
+        .await
+        .unwrap()
     });
 
     let mut conn = tcp::dial(addr).await.unwrap();

@@ -843,6 +843,7 @@ impl Engine {
             let drain_db = db.clone();
             let drain_staging = staging.clone();
             let drain_sessions = sessions.clone();
+            let drain_tx = tx.clone();
             let drain_battery = battery_saver.clone();
             let drain_obs = observability.clone();
             let policy = DrainPolicy::default();
@@ -878,6 +879,7 @@ impl Engine {
                 let ctx = DrainCtx {
                     db: drain_db.clone(),
                     staging: drain_staging.clone(),
+                    tx: drain_tx.clone(),
                     sessions: drain_sessions.clone(),
                     max_backoff_secs,
                     observability: drain_obs.clone(),
@@ -2030,7 +2032,15 @@ impl Engine {
         paths: Vec<Option<PathBuf>>,
     ) -> Result<[u8; 16]> {
         let transfer_id = manifest.payload_id;
-        send_secure_with(&self.sessions, peer_device_id, &manifest, &paths).await?;
+        send_secure_with(
+            &self.sessions,
+            peer_device_id,
+            &manifest,
+            &paths,
+            &self.tx,
+            &self.db,
+        )
+        .await?;
         Ok(transfer_id)
     }
 
@@ -2566,6 +2576,9 @@ impl Engine {
         // by the time recv_secure_transfer hands back the manifest the vec is
         // complete -- no lock, no channel, no await point in between.
         let mut saved_paths: Vec<String> = Vec::new();
+        // The receiver knows the total after it parses the manifest, so the
+        // gate is built on the first progress call (P4 Task 12).
+        let mut progress_gate: Option<ProgressGate> = None;
         // R6: the real Db, not None -- inbound transfers are persisted so the
         // NACK-driven resume path (bitmaps, quarantine rows) is reachable.
         match recv_secure_transfer(
@@ -2575,6 +2588,22 @@ impl Engine {
             Some(hello.device_id),
             out_dir,
             Some(db),
+            |id, n, total| {
+                let g = progress_gate.get_or_insert_with(|| {
+                    ProgressGate::new(total, PROGRESS_INTERVAL, std::time::Instant::now())
+                });
+                if let Some((done, total)) = g.add(n, std::time::Instant::now()) {
+                    // The stored value follows the events, exactly as on the
+                    // send side. The receiver wrote its row before the first
+                    // chunk, so the UPDATE matches it.
+                    let _ = db.set_bytes_done(&id, done);
+                    let _ = tx.send(EngineEvent::TransferProgress {
+                        transfer_id: id,
+                        bytes_done: done,
+                        bytes_total: total,
+                    });
+                }
+            },
             |ev| {
                 if let EngineEvent::TransferItem {
                     dest_path: Some(p), ..
@@ -2710,14 +2739,56 @@ const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 // a cold peer serializes every other peer's connect. N is small (a room's worth
 // of devices) and a LAN handshake is ~ms; shard the registry per peer, or dial
 // outside the lock, if that ever stops being true.
+/// The engine reports progress at most once per this interval, plus one final
+/// event for the last chunk. Without the gate, every 1 MiB chunk would cross
+/// the FFI or the IPC boundary.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Accumulates chunk lengths and decides when a progress event is due. The
+/// clock is passed in, so a test drives it without sleeping.
+struct ProgressGate {
+    done: u64,
+    total: u64,
+    last: std::time::Instant,
+    interval: std::time::Duration,
+}
+
+impl ProgressGate {
+    fn new(total: u64, interval: std::time::Duration, now: std::time::Instant) -> Self {
+        Self {
+            done: 0,
+            total,
+            last: now,
+            interval,
+        }
+    }
+
+    /// Add one chunk length. Returns the new (done, total) when an event is
+    /// due. A zero total never reports: a text payload moves no bytes.
+    fn add(&mut self, delta: u64, now: std::time::Instant) -> Option<(u64, u64)> {
+        self.done += delta;
+        if self.total == 0 {
+            return None;
+        }
+        if self.done >= self.total || now.duration_since(self.last) >= self.interval {
+            self.last = now;
+            Some((self.done, self.total))
+        } else {
+            None
+        }
+    }
+}
+
 async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     sessions: &SharedSessions<T>,
     peer_device_id: [u8; 16],
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
+    tx: &broadcast::Sender<EngineEvent>,
+    db: &Db,
 ) -> Result<()> {
     let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
-    match send_on_session(&handle, manifest, paths).await {
+    match send_on_session(&handle, manifest, paths, tx, db).await {
         Ok(()) => return Ok(()),
         // B4: a hash mismatch is a PERMANENT verdict on bytes the receiver
         // already holds, so the retry below cannot change it -- it would upload
@@ -2730,7 +2801,7 @@ async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     // NACK-driven ranges (transfer::resume) once the receiver can use them.
     sessions.lock().await.remove(&peer_device_id);
     let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
-    send_on_session(&handle, manifest, paths).await?;
+    send_on_session(&handle, manifest, paths, tx, db).await?;
     Ok(())
 }
 
@@ -2741,9 +2812,29 @@ async fn send_on_session<T: crate::net::FrameTransport + Send>(
     handle: &crate::session::SessionHandle<T>,
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
+    tx: &broadcast::Sender<EngineEvent>,
+    db: &Db,
 ) -> Result<()> {
     let mut s = handle.lock().await;
-    let r = crate::transfer::send_transfer(&mut s.conn, manifest, paths, &[], |_| {}).await;
+    let transfer_id = manifest.payload_id;
+    // The same sum the receiver writes to the row. One sum, not a second one.
+    let total: u64 = manifest.binary_items().filter_map(|i| i.size).sum();
+    let mut gate = ProgressGate::new(total, PROGRESS_INTERVAL, std::time::Instant::now());
+    let r = crate::transfer::send_transfer(&mut s.conn, manifest, paths, &[], |n| {
+        if let Some((done, total)) = gate.add(n, std::time::Instant::now()) {
+            // The stored value follows the events. This is an ABSOLUTE write,
+            // because a retry re-sends the whole payload and a delta would
+            // overshoot. A direct send may have no row, and then the UPDATE
+            // matches nothing.
+            let _ = db.set_bytes_done(&transfer_id, done);
+            let _ = tx.send(EngineEvent::TransferProgress {
+                transfer_id,
+                bytes_done: done,
+                bytes_total: total,
+            });
+        }
+    })
+    .await;
     // touch on BOTH paths: `last_used` means "last attempted", which is what
     // eviction wants -- a repeatedly-failing peer must not keep a stale
     // last_used and pin the session past its idle timeout.
@@ -2759,6 +2850,9 @@ async fn send_on_session<T: crate::net::FrameTransport + Send>(
 struct DrainCtx<T = TcpConn> {
     db: Arc<Db>,
     staging: Arc<Staging>,
+    /// The engine broadcast sender, so a drained send reports progress exactly
+    /// like a direct send does.
+    tx: broadcast::Sender<EngineEvent>,
     /// R-T11-12: the SAME sessions the Engine holds, so a drained send reuses
     /// (and re-dials) the same per-peer connection a direct send would.
     sessions: SharedSessions<T>,
@@ -3036,7 +3130,16 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
     }
     // R-D: an unknown peer is a failure, not a panic -- the connect closure
     // returns "not discovered" and the row goes back to pending with backoff.
-    match send_secure_with(&ctx.sessions, row.peer_device_id, &manifest, &paths).await {
+    match send_secure_with(
+        &ctx.sessions,
+        row.peer_device_id,
+        &manifest,
+        &paths,
+        &ctx.tx,
+        db,
+    )
+    .await
+    {
         // R-C: send_transfer already read the peer's Ack and returns Ok ONLY on
         // complete && hash_ok (Err on mismatch/close), so Ok(()) IS the ack.
         Ok(_) => {
@@ -3165,6 +3268,39 @@ async fn read_identity_public(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // P4 Task 12. The clock is a parameter, so these cases never sleep.
+    #[test]
+    fn progress_gate_reports_inside_the_interval_only_on_the_last_chunk() {
+        let t0 = std::time::Instant::now();
+        let mut g = ProgressGate::new(300, PROGRESS_INTERVAL, t0);
+        assert_eq!(g.add(100, t0 + std::time::Duration::from_millis(10)), None);
+        assert_eq!(g.add(100, t0 + std::time::Duration::from_millis(20)), None);
+        assert_eq!(
+            g.add(100, t0 + std::time::Duration::from_millis(30)),
+            Some((300, 300)),
+            "the chunk that reaches the total always reports"
+        );
+    }
+
+    #[test]
+    fn progress_gate_reports_after_the_interval_with_the_summed_done() {
+        let t0 = std::time::Instant::now();
+        let mut g = ProgressGate::new(10_000, PROGRESS_INTERVAL, t0);
+        assert_eq!(g.add(100, t0 + std::time::Duration::from_millis(10)), None);
+        assert_eq!(
+            g.add(150, t0 + std::time::Duration::from_millis(120)),
+            Some((250, 10_000)),
+            "one event, with both chunks summed"
+        );
+    }
+
+    #[test]
+    fn progress_gate_never_reports_a_zero_total() {
+        let t0 = std::time::Instant::now();
+        let mut g = ProgressGate::new(0, PROGRESS_INTERVAL, t0);
+        assert_eq!(g.add(0, t0 + std::time::Duration::from_millis(500)), None);
+    }
 
     fn test_device(id: [u8; 16]) -> DeviceInfo {
         DeviceInfo {
@@ -3632,6 +3768,7 @@ mod tests {
             DrainCtx {
                 db: db.clone(),
                 staging: staging.clone(),
+                tx: broadcast::channel(8).0,
                 sessions,
                 max_backoff_secs: 600,
                 observability: Arc::new(Observability::default()),
@@ -3775,6 +3912,7 @@ mod tests {
             DrainCtx {
                 db: db.clone(),
                 staging: staging.clone(),
+                tx: broadcast::channel(8).0,
                 sessions,
                 max_backoff_secs: 600,
                 observability: Arc::new(Observability::default()),

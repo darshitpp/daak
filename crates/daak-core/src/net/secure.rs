@@ -213,6 +213,10 @@ pub async fn open_secure<T: FrameTransport + Send>(
     Ok(SecureConnection::new(conn, tx, rx))
 }
 
+// The progress callback pushes this past the default argument limit. Each
+// argument is a distinct fact the caller owns, so a struct would add ceremony
+// without removing a caller decision.
+#[allow(clippy::too_many_arguments)]
 pub async fn recv_secure_transfer<T: FrameTransport + Send>(
     conn: &mut T,
     static_secret: &[u8; 32],
@@ -220,6 +224,7 @@ pub async fn recv_secure_transfer<T: FrameTransport + Send>(
     expected_sender: Option<[u8; 16]>,
     out_dir: &Path,
     db: Option<&Db>,
+    on_progress: impl FnMut([u8; 16], u64, u64),
     on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
     let prologue = session_prologue(&x25519_public(static_secret), initiator_static);
@@ -227,7 +232,15 @@ pub async fn recv_secure_transfer<T: FrameTransport + Send>(
         HandshakeDriver::responder(static_secret, &prologue)?.pin_remote_static(*initiator_static);
     let (tx, rx, _hash, _confirm) = complete_handshake(conn, driver, false).await?;
     let mut secure = SecureConnection::new(conn, tx, rx);
-    receive_transfer_from(&mut secure, expected_sender, out_dir, |_| {}, db, on_item).await
+    receive_transfer_from(
+        &mut secure,
+        expected_sender,
+        out_dir,
+        on_progress,
+        db,
+        on_item,
+    )
+    .await
 }
 
 fn x25519_public(secret: &[u8; 32]) -> [u8; 32] {
@@ -440,6 +453,7 @@ mod tests {
             None,
             dst.path(),
             Some(&db),
+            |_, _, _| {},
             |_| {},
         )
         .await
@@ -496,7 +510,16 @@ mod tests {
         let (_, victim) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             tokio::join!(
                 complete_handshake(&mut attacker_io, attacker, true),
-                recv_secure_transfer(&mut b_io, &b_secret, &a_pub, None, out.path(), None, |_| {}),
+                recv_secure_transfer(
+                    &mut b_io,
+                    &b_secret,
+                    &a_pub,
+                    None,
+                    out.path(),
+                    None,
+                    |_, _, _| {},
+                    |_| {}
+                ),
             )
         })
         .await
