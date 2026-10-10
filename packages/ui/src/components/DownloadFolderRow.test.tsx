@@ -73,3 +73,15 @@ it('shows the no-picker words and no button when the host gives no choose', asyn
   expect(screen.queryByText('Files are moved, not copied')).toBeNull();
 });
 
+it('hides the note when asked', async () => {
+  render(<DownloadFolderRow load={async () => null} choose={async () => null} hideNote />);
+  await screen.findByLabelText('download-folder-choose');
+  expect(screen.queryByText('Files are moved, not copied')).toBeNull();
+});
+
+it('keeps the note by default', async () => {
+  render(<DownloadFolderRow load={async () => null} choose={async () => null} />);
+  expect(await screen.findByText('Files are moved, not copied')).toBeTruthy();
+});
+
+

@@ -19,12 +19,14 @@ import { ui } from '../theme';
  * `choose` absent means the host has no picker: the row shows the iPhone
  * prototype words and no button.
  */
-export function DownloadFolderRow({ load, choose, reset, title, chooseLabel }: {
+export function DownloadFolderRow({ load, choose, reset, title, chooseLabel, hideNote }: {
   load: () => Promise<string | null>;
   choose?: () => Promise<string | null>;
   reset?: () => Promise<void>;
   title?: string;
   chooseLabel?: string;
+  /** Removes the "Files are moved, not copied" note. The onboarding step has its own note. Default false. */
+  hideNote?: boolean;
 }) {
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -111,10 +113,12 @@ export function DownloadFolderRow({ load, choose, reset, title, chooseLabel }: {
           }}
         />
       ) : null}
-      <Note
-        title="Files are moved, not copied"
-        body="A file that arrives is moved to the folder you choose, so it is stored once and you can open it from your own file manager."
-      />
+      {hideNote !== true ? (
+        <Note
+          title="Files are moved, not copied"
+          body="A file that arrives is moved to the folder you choose, so it is stored once and you can open it from your own file manager."
+        />
+      ) : null}
     </Section>
   );
 }
