@@ -123,6 +123,26 @@ export interface TransferFilter {
   peerDeviceId?: string;
 }
 
+export interface ThreadItem {
+  transferId: string;
+  itemIndex: number;
+  direction: 'in' | 'out';
+  type: 'text' | 'file';
+  name: string | null;
+  size: number | null;
+  text: string | null;
+  state: ItemState;
+  destPath: string | null;
+  at: number;
+  transferState: string;
+  error: string | null;
+}
+
+export interface ThreadPage {
+  items: ThreadItem[];
+  olderCursor: string | null;
+}
+
 /** This device's own advertised name and id. The READ half of setDisplayName. */
 export interface SelfProfile {
   /** The RESOLVED name, with any LAN-collision suffix -- what peers see. */
@@ -271,6 +291,13 @@ export interface DaakEngine {
   listQuarantineReports(): Promise<QuarantineReport[]>;
   listTransfers(filter?: TransferFilter): Promise<TransferSummary[]>;
   listInbox(): Promise<InboxEntry[]>;
+  /**
+   * One page of the thread of a peer: sent and received items together,
+   * oldest first within the page. Limit defaults to 50 and the engine clamps
+   * it to 200. Before is the olderCursor of the previous page. A cursor that
+   * does not parse rejects.
+   */
+  listThread(peerDeviceId: string, opts?: { limit?: number; before?: string }): Promise<ThreadPage>;
   selfProfile(): Promise<SelfProfile>;
   setDisplayName(name: string): Promise<void>;
   setPresence(state: 'online' | 'away'): Promise<void>;

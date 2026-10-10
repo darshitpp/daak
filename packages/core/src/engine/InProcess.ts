@@ -7,6 +7,7 @@ import type {
   SendRequest,
   QuarantineReport,
   SelfProfile,
+  ThreadPage,
   TransferFilter,
   TransferSummary,
 } from './types';
@@ -156,6 +157,16 @@ export class InProcessEngine implements DaakEngine {
     const parsed: unknown = JSON.parse(await this.native.listInbox());
     if (!Array.isArray(parsed)) throw new Error('listInbox did not return an array');
     return parsed as InboxEntry[];
+  }
+  async listThread(peerDeviceId: string, opts?: { limit?: number; before?: string }): Promise<ThreadPage> {
+    const threadLimit = (opts && opts.limit !== undefined) ? opts.limit : 50;
+    const threadBefore = (opts && opts.before !== undefined) ? opts.before : '';
+    const parsed: unknown = JSON.parse(await this.native.listThread(peerDeviceId, threadLimit, threadBefore));
+    const pg = parsed as Partial<ThreadPage> | null;
+    if (typeof pg !== 'object' || pg === null || !Array.isArray(pg.items)) {
+      throw new Error('listThread did not return a page');
+    }
+    return pg as ThreadPage;
   }
 
   async selfProfile(): Promise<SelfProfile> {

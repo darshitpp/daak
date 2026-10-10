@@ -32,6 +32,7 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     sendFiles: async (peer, paths) => { calls.push(['sendFiles', peer, paths]); return 'bb'.repeat(16); },
     listInbox: async () => '[]',
     listTransfers: async () => '[]',
+    listThread: async () => JSON.stringify({ items: [], olderCursor: null }),
     cancel: async () => {},
     retry: async () => {},
     retryItem: async () => {},

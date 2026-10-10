@@ -11,7 +11,7 @@ import type { Spec as NativeDaakSpec } from '../src/NativeDaak';
 const METHODS: (keyof DaakEngine)[] = [
   'start', 'stop', 'devices', 'pair', 'send', 'cancel',
    'retry', 'quarantineReport', 'deleteQuarantined', 'listQuarantineReports',
-   'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+   'listTransfers', 'listThread', 'listInbox', 'setDisplayName', 'setPresence', 'on',
   'offerPairing', 'selfProfile',
   'armHostPairing',
   // The per-item re-arm. PARKED and on no screen: `retry` alone cannot reach a
@@ -77,6 +77,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   deleteQuarantined: true,
   listQuarantineReports: true,
   listTransfers: true,
+  listThread: true,
   listInbox: true,
   selfProfile: true,
   setDisplayName: true,
@@ -105,7 +106,7 @@ describe('contract types', () => {
       replaceInboxPaths: true,
       retry: true, quarantineReport: true, deleteQuarantined: true,
       listQuarantineReports: true,
-      listTransfers: true, listInbox: true, selfProfile: true, setDisplayName: true,
+      listTransfers: true, listThread: true, listInbox: true, selfProfile: true, setDisplayName: true,
       setPresence: true, on: true, offerPairing: true, armHostPairing: true,
       retryItem: true, backgroundWake: true,
     };
@@ -151,7 +152,8 @@ describe('contract types', () => {
     // method was added without a decision here.
     // confirm_pairing (the SAS gate) is the 28th: a UDL method and a TurboModule
     // override on all three native modules.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(28);
+    // list_thread (this plan) is the 29th: a UDL method and a TurboModule override on all three native modules.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(29);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -232,6 +234,12 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
     },
     listTransfers: async () => '[]',
     listInbox: async () => '[]',
+    listThread: async (peerId: string, limit: number, before: string) => {
+      void limit;
+      if (!/^[0-9a-f]{32}$/.test(peerId)) throw new Error('bad peer id');
+      if (before !== '' && !/^[0-9]+:[0-9a-f]{32}$/.test(before)) throw new Error('bad thread cursor');
+      return JSON.stringify({ items: [], olderCursor: null });
+    },
     // The quarantine surface, in the BASE rather than in the suite's
     // fakeNative({...}) override, because what these three model is the shape
     // of the BRIDGE and not one test's data: a fake that has just been started

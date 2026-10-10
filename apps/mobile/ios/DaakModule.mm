@@ -95,6 +95,11 @@ RCT_EXTERN_METHOD(deleteQuarantined:(NSString *)transferId
 RCT_EXTERN_METHOD(listTransfers:(NSString *)filterJson
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(listThread:(NSString *)peerId
+                  limit:(double)limit
+                  before:(NSString *)before
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(listInbox:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)

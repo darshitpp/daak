@@ -32,7 +32,7 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     const methods: (keyof DaakEngine)[] = [
       'start', 'stop', 'devices', 'pair', 'send', 'cancel',
       'retry', 'quarantineReport', 'deleteQuarantined', 'listQuarantineReports',
-      'listTransfers', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+      'listTransfers', 'listThread', 'listInbox', 'setDisplayName', 'setPresence', 'on',
       'armHostPairing', 'selfProfile',
     ];
     for (const m of methods) expect(typeof e[m], `${name}.${m}`).toBe('function');
@@ -176,6 +176,19 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     // without the explicit check it would render a screen of invented nulls.
     await expect(e.quarantineReport('00'.repeat(16), 0)).rejects.toThrow();
     await expect(e.deleteQuarantined('00'.repeat(16), 0)).rejects.toThrow();
+    await e.stop();
+  });
+
+  it(`${name}: listThread answers an empty page for a peer with no transfers`, async () => {
+    const e = await factory();
+    await e.start();
+    const page = await e.listThread('ab'.repeat(16));
+    expect(page).toEqual({ items: [], olderCursor: null });
+    expect(await e.listThread('ab'.repeat(16), { limit: 0 })).toEqual({ items: [], olderCursor: null });
+    // A cursor that does not parse must reject, not return the first page.
+    await expect(e.listThread('ab'.repeat(16), { before: 'nope' })).rejects.toThrow();
+    // A peer id that is not 32 hex characters must reject.
+    await expect(e.listThread('zz')).rejects.toThrow();
     await e.stop();
   });
 }

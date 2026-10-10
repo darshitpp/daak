@@ -7,6 +7,7 @@ import type {
   QuarantineReport,
   SendRequest,
   SelfProfile,
+  ThreadPage,
   TransferFilter,
   TransferSummary,
 } from './types';
@@ -245,6 +246,21 @@ export class DaemonClientEngine implements DaakEngine {
   async listInbox(): Promise<InboxEntry[]> {
     return parseArray<InboxEntry>(await this.json('ListInbox'), 'listInbox');
   }
+  async listThread(peerDeviceId: string, opts?: { limit?: number; before?: string }): Promise<ThreadPage> {
+    const wireLimit = (opts && opts.limit !== undefined) ? opts.limit : 50;
+    const wireBefore = (opts && opts.before !== undefined) ? opts.before : undefined;
+    const wire = {
+      peer_device_id: peerDeviceId,
+      limit: wireLimit,
+    } as { peer_device_id: string; limit: number; before?: string };
+    if (wireBefore !== undefined) wire.before = wireBefore;
+    const parsed: unknown = JSON.parse(await this.json({ ListThread: wire }));
+    const pg = parsed as Partial<ThreadPage> | null;
+    if (typeof pg !== 'object' || pg === null || !Array.isArray(pg.items)) {
+      throw new Error('listThread did not return a page');
+    }
+    return pg as ThreadPage;
+  }
 
   async selfProfile(): Promise<SelfProfile> {
     const parsed: unknown = JSON.parse(await this.json('SelfProfile'));
@@ -311,7 +327,12 @@ function parseArray<T>(json: string, what: string): T[] {
 // ponytail: hard-coded, because the OS-native data dir is a platform-
 // packaging question (launchd/systemd/Win32 service install, Phase 8). Until
 // then this is the conventional location and it is per-user, not shared.
-function defaultDataDir(): string {
+export function defaultDataDir(): string {
+  // DAAK_DATA_DIR points the daemon at a throwaway directory, the way
+  // DAAK_SOCK and DAAK_TEST_FILE_STORE point other parts of the test setup.
+  // When it is unset the product default below is unchanged.
+  const override = process.env.DAAK_DATA_DIR;
+  if (override) return override;
   const home = homedir();
   switch (process.platform) {
     case 'darwin':

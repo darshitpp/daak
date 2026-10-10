@@ -213,6 +213,9 @@ if (existsSync(BIN)) {
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'daakd-contract-'));
     sock = join(dir, 'daakd.sock');
+    // The client sends Start with defaultDataDir(). Point it at this test's
+    // own directory, so the daemon writes no row to the real data dir.
+    process.env.DAAK_DATA_DIR = dir;
     // Keep stderr: a daemon that cannot bind (no privileges, stale socket)
     // exits immediately, and a bare 10s hook timeout hides the real reason.
     let err = '';
@@ -233,6 +236,7 @@ if (existsSync(BIN)) {
   afterEach(() => {
     daemon?.kill();
     daemon = undefined;
+    delete process.env.DAAK_DATA_DIR;
     rmSync(dir, { recursive: true, force: true });
   });
 }

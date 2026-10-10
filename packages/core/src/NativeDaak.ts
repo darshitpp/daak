@@ -49,6 +49,8 @@ export interface Spec extends TurboModule {
   listTransfers(filterJson: string): Promise<string>;
   /** UDL: list_inbox() -> [{payloadId, transferId, ..., savedPaths}] */
   listInbox(): Promise<string>;
+  /** UDL: list_thread(string peer_id, u32 limit, string before) -> JSON ThreadPage. before empty means newest page */
+  listThread(peerId: string, limit: number, before: string): Promise<string>;
   /** UDL: self_profile() -> JSON `{name, deviceId}` -- this device's own */
   selfProfile(): Promise<string>;
   /** UDL: set_display_name(string name) */

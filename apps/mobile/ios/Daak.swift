@@ -221,6 +221,15 @@ final class Daak: RCTEventEmitter, EventSink {
     // both mean no filter and the Rust parser turns both into None.
     run(resolve, reject) { try self.need().listTransfers(filterJson: filterJson) }
   }
+  @objc func listThread(_ peerId: String,
+                         limit: Double,
+                         before: String,
+                         resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().listThread(peerId: peerId, limit: UInt32(min(max(0, limit.isFinite ? limit : 0), 4294967295)), before: before)
+    }
+  }
 
   @objc func listInbox(_ resolve: @escaping RCTPromiseResolveBlock,
                       reject: @escaping RCTPromiseRejectBlock) {

@@ -240,6 +240,9 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun listTransfers(filterJson: String, promise: Promise) =
         resolve(promise) { handle().listTransfers(filterJson) }
+    @ReactMethod
+    override fun listThread(peerId: String, limit: Double, before: String, promise: Promise) =
+        resolve(promise) { handle().listThread(peerId, itemIndexArg(limit), before) }
 
     @ReactMethod
     override fun listInbox(promise: Promise) = resolve(promise) { handle().listInbox() }

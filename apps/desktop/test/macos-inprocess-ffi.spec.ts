@@ -140,6 +140,7 @@ describe('macOS runs the engine in-process', () => {
       'cancel:',
       'retry:',
       'listTransfers:',
+      'listThread:',
       'listInbox:',
       'setDisplayName:',
       'setPresence:',
