@@ -282,6 +282,7 @@ describe('DaemonClientEngine', () => {
     h.event({ DeviceState: { device_id: 'd2', online: false } });
     h.event({ PairingSas: { peer_device_id: 'd1', sas: '1-2-3' } });
     h.event({ PairingDone: { device_id: 'd1' } });
+    h.event({ DevicePresence: { device_id: 'd1', presence: 'away' } });
     h.event({ TransferProgress: { transfer_id: 't1', bytes_done: 5, bytes_total: 10 } });
     h.event({ TransferItem: { transfer_id: 't1', item_index: 1, state: 'receiving', dest_path: '/a' } });
     h.event({ TransferDone: { transfer_id: 't1' } });
@@ -292,6 +293,7 @@ describe('DaemonClientEngine', () => {
       { type: 'device.state', deviceId: 'd2', state: 'offline' },
       { type: 'pairing.sas', peerDeviceId: 'd1', sas: '1-2-3' },
       { type: 'pairing.done', deviceId: 'd1' },
+      { type: 'device.presence', deviceId: 'd1', presence: 'away' },
       { type: 'transfer.progress', transferId: 't1', bytesDone: 5, bytesTotal: 10 },
       { type: 'transfer.item', transferId: 't1', itemIndex: 1, state: 'receiving', destPath: '/a' },
       { type: 'transfer.done', transferId: 't1' },
@@ -322,6 +324,13 @@ describe('DaemonClientEngine', () => {
     const off = h.engine.on((e) => seen.push(e));
     off();
     h.event({ TransferDone: { transfer_id: 't1' } });
+    expect(seen).toEqual([]);
+  });
+  it('drops a DevicePresence event whose presence is not online or away', () => {
+    const h = makeEngine();
+    const seen: unknown[] = [];
+    h.engine.on((e) => seen.push(e));
+    h.event({ DevicePresence: { device_id: 'd1', presence: 'offline' } });
     expect(seen).toEqual([]);
   });
 

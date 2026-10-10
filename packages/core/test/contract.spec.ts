@@ -37,6 +37,7 @@ const METHODS: (keyof DaakEngine)[] = [
 const EVENT_TYPES: Record<DaakEvent['type'], true> = {
   'device.discovered': true,
   'device.state': true,
+  'device.presence': true,
   'pairing.sas': true,
   'pairing.done': true,
   'pairing.revoked': true,
@@ -110,7 +111,7 @@ describe('contract types', () => {
       setPresence: true, on: true, offerPairing: true, armHostPairing: true,
       retryItem: true, backgroundWake: true,
     };
-    // 12 = the union's 12 members. peer.incompatible and outbox.queued are
+    // 13 = the union's 13 members. peer.incompatible and outbox.queued are
     // pinned by tsc alone, via this Record's exhaustiveness, and NOT by the
     // fixture below -- which
     // has 9 entries for a reason that has nothing to do with the encoder.
@@ -126,7 +127,7 @@ describe('contract types', () => {
     // which is true of the 9 but not exhaustive over the encoder. smoke.rs:487
     // already flags the hand-listing (a new FfiEvent variant is not caught
     // there), so the tenth is a KNOWN, recorded gap -- not a dead event path.
-    expect(Object.keys(EVENT_TYPES).length).toBe(12);
+    expect(Object.keys(EVENT_TYPES).length).toBe(13);
     expect(Object.keys(exhaustive).length).toBe(METHODS.length);
   });
 

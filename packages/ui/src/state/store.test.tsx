@@ -1,4 +1,4 @@
-import { initialUiState, reduceUiState, type UiAction } from './store';
+import { initialUiState, reduceUiState, type UiAction, type UiState } from './store';
 
 const device = (deviceId: string, name: string) => ({ deviceId, name, addr: '1.2.3.4:40001', online: true });
 const entry = (payloadId: string) => ({ payloadId, transferId: 't', peerDeviceId: 'p', kind: 'text' as const, itemCount: 1, summary: 'msg', receivedAt: 0, savedPaths: [] });
@@ -200,5 +200,76 @@ describe('reduceUiState', () => {
     const devices = [device('a', 'A')];
     const once = reduceUiState(initialUiState, { type: 'devices.loaded', devices });
     expect(reduceUiState(once, { type: 'devices.loaded', devices })).toBe(once);
+  });
+});
+
+describe('device presence', () => {
+  type Presence = 'online' | 'away' | 'offline';
+  const paired = (presence: Presence) => ({
+    deviceId: 'a',
+    name: 'A',
+    addr: '1.2.3.4:40001',
+    paired: true,
+    presence,
+    online: presence !== 'offline',
+  });
+  const stateOf = (d: ReturnType<typeof paired> | { deviceId: string; name: string; addr: string }): UiState => ({
+    ...initialUiState,
+    devices: [d],
+  });
+
+  it('device.presence away sets presence away and online true', () => {
+    const next = reduceUiState(stateOf(paired('offline')), { type: 'device.presence', deviceId: 'a', presence: 'away' });
+    expect(next.devices[0]).toMatchObject({ presence: 'away', online: true });
+  });
+
+  it('device.state offline sets presence offline and online false', () => {
+    const next = reduceUiState(stateOf(paired('away')), { type: 'device.state', deviceId: 'a', state: 'offline' });
+    expect(next.devices[0]).toMatchObject({ presence: 'offline', online: false });
+  });
+
+  it('device.state online keeps a declared away', () => {
+    const next = reduceUiState(stateOf(paired('away')), { type: 'device.state', deviceId: 'a', state: 'online' });
+    expect(next.devices[0]).toMatchObject({ presence: 'away', online: true });
+  });
+
+  it('device.state online replaces a stale offline', () => {
+    const next = reduceUiState(stateOf(paired('offline')), { type: 'device.state', deviceId: 'a', state: 'online' });
+    expect(next.devices[0]).toMatchObject({ presence: 'online', online: true });
+  });
+
+  it('device.state never adds presence to an unpaired device', () => {
+    const next = reduceUiState(stateOf({ deviceId: 'a', name: 'A', addr: '1.2.3.4:40001' }), {
+      type: 'device.state',
+      deviceId: 'a',
+      state: 'online',
+    });
+    expect(next.devices[0].online).toBe(true);
+    expect('presence' in next.devices[0]).toBe(false);
+  });
+
+  it('device.discovered keeps the presence of a paired device', () => {
+    const announce = { type: 'device.discovered' as const, device: { deviceId: 'a', name: 'A', addr: '9.9.9.9:1', online: true } };
+    const away = reduceUiState(stateOf(paired('away')), announce);
+    expect(away.devices[0]).toMatchObject({ paired: true, presence: 'away', online: true, addr: '9.9.9.9:1' });
+    const offline = reduceUiState(stateOf(paired('offline')), announce);
+    expect(offline.devices[0]).toMatchObject({ paired: true, presence: 'offline', online: false });
+  });
+
+  it('pairing.revoked clears paired and presence, and a later snapshot does not bring presence back', () => {
+    const revoked = reduceUiState(stateOf(paired('away')), { type: 'pairing.revoked', deviceId: 'a' });
+    expect(revoked.devices[0].paired).toBe(false);
+    expect('presence' in revoked.devices[0]).toBe(false);
+    const loaded = reduceUiState(revoked, {
+      type: 'devices.loaded',
+      devices: [{ deviceId: 'a', name: 'A', addr: '1.2.3.4:40001', paired: false }],
+    });
+    expect(loaded.devices[0].paired).toBe(false);
+    expect('presence' in loaded.devices[0]).toBe(false);
+  });
+
+  it('pairing.revoked for a device the store does not know changes nothing', () => {
+    const state = stateOf(paired('away'));
+    expect(reduceUiState(state, { type: 'pairing.revoked', deviceId: 'zz' }).devices).toEqual(state.devices);
   });
 });

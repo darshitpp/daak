@@ -374,6 +374,11 @@ export function toDaakEvent(name: string, d: Record<string, unknown>): DaakEvent
       return { type: 'device.discovered', device: { deviceId: str(d.device_id), name: str(d.name), addr: str(d.addr), online: true } };
     case 'DeviceState':
       return { type: 'device.state', deviceId: str(d.device_id), state: d.online ? 'online' : 'offline' };
+    case 'DevicePresence': {
+      const presence = str(d.presence);
+      if (presence !== 'online' && presence !== 'away') return undefined;
+      return { type: 'device.presence', deviceId: str(d.device_id), presence };
+    }
     case 'PairingSas':
       return { type: 'pairing.sas', peerDeviceId: str(d.peer_device_id), sas: str(d.sas) };
     // C2: IpcEvent::PairingDone exists on the wire (proto/ipc.cddl

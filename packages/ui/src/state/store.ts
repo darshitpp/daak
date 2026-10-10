@@ -59,18 +59,64 @@ export type UiAction = DaakEvent | { type: 'devices.loaded'; devices: DeviceInfo
 const sameDevices = (a: DeviceInfo[], b: DeviceInfo[]): boolean =>
   a.length === b.length && a.every((d, i) => d === b[i]);
 
+/**
+ * Apply an on-network event to one device. Only a device that already has a
+ * presence (a paired one) gets a new presence: an unpaired device has none,
+ * and that must stay so. A declared away survives an online event, and a
+ * stale offline never does.
+ */
+const withLiveness = (d: DeviceInfo, state: 'online' | 'offline'): DeviceInfo => {
+  const online = state === 'online';
+  if (d.presence === undefined) return { ...d, online };
+  return { ...d, online, presence: online ? (d.presence === 'away' ? 'away' : 'online') : 'offline' };
+};
+
+/**
+ * A discovery event carries neither paired nor presence on either engine
+ * path, and an announce is not a beacon. So a device the store already knows as
+ * paired keeps its paired, presence, and online, and takes only the new
+ * name and address.
+ */
+const mergeDiscovered = (was: DeviceInfo | undefined, next: DeviceInfo): DeviceInfo => {
+  if (was?.presence === undefined || next.paired === false || next.presence !== undefined) return next;
+  return { ...next, paired: was.paired, presence: was.presence, online: was.online };
+};
+
 export function reduceUiState(state: UiState, event: UiAction): UiState {
   switch (event.type) {
     case 'device.discovered': {
+      const was = state.devices.find((d) => d.deviceId === event.device.deviceId);
       const rest = state.devices.filter((d) => d.deviceId !== event.device.deviceId);
-      return { ...state, devices: [...rest, event.device] };
+      return { ...state, devices: [...rest, mergeDiscovered(was, event.device)] };
     }
     case 'device.state':
       return {
         ...state,
         devices: state.devices.map((d) =>
-          d.deviceId === event.deviceId ? { ...d, online: event.state === 'online' } : d,
+          d.deviceId === event.deviceId ? withLiveness(d, event.state) : d,
         ),
+      };
+    case 'device.presence':
+      return {
+        ...state,
+        devices: state.devices.map((d) =>
+          d.deviceId === event.deviceId ? { ...d, online: true, presence: event.presence } : d,
+        ),
+      };
+    // The pairing is gone. The device may still be on the LAN, but it is not
+    // paired and has no presence. Online stays: the engine sends its own
+    // device.state for the peer. The next devices.loaded snapshot lists the
+    // peer as unpaired, and the merge there copies only online, never
+    // presence.
+    case 'pairing.revoked':
+      return {
+        ...state,
+        devices: state.devices.map((d) => {
+          if (d.deviceId !== event.deviceId) return d;
+          const next = { ...d, paired: false };
+          delete next.presence;
+          return next;
+        }),
       };
     case 'outbox.queued':
       return {
@@ -162,7 +208,7 @@ export function reduceUiState(state: UiState, event: UiAction): UiState {
       const rest = state.incompatible.filter((p) => p.peerDeviceId !== event.peerDeviceId);
       return { ...state, incompatible: [peer, ...rest] };
     }
-    // `transfer.item` and `pairing.*` carry nothing this store renders, and an
+    // `transfer.item`, `pairing.sas`, and `pairing.done` carry nothing this store renders, and an
     // event type added to DaakEvent later must not throw here.
     default:
       return state;

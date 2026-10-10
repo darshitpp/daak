@@ -10,6 +10,12 @@ export interface DeviceInfo {
    * send to. The UI offers Send when this is true and Pair when it is not.
    */
   paired?: boolean;
+  /**
+   * Set by the engine for a PAIRED peer only: online, away (the peer says
+   * so in its sealed beacon), or offline. An unpaired device has no
+   * presence. Online is true for online and away.
+   */
+  presence?: 'online' | 'away' | 'offline';
 }
 
 export type ItemState = 'pending' | 'receiving' | 'verifying' | 'done' | 'failed' | 'quarantined';
@@ -69,6 +75,7 @@ export interface InboxEntry {
 export type DaakEvent =
   | { type: 'device.discovered'; device: DeviceInfo }
   | { type: 'device.state'; deviceId: string; state: 'online' | 'offline' }
+  | { type: 'device.presence'; deviceId: string; presence: 'online' | 'away' }
   | { type: 'pairing.sas'; peerDeviceId: string; sas: string }
   | { type: 'pairing.done'; deviceId: string }
   | { type: 'pairing.revoked'; deviceId: string }
