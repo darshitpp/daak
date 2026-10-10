@@ -170,6 +170,7 @@ interface DaakEngine {
   // empty string or "{}" means no filter (list everything). Invalid JSON and a
   // malformed peerDeviceId are FfiError.Protocol, not a silent unfiltered list.
   [Throws=FfiError] string list_transfers(string filter_json);
+  [Throws=FfiError] string list_thread(string peer_id, u32 limit, string before);
   [Throws=FfiError] string list_inbox();
   // R42p: record where the platform MOVED this payload's files. The move
   // happens outside the engine (an Android SAF tree has no path the engine can

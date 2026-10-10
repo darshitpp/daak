@@ -297,6 +297,33 @@ pub fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> 
     })
 }
 
+/// One thread page as the ThreadPage TS type. A free function, like
+/// transfer_summary_json, so daakd reuses it and the two deployments cannot
+/// drift. Each nullable key stays present with null, never omitted.
+pub fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value {
+    let items: Vec<serde_json::Value> = p
+        .items
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "transferId": to_hex(&i.transfer_id),
+                "itemIndex": i.item_index,
+                "direction": if i.outbound { "out" } else { "in" },
+                "type": if i.is_text { "text" } else { "file" },
+                "name": i.name,
+                "size": i.size,
+                "text": i.text,
+                "state": i.state,
+                "destPath": i.dest_path,
+                "at": i.at,
+                "transferState": i.transfer_state,
+                "error": i.error,
+            })
+        })
+        .collect();
+    serde_json::json!({ "items": items, "olderCursor": p.older_cursor })
+}
+
 /// One inbox_history row as the InboxEntry TS type. saved_paths is a JSON
 /// string in SQLite and a string[] in TS, so it is parsed rather than passed
 /// through as a quoted blob. A value that will not parse becomes `null`, NOT
@@ -747,6 +774,26 @@ impl DaakEngine {
         let rows = engine.list_transfers(state, peer).map_err(engine_err)?;
         let json: Vec<serde_json::Value> = rows.iter().map(transfer_summary_json).collect();
         serde_json::to_string(&json).map_err(protocol_err)
+    }
+
+    /// One page of the thread of a peer. Empty before means the newest page.
+    pub fn list_thread(
+        &self,
+        peer_id: String,
+        limit: u32,
+        before: String,
+    ) -> Result<String, FfiError> {
+        let peer = parse_id(&peer_id)?;
+        let before = if before.is_empty() {
+            None
+        } else {
+            Some(before.as_str())
+        };
+        let page = self
+            .engine()?
+            .list_thread(peer, limit, before)
+            .map_err(engine_err)?;
+        serde_json::to_string(&thread_page_json(&page)).map_err(protocol_err)
     }
 
     /// R42p: record where the platform MOVED this payload's files.
