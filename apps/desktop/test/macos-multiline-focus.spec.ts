@@ -38,8 +38,8 @@ import { describe, expect, it } from 'vitest';
  *     override is the MESSENGER, not the cause. A plain NSTextField does not
  *     raise, which is why single-line inputs (the Settings rename box,
  *     NameDeviceScreen) mounted and only MULTILINE inputs killed the app:
- *     packages/ui/src/screens/SendScreen.tsx:170 and
- *     packages/ui/src/components/ComposerBar.tsx:16.
+ *     the note field in packages/ui/src/screens/ThreadScreen.tsx (SendScreen
+ *     and ComposerBar held the other two, and are deleted).
  *
  * The fix is a category on RCTUITextView, in the APP target, for the same
  * reason RCTUITextFieldTypingAttributes.mm lives there: node_modules is

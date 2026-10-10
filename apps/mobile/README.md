@@ -182,6 +182,6 @@ The prototype onboarding screens (Welcome, Name Device, Permissions, Pair First
 Device, Update Required) are intentionally NOT faked in the app: they have no
 authoritative durable "onboarding complete" source or permission-inspection API
 behind them, so a UI-only flag would be fake state. The real app covers the
-functional prototype screens — Nearby Devices (Devices tab), Send, Inbox,
-Settings, Transfer Progress, Quarantine (per-item transfer state) — and handles
+functional prototype screens — Devices, Thread,
+Settings, Quarantine (per-item transfer state) — and handles
 device naming and presence through Settings against the live engine.

@@ -219,26 +219,7 @@ export const ui = StyleSheet.create({
   deskVer: { fontSize: type.xs, color: colors.muted },
   segTab: { minHeight: control.minHeight, minWidth: 96, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg, borderRadius: radius.pill },
 
-  // The device picker rail. The desktop prototype's chips are 176x72 cards;
-  // the phone prototype's are the same idea as pills. One shape, one style.
-  rail: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
-  devchip: {
-    minWidth: 176,
-    minHeight: 72,
-    gap: spacing.xs,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-  },
-  devchipOn: { borderColor: colors.fg, backgroundColor: colors.paper },
-  devchipT: { fontSize: type.body, fontWeight: '600', lineHeight: 21, color: colors.fg },
-  devchipS: { fontSize: type.xs, lineHeight: 16, color: colors.muted },
-
   wordmark: { flexDirection: 'row', alignItems: 'baseline' },
-
-  search: { minHeight: control.minHeight, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, backgroundColor: colors.surface, color: colors.fg, fontSize: type.body },
   btnBlock: { alignSelf: 'stretch' },
   pressed: { opacity: 0.8 },
   noteDot: { marginTop: 6 },

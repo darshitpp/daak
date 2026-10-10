@@ -55,7 +55,7 @@ note), but it still needs two real devices.
   force-stop and a cold restart. The Settings screen reads
   `Seawood Marten · Cedar Lamp`, and the database holds
   `display_name|Cedar Lamp`. The Pair First Device screen renders, and
-  `Skip for now` reaches the Send screen.
+  `Skip for now` reaches the Devices screen.
 
 ## Blocked here (environment, not code)
 
@@ -90,7 +90,7 @@ note), but it still needs two real devices.
     separate confirm API, so the SAS comparison is what binds the peer to a
     human; do not treat a Confirm button as the pass criterion.
 - [ ] 2. **Share in from another app.** In Photos, share an image to Daak. The
-  share target stages it. Select the paired device, Send. The other phone
+  share target stages it. Open the paired device, add the file, press Send. The other phone
   receives a notification with [Open] and [Share].
   - Needs two devices and an Android build for the full round trip. The
     composer and the inbound drain are now wired (`drainInbound` → the Send
@@ -102,8 +102,8 @@ note), but it still needs two real devices.
   the received file. Tap [Open] → app opens the inbox entry.
   - Needs two devices. The handlers are now wired in production
     (`wireNotificationActions` is called by `App.tsx`): [Share] presents the
-    real OS share sheet via `mobileInboxActions`, and [Open] routes to the Inbox
-    tab. "Show in folder" is **not** a pass criterion: `daak.folder` is still
+    real OS share sheet via `mobileInboxActions`, and [Open] opens the thread of
+    the sender. "Show in folder" is **not** a pass criterion: `daak.folder` is still
     withheld from the installed set because reveal has no iOS implementation
     (iOS resolves false by design; Android uses a FileProvider `ACTION_VIEW`).
     See `apps/mobile/src/bootstrap.ts` (`wireNotificationActions`) and
