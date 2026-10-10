@@ -84,6 +84,8 @@ Works with the internet off
 Airplane mode is fine. Only your own Wi-Fi is ever used.
 ```
 
+The Welcome words changed on 2026-10-09 (plan P4). This block records the build of 2026-10-05.
+
 Screenshot: `/tmp/dk_android_ok.png`. The APK is 141,406,494 bytes.
 
 The APK is a kept artifact. The user installs it.

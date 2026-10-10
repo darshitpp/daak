@@ -50,6 +50,7 @@ note), but it still needs two real devices.
   (`Get started`, `Send photos, files, and text`, `Both devices sit on the
   same Wi-Fi.`) comes from the real React Native tree. Screenshot:
   `/tmp/dk_android_ok.png`.
+  The Welcome words changed on 2026-10-09 (plan P4).
 - **Android onboarding, driven by hand.** All five onboarding steps run on the
   emulator against the real engine. A name typed in step two survives a
   force-stop and a cold restart. The Settings screen reads
@@ -75,9 +76,9 @@ note), but it still needs two real devices.
 
 ## Matrix — all items need two physical devices; all unchecked
 
-- [ ] 1. **Pair (QR).** Phone A: Pair → Show QR. Phone B: Pair → Scan. Both
-  show the same 6-digit SAS; confirm on both. The peer appears in Devices on
-  both.
+- [ ] 1. **Pair (QR).** Phone A: Pair → Show my code. Phone B: Pair → Scan a code. Both
+  show the same number (6 digits, in 2 groups of 3). Press They match on both. The peer appears in Devices on
+  both. Then pair again and press Does not match on one phone: the peer must not appear on either phone, and a toast reads "Pairing cancelled".
   - Needs two devices. The two structural blockers this item used to carry
     are **fixed**: the host arm is now `offerPairing` / `armHostPairing` on the
     FFI surface (`offer_pairing` at `crates/daak-ffi/src/daak.udl:102`,
@@ -85,10 +86,12 @@ note), but it still needs two real devices.
     `pairing.done` exists on `EngineEvent` (`crates/daak-core/src/engine.rs:167`),
     `FfiEvent` (`crates/daak-ffi/src/lib.rs:131`), and the daemon IPC
     (`crates/daak-ipc/src/lib.rs:214`), and `DaemonClient` routes it to the TS
-    union (`packages/core/src/engine/DaemonClient.ts:330`). Note that
-    the engine auto-commits `upsert_pairing` on both sides and there is no
-    separate confirm API, so the SAS comparison is what binds the peer to a
-    human; do not treat a Confirm button as the pass criterion.
+    union (`packages/core/src/engine/DaemonClient.ts:330`). The engine keeps a
+    new pairing pending until engine.confirmPairing (the They match button).
+    Does not match calls revokePairing and shows the toast "Pairing cancelled".
+    Leaving the pair screen with a number on screen also calls revokePairing.
+    The pass criterion is that the peer appears in Devices only after They
+    match.
 - [ ] 2. **Share in from another app.** In Photos, share an image to Daak. The
   share target stages it. Open the paired device, add the file, press Send. The other phone
   receives a notification with [Open] and [Share].
