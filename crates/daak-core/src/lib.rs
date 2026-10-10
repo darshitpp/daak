@@ -15,6 +15,7 @@ pub mod pairing;
 pub mod session;
 pub mod staging;
 pub mod store;
+pub mod thread;
 pub mod transfer;
 pub mod wordlist;
 

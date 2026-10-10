@@ -1619,6 +1619,17 @@ impl Engine {
         self.db.list_inbox()
     }
 
+    // One page of the thread of a peer: sent and received items together,
+    // oldest first within the page. See crate::thread.
+    pub fn list_thread(
+        &self,
+        peer_device_id: [u8; 16],
+        limit: u32,
+        before: Option<&str>,
+    ) -> Result<crate::thread::ThreadPage> {
+        crate::thread::list_thread(&self.db, &peer_device_id, limit, before)
+    }
+
     /// R42p: record where the platform MOVED this payload's files.
     ///
     /// SQLite is the source of truth for a saved path, and the move happens
