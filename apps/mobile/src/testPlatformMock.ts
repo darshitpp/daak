@@ -65,6 +65,10 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     clearDownloadFolder: jest.fn(async () => undefined),
     moveReceivedFiles: jest.fn(async (paths: string[]) => paths),
     relocateReceivedFiles: jest.fn(async () => undefined),
+    // Task 2 of the design-conformance P2 plan: the notification preference.
+    // It defaults ON, which is the real default.
+    loadNotifyPrefs: jest.fn(async () => ({ arrival: true })),
+    saveNotifyPrefs: jest.fn(async () => undefined),
     ...overrides,
   };
 }

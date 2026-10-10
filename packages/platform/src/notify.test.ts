@@ -12,6 +12,10 @@ vi.mock('@daak/rn-notify', () => ({
   },
 }));
 
+vi.mock('./notify-prefs', () => ({
+  loadNotifyPrefs: vi.fn(async () => ({ arrival: true })),
+}));
+
 import NativeDaakNotify from '@daak/rn-notify';
 import type { InboxEntry } from '@daak/core';
 import {
@@ -24,7 +28,10 @@ import {
   onNotificationAction,
 } from './notify';
 
+import { loadNotifyPrefs } from './notify-prefs';
+
 const native = vi.mocked(NativeDaakNotify);
+const prefs = vi.mocked(loadNotifyPrefs);
 
 const entry: InboxEntry = {
   payloadId: 'p1',
@@ -43,6 +50,7 @@ beforeEach(() => {
   native.registerCategories.mockResolvedValue(undefined);
   native.post.mockResolvedValue(undefined);
   native.consumePendingAction.mockResolvedValue('');
+  prefs.mockResolvedValue({ arrival: true });
 });
 
 describe('notifyReceived', () => {
@@ -55,6 +63,25 @@ describe('notifyReceived', () => {
       DAK_RECEIVED_CATEGORY,
       JSON.stringify(entry),
     );
+  });
+
+  it('posts nothing when the arrival preference is off', async () => {
+    prefs.mockResolvedValue({ arrival: false });
+    await notifyReceived(entry);
+    expect(native.post).not.toHaveBeenCalled();
+  });
+
+  // The pref store never rejects, but the OS may deny the permission. The
+  // native post resolves without a banner in that case, and JS still calls it.
+  it('still calls post when the preference is on and the OS denied the grant', async () => {
+    native.requestPermission.mockResolvedValue(false);
+    await notifyReceived(entry);
+    expect(native.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not throw when the native post rejects', async () => {
+    native.post.mockRejectedValue(new Error('E_NOTIFY'));
+    await expect(notifyReceived(entry)).resolves.toBeUndefined();
   });
 });
 

@@ -1,6 +1,7 @@
 import { NativeEventEmitter } from 'react-native';
 import NativeDaakNotify from '@daak/rn-notify';
 import type { InboxEntry } from '@daak/core';
+import { loadNotifyPrefs } from './notify-prefs';
 
 export const DAK_RECEIVED_CATEGORY = 'daak.received';
 export const DAK_RECEIVED_ACTIONS = ['daak.open', 'daak.share', 'daak.folder'] as const;
@@ -67,8 +68,15 @@ export async function initNotifications(known?: boolean): Promise<boolean> {
  * `inbox.received` handler, and an unhandled rejection there would take down a
  * process the user is receiving a file into. A dropped post is warned so it is
  * at least visible.
+ * Reads the arrival preference first. "Arrival" off posts nothing.
  */
 export async function notifyReceived(entry: InboxEntry): Promise<void> {
+  // `loadNotifyPrefs` never rejects. A pref that is off posts nothing, which
+  // costs a banner and never a transfer (R36). The OS permission is a second,
+  // independent fact: the native `post` resolves without a banner when the OS
+  // denies it, so JS does not read the grant here.
+  const prefs = await loadNotifyPrefs();
+  if (!prefs.arrival) return;
   await NativeDaakNotify.post(
     entry.payloadId,
     'Daak',

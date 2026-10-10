@@ -8,6 +8,17 @@ import { recordNotificationGrant, startEngine, wireNotificationActions } from '.
 // mocked, so the real file is loaded for exactly one exported function.
 jest.mock('@daak/rn-notify', () => ({ default: {} }));
 
+// The real notify.ts imports ./notify-prefs, which imports ./securestore. That
+// reaches @daak/rn-securestore, whose getEnforcing throws under Jest for the
+// same reason as @daak/rn-notify above. Nothing here calls it.
+jest.mock('@daak/rn-securestore', () => ({
+  default: {
+    get: jest.fn(async () => null),
+    set: jest.fn(async () => true),
+    remove: jest.fn(async () => true),
+  },
+}));
+
 // handleNotificationAction is taken from the REAL platform file: it is the R33
 // guard, and a test that mocks the very function it exists to police is worth
 // nothing. The relative path is needed because jest.requireActual on
