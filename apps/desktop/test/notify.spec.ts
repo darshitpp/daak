@@ -147,3 +147,66 @@ describe('notifyInboxEntry', () => {
     await Promise.resolve();
   });
 });
+
+describe('notifyInboxEntry preference', () => {
+  function fakeEngine() {
+    let handler: ((event: DaakEvent) => void) | undefined;
+    const engine: NotifyEngine = {
+      on(cb) {
+        handler = cb;
+        return () => {};
+      },
+    };
+    const emit = (payload: InboxEntry) =>
+      handler?.({ type: 'inbox.received', payload } as DaakEvent);
+    return { engine, emit };
+  }
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('posts nothing when the arrival preference is off', async () => {
+    const { engine, emit } = fakeEngine();
+    const posts: string[] = [];
+    notifyInboxEntry(engine, {
+      post: async (e) => void posts.push(e.payloadId),
+      prefs: async () => ({ arrival: false }),
+    });
+    emit(entry());
+    await flush();
+    expect(posts).toEqual([]);
+  });
+
+  it('posts when the arrival preference is on', async () => {
+    const { engine, emit } = fakeEngine();
+    const posts: string[] = [];
+    notifyInboxEntry(engine, {
+      post: async (e) => void posts.push(e.payloadId),
+      prefs: async () => ({ arrival: true }),
+    });
+    emit(entry());
+    await flush();
+    expect(posts).toEqual(['p1']);
+  });
+
+  it('posts when no preference reader is given', async () => {
+    const { engine, emit } = fakeEngine();
+    const posts: string[] = [];
+    notifyInboxEntry(engine, { post: async (e) => void posts.push(e.payloadId) });
+    emit(entry());
+    await flush();
+    expect(posts).toEqual(['p1']);
+  });
+
+  it('uses the default when the preference reader rejects', async () => {
+    const { engine, emit } = fakeEngine();
+    const posts: string[] = [];
+    notifyInboxEntry(engine, {
+      post: async (e) => void posts.push(e.payloadId),
+      prefs: async () => {
+        throw new Error('keystore locked');
+      },
+    });
+    emit(entry());
+    await flush();
+    expect(posts).toEqual(['p1']);
+  });
+});

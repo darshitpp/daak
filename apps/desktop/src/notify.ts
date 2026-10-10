@@ -56,9 +56,17 @@ export interface InboxBanner {
   summary: string;
 }
 
+export interface NotifyPrefsLike {
+  arrival: boolean;
+}
+
 export interface NotifyDeps {
   post(entry: InboxBanner): Promise<void>;
+  /** Absent means "arrival on". A rejection also means "arrival on". */
+  prefs?(): Promise<NotifyPrefsLike>;
 }
+
+const PREFS_ON: NotifyPrefsLike = { arrival: true };
 
 // Posts a banner per inbox.received and NOTHING else. The inbox stays the
 // source of truth, exactly as packages/platform/src/notify.ts R36 records for
@@ -72,7 +80,12 @@ export function notifyInboxEntry(engine: NotifyEngine, deps: NotifyDeps): () => 
   return engine.on((event) => {
     if (event.type !== 'inbox.received') return;
     void Promise.resolve()
-      .then(() => deps.post(event.payload))
+      .then(async () => {
+        const prefs = deps.prefs ? await deps.prefs().catch(() => PREFS_ON) : PREFS_ON;
+        // A preference that is off posts nothing. The inbox keeps the entry.
+        if (!prefs.arrival) return;
+        await deps.post(event.payload);
+      })
       .then(undefined, () => undefined);
   });
 }
@@ -126,7 +139,13 @@ export function onDesktopNotify(): () => void {
   if (engine === undefined) {
     throw new Error('onDesktopNotify: attachNotifyEngine must run first');
   }
-  const stopEvents = notifyInboxEntry(engine, { post: (entry) => mod.notifyInbox(entry) });
+  // Lazy for the same reason as `mod`: notify-prefs imports securestore, which
+  // evaluates a TurboModule getEnforcing at module scope.
+  const prefsMod = require('@daak/platform/src/notify-prefs') as typeof import('@daak/platform/src/notify-prefs');
+  const stopEvents = notifyInboxEntry(engine, {
+    post: (entry) => mod.notifyInbox(entry),
+    prefs: () => prefsMod.loadNotifyPrefs(),
+  });
   const stopActions = mod.onNotifyAction(({ actionId }) => applyNotifyAction(actionId, host));
   return () => {
     stopEvents();
