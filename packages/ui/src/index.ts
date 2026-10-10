@@ -16,6 +16,7 @@ export { ComposerScreen } from './screens/ComposerScreen';
 export { TransferProgressScreen } from './screens/TransferProgressScreen';
 export { TransfersScreen } from './screens/TransfersScreen';
 export { HistoryScreen } from './screens/HistoryScreen';
+export { ThreadScreen } from './screens/ThreadScreen';
 export type { InboxActions } from './inbox-actions';
 export { SettingsScreen } from './screens/SettingsScreen';
 export { QuarantineScreen } from './screens/QuarantineScreen';

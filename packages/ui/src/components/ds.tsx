@@ -126,7 +126,7 @@ export function Note({ title, body, tone = 'plain', testID }: {
     tone === 'ok' ? ui.noteOk : tone === 'warn' ? ui.noteWarn : tone === 'err' ? ui.noteErr : null;
   const dot = tone === 'ok' ? colors.ok : tone === 'warn' ? colors.warnInk : tone === 'err' ? colors.err : colors.meta;
   return (
-    <View style={[ui.note, fill]} accessibilityLabel={testID}>
+    <View style={[ui.note, fill]} testID={testID} accessibilityLabel={testID}>
       <View style={[ui.dot, { backgroundColor: dot }, ui.noteDot]} />
       <View style={ui.fill}>
         {title ? <Text style={ui.noteTtl}>{title}</Text> : null}
