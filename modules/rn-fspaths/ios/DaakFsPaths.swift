@@ -1,6 +1,7 @@
 import Foundation
 import React
 import UIKit
+import QuickLook
 
 /// Every path this module hands out is an APP-SANDBOX path. The engine's data
 /// dir and every saved file live here, so a caller can never steer the engine
@@ -17,6 +18,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   /// asynchronously, so the promise is held until the delegate fires -- and
   /// released on BOTH paths, or a cancelled picker leaves JS waiting forever.
   private var pendingChoose: RCTPromiseResolveBlock?
+  private var previewSource: DaakPreviewSource?
   @objc static func requiresMainQueueSetup() -> Bool { false }
 
   @objc func documentsDir(_ resolve: @escaping RCTPromiseResolveBlock,
@@ -66,6 +68,53 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   /// answer the OS gives a document picker, and it returns false instead of
   /// throwing for a path that is not there. "No such file" is an ANSWER -- a
   /// reveal action must not die on a rejected promise.
+  /// Opens a received file in QuickLook, the iOS viewer for the file's type.
+  ///
+  /// A file that the user moved into the chosen download folder sits outside
+  /// the sandbox. The bookmark scope must stay open while the preview shows, so
+  /// DaakPreviewSource owns the scope and closes it when the preview goes away.
+  /// Resolves false, never rejects, for a path the app cannot read.
+  @objc func openFile(_ path: String,
+                      resolve: @escaping RCTPromiseResolveBlock,
+                      reject: @escaping RCTPromiseRejectBlock) {
+    let scope = Self.chosenFolderScope()
+    guard FileManager.default.isReadableFile(atPath: path) else {
+      scope?.stopAccessingSecurityScopedResource()
+      resolve(false)
+      return
+    }
+    DispatchQueue.main.async {
+      guard let root = UIApplication.shared.connectedScenes
+        .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
+        .first?.rootViewController
+      else {
+        scope?.stopAccessingSecurityScopedResource()
+        resolve(false)
+        return
+      }
+      var top = root
+      while let next = top.presentedViewController { top = next }
+      let source = DaakPreviewSource(url: URL(fileURLWithPath: path), scope: scope)
+      self.previewSource = source
+      let preview = QLPreviewController()
+      preview.dataSource = source
+      top.present(preview, animated: true) { resolve(true) }
+    }
+  }
+
+  /// Starts the security scope of the remembered download folder, or nil when
+  /// none is set. The caller must stop the scope that this returns.
+  private static func chosenFolderScope() -> URL? {
+    guard let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
+    var stale = false
+    guard let folder = try? URL(
+      resolvingBookmarkData: bookmark, options: [], relativeTo: nil,
+      bookmarkDataIsStale: &stale),
+      folder.startAccessingSecurityScopedResource()
+    else { return nil }
+    return folder
+  }
+
   @objc func exists(_ path: String,
                     resolve: @escaping RCTPromiseResolveBlock,
                     reject: @escaping RCTPromiseRejectBlock) {
@@ -209,3 +258,26 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     resolve(out)
   }
 }
+
+/// The QuickLook data source for one file. It holds the bookmark scope of the
+/// download folder, so a file outside the sandbox stays readable until the
+/// preview is dismissed and this object is released.
+final class DaakPreviewSource: NSObject, QLPreviewControllerDataSource {
+  private let url: URL
+  private let scope: URL?
+
+  init(url: URL, scope: URL?) {
+    self.url = url
+    self.scope = scope
+  }
+
+  deinit { scope?.stopAccessingSecurityScopedResource() }
+
+  func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+
+  func previewController(_ controller: QLPreviewController,
+                         previewItemAt index: Int) -> QLPreviewItem {
+    url as NSURL
+  }
+}
+

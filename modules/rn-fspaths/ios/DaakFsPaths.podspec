@@ -11,4 +11,5 @@ Pod::Spec.new do |s|
   # modules/rn-fspaths/ios/ios/** and the pod compiled zero sources.
   s.source_files = "**/*.{swift,mm,h}"
   s.dependency "React-Core"
+  s.frameworks = "QuickLook"
 end

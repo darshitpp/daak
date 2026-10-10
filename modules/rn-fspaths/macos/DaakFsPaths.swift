@@ -56,6 +56,39 @@ class DaakFsPaths: NSObject {
     resolve(true)
   }
 
+  /// Opens the file in its default app (Preview for a PDF). `reveal` selects
+  /// the file in Finder; this starts the viewer. Resolves false for a path that
+  /// does not exist and for a file with no app that can open it.
+  @objc func openFile(_ path: String,
+                      resolve: @escaping RCTPromiseResolveBlock,
+                      reject: @escaping RCTPromiseRejectBlock) {
+    let url = URL(fileURLWithPath: path)
+    // The App Sandbox is on. A file in the folder the user chose lies outside
+    // the container, so the folder's security scope must be open while the
+    // file is checked and opened. Resolve the bookmark the way
+    // `moveReceivedFiles` does.
+    var folder: URL?
+    if let bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey) {
+      var stale = false
+      if let f = try? URL(
+        resolvingBookmarkData: bookmark, options: [.withSecurityScope],
+        relativeTo: nil, bookmarkDataIsStale: &stale),
+        f.startAccessingSecurityScopedResource() {
+        folder = f
+      }
+    }
+    guard FileManager.default.fileExists(atPath: path) else {
+      folder?.stopAccessingSecurityScopedResource()
+      resolve(false)
+      return
+    }
+    DispatchQueue.main.async {
+      let ok = NSWorkspace.shared.open(url)
+      folder?.stopAccessingSecurityScopedResource()
+      resolve(ok)
+    }
+  }
+
   @objc func exists(_ path: String,
                     resolve: @escaping RCTPromiseResolveBlock,
                     reject: @escaping RCTPromiseRejectBlock) {

@@ -385,7 +385,7 @@ describe('fspaths reveal on Android', () => {
   // installed category, so no UI path reaches a reveal that does not work.
   it('leaves iOS reveal a no-op and keeps daak.folder withheld', () => {
     const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
-    const reveal = ios.slice(ios.indexOf('func reveal('));
+    const reveal = ios.slice(ios.indexOf('func reveal('), ios.indexOf('func openFile('));
     expect(reveal).toMatch(/resolve\(false\)/);
     expect(reveal).not.toMatch(/QLPreviewController|UIFileSharingEnabled/);
     const notify = read(repo + 'packages/platform/src/notify.ts');
@@ -661,3 +661,42 @@ describe('rn-share present opens a file the download-folder move recorded', () =
     expect(swift).toContain('picker.delegate = delegate');
   });
 });
+
+describe('openFile opens a viewer on every platform', () => {
+  const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const mac = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift');
+  const kt = read(
+    repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+
+  it('previews with QuickLook on iOS and resolves false for an unreadable path', () => {
+    const fn = ios.slice(ios.indexOf('func openFile('));
+    expect(fn).toContain('QLPreviewController');
+    expect(fn).toContain('isReadableFile');
+    expect(fn).toMatch(/resolve\(false\)/);
+    expect(ios).toContain('import QuickLook');
+  });
+
+  it('keeps the iOS bookmark scope open while the preview shows', () => {
+    expect(ios).toContain('final class DaakPreviewSource');
+    expect(ios).toMatch(/deinit \{[^}]*stopAccessingSecurityScopedResource/);
+  });
+
+  it('opens the default app on macOS', () => {
+    const fn = mac.slice(mac.indexOf('func openFile('));
+    expect(fn).toContain('NSWorkspace.shared.open(');
+    expect(fn).toContain('fileExists(atPath: path)');
+  });
+
+  it('routes Android openFile through the same ACTION_VIEW path as reveal', () => {
+    expect(kt).toMatch(/override fun openFile\(path: String, promise: Promise\) = reveal\(path, promise\)/);
+  });
+
+  it('declares openFile in both .mm tables and links QuickLook on iOS', () => {
+    for (const p of ['ios/DaakFsPaths.mm', 'macos/DaakFsPaths.mm']) {
+      expect(read(repo + 'modules/rn-fspaths/' + p)).toMatch(/RCT_EXTERN_METHOD\(openFile:/);
+    }
+    expect(read(repo + 'modules/rn-fspaths/DaakFsPaths.podspec')).toContain('s.ios.frameworks = "QuickLook"');
+  });
+});
+

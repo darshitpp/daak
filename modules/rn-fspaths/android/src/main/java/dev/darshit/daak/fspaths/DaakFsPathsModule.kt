@@ -135,6 +135,14 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
   @ReactMethod
   override fun exists(path: String, promise: Promise) = resolve(promise) { File(path).exists() }
 
+  /**
+   * The Preview verb. `reveal` already starts ACTION_VIEW through the file
+   * provider and resolves false when no app can open the type, so `openFile`
+   * reuses it. The two verbs differ only on iOS and macOS.
+   */
+  @ReactMethod
+  override fun openFile(path: String, promise: Promise) = reveal(path, promise)
+
   private inline fun resolve(promise: Promise, block: () -> Any?) {
     try { promise.resolve(block()) } catch (t: Throwable) { promise.reject("E_FSPATHS", t) }
   }

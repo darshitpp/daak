@@ -29,4 +29,6 @@ Pod::Spec.new do |s|
   # `reveal` calls NSWorkspace. Without it the pod's object file carries UN*
   # references the app target never links.
   s.osx.frameworks = "AppKit"
+  # QLPreviewController, used by openFile on iOS.
+  s.ios.frameworks = "QuickLook"
 end
