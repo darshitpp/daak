@@ -262,6 +262,11 @@ async fn an_engine_backed_request_before_start_is_refused() {
     for req in [
         IpcRequest::ListInbox,
         IpcRequest::Devices,
+        IpcRequest::ListThread {
+            peer_device_id: OFFLINE_PEER.into(),
+            limit: 5,
+            before: None,
+        },
         IpcRequest::SetDisplayName {
             name: "nope".into(),
         },
@@ -967,4 +972,86 @@ async fn a_completed_pairing_reaches_the_ipc_client_with_the_same_shape_as_ffi()
     .await
     .unwrap();
     assert!(!buf.is_empty());
+}
+
+#[tokio::test]
+async fn list_thread_returns_an_empty_page_for_a_peer_with_no_transfers() {
+    let d = Daemon::spawn().await;
+    let mut s = connect(&d.sock).await;
+    d.start_engine(&mut s).await;
+    let r = d
+        .call(
+            &mut s,
+            IpcRequest::ListThread {
+                peer_device_id: OFFLINE_PEER.into(),
+                limit: 50,
+                before: None,
+            },
+        )
+        .await;
+    let IpcResponse::Json { value } = r else {
+        panic!("ListThread must answer Json: {r:?}")
+    };
+    let v: serde_json::Value = serde_json::from_str(&value).unwrap();
+    assert_eq!(v["items"], serde_json::json!([]));
+    assert!(v["olderCursor"].is_null());
+}
+
+#[tokio::test]
+async fn list_thread_returns_a_queued_send_and_rejects_a_bad_peer_id_and_a_bad_cursor() {
+    let d = Daemon::spawn().await;
+    let mut s = connect(&d.sock).await;
+    d.start_engine(&mut s).await;
+
+    let sent = d
+        .call(
+            &mut s,
+            IpcRequest::Send {
+                peer_device_id: OFFLINE_PEER.into(),
+                text: Some("héllo".into()),
+                files: vec![],
+            },
+        )
+        .await;
+    assert!(matches!(sent, IpcResponse::Json { .. }), "got {sent:?}");
+    let r = d
+        .call(
+            &mut s,
+            IpcRequest::ListThread {
+                peer_device_id: OFFLINE_PEER.into(),
+                limit: 50,
+                before: None,
+            },
+        )
+        .await;
+    let IpcResponse::Json { value } = r else {
+        panic!("ListThread must answer Json: {r:?}")
+    };
+    let v: serde_json::Value = serde_json::from_str(&value).unwrap();
+    assert_eq!(v["items"][0]["text"], "héllo");
+    assert_eq!(v["items"][0]["direction"], "out");
+    assert_eq!(v["items"][0]["type"], "text");
+
+    let bad_peer = d
+        .call(
+            &mut s,
+            IpcRequest::ListThread {
+                peer_device_id: "zz".into(),
+                limit: 5,
+                before: None,
+            },
+        )
+        .await;
+    assert!(matches!(bad_peer, IpcResponse::Error { .. }));
+    let bad_cursor = d
+        .call(
+            &mut s,
+            IpcRequest::ListThread {
+                peer_device_id: OFFLINE_PEER.into(),
+                limit: 5,
+                before: Some("nope".into()),
+            },
+        )
+        .await;
+    assert!(matches!(bad_cursor, IpcResponse::Error { .. }));
 }

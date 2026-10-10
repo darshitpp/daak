@@ -178,6 +178,33 @@ fn transfer_summary_json(row: &daak_core::store::transfers::TransferRow) -> serd
     })
 }
 
+/// One thread page as the TS ThreadPage. Same key set as the free function
+/// in daak-ffi, kept here because the daemon must not depend on daak-ffi.
+/// The two shapes stay equal through the shared contract suite.
+fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value {
+    let items: Vec<serde_json::Value> = p
+        .items
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "transferId": hex::encode(i.transfer_id),
+                "itemIndex": i.item_index,
+                "direction": if i.outbound { "out" } else { "in" },
+                "type": if i.is_text { "text" } else { "file" },
+                "name": i.name,
+                "size": i.size,
+                "text": i.text,
+                "state": i.state,
+                "destPath": i.dest_path,
+                "at": i.at,
+                "transferState": i.transfer_state,
+                "error": i.error,
+            })
+        })
+        .collect();
+    serde_json::json!({ "items": items, "olderCursor": p.older_cursor })
+}
+
 /// One held-back item as the TS `QuarantineReport`. Mirrors daak-ffi's
 /// quarantine_report_json for the same reason as transfer_summary_json above.
 ///
@@ -720,6 +747,20 @@ async fn dispatch(
                 },
             }
         }
+        IpcRequest::ListThread {
+            peer_device_id,
+            limit,
+            before,
+        } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&peer_device_id) {
+                Err(e) => e,
+                Ok(peer) => match engine.list_thread(peer, limit, before.as_deref()) {
+                    Ok(page) => json(thread_page_json(&page)),
+                    Err(e) => err(e),
+                },
+            },
+        },
         IpcRequest::ListInbox => match state.engine().await {
             Err(e) => e,
             Ok(engine) => match engine.list_inbox() {

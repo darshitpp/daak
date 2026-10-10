@@ -65,6 +65,7 @@ ipc-request =
   / list-quarantine-reports-request
   / delete-quarantined-request
   / list-transfers-request
+  / list-thread-request
   / list-inbox-request
   / self-profile-request
   / set-display-name-request
@@ -121,6 +122,10 @@ item-ref = {
 ; Option so a missing filter is a unit variant. Both are pinned by
 ; crates/daak-ipc/tests/schema.rs.
 list-transfers-request   = list-transfers-args
+; One page of the thread of a peer. Before holds the opaque olderCursor of
+; the previous page and is OPTIONAL: the Rust field skips None.
+list-thread-request = { "ListThread": list-thread-args }
+list-thread-args = { "peer_device_id": tstr, "limit": uint, ? "before": tstr }
 list-inbox-request       = "ListInbox"
 ; This device's OWN advertised name and device id -- the READ half of
 ; SetDisplayName, sitting next to it in the Rust enum for that reason. A UI can

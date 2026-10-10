@@ -221,6 +221,16 @@ fn every_request_validates_against_the_cddl() {
                 peer_device_id: None,
             }),
         }),
+        IpcMessage::Request(IpcRequest::ListThread {
+            peer_device_id: "d1".into(),
+            limit: 50,
+            before: None,
+        }),
+        IpcMessage::Request(IpcRequest::ListThread {
+            peer_device_id: "d1".into(),
+            limit: 50,
+            before: Some("5:00".into()),
+        }),
         IpcMessage::Request(IpcRequest::ListInbox),
         // A unit variant, like Devices/Subscribe -- but it is a NEW wire key, so
         // it has to be pinned here or the cddl can keep refusing the very frame

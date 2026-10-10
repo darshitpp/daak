@@ -333,6 +333,7 @@ pub enum IpcRequest {
     ListQuarantineReportsRequest(ListQuarantineReportsRequest),
     DeleteQuarantinedRequest(DeleteQuarantinedRequest),
     ListTransfersRequest(ListTransfersRequest),
+    ListThreadRequest(ListThreadRequest),
     ListInboxRequest(ListInboxRequest),
     SelfProfileRequest(SelfProfileRequest),
     SetDisplayNameRequest(SetDisplayNameRequest),
@@ -396,6 +397,10 @@ impl IpcRequest {
 
     pub fn new_list_transfers_request(list_transfers_request: ListTransfersRequest) -> Self {
         Self::ListTransfersRequest(list_transfers_request)
+    }
+
+    pub fn new_list_thread_request(list_thread_request: ListThreadRequest) -> Self {
+        Self::ListThreadRequest(list_thread_request)
     }
 
     pub fn new_list_inbox_request(list_inbox_request: ListInboxRequest) -> Self {
@@ -520,6 +525,34 @@ pub enum ListQuarantineReportsRequest {
 impl ListQuarantineReportsRequest {
     pub fn new_value_text4_c69737451756172616_e74696_e655265706_f727473() -> Self {
         Self::ValueText4C69737451756172616E74696E655265706F727473
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ListThreadArgs {
+    pub peer_device_id: String,
+    pub limit: u64,
+    pub before: Option<String>,
+}
+
+impl ListThreadArgs {
+    pub fn new(peer_device_id: String, limit: u64) -> Self {
+        Self {
+            peer_device_id,
+            limit,
+            before: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ListThreadRequest {
+    pub list_thread: ListThreadArgs,
+}
+
+impl ListThreadRequest {
+    pub fn new(list_thread: ListThreadArgs) -> Self {
+        Self { list_thread }
     }
 }
 

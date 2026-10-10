@@ -2107,6 +2107,9 @@ impl cbor_event::se::Serialize for IpcRequest {
             IpcRequest::ListTransfersRequest(list_transfers_request) => {
                 list_transfers_request.serialize(serializer)
             }
+            IpcRequest::ListThreadRequest(list_thread_request) => {
+                list_thread_request.serialize(serializer)
+            }
             IpcRequest::ListInboxRequest(list_inbox_request) => {
                 list_inbox_request.serialize(serializer)
             }
@@ -2240,6 +2243,14 @@ impl Deserialize for IpcRequest {
                 }
                 Err(e) => {
                     errs.push(e.annotate("ListTransfersRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = ListThreadRequest::deserialize(raw);
+            match deser_variant {
+                Ok(list_thread_request) => return Ok(Self::ListThreadRequest(list_thread_request)),
+                Err(e) => {
+                    errs.push(e.annotate("ListThreadRequest"));
                     raw.set_position(initial_position).unwrap();
                 }
             };
@@ -2729,6 +2740,225 @@ impl Deserialize for ListQuarantineReportsRequest {
                 _ => Err(DeserializeFailure::NoVariantMatched.into()),
             }
         })().map_err(|e| e.annotate("ListQuarantineReportsRequest"))
+    }
+}
+
+impl cbor_event::se::Serialize for ListThreadArgs {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(
+            2 + match &self.before {
+                Some(_) => 1,
+                None => 0,
+            },
+        ))?;
+        serializer.write_text("limit")?;
+        serializer.write_unsigned_integer(self.limit)?;
+        if let Some(field) = &self.before {
+            serializer.write_text("before")?;
+            serializer.write_text(field)?;
+        }
+        serializer.write_text("peer_device_id")?;
+        serializer.write_text(&self.peer_device_id)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for ListThreadArgs {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(2)?;
+            let mut limit = None;
+            let mut before = None;
+            let mut peer_device_id = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "limit" => {
+                            if limit.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "limit".into(),
+                                ))
+                                .into());
+                            }
+                            limit = Some(
+                                Ok(raw.unsigned_integer()?)
+                                    .map_err(|e: DeserializeError| e.annotate("limit"))?,
+                            );
+                        }
+                        "before" => {
+                            if before.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "before".into(),
+                                ))
+                                .into());
+                            }
+                            before = Some(
+                                (|| -> Result<_, DeserializeError> {
+                                    read_len.read_elems(1)?;
+                                    Ok(raw.text()?)
+                                })()
+                                .map_err(|e| e.annotate("before"))?,
+                            );
+                        }
+                        "peer_device_id" => {
+                            if peer_device_id.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "peer_device_id".into(),
+                                ))
+                                .into());
+                            }
+                            peer_device_id = Some(
+                                Ok(raw.text()?)
+                                    .map_err(|e: DeserializeError| e.annotate("peer_device_id"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let peer_device_id =
+                match peer_device_id {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("peer_device_id"),
+                        ))
+                        .into());
+                    }
+                };
+            let limit = match limit {
+                Some(x) => x,
+                None => {
+                    return Err(
+                        DeserializeFailure::MandatoryFieldMissing(Key::Str(String::from("limit")))
+                            .into(),
+                    );
+                }
+            };
+            read_len.finish()?;
+            Ok(Self {
+                peer_device_id,
+                limit,
+                before,
+            })
+        })()
+        .map_err(|e| e.annotate("ListThreadArgs"))
+    }
+}
+
+impl cbor_event::se::Serialize for ListThreadRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("ListThread")?;
+        self.list_thread.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for ListThreadRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut list_thread = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "ListThread" => {
+                            if list_thread.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "ListThread".into(),
+                                ))
+                                .into());
+                            }
+                            list_thread = Some(
+                                ListThreadArgs::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("list_thread"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let list_thread =
+                match list_thread {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("ListThread"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { list_thread })
+        })()
+        .map_err(|e| e.annotate("ListThreadRequest"))
     }
 }
 

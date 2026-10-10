@@ -75,6 +75,10 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::ListInboxRequest>();
     _assert_serialize::<crate::generated::ListQuarantineReportsRequest>();
     _assert_deserialize::<crate::generated::ListQuarantineReportsRequest>();
+    _assert_serialize::<crate::generated::ListThreadArgs>();
+    _assert_deserialize::<crate::generated::ListThreadArgs>();
+    _assert_serialize::<crate::generated::ListThreadRequest>();
+    _assert_deserialize::<crate::generated::ListThreadRequest>();
     _assert_serialize::<crate::generated::ListTransfersArgs>();
     _assert_deserialize::<crate::generated::ListTransfersArgs>();
     _assert_serialize::<crate::generated::OkResponse>();

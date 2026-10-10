@@ -81,6 +81,9 @@ export type IpcRequestJSON =
       ListTransfersRequest: ListTransfersArgsJSON;
     }
   | {
+      ListThreadRequest: ListThreadRequestJSON;
+    }
+  | {
       ListInboxRequest: ListInboxRequestJSON;
     }
   | {
@@ -285,6 +288,14 @@ export interface ListTransfersArgsJSON {
 export interface TransferFilterJSON {
   peer_device_id?: string | null;
   state?: string | null;
+}
+export interface ListThreadRequestJSON {
+  list_thread: ListThreadArgsJSON;
+}
+export interface ListThreadArgsJSON {
+  before?: string | null;
+  limit: number;
+  peer_device_id: string;
 }
 export interface SetDisplayNameRequestJSON {
   set_display_name: DisplayNameArgsJSON;
