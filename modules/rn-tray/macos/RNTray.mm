@@ -60,8 +60,17 @@ RCT_EXPORT_MODULE(DaakTray)
   }
   _statusItem = [[NSStatusBar systemStatusBar]
       statusItemWithLength:NSSquareStatusItemLength];
-  _statusItem.button.image = [NSImage imageWithSystemSymbolName:@"paperplane"
-                                           accessibilityDescription:@"Daak"];
+  // MenuBarIcon is a template image in the app asset catalog. The system tints
+  // it for the light bar, the dark bar, and the pressed state. The symbol is
+  // the fallback for a host app that has no such image.
+  NSImage *icon = [NSImage imageNamed:@"MenuBarIcon"];
+  if (icon == nil) {
+    icon = [NSImage imageWithSystemSymbolName:@"paperplane"
+                     accessibilityDescription:@"Daak"];
+  }
+  [icon setTemplate:YES];  // dot syntax: `template` is a C++ keyword in Objective-C++
+  icon.accessibilityDescription = @"Daak";
+  _statusItem.button.image = icon;
   _menu = [[NSMenu alloc] initWithTitle:@"Daak"];
   // NSStatusItem.menu, not a target/action on the button. The system then owns
   // the click: it shows THIS menu on left AND right click, so the per-device Send
