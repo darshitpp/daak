@@ -113,7 +113,8 @@ RCT_EXPORT_MODULE(DaakWindowHost)
     return;
   }
   NSPopover *popover = [[NSPopover alloc] init];
-  popover.contentSize = NSMakeSize(360, 440);
+  // 320 points, as in the design (macos-menubar.html). The React root has the same width.
+  popover.contentSize = NSMakeSize(320, 440);
   popover.behavior = NSPopoverBehaviorTransient;
   NSViewController *controller = [NSViewController new];
   controller.view = rootView;
