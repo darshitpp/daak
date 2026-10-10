@@ -5,6 +5,7 @@ import type { AppMode, UiRuntime } from './headless';
 import type { InboxActions } from './inbox-actions';
 import { ToastProvider } from './components/Toast';
 import type { DeviceNoun } from './components/ds';
+import type { SettingsHost } from './screens/settings/host';
 import { Popover } from './modes/Popover';
 import { Dashboard } from './modes/Dashboard';
 
@@ -25,7 +26,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, settingsHost }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -66,6 +67,8 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   keyboardAvoiding?: boolean;
   /** The Mac design puts the toast nearer the bottom edge than the phone design does. */
   toastBottomOffset?: number;
+  /** The injected Settings functions: arrival prefs, app version, OS grant. */
+  settingsHost?: SettingsHost;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -105,6 +108,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             deviceNoun={deviceNoun}
             windowChrome={windowChrome}
             keyboardAvoiding={keyboardAvoiding}
+            settingsHost={settingsHost}
           />}
     </View>
     </ToastProvider>

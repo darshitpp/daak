@@ -5,6 +5,7 @@ import type { UiState } from '../state/store';
 import type { InboxActions } from '../inbox-actions';
 import { AppShell } from '../components/AppShell';
 import type { DeviceNoun } from '../components/ds';
+import type { SettingsHost } from '../screens/settings/host';
 import { EngineProvider } from '../EngineContext';
 import { ui } from '../theme';
 
@@ -21,7 +22,7 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, settingsHost }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
@@ -46,6 +47,8 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   windowChrome?: { title: string; version?: string };
   /** Lift the composer above the keyboard. The iOS host sets it. */
   keyboardAvoiding?: boolean;
+  /** The injected Settings functions: arrival prefs, app version, OS grant. */
+  settingsHost?: SettingsHost;
 }) {
   void state;
   return (
@@ -66,6 +69,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           deviceNoun={deviceNoun}
           windowChrome={windowChrome}
           keyboardAvoiding={keyboardAvoiding}
+          settingsHost={settingsHost}
         />
       </View>
     </EngineProvider>

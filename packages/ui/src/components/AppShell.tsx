@@ -6,6 +6,7 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 import { ThreadScreen } from '../screens/ThreadScreen';
 import { QuarantineScreen } from '../screens/QuarantineScreen';
 import type { InboxActions } from '../inbox-actions';
+import type { SettingsHost } from '../screens/settings/host';
 import { TabBar, type Tab } from './TabBar';
 import { Btn, type DeviceNoun } from './ds';
 import { spacing, ui } from '../theme';
@@ -44,6 +45,7 @@ export function AppShell({
   onPickFiles,
   inboxActions,
   onUnpair,
+  settingsHost,
   initialPeerDeviceId,
   initialText,
   initialFiles,
@@ -71,6 +73,8 @@ export function AppShell({
   onCheckConnection?: () => void;
   /** R42g. Settings calls revokePairing itself. The host hook runs after it. */
   onUnpair?: (d: DeviceInfo) => void;
+  /** The injected Settings functions: arrival prefs, app version, OS grant. */
+  settingsHost?: SettingsHost;
   /** R42p: the download-folder row. Injected: the picker is a platform call. */
   downloadFolder?: {
     load: () => Promise<string | null>;
@@ -197,6 +201,8 @@ export function AppShell({
         onCheckConnection={onCheckConnection}
         downloadFolder={downloadFolder}
         onUnpair={onUnpair}
+        settingsHost={settingsHost}
+        deviceNoun={deviceNoun}
       />
     );
   }

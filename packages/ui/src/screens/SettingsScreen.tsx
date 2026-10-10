@@ -4,6 +4,9 @@ import { useEngine } from '../EngineContext';
 import { Btn, Note, Section } from '../components/ds';
 import { DownloadFolderRow } from '../components/DownloadFolderRow';
 import { PairedSection } from './settings/PairedSection';
+import { ArrivalSection } from './settings/ArrivalSection';
+import type { SettingsHost } from './settings/host';
+import type { DeviceNoun } from '../components/ds';
 import type { DeviceInfo } from '@daak/core';
 import { colors, ui } from '../theme';
 
@@ -30,7 +33,7 @@ const NAME_READ_RETRY_MS = 1000;
  * time -- importing it here would invert the dependency direction and break
  * every ui test that renders this screen.
  */
-export function SettingsScreen({ background, onCheckConnection, downloadFolder, onUnpair }: {
+export function SettingsScreen({ background, onCheckConnection, downloadFolder, onUnpair, settingsHost, deviceNoun }: {
   background?: React.ReactNode;
   /**
    * R42p: where received files go. Injected for the same reason `background`
@@ -45,6 +48,10 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
   };
   /** R42g. PairedSection revokes the pairing itself and then calls this hook. */
   onUnpair?: (d: DeviceInfo) => void;
+  /** The injected Settings functions: arrival prefs, app version, OS grant. */
+  settingsHost?: SettingsHost;
+  /** "phone" or "Mac" in copy. */
+  deviceNoun?: DeviceNoun;
   /**
    * The prototype's "Something not working? See what to check" button, in the
    * Connection section (prototypes/index.html:1237). Injected for the same
@@ -252,6 +259,7 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
             are gone and only the button survives, because the button is the
             part that leads somewhere real. */}
         <PairedSection onUnpair={onUnpair} />
+        <ArrivalSection host={settingsHost} deviceNoun={deviceNoun} />
 
         <Section title="Connection">
           {onCheckConnection ? (

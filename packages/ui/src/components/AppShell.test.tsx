@@ -208,6 +208,15 @@ describe('AppShell tokens', () => {
     await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(peer));
   });
 
+  it('threads settingsHost from the shell to the Arrival switches', async () => {
+    const load = jest.fn(async () => ({ arrival: true }));
+    shell(fakeEngine([]), { settingsHost: { notifyPrefs: { load, save: async () => {} } }, deviceNoun: 'phone' });
+    fireEvent.press(screen.getByTestId('tab-settings'));
+    expect(await screen.findByText('Shows a message on this phone.')).toBeTruthy();
+    expect(load).toHaveBeenCalled();
+  });
+
+
 });
 
 describe('AppShell desktop layout', () => {
