@@ -32,8 +32,8 @@ describe('Welcome', () => {
     render(<WelcomeScreen onGetStarted={started} onSkip={skip} />);
     expect(screen.getByText('Get started')).toBeTruthy();
     expect(screen.getByText('I already set this up')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('welcome-get-started'));
-    fireEvent.press(screen.getByLabelText('welcome-skip'));
+    fireEvent.press(screen.getByTestId('welcome-get-started'));
+    fireEvent.press(screen.getByTestId('welcome-skip'));
     expect(started).toHaveBeenCalledTimes(1);
     expect(skip).toHaveBeenCalledTimes(1);
   });

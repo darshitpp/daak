@@ -31,10 +31,10 @@ it('shows Checking while the facts are unknown', () => {
 it('offers the check link only when the host gives it', () => {
   const onCheckConnection = jest.fn();
   const { unmount } = render(<ConnectionSection connection={{ status: 'working', wifi: 'connected' }} onCheckConnection={onCheckConnection} />);
-  fireEvent.press(screen.getByLabelText('settings-check-connection'));
+  fireEvent.press(screen.getByTestId('settings-check-connection'));
   expect(onCheckConnection).toHaveBeenCalled();
   unmount();
   render(<ConnectionSection connection={{ status: 'working', wifi: 'connected' }} />);
-  expect(screen.queryByLabelText('settings-check-connection')).toBeNull();
+  expect(screen.queryByTestId('settings-check-connection')).toBeNull();
 });
 

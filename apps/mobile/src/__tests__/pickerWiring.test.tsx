@@ -56,9 +56,9 @@ it('reaches the platform picker from a tap on Add files', async () => {
   jest.spyOn(engine, 'devices').mockResolvedValue([pixel]);
   render(<App />);
   fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
-  await waitFor(() => expect(screen.getByLabelText('pick-files')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('pick-files')).toBeTruthy());
   expect(pickFiles).not.toHaveBeenCalled();
-  fireEvent.press(screen.getByLabelText('pick-files'));
+  fireEvent.press(screen.getByTestId('pick-files'));
   // And what the picker returned has to reach the composer -- a picker that
   // resolved into a void is exactly what a broken TurboModule looks like here.
   await waitFor(() => expect(screen.getByText('a.pdf')).toBeTruthy());

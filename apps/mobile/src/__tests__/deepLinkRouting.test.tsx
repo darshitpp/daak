@@ -81,7 +81,7 @@ it('routes a send link to the thread, prefilled and pointed at that peer', async
   await openThenLink('daak://send?deviceId=' + PEER + '&text=from%20a%20link');
   expect(await screen.findByDisplayValue('from a link')).toBeTruthy();
   const sent = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: false });
-  fireEvent.press(await screen.findByLabelText('send'));
+  fireEvent.press(await screen.findByTestId('send'));
   await waitFor(() => expect(sent).toHaveBeenCalledWith({ peerDeviceId: PEER, text: 'from a link' }));
 });
 
@@ -99,7 +99,7 @@ it('does not send when a send link opens the thread', async () => {
 it('moves the user from Devices into the thread', async () => {
   render(<App />);
   fireEvent.press(await screen.findByTestId('tab-devices'));
-  expect(screen.getByLabelText('pair-a-device')).toBeTruthy();
+  expect(screen.getByTestId('pair-a-device')).toBeTruthy();
   await act(async () => {
     emit('daak://send?deviceId=' + PEER);
   });
@@ -116,7 +116,7 @@ it('opens pairing from a pair link and joins with its bundle, no camera', async 
   // and the joiner falls back to discovery (R42c/R42d).
   // A link is an untrusted request from another app or a web page. It asks the
   // user first and joins nothing until the user taps Pair.
-  fireEvent.press(await screen.findByLabelText('link-pair-confirm'));
+  fireEvent.press(await screen.findByTestId('link-pair-confirm'));
   await waitFor(() => expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc', undefined));
   expect(await screen.findByText('555 666')).toBeTruthy();
   expect(jest.requireMock('@daak/platform').scanQr).not.toHaveBeenCalled();
@@ -128,9 +128,9 @@ it('asks before it joins a pair link, and Cancel joins nothing', async () => {
   emit('daak://pair?bundle=' + encodeURIComponent(BUNDLE));
   expect(await screen.findByText(/Pair with/)).toBeTruthy();
   expect(pair).not.toHaveBeenCalled();
-  fireEvent.press(screen.getByLabelText('link-pair-cancel'));
+  fireEvent.press(screen.getByTestId('link-pair-cancel'));
   expect(pair).not.toHaveBeenCalled();
-  expect(screen.queryByLabelText('link-pair-confirm')).toBeNull();
+  expect(screen.queryByTestId('link-pair-confirm')).toBeNull();
 });
 
 it('says so when a pair link is not a bundle', async () => {
@@ -152,7 +152,7 @@ it('does not join when the pair route is opened by hand', async () => {
   const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: 'x' });
   render(<App />);
   fireEvent.press(await screen.findByTestId('tab-devices'));
-  fireEvent.press(screen.getByLabelText('pair-a-device'));
+  fireEvent.press(screen.getByTestId('pair-a-device'));
   expect(screen.getByText('Show my code')).toBeTruthy();
   expect(pair).not.toHaveBeenCalled();
 });

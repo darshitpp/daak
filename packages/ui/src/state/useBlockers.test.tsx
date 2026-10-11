@@ -60,7 +60,7 @@ function mountWithAlert(engine: DaakEngine, initialPeers: IncompatiblePeer[] = [
       }),
     press: (testID: string) =>
       act(() => {
-        fireEvent.press(screen.getByLabelText(testID));
+        fireEvent.press(screen.getByTestId(testID));
       }),
     screen,
   };
@@ -183,7 +183,7 @@ describe('useBlockers, the reachability check', () => {
     render(<>{result.current.alert}</>);
     // Note carries its testID as the accessibilityLabel, which is what the
     // OnboardingScreens cases query. getByTestId finds nothing here.
-    expect(screen.getByLabelText('cant-reach-error')).toBeTruthy();
+    expect(screen.getByTestId('cant-reach-error')).toBeTruthy();
     expect(screen.getByText('daakd is not answering')).toBeTruthy();
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
   });
@@ -315,7 +315,7 @@ describe('useBlockers, Update available', () => {
     const openUrl = jest.fn();
     const h = mountHost(stubEngine(), { openUrl });
     await h.setPeers([outOfStep]);
-    fireEvent.press(screen.getByLabelText('update-open'));
+    fireEvent.press(screen.getByTestId('update-open'));
     expect(openUrl).toHaveBeenCalledWith('https://github.com/darshitpp/daak/releases/latest');
     expect(h.current().alert).not.toBeUndefined();
     expect(h.current().settingsRouteToken).toBeUndefined();
@@ -325,7 +325,7 @@ describe('useBlockers, Update available', () => {
   it('dismisses from the back arrow without routing', async () => {
     const h = mountHost(stubEngine(), undefined);
     await h.setPeers([outOfStep]);
-    fireEvent.press(screen.getByLabelText('Back'));
+    fireEvent.press(screen.getByTestId('onb-back'));
     expect(h.current().alert).toBeUndefined();
     expect(h.current().settingsRouteToken).toBeUndefined();
   });
@@ -430,7 +430,7 @@ describe('useBlockers, the retry on the cannot-reach screen', () => {
       h.current().onCheckConnection();
     });
     await act(async () => {
-      fireEvent.press(h.screen.getByLabelText('cant-reach-retry'));
+      fireEvent.press(h.screen.getByTestId('cant-reach-retry'));
     });
     expect(engine.devices).toHaveBeenCalledTimes(3);
     expect(engine.listTransfers).toHaveBeenCalledTimes(3);

@@ -288,7 +288,7 @@ export function ThreadScreen({
       <Pressable
         testID="thread-back"
         accessibilityRole="button"
-        accessibilityLabel="thread-back"
+        accessibilityLabel="Go back"
         accessibilityHint="Back to the device list"
         onPress={onBack}
         style={ui.iconbtn}
@@ -390,7 +390,9 @@ export function ThreadScreen({
         return (
           <View key={s.transferId} style={[ui.card, { marginHorizontal: 12, marginBottom: 8 }]} testID={`thread-active-${s.transferId}`}>
             <Text style={ui.h3}>{`Sending to ${name}`}</Text>
-            <Text style={ui.hint}>{`${plural(s.itemCount, 'item', 'items')} · ${humanBytes(total)}`}</Text>
+            <Text style={ui.hint}>
+              {[plural(s.itemCount, 'item', 'items'), humanBytes(total)].filter(Boolean).join(' · ')}
+            </Text>
             <ProgressBar pct={pct} />
             <View style={ui.progMeta}>
               <Text style={ui.hint}>Sending over your Wi-Fi</Text>

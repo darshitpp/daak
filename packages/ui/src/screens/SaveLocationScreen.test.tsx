@@ -35,7 +35,7 @@ describe('SaveLocationScreen', () => {
 
   it('shows the chosen folder name after a choice', async () => {
     render(<SaveLocationScreen folder={{ load: async () => null, choose: async () => 'Documents / Daak' }} onContinue={noop} />);
-    fireEvent.press(await screen.findByLabelText('download-folder-choose'));
+    fireEvent.press(await screen.findByTestId('download-folder-choose'));
     expect(await screen.findByText('Documents / Daak')).toBeTruthy();
   });
 
@@ -43,7 +43,7 @@ describe('SaveLocationScreen', () => {
   it('continues with no choice made', () => {
     const next = jest.fn();
     render(<SaveLocationScreen folder={{ load: async () => null, choose: async () => null }} onContinue={next} />);
-    fireEvent.press(screen.getByLabelText('save-location-continue'));
+    fireEvent.press(screen.getByTestId('save-location-continue'));
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -62,10 +62,10 @@ describe('SaveLocationScreen', () => {
     expect(screen.getByText("Files are saved in Daak's folder, not in the cloud. Nothing is uploaded.")).toBeTruthy();
     expect(screen.getByText('One quick step left.')).toBeTruthy();
     expect(screen.queryByText('Change folder')).toBeNull();
-    expect(screen.queryByLabelText('download-folder-choose')).toBeNull();
+    expect(screen.queryByTestId('download-folder-choose')).toBeNull();
     expect(screen.queryByText('Pick the folder where files you receive are saved. You can change this later in Settings.')).toBeNull();
     expect(screen.queryByText('Files you receive are saved on this device.')).toBeNull();
-    fireEvent.press(screen.getByLabelText('save-location-continue'));
+    fireEvent.press(screen.getByTestId('save-location-continue'));
     expect(next).toHaveBeenCalledTimes(1);
   });
 

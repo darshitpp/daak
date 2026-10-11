@@ -28,6 +28,8 @@ export function usePanelTransfer(engine: DaakEngine) {
   const [failure, setFailure] = useState<string | null>(null);
   const sendRef = useRef(send);
   sendRef.current = send;
+  const rowRef = useRef(row);
+  rowRef.current = row;
   // `begin` and `clear` raise this number. A read that started before either call
   // holds a stale list. Without the check, a poll that is in flight when `stop`
   // clears the transfer would adopt the old running row again for one cycle.
@@ -56,7 +58,25 @@ export function usePanelTransfer(engine: DaakEngine) {
         return;
       }
       const mine = all.find((t) => t.transferId === current.transferId);
-      if (mine !== undefined) setRow(mine);
+      if (mine !== undefined) {
+        setRow(mine);
+        return;
+      }
+      // The tracked transfer is gone. If it was still running, another surface
+      // canceled it. The listTransfers rows are the only cancel signal, so
+      // adopt the newest running outbound transfer, or clear when none runs.
+      // A gone row that was already done stayed as read.
+      if (rowRef.current !== null && isRunning(rowRef.current)) {
+        const running = newestRunningOut(all);
+        if (running !== undefined) {
+          sendRef.current = { transferId: running.transferId, peerDeviceId: running.peerDeviceId, label: '' };
+          setSend(sendRef.current);
+        } else {
+          sendRef.current = null;
+          setSend(null);
+        }
+        setRow(running ?? null);
+      }
     } catch {
       // A failed read keeps the last row. The next event or poll reads again.
     }

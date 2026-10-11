@@ -330,7 +330,15 @@ pub async fn receive_transfer<T: FrameTransport>(
     db: Option<&Db>,
     on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
-    receive_transfer_from(conn, None, out_dir, |_, n, _| on_progress(n), db, on_item).await
+    receive_transfer_from(
+        conn,
+        None,
+        out_dir,
+        |_, n, _, _, _| on_progress(n),
+        db,
+        on_item,
+    )
+    .await
 }
 
 /// Like `receive_transfer`. With `Some(id)`, the manifest must name `id` as its
@@ -342,7 +350,13 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     // (payload id, chunk length, bytes total). The receiver knows the id and
     // the total only after it parses the manifest, so both travel with each
     // progress call (P4 Task 12).
-    mut on_progress: impl FnMut([u8; 16], u64, u64),
+    // (payload id, new chunk bytes, bytes total, bytes the receiver already
+    // HOLDS from a prior attempt, credited). `credited` is false for a
+    // duplicate payload (payload_seen): the bytes go to the discard directory
+    // and no row is written, so the caller must write no bytes_done and send
+    // no event (P6 3.1). `initial` lets a resume that skips chunks start its
+    // bar from the held bytes, so it reaches 100% (P6 3.2).
+    mut on_progress: impl FnMut([u8; 16], u64, u64, u64, bool),
     db: Option<&Db>,
     mut on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
@@ -505,6 +519,20 @@ pub async fn receive_transfer_from<T: FrameTransport>(
         bitmaps.push(Some(bitmap));
     }
 
+    // The bytes a resume already holds: the chunk length summed over the bits
+    // the persisted bitmap has set. Exact, because these chunks are the ones
+    // the sender will NOT re-send.
+    let bytes_held: u64 = manifest
+        .binary_items()
+        .filter_map(|i| {
+            let bm = bitmaps.get(i.index as usize).and_then(|b| b.as_ref())?;
+            let chunk_size = i.chunk_size? as u64;
+            let size = i.size?;
+            let whole = bm.count_ones().saturating_sub(1) * chunk_size;
+            Some((whole + chunk_size).min(size))
+        })
+        .sum();
+
     let all_received = |bitmaps: &[Option<ChunkBitmap>]| {
         bitmaps
             .iter()
@@ -580,7 +608,13 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             .ok_or_else(|| CoreError::Protocol(format!("chunk for unknown item {item_index}")))?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;
         file.write_all(&data).await?;
-        on_progress(manifest.payload_id, data.len() as u64, bytes_total);
+        on_progress(
+            manifest.payload_id,
+            data.len() as u64,
+            bytes_total,
+            bytes_held,
+            !dedupe,
+        );
         let bitmap = bitmaps[idx].as_mut().ok_or_else(|| {
             CoreError::Protocol(format!("chunk for non-binary item {item_index}"))
         })?;
@@ -822,7 +856,7 @@ mod tests {
                 &mut conn,
                 Some(expected),
                 dst.path(),
-                |_, _, _| {},
+                |_, _, _, _, _| {},
                 None,
                 |_| {},
             )
@@ -1392,6 +1426,61 @@ mod tests {
         assert!(
             !dst.path().join("dedupe-discard").exists(),
             "the discard directory must be removed before the return"
+        );
+    }
+
+    /// C-1: db:None can only report ONE failed item, and it must be the FIRST.
+    // 3.1: a duplicate payload (payload_seen) writes no row, so the progress
+    // callback must report credited == false. The engine closure maps that to
+    // "no bytes_done write and no TransferProgress event".
+    #[tokio::test]
+    async fn a_duplicate_delivery_reports_no_credited_bytes() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("ok.bin");
+        std::fs::write(&path, vec![7u8; 120_000]).unwrap();
+        let item = Item::from_file(0, &path, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_inbox(&crate::store::inbox::InboxRow {
+            id: manifest.payload_id,
+            transfer_id: manifest.payload_id,
+            peer_device_id: manifest.sender.device_id,
+            kind: "media".into(),
+            item_count: 1,
+            summary: "1 file(s)".into(),
+            received_at: 1,
+            saved_paths: "[]".into(),
+        })
+        .unwrap();
+        assert!(db.payload_seen(&manifest.payload_id).unwrap());
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            crate::transfer::send_transfer(&mut theirs, &m, &[Some(path.clone())], &[], |_| {})
+                .await
+                .unwrap();
+        });
+
+        let mut credited: Vec<bool> = Vec::new();
+        receive_transfer_from(
+            &mut mine,
+            None,
+            dst.path(),
+            |_, _, _, _, ok| credited.push(ok),
+            Some(&db),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        sender.await.unwrap();
+
+        assert!(!credited.is_empty(), "the sender sent at least one chunk");
+        assert!(
+            credited.iter().all(|c| !c),
+            "a duplicate payload must credit no bytes, got {credited:?}"
         );
     }
 

@@ -20,7 +20,7 @@ describe('DaakUiApp', () => {
     });
     // The device name and the avatar initial are the same letter here, so this
     // pins the row rather than counting name matches.
-    expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
+    expect(screen.getByTestId('open-dashboard')).toBeTruthy();
     expect(screen.getAllByText('A').length).toBeGreaterThan(0);
   });
 
@@ -76,7 +76,7 @@ describe('DaakUiApp', () => {
     // The panel must be GONE, not merely covered: a Send button beside a
     // claim that Daak cannot proceed is a lie about what works. The dashboard
     // branch drops the tab bar for the same reason.
-    expect(screen.queryByLabelText('open-dashboard')).toBeNull();
+    expect(screen.queryByTestId('open-dashboard')).toBeNull();
     // R43e: the wordmark row STAYS above the alert, and this pins it. Without
     // the assertion a later edit that drops the mark while blocked passes every
     // other case here.
@@ -105,7 +105,7 @@ describe('DaakUiApp', () => {
     );
     expect(screen.getByTestId('popover-update-banner')).toBeTruthy();
     expect(screen.queryByTestId('blocking-alert')).toBeNull();
-    expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
+    expect(screen.getByTestId('open-dashboard')).toBeTruthy();
   });
 
   // The negative half. Without it, a shell that renders the alert over the
@@ -124,7 +124,7 @@ describe('DaakUiApp', () => {
       />,
     );
     expect(screen.queryByTestId('blocking-alert')).toBeNull();
-    expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
+    expect(screen.getByTestId('open-dashboard')).toBeTruthy();
   });
 });
 

@@ -41,7 +41,7 @@ it('routes the device row into the thread for that peer', async () => {
   render(<Shell />);
   fireEvent.press(await screen.findByTestId('open-' + device.deviceId));
   fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'hello');
-  fireEvent.press(screen.getByLabelText('send'));
+  fireEvent.press(screen.getByTestId('send'));
   await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: device.deviceId, text: 'hello' }));
 });
 
@@ -51,9 +51,9 @@ it('sends the paths the injected picker returned', async () => {
   const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: OLD, queued: false });
   render(<Shell />);
   fireEvent.press(await screen.findByTestId('open-' + device.deviceId));
-  fireEvent.press(await screen.findByLabelText('pick-files'));
+  fireEvent.press(await screen.findByTestId('pick-files'));
   await waitFor(() => expect(screen.getByText('a.pdf')).toBeTruthy());
-  fireEvent.press(screen.getByLabelText('send'));
+  fireEvent.press(screen.getByTestId('send'));
   await waitFor(() =>
     expect(send).toHaveBeenCalledWith({ peerDeviceId: device.deviceId, files: ['/Users/d/Documents/a.pdf'] }),
   );
@@ -68,8 +68,8 @@ it('shows both active transfers and cancels the one that was tapped', async () =
   fireEvent.press(await screen.findByTestId('open-' + device.deviceId));
   await screen.findByTestId('thread-active-' + OLD);
   expect(screen.getByTestId('thread-active-' + NEW)).toBeTruthy();
-  fireEvent.press(screen.getByLabelText('thread-stop-' + OLD));
-  fireEvent.press(screen.getByLabelText('confirm-stop'));
+  fireEvent.press(screen.getByTestId('thread-stop-' + OLD));
+  fireEvent.press(screen.getByTestId('confirm-stop'));
   await waitFor(() => expect(cancel).toHaveBeenCalledWith(OLD));
   expect(cancel).toHaveBeenCalledTimes(1);
 });

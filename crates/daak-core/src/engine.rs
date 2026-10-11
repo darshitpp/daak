@@ -2598,11 +2598,17 @@ impl Engine {
             Some(hello.device_id),
             out_dir,
             Some(db),
-            |id, n, total| {
+            |id, written, total, initial, credited| {
+                // 3.1: a duplicate payload (payload_seen) writes no row, so it
+                // must also write no bytes_done and send no event. The receiver
+                // flags it with `credited == false`.
+                if !credited {
+                    return;
+                }
                 let g = progress_gate.get_or_insert_with(|| {
-                    ProgressGate::new(total, PROGRESS_INTERVAL, std::time::Instant::now())
+                    ProgressGate::new(initial, total, PROGRESS_INTERVAL, std::time::Instant::now())
                 });
-                if let Some((done, total)) = g.add(n, std::time::Instant::now()) {
+                if let Some((done, total)) = g.add(written, std::time::Instant::now()) {
                     // The stored value follows the events, exactly as on the
                     // send side. The receiver wrote its row before the first
                     // chunk, so the UPDATE matches it.
@@ -2764,9 +2770,17 @@ struct ProgressGate {
 }
 
 impl ProgressGate {
-    fn new(total: u64, interval: std::time::Duration, now: std::time::Instant) -> Self {
+    /// `initial` is the bytes already done when this gate starts: the bytes a
+    /// resumed receive already HOLDS, else 0. Without it a resume that skips
+    /// chunks grows only by the new bytes and never reaches 100%.
+    fn new(
+        initial: u64,
+        total: u64,
+        interval: std::time::Duration,
+        now: std::time::Instant,
+    ) -> Self {
         Self {
-            done: 0,
+            done: initial.min(total),
             total,
             last: now,
             interval,
@@ -2776,7 +2790,9 @@ impl ProgressGate {
     /// Add one chunk length. Returns the new (done, total) when an event is
     /// due. A zero total never reports: a text payload moves no bytes.
     fn add(&mut self, delta: u64, now: std::time::Instant) -> Option<(u64, u64)> {
-        self.done += delta;
+        // Cap at the total: a resume already seeded with bytes the receiver
+        // holds must not overshoot the end of the bar.
+        self.done = (self.done + delta).min(self.total);
         if self.total == 0 {
             return None;
         }
@@ -2829,7 +2845,7 @@ async fn send_on_session<T: crate::net::FrameTransport + Send>(
     let transfer_id = manifest.payload_id;
     // The same sum the receiver writes to the row. One sum, not a second one.
     let total: u64 = manifest.binary_items().filter_map(|i| i.size).sum();
-    let mut gate = ProgressGate::new(total, PROGRESS_INTERVAL, std::time::Instant::now());
+    let mut gate = ProgressGate::new(0, total, PROGRESS_INTERVAL, std::time::Instant::now());
     let r = crate::transfer::send_transfer(&mut s.conn, manifest, paths, &[], |n| {
         if let Some((done, total)) = gate.add(n, std::time::Instant::now()) {
             // The stored value follows the events. This is an ABSOLUTE write,
@@ -3074,7 +3090,9 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             max_backoff_secs,
             Some(&ctx.observability),
         ) {
-            let _ = db.set_transfer_state(&row.id, state);
+            // 3.3: a cancel or a revoke that lands during this drain already
+            // wrote 'canceled'. Do not relabel it 'failed' or 'paused'.
+            let _ = db.set_transfer_state_unless_canceled(&row.id, state);
         }
     };
 
@@ -3097,7 +3115,8 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             // B2: the transfers row was written 'queued' at enqueue; leaving it
             // there forever is the one state the UI cannot explain. The outbox
             // write is the authority, so this is gated on it.
-            let _ = db.set_transfer_state(&row.id, "failed");
+            // 3.3: a cancel or a revoke during this drain must keep 'canceled'.
+            let _ = db.set_transfer_state_unless_canceled(&row.id, "failed");
         }
     };
 
@@ -3173,7 +3192,8 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 // forever. Same best-effort treatment as the settles beside it:
                 // a missing row must not turn a successful send into a failed
                 // drain.
-                let _ = db.set_transfer_state(&row.id, "done");
+                // 3.3: a cancel during this drain keeps 'canceled'.
+                let _ = db.set_transfer_state_unless_canceled(&row.id, "done");
             }
         }
         Err(e) => {
@@ -3283,7 +3303,7 @@ mod tests {
     #[test]
     fn progress_gate_reports_inside_the_interval_only_on_the_last_chunk() {
         let t0 = std::time::Instant::now();
-        let mut g = ProgressGate::new(300, PROGRESS_INTERVAL, t0);
+        let mut g = ProgressGate::new(0, 300, PROGRESS_INTERVAL, t0);
         assert_eq!(g.add(100, t0 + std::time::Duration::from_millis(10)), None);
         assert_eq!(g.add(100, t0 + std::time::Duration::from_millis(20)), None);
         assert_eq!(
@@ -3296,7 +3316,7 @@ mod tests {
     #[test]
     fn progress_gate_reports_after_the_interval_with_the_summed_done() {
         let t0 = std::time::Instant::now();
-        let mut g = ProgressGate::new(10_000, PROGRESS_INTERVAL, t0);
+        let mut g = ProgressGate::new(0, 10_000, PROGRESS_INTERVAL, t0);
         assert_eq!(g.add(100, t0 + std::time::Duration::from_millis(10)), None);
         assert_eq!(
             g.add(150, t0 + std::time::Duration::from_millis(120)),
@@ -3308,8 +3328,34 @@ mod tests {
     #[test]
     fn progress_gate_never_reports_a_zero_total() {
         let t0 = std::time::Instant::now();
-        let mut g = ProgressGate::new(0, PROGRESS_INTERVAL, t0);
+        let mut g = ProgressGate::new(0, 0, PROGRESS_INTERVAL, t0);
         assert_eq!(g.add(0, t0 + std::time::Duration::from_millis(500)), None);
+    }
+
+    // 3.2: a resume that skips chunks starts from the bytes the receiver
+    // already holds, so the bar reaches 100%.
+    #[test]
+    fn progress_gate_seeds_a_resume_with_the_bytes_already_held() {
+        let t0 = std::time::Instant::now();
+        // 300 of 1000 bytes already on disk, then the last new chunk.
+        let mut g = ProgressGate::new(300, 1000, PROGRESS_INTERVAL, t0);
+        assert_eq!(
+            g.add(700, t0 + std::time::Duration::from_millis(10)),
+            Some((1000, 1000)),
+            "the seed plus the new bytes reaches the total"
+        );
+    }
+
+    // 3.2: `done` never passes the total, even when the seed is large.
+    #[test]
+    fn progress_gate_caps_done_at_the_total() {
+        let t0 = std::time::Instant::now();
+        let mut g = ProgressGate::new(900, 1000, PROGRESS_INTERVAL, t0);
+        assert_eq!(
+            g.add(500, t0 + std::time::Duration::from_millis(10)),
+            Some((1000, 1000)),
+            "done is capped at the total, never above it"
+        );
     }
 
     fn test_device(id: [u8; 16]) -> DeviceInfo {
@@ -3572,6 +3618,50 @@ mod tests {
             .unwrap();
         let entry = devices.lock().await.get(&id).cloned().unwrap();
         assert_eq!(entry.name, hex::encode(id));
+    }
+
+    // 3.3: the drain WON the pending->sending claim, then a cancel or a revoke
+    // landed. The drain's transfers write is gated on the outbox transition,
+    // which loses here -- but the row is already 'canceled', and a drain that
+    // still wrote 'failed' would relabel a canceled share.
+    #[test]
+    fn a_cancel_during_a_drain_is_never_relabelled_failed() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let manifest = Manifest::text("revoke race");
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[]).unwrap();
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        // The user cancels mid-drain. cancel's terminal write wins the outbox
+        // guard, so the transfers row reads 'canceled'.
+        cancel_with(&db, &staging, id).unwrap();
+        // The drain still holds its own view and tries to settle terminally.
+        assert!(!db
+            .mark_outbox_terminal_failed(&id, "drain gave up")
+            .unwrap());
+        // The drain's guarded write must refuse, so the row stays canceled.
+        assert!(!db
+            .set_transfer_state_unless_canceled(&id, "failed")
+            .unwrap());
+        assert_eq!(
+            db.get_transfer(&id).unwrap().unwrap().state,
+            "canceled",
+            "a cancel during a drain must not be relabelled failed"
+        );
+        // The same guard protects the delivered and the paused writes.
+        assert!(!db.set_transfer_state_unless_canceled(&id, "done").unwrap());
+        assert!(!db
+            .set_transfer_state_unless_canceled(&id, "paused")
+            .unwrap());
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        // A row that is NOT canceled still accepts the write.
+        let live = crate::outbox::enqueue(&db, &staging, &[4u8; 16], &Manifest::text("live"), &[])
+            .unwrap();
+        assert!(db
+            .set_transfer_state_unless_canceled(&live, "failed")
+            .unwrap());
+        assert_eq!(db.get_transfer(&live).unwrap().unwrap().state, "failed");
     }
 
     // B2 (4): the FAILURE path was the one settle round 2 left ungated. A

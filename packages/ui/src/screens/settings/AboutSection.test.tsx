@@ -59,7 +59,7 @@ it('opens the releases page from Check for updates', () => {
   const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
   render(<AboutSection />);
   expect(screen.getByText('See whether Daak needs an update')).toBeTruthy();
-  fireEvent.press(screen.getByLabelText('check-for-updates'));
+  fireEvent.press(screen.getByTestId('check-for-updates'));
   expect(open).toHaveBeenCalledWith(RELEASES_URL);
   expect(RELEASES_URL).toBe('https://github.com/darshitpp/daak/releases/latest');
 });
@@ -67,7 +67,7 @@ it('opens the releases page from Check for updates', () => {
 it('says so when the browser cannot open the link', async () => {
   jest.spyOn(Linking, 'openURL').mockRejectedValue(new Error('no handler'));
   render(<AboutSection />);
-  fireEvent.press(screen.getByLabelText('check-for-updates'));
+  fireEvent.press(screen.getByTestId('check-for-updates'));
   await waitFor(() => expect(screen.getByTestId('about-open-error')).toBeTruthy());
 });
 

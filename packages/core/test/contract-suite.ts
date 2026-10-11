@@ -185,6 +185,9 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     const page = await e.listThread('ab'.repeat(16));
     expect(page).toEqual({ items: [], olderCursor: null });
     expect(await e.listThread('ab'.repeat(16), { limit: 0 })).toEqual({ items: [], olderCursor: null });
+    // An empty cursor is the newest page, the same way an absent one is.
+    // The daemon path used to send '' on the wire and reject it as a cursor.
+    expect(await e.listThread('ab'.repeat(16), { before: '' })).toEqual({ items: [], olderCursor: null });
     // A cursor that does not parse must reject, not return the first page.
     await expect(e.listThread('ab'.repeat(16), { before: 'nope' })).rejects.toThrow();
     // A peer id that is not 32 hex characters must reject.

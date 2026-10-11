@@ -23,8 +23,8 @@ describe('Name this device', () => {
   it('keeps Continue enabled, shows the error, and does not continue with a blank name', () => {
     const next = jest.fn();
     render(<NameDeviceScreen name="   " onNameChange={noop} onContinue={next} />);
-    expect(screen.getByLabelText('name-next').props.accessibilityState?.disabled).not.toBe(true);
-    fireEvent.press(screen.getByLabelText('name-next'));
+    expect(screen.getByTestId('name-next').props.accessibilityState?.disabled).not.toBe(true);
+    fireEvent.press(screen.getByTestId('name-next'));
     expect(screen.getByTestId('name-error')).toBeTruthy();
     expect(screen.getByText('Give this device a name so people can tell it apart.')).toBeTruthy();
     expect(screen.queryByText('Short names are easier to spot. You can change this later.')).toBeNull();
@@ -51,7 +51,7 @@ describe('Name this device', () => {
     const next = jest.fn();
     render(<NameDeviceScreen name="Seawood Otter" onNameChange={change} onContinue={next} />);
     fireEvent.changeText(screen.getByTestId('name-input'), 'Study Pi');
-    fireEvent.press(screen.getByLabelText('name-next'));
+    fireEvent.press(screen.getByTestId('name-next'));
     expect(change).toHaveBeenCalledWith('Study Pi');
     expect(next).toHaveBeenCalledTimes(1);
   });
@@ -91,8 +91,8 @@ describe('Permissions', () => {
   it('never blocks Continue', () => {
     const next = jest.fn();
     render(<PermissionsScreen rows={[off]} onContinue={next} />);
-    expect(screen.getByLabelText('permissions-continue').props.accessibilityState?.disabled).not.toBe(true);
-    fireEvent.press(screen.getByLabelText('permissions-continue'));
+    expect(screen.getByTestId('permissions-continue').props.accessibilityState?.disabled).not.toBe(true);
+    fireEvent.press(screen.getByTestId('permissions-continue'));
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -160,8 +160,8 @@ describe('Cant reach any devices', () => {
     const retry = jest.fn();
     const settings = jest.fn();
     render(<CantReachScreen onRetry={retry} onOpenSettings={settings} />);
-    fireEvent.press(screen.getByLabelText('cant-reach-retry'));
-    fireEvent.press(screen.getByLabelText('cant-reach-settings'));
+    fireEvent.press(screen.getByTestId('cant-reach-retry'));
+    fireEvent.press(screen.getByTestId('cant-reach-settings'));
     expect(retry).toHaveBeenCalledTimes(1);
     expect(settings).toHaveBeenCalledTimes(1);
   });
@@ -207,7 +207,7 @@ describe('Cant reach any devices', () => {
 
   it('shows a real engine error when the check itself failed', () => {
     render(<CantReachScreen onRetry={noop} onOpenSettings={noop} error="the engine did not answer" />);
-    expect(screen.getByLabelText('cant-reach-error')).toBeTruthy();
+    expect(screen.getByTestId('cant-reach-error')).toBeTruthy();
     expect(screen.getByText('the engine did not answer')).toBeTruthy();
     expect(screen.queryByText('Looking on this Wi-Fi')).toBeNull();
   });
@@ -281,10 +281,10 @@ describe('Update available', () => {
     const open = jest.fn();
     const later = jest.fn();
     render(<UpdateRequiredScreen onDismiss={later} onOpenDownloadPage={open} />);
-    fireEvent.press(screen.getByLabelText('update-open'));
+    fireEvent.press(screen.getByTestId('update-open'));
     expect(open).toHaveBeenCalledTimes(1);
-    fireEvent.press(screen.getByLabelText('update-dismiss'));
-    fireEvent.press(screen.getByLabelText('Back'));
+    fireEvent.press(screen.getByTestId('update-dismiss'));
+    fireEvent.press(screen.getByTestId('onb-back'));
     expect(later).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Open the download page')).toBeTruthy();
     expect(screen.getByText('Remind me later')).toBeTruthy();
@@ -295,7 +295,7 @@ describe('Update available', () => {
       throw new Error('no handler');
     });
     render(<UpdateRequiredScreen onDismiss={noop} onOpenDownloadPage={open} />);
-    fireEvent.press(screen.getByLabelText('update-open'));
+    fireEvent.press(screen.getByTestId('update-open'));
     expect(await screen.findByText('Daak could not open the page')).toBeTruthy();
     expect(screen.getByText(/github\.com\/darshitpp\/daak\/releases/)).toBeTruthy();
   });

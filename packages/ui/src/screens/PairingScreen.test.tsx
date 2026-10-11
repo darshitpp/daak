@@ -12,15 +12,15 @@ describe('PairingScreen', () => {
   it('renders the QR and NO scan control for the host role', () => {
     render(<PairingScreen role="host" qrUri="data:image/png;base64,QUJD" onScan={jest.fn()} sas={SAS} />);
     expect(screen.getByLabelText('pairing-qr')).toBeTruthy();
-    expect(screen.queryByLabelText('scan-joiner')).toBeNull();
-    expect(screen.queryByLabelText('scan')).toBeNull();
+    expect(screen.queryByTestId('scan-joiner')).toBeNull();
+    expect(screen.queryByTestId('scan')).toBeNull();
   });
 
   it('keeps the join role on the scan control and renders no QR', () => {
     const onScan = jest.fn();
     render(<PairingScreen role="join" qrUri="" onScan={onScan} sas={SAS} />);
     expect(screen.queryByLabelText('pairing-qr')).toBeNull();
-    fireEvent.press(screen.getByLabelText('scan'));
+    fireEvent.press(screen.getByTestId('scan'));
     expect(onScan).toHaveBeenCalledTimes(1);
   });
 
@@ -29,12 +29,12 @@ describe('PairingScreen', () => {
     const { rerender } = render(
       <PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas="" onReject={onReject} />,
     );
-    expect(screen.queryByLabelText('reject')).toBeNull();
+    expect(screen.queryByTestId('reject')).toBeNull();
     rerender(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} onReject={onReject} />);
-    fireEvent.press(screen.getByLabelText('reject'));
+    fireEvent.press(screen.getByTestId('reject'));
     expect(onReject).toHaveBeenCalledTimes(1);
     rerender(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
-    expect(screen.queryByLabelText('reject')).toBeNull();
+    expect(screen.queryByTestId('reject')).toBeNull();
   });
 
   // Commit 552459d. A new pairing is pending until the user confirms it.
@@ -43,12 +43,12 @@ describe('PairingScreen', () => {
     const { rerender } = render(
       <PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas="" onConfirm={onConfirm} />,
     );
-    expect(screen.queryByLabelText('confirm')).toBeNull();
+    expect(screen.queryByTestId('confirm')).toBeNull();
     rerender(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} onConfirm={onConfirm} />);
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     expect(onConfirm).toHaveBeenCalledTimes(1);
     rerender(<PairingScreen role="host" qrUri="u" onScan={jest.fn()} sas={SAS} />);
-    expect(screen.queryByLabelText('confirm')).toBeNull();
+    expect(screen.queryByTestId('confirm')).toBeNull();
   });
 
   it('drops its own appbar when a host is already drawing one', () => {
@@ -65,7 +65,7 @@ describe('PairingScreen', () => {
     expect(screen.getByLabelText('pairing-qr')).toBeTruthy();
     expect(screen.getByText(SHOWN)).toBeTruthy();
     const join = render(<PairingScreen role="join" qrUri="" onScan={onScan} sas={SAS} embedded />);
-    fireEvent.press(screen.getAllByLabelText('scan')[0]);
+    fireEvent.press(screen.getAllByTestId('scan')[0]);
     expect(onScan).toHaveBeenCalledTimes(1);
     join.unmount();
   });
@@ -151,7 +151,7 @@ describe('PairingScreen words of the design', () => {
     expect(screen.getByText('Make sure their screen is showing the code, then try again.')).toBeTruthy();
     expect(screen.queryByText(/camera denied/)).toBeNull();
     expect(warn).toHaveBeenCalled();
-    fireEvent.press(screen.getByLabelText('pair-retry'));
+    fireEvent.press(screen.getByTestId('pair-retry'));
     expect(retry).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
@@ -173,10 +173,10 @@ describe('PairingScreen words of the design', () => {
     const { rerender } = render(
       <PairingScreen role="host" qrUri="u" onScan={noop} sas="" onNewCode={onNewCode} />,
     );
-    expect(screen.queryByLabelText('pair-newcode')).toBeNull();
+    expect(screen.queryByTestId('pair-newcode')).toBeNull();
     rerender(<PairingScreen role="host" qrUri="u" onScan={noop} sas="482917" onNewCode={onNewCode} />);
     expect(screen.getByText('Show a new code')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('pair-newcode'));
+    fireEvent.press(screen.getByTestId('pair-newcode'));
     expect(onNewCode).toHaveBeenCalledTimes(1);
   });
 

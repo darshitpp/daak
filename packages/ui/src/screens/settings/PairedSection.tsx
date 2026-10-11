@@ -86,7 +86,13 @@ export function PairedSection({ onUnpair }: { onUnpair?: (d: DeviceInfo) => void
                   <Text style={ui.rowTitle} numberOfLines={1}>{deviceLabel(d)}</Text>
                   <Status tone={view.tone} label={view.label} />
                 </View>
-                <Btn label="Remove" variant="ghost" testID={`remove-${d.deviceId}`} onPress={() => setTarget(d)} />
+                <Btn
+                  label="Remove"
+                  accessibilityLabel={`Remove ${deviceLabel(d)}`}
+                  variant="ghost"
+                  testID={`remove-${d.deviceId}`}
+                  onPress={() => setTarget(d)}
+                />
               </View>
             );
           })}

@@ -224,7 +224,7 @@ pub async fn recv_secure_transfer<T: FrameTransport + Send>(
     expected_sender: Option<[u8; 16]>,
     out_dir: &Path,
     db: Option<&Db>,
-    on_progress: impl FnMut([u8; 16], u64, u64),
+    on_progress: impl FnMut([u8; 16], u64, u64, u64, bool),
     on_item: impl FnMut(EngineEvent),
 ) -> Result<Manifest> {
     let prologue = session_prologue(&x25519_public(static_secret), initiator_static);
@@ -453,7 +453,7 @@ mod tests {
             None,
             dst.path(),
             Some(&db),
-            |_, _, _| {},
+            |_, _, _, _, _| {},
             |_| {},
         )
         .await
@@ -517,7 +517,7 @@ mod tests {
                     None,
                     out.path(),
                     None,
-                    |_, _, _| {},
+                    |_, _, _, _, _| {},
                     |_| {}
                 ),
             )

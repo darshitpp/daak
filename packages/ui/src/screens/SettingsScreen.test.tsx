@@ -30,7 +30,7 @@ describe('SettingsScreen background-sync slot', () => {
         <SettingsScreen />
       </EngineProvider>,
     );
-    expect(screen.getByLabelText('save-name')).toBeTruthy();
+    expect(screen.getByTestId('save-name')).toBeTruthy();
   });
 });
 
@@ -138,7 +138,7 @@ describe('SettingsScreen reads the stored name', () => {
     ready = true;
     await waitFor(() => expect(nameBox().props.value).toBe('Desk'));
     fireEvent.changeText(nameBox(), 'Study Room');
-    fireEvent.press(screen.getByLabelText('save-name'));
+    fireEvent.press(screen.getByTestId('save-name'));
     await waitFor(() => expect(saved).toEqual(['Study Room']));
     await waitFor(() => expect(nameBox().props.value).toBe('Study Room'));
   });
@@ -223,12 +223,12 @@ describe('SettingsScreen sections', () => {
     await waitFor(() => expect(box.props.value).toBe('Desk'));
     // Design: a blank box toasts and saves nothing.
     fireEvent.changeText(box, '   ');
-    fireEvent.press(screen.getByLabelText('save-name'));
+    fireEvent.press(screen.getByTestId('save-name'));
     expect(await screen.findByText('Type a name first')).toBeTruthy();
     expect(set).not.toHaveBeenCalled();
     // Design: a save toasts "Saved · {name}". It shows no inline success note.
     fireEvent.changeText(box, '  Study Room ');
-    fireEvent.press(screen.getByLabelText('save-name'));
+    fireEvent.press(screen.getByTestId('save-name'));
     await waitFor(() => expect(set).toHaveBeenCalledWith('Study Room'));
     expect(await screen.findByText('Saved · Study Room')).toBeTruthy();
     expect(screen.queryByText('Saved on this device.')).toBeNull();
@@ -249,7 +249,7 @@ describe('SettingsScreen sections', () => {
     const box = await screen.findByPlaceholderText('Display name');
     await waitFor(() => expect(box.props.value).toBe('Desk'));
     fireEvent.changeText(box, 'Study Room');
-    fireEvent.press(screen.getByLabelText('save-name'));
+    fireEvent.press(screen.getByTestId('save-name'));
     expect(await screen.findByText('Name did not save')).toBeTruthy();
     expect(screen.getByText('disk full')).toBeTruthy();
     expect(screen.queryByTestId('toast')).toBeNull();
@@ -321,7 +321,7 @@ describe('SettingsScreen paired devices', () => {
       </EngineProvider>,
     );
     fireEvent.press(await screen.findByTestId('remove-' + d.deviceId));
-    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    fireEvent.press(screen.getByTestId('confirm-remove'));
     await waitFor(() => expect(revoke).toHaveBeenCalledWith(d.deviceId));
     await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(d));
   });
@@ -336,13 +336,13 @@ describe('SettingsScreen Save files to', () => {
         />
       </EngineProvider>,
     );
-    await screen.findByLabelText('download-folder-choose');
+    await screen.findByTestId('download-folder-choose');
     // The design has no "Files are moved, not copied" note here.
     expect(screen.queryByText('Files are moved, not copied')).toBeNull();
     // No folder chosen: nothing to reset.
-    expect(screen.queryByLabelText('download-folder-reset')).toBeNull();
-    fireEvent.press(screen.getByLabelText('download-folder-choose'));
-    expect(await screen.findByLabelText('download-folder-reset')).toBeTruthy();
+    expect(screen.queryByTestId('download-folder-reset')).toBeNull();
+    fireEvent.press(screen.getByTestId('download-folder-choose'));
+    expect(await screen.findByTestId('download-folder-reset')).toBeTruthy();
   });
 
   // Design index.html Settings: the "Saved as" hint and the Save button share
@@ -356,7 +356,7 @@ describe('SettingsScreen Save files to', () => {
       </EngineProvider>,
     );
     expect(await screen.findByText('Saved as Desk')).toBeTruthy();
-    expect(within(screen.getByTestId('name-save-row')).getByLabelText('save-name')).toBeTruthy();
+    expect(within(screen.getByTestId('name-save-row')).getByTestId('save-name')).toBeTruthy();
   });
 });
 

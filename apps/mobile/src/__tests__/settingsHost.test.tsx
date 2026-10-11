@@ -72,7 +72,7 @@ it('revokes a pairing exactly once', async () => {
   const revoke = jest.spyOn(engine, 'revokePairing').mockResolvedValue(undefined);
   await openSettings();
   fireEvent.press(await screen.findByTestId('remove-' + paired.deviceId));
-  fireEvent.press(screen.getByLabelText('confirm-remove'));
+  fireEvent.press(screen.getByTestId('confirm-remove'));
   await waitFor(() => expect(revoke).toHaveBeenCalledTimes(1));
   await new Promise((r) => setTimeout(r, 50));
   expect(revoke).toHaveBeenCalledTimes(1);

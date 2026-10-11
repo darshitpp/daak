@@ -248,7 +248,9 @@ export class DaemonClientEngine implements DaakEngine {
   }
   async listThread(peerDeviceId: string, opts?: { limit?: number; before?: string }): Promise<ThreadPage> {
     const wireLimit = (opts && opts.limit !== undefined) ? opts.limit : 50;
-    const wireBefore = (opts && opts.before !== undefined) ? opts.before : undefined;
+    // An empty cursor is no cursor, the same way the in-process engine reads
+    // it. Sending '' on the wire makes the daemon reject it as a bad cursor.
+    const wireBefore = (opts && opts.before) || undefined;
     const wire = {
       peer_device_id: peerDeviceId,
       limit: wireLimit,

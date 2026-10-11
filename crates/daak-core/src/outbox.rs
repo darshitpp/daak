@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(row.kind, format!("{:?}", manifest.kind).to_lowercase());
         assert_eq!(
             row.bytes_total,
-            manifest.binary_items().filter_map(|i| i.size).sum()
+            manifest.binary_items().filter_map(|i| i.size).sum::<u64>()
         );
         assert!(row.error.is_none());
 

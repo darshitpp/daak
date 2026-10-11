@@ -32,13 +32,13 @@ describe('BackgroundHint', () => {
   // caller can actually do something.
   it('renders no pressable when no action is passed', () => {
     render(<BackgroundHint />);
-    expect(screen.queryByLabelText('open-daak')).toBeNull();
+    expect(screen.queryByTestId('open-daak')).toBeNull();
   });
 
   it('fires the action when one is passed', () => {
     const onOpen = jest.fn();
     render(<BackgroundHint onOpen={onOpen} />);
-    fireEvent.press(screen.getByLabelText('open-daak'));
+    fireEvent.press(screen.getByTestId('open-daak'));
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });

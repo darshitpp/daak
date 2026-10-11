@@ -66,17 +66,17 @@ describe('ThreadScreen', () => {
   it('disables Send until there is a file or a non-blank note', async () => {
     mount(fakeEngine([peer]), { onPickFiles: async () => ['/Users/d/a.pdf'] });
     await screen.findByText('Nothing here yet');
-    expect(screen.getByLabelText('send')).toBeDisabled();
+    expect(screen.getByTestId('send')).toBeDisabled();
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), '   ');
-    expect(screen.getByLabelText('send')).toBeDisabled();
+    expect(screen.getByTestId('send')).toBeDisabled();
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hi');
-    expect(screen.getByLabelText('send')).not.toBeDisabled();
+    expect(screen.getByTestId('send')).not.toBeDisabled();
   });
 
   it('shows a chip for each picked file and removes it on press', async () => {
     mount(fakeEngine([peer]), { onPickFiles: async () => ['/Users/d/a.pdf', '/Users/d/b.png'] });
     await screen.findByText('Nothing here yet');
-    fireEvent.press(screen.getByLabelText('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-files'));
     expect(await screen.findByText('a.pdf')).toBeTruthy();
     // The count comes as the design toast, not as a line in the composer.
     expect(screen.getByTestId('toast-text')).toHaveTextContent('2 files ready');
@@ -88,7 +88,7 @@ describe('ThreadScreen', () => {
   it('toasts "1 file ready" for a single picked file', async () => {
     mount(fakeEngine([peer]), { onPickFiles: async () => ['/Users/d/a.pdf'] });
     await screen.findByText('Nothing here yet');
-    fireEvent.press(screen.getByLabelText('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-files'));
     expect(await screen.findByText('1 file ready')).toBeTruthy();
   });
 
@@ -101,7 +101,7 @@ describe('ThreadScreen', () => {
   it('draws no Add files button when the host gives no picker', async () => {
     mount(fakeEngine([peer]));
     await screen.findByText('Nothing here yet');
-    expect(screen.queryByLabelText('pick-files')).toBeNull();
+    expect(screen.queryByTestId('pick-files')).toBeNull();
   });
 
   // Spec 6.3 rule 4: two transfers, files first.
@@ -110,10 +110,10 @@ describe('ThreadScreen', () => {
     const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: true });
     mount(engine, { onPickFiles: async () => ['/Users/d/a.pdf'] });
     await screen.findByText('Nothing here yet');
-    fireEvent.press(screen.getByLabelText('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-files'));
     await screen.findByText('a.pdf');
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'here you go');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(send).toHaveBeenNthCalledWith(1, { peerDeviceId: peer.deviceId, files: ['/Users/d/a.pdf'] });
     expect(send).toHaveBeenNthCalledWith(2, { peerDeviceId: peer.deviceId, text: 'here you go' });
@@ -131,7 +131,7 @@ describe('ThreadScreen', () => {
     mount(engine);
     await screen.findByText('Nothing here yet');
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), '  hello  ');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, text: 'hello' });
   });
@@ -144,7 +144,7 @@ describe('ThreadScreen', () => {
     mount(engine);
     await screen.findByText('Nothing here yet');
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'now');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     expect(await screen.findByText('Sent to Pixel 9')).toBeTruthy();
     expect(screen.queryByText('Will send when Pixel 9 is back')).toBeNull();
   });
@@ -157,8 +157,8 @@ describe('ThreadScreen', () => {
     mount(engine);
     expect(await screen.findByText('Not on this network')).toBeTruthy();
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'later');
-    expect(screen.getByLabelText('send')).not.toBeDisabled();
-    fireEvent.press(screen.getByLabelText('send'));
+    expect(screen.getByTestId('send')).not.toBeDisabled();
+    fireEvent.press(screen.getByTestId('send'));
     expect(await screen.findByText('Will send when Pixel 9 is back')).toBeTruthy();
     expect(screen.queryByTestId('thread-result')).toBeNull();
   });
@@ -169,7 +169,7 @@ describe('ThreadScreen', () => {
     mount(engine);
     await screen.findByText('Nothing here yet');
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'x');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     expect(await screen.findByTestId('thread-result')).toBeTruthy();
     expect(screen.queryByTestId('toast')).toBeNull();
   });
@@ -184,7 +184,7 @@ describe('ThreadScreen', () => {
     );
     await screen.findByText('Nothing here yet');
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hi');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('toast')).toBeNull();
   });
@@ -196,17 +196,17 @@ describe('ThreadScreen', () => {
       .mockRejectedValueOnce(new Error('peer refused'));
     mount(engine, { onPickFiles: async () => ['/Users/d/a.pdf'] });
     await screen.findByText('Nothing here yet');
-    fireEvent.press(screen.getByLabelText('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-files'));
     await screen.findByText('a.pdf');
     fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'keep me');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     expect(await screen.findByText('That send did not go through')).toBeTruthy();
     expect(screen.getByText('peer refused')).toBeTruthy();
     expect(screen.queryByText('a.pdf')).toBeNull();
     expect(screen.getByPlaceholderText('Or type a note').props.value).toBe('keep me');
     // Try again sends only the note.
     send.mockResolvedValueOnce({ transferId: TID, queued: true });
-    fireEvent.press(screen.getByLabelText('thread-retry-send'));
+    fireEvent.press(screen.getByTestId('thread-retry-send'));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(3));
     expect(send).toHaveBeenLastCalledWith({ peerDeviceId: peer.deviceId, text: 'keep me' });
   });
@@ -276,10 +276,10 @@ describe('ThreadScreen', () => {
     mount(engine);
     await screen.findByText('newer');
     spy.mockResolvedValueOnce(threadPage([threadItem({ transferId: 'cc'.repeat(16), text: 'older', at: 100 })], null));
-    fireEvent.press(screen.getByLabelText('thread-load-older'));
+    fireEvent.press(screen.getByTestId('thread-load-older'));
     expect(await screen.findByText('older')).toBeTruthy();
     expect(spy).toHaveBeenLastCalledWith(peer.deviceId, { limit: 50, before: 'c1' });
-    expect(screen.queryByLabelText('thread-load-older')).toBeNull();
+    expect(screen.queryByTestId('thread-load-older')).toBeNull();
   });
 
   it('shows an error with Try again when the thread read fails', async () => {
@@ -288,7 +288,7 @@ describe('ThreadScreen', () => {
     mount(engine);
     expect(await screen.findByText('engine not started')).toBeTruthy();
     spy.mockResolvedValueOnce(threadPage([threadItem({ text: 'back' })]));
-    fireEvent.press(screen.getByLabelText('thread-reload'));
+    fireEvent.press(screen.getByTestId('thread-reload'));
     expect(await screen.findByText('back')).toBeTruthy();
   });
 
@@ -309,10 +309,10 @@ describe('ThreadScreen', () => {
       nativeEvent: { contentOffset: { x: 0, y: 600 }, contentSize: { width: 300, height: 1000 }, layoutMeasurement: { width: 300, height: 400 } },
     });
     spy.mockResolvedValueOnce(threadPage([], null));
-    fireEvent.press(screen.getByLabelText('thread-load-older'));
+    fireEvent.press(screen.getByTestId('thread-load-older'));
     // 1 s is the default and this file runs beside 36 others in the gate. The
     // assertion is unchanged; only the wait is longer.
-    await waitFor(() => expect(screen.queryByLabelText('thread-load-older')).toBeNull(), { timeout: 5000 });
+    await waitFor(() => expect(screen.queryByTestId('thread-load-older')).toBeNull(), { timeout: 5000 });
     toEnd.mockClear();
     to.mockClear();
     spy.mockResolvedValueOnce(threadPage([
@@ -351,10 +351,10 @@ describe('ThreadScreen', () => {
     expect(screen.getByText('3 items · 128.0 MB')).toBeTruthy();
     expect(screen.getByText('Sending over your Wi-Fi')).toBeTruthy();
     expect(screen.getByText('50%')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('thread-stop-' + TID));
+    fireEvent.press(screen.getByTestId('thread-stop-' + TID));
     expect(screen.getByText('Stop sending?')).toBeTruthy();
     expect(cancel).not.toHaveBeenCalled();
-    fireEvent.press(screen.getByLabelText('confirm-stop'));
+    fireEvent.press(screen.getByTestId('confirm-stop'));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(TID));
     // The design toast after a confirmed stop.
     expect(await screen.findByText('Sending stopped')).toBeTruthy();
@@ -365,8 +365,8 @@ describe('ThreadScreen', () => {
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
     jest.spyOn(engine, 'cancel').mockRejectedValue(new Error('too late'));
     mount(engine);
-    fireEvent.press(await screen.findByLabelText('thread-stop-' + TID));
-    fireEvent.press(screen.getByLabelText('confirm-stop'));
+    fireEvent.press(await screen.findByTestId('thread-stop-' + TID));
+    fireEvent.press(screen.getByTestId('confirm-stop'));
     expect(await screen.findByText('Sending did not stop')).toBeTruthy();
     expect(screen.queryByTestId('toast')).toBeNull();
   });
@@ -376,8 +376,8 @@ describe('ThreadScreen', () => {
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
     const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
     mount(engine);
-    fireEvent.press(await screen.findByLabelText('thread-stop-' + TID));
-    fireEvent.press(screen.getByLabelText('keep-sending'));
+    fireEvent.press(await screen.findByTestId('thread-stop-' + TID));
+    fireEvent.press(screen.getByTestId('keep-sending'));
     expect(cancel).not.toHaveBeenCalled();
   });
 
@@ -386,13 +386,13 @@ describe('ThreadScreen', () => {
     const engine = fakeEngine([peer]);
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
     const first = mount(engine, { deviceNoun: 'Mac' });
-    fireEvent.press(await screen.findByLabelText('thread-stop-' + TID));
+    fireEvent.press(await screen.findByTestId('thread-stop-' + TID));
     expect(
       screen.getByText('Nothing has reached Pixel 9 yet. If you stop now, the items stay on this Mac.'),
     ).toBeTruthy();
     first.unmount();
     mount(engine, { deviceNoun: 'phone' });
-    fireEvent.press(await screen.findByLabelText('thread-stop-' + TID));
+    fireEvent.press(await screen.findByTestId('thread-stop-' + TID));
     expect(
       screen.getByText('Nothing has reached Pixel 9 yet. If you stop now, the items stay on this phone.'),
     ).toBeTruthy();
@@ -529,7 +529,7 @@ describe('ThreadScreen', () => {
     expect(await screen.findByText('Not paired any more')).toBeTruthy();
     expect(screen.queryByText('old history')).toBeNull();
     expect(screen.queryByPlaceholderText('Or type a note')).toBeNull();
-    fireEvent.press(screen.getByLabelText('thread-back'));
+    fireEvent.press(screen.getByTestId('thread-back'));
     expect(onBack).toHaveBeenCalled();
   });
 
@@ -553,13 +553,13 @@ describe('ThreadScreen', () => {
 
   it('goes back from the header button', async () => {
     const { onBack } = mount(fakeEngine([peer]));
-    fireEvent.press(await screen.findByLabelText('thread-back'));
+    fireEvent.press(await screen.findByTestId('thread-back'));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it('names the bubble actions and sizes the header controls for touch', async () => {
     mount(fakeEngine([peer]));
-    const back = await screen.findByLabelText('thread-back');
+    const back = await screen.findByTestId('thread-back');
     expect(back.props.accessibilityRole).toBe('button');
     expect(back.props.accessibilityHint ?? back.props.accessibilityLabel).toBeTruthy();
   });

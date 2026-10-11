@@ -39,7 +39,7 @@ describe('Dashboard (window mode)', () => {
     const { engine, sent } = spyEngine([peer, second]);
     render(<Dashboard state={initialUiState} engine={engine} peerDeviceId={second.deviceId} />);
     fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'hi');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: second.deviceId, text: 'hi' }]));
   });
 
@@ -58,9 +58,9 @@ describe('Dashboard (window mode)', () => {
     const { engine, sent } = spyEngine();
     const onPickFiles = jest.fn(async () => ['/Users/d/Documents/a.pdf']);
     render(<Dashboard state={initialUiState} engine={engine} peerDeviceId={peer.deviceId} onPickFiles={onPickFiles} />);
-    fireEvent.press(await screen.findByLabelText('pick-files'));
+    fireEvent.press(await screen.findByTestId('pick-files'));
     await waitFor(() => expect(screen.getByText('a.pdf')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: peer.deviceId, files: ['/Users/d/Documents/a.pdf'] }]));
   });
 });

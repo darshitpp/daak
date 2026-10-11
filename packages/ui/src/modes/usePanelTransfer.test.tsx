@@ -45,6 +45,22 @@ describe('usePanelTransfer', () => {
     expect(result.current.send).toBeNull();
   });
 
+  // 3.7: after the panel's transfer is canceled ELSEWHERE, a later poll or
+  // event keeps the panel on a row the engine no longer returns. The panel
+  // must adopt the next newest running outbound transfer instead.
+  it('adopts a new running transfer after its own transfer is canceled elsewhere', async () => {
+    const engine = fakeEngine();
+    const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([row()]);
+    const { result } = renderHook(() => usePanelTransfer(engine));
+    await flush();
+    expect(result.current.send?.transferId).toBe(TID);
+    list.mockResolvedValue([row({ transferId: 'zz'.repeat(16), updatedAt: 8 })]);
+    emit(engine, { type: 'transfer.failed', transferId: TID, error: 'canceled elsewhere' });
+    await flush();
+    expect(result.current.send?.transferId).toBe('zz'.repeat(16));
+    expect(result.current.row?.transferId).toBe('zz'.repeat(16));
+  });
+
   it('follows its own transfer after begin and polls while it runs', async () => {
     const engine = fakeEngine();
     const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([]);

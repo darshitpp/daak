@@ -161,7 +161,7 @@ describe('App', () => {
     fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
     expect(await screen.findByDisplayValue('from the share sheet')).toBeTruthy();
     expect(screen.getByText('photo.png')).toBeTruthy();
-    fireEvent.press(await screen.findByLabelText('send'));
+    fireEvent.press(await screen.findByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(send).toHaveBeenNthCalledWith(1, { peerDeviceId: pixel.deviceId, files: ['/Documents/photo.png'] });
     expect(send).toHaveBeenNthCalledWith(2, { peerDeviceId: pixel.deviceId, text: 'from the share sheet' });
@@ -189,13 +189,13 @@ describe('App', () => {
 
     // Away from Devices, so arriving is the assertion.
     fireEvent.press(screen.getByTestId('tab-settings'));
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    expect(await screen.findByTestId('save-name')).toBeTruthy();
 
     expect(open).toBeDefined();
     await act(async () => {
       open!(JSON.stringify({ peerDeviceId: pixel.deviceId }));
     });
-    expect(await screen.findByLabelText('thread-back')).toBeTruthy();
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
 
     await act(async () => {
       open!(JSON.stringify({ transferId: 'aa'.repeat(16) }));

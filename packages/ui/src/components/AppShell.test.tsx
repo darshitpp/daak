@@ -42,11 +42,11 @@ describe('AppShell tabs', () => {
 
   it('threads a pair slot through to Pairing and routes out again', async () => {
     shell(fakeEngine([]), { pair: <Text>pair-ui</Text> });
-    fireEvent.press(await screen.findByLabelText('pair-a-device'));
+    fireEvent.press(await screen.findByTestId('pair-a-device'));
     expect(screen.getByText('pair-ui')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('pair-back'));
+    fireEvent.press(screen.getByTestId('pair-back'));
     expect(screen.queryByText('pair-ui')).toBeNull();
-    expect(screen.getByLabelText('pair-a-device')).toBeTruthy();
+    expect(screen.getByTestId('pair-a-device')).toBeTruthy();
   });
 
   it('routes a pair link into the pair slot', () => {
@@ -61,12 +61,12 @@ describe('AppShell thread route', () => {
     const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: false });
     shell(engine);
     fireEvent.press(await screen.findByTestId('open-' + second.deviceId));
-    expect(await screen.findByLabelText('thread-back')).toBeTruthy();
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
     expect(screen.queryByTestId('tab-devices')).toBeNull();
     fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'hi');
-    fireEvent.press(screen.getByLabelText('send'));
+    fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: second.deviceId, text: 'hi' }));
-    fireEvent.press(screen.getByLabelText('thread-back'));
+    fireEvent.press(screen.getByTestId('thread-back'));
     expect(await screen.findByTestId('tab-devices')).toBeTruthy();
   });
 
@@ -83,7 +83,7 @@ describe('AppShell thread route', () => {
     const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: false });
     shell(engine, { initialPeerDeviceId: peer.deviceId, initialText: 'from a link' });
     expect(await screen.findByDisplayValue('from a link')).toBeTruthy();
-    fireEvent.press(await screen.findByLabelText('send'));
+    fireEvent.press(await screen.findByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, text: 'from a link' }));
   });
 
@@ -105,7 +105,7 @@ describe('AppShell thread route', () => {
     shell(engine, { initialPeerDeviceId: 'dd'.repeat(16), initialText: 'x' });
     expect(await screen.findByText('Not paired any more')).toBeTruthy();
     expect(send).not.toHaveBeenCalled();
-    fireEvent.press(screen.getByLabelText('thread-back'));
+    fireEvent.press(screen.getByTestId('thread-back'));
     expect(await screen.findByTestId('tab-devices')).toBeTruthy();
   });
 
@@ -117,11 +117,11 @@ describe('AppShell thread route', () => {
     fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
     expect(await screen.findByDisplayValue('shared note')).toBeTruthy();
     expect(screen.getByText('photo.png')).toBeTruthy();
-    fireEvent.press(await screen.findByLabelText('send'));
+    fireEvent.press(await screen.findByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(send).toHaveBeenNthCalledWith(1, { peerDeviceId: peer.deviceId, files: ['/Documents/photo.png'] });
     expect(send).toHaveBeenNthCalledWith(2, { peerDeviceId: peer.deviceId, text: 'shared note' });
-    fireEvent.press(screen.getByLabelText('thread-back'));
+    fireEvent.press(screen.getByTestId('thread-back'));
     await screen.findByText('Your devices');
     expect(screen.queryByText('Pick a device for what you shared')).toBeNull();
   });
@@ -140,7 +140,7 @@ describe('AppShell held route', () => {
     expect(screen.queryByTestId('tab-devices')).toBeNull();
     await waitFor(() => expect(report).toHaveBeenCalledWith(TID, 1));
     fireEvent.press(screen.getByTestId('onb-back'));
-    expect(await screen.findByLabelText('thread-back')).toBeTruthy();
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
   });
 
   // The thread stays mounted under the held screen. A remount would drop the
@@ -152,7 +152,7 @@ describe('AppShell held route', () => {
     ]));
     shell(engine, { initialPeerDeviceId: peer.deviceId, onPickFiles: async () => ['/Users/d/a.pdf'] });
     fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'half written');
-    fireEvent.press(screen.getByLabelText('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-files'));
     await screen.findByText('a.pdf');
     fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
     expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
@@ -171,9 +171,9 @@ describe('AppShell held route', () => {
     fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
     expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
     expect(screen.getByLabelText('Back to conversation')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('quarantine-delete'));
+    fireEvent.press(screen.getByTestId('quarantine-delete'));
     expect(screen.getByText('It was never opened. Deleting it only clears the holding area on this Mac.')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('quarantine-delete-confirm'));
+    fireEvent.press(screen.getByTestId('quarantine-delete-confirm'));
     // The design returns to the conversation after the delete.
     await waitFor(() => expect(screen.queryByTestId('quarantine-route')).toBeNull());
   });
@@ -185,11 +185,11 @@ describe('AppShell tokens', () => {
     const { again } = shell(engine);
     await screen.findByText('Your devices');
     again({ settingsRouteToken: '1' });
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    expect(await screen.findByTestId('save-name')).toBeTruthy();
     fireEvent.press(screen.getByTestId('tab-devices'));
     await screen.findByText('Your devices');
     again({ settingsRouteToken: '2' });
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    expect(await screen.findByTestId('save-name')).toBeTruthy();
   });
 
   // A tapped [Open] notification. The host may name the sender.
@@ -197,14 +197,14 @@ describe('AppShell tokens', () => {
     const engine = fakeEngine([peer]);
     const { again } = shell(engine);
     fireEvent.press(screen.getByTestId('tab-settings'));
-    await screen.findByLabelText('save-name');
+    await screen.findByTestId('save-name');
     again({ inboxRouteToken: '1' });
     expect(await screen.findByText('Your devices')).toBeTruthy();
     again({ inboxRouteToken: '2', inboxPeerDeviceId: peer.deviceId });
-    expect(await screen.findByLabelText('thread-back')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('thread-back'));
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('thread-back'));
     again({ inboxRouteToken: '3', inboxPeerDeviceId: peer.deviceId });
-    expect(await screen.findByLabelText('thread-back')).toBeTruthy();
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
   });
 
   it('shows a blocking alert instead of the tabs', async () => {
@@ -221,7 +221,7 @@ describe('AppShell tokens', () => {
     shell(engine, { onUnpair });
     fireEvent.press(screen.getByTestId('tab-settings'));
     fireEvent.press(await screen.findByTestId('remove-' + peer.deviceId));
-    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    fireEvent.press(screen.getByTestId('confirm-remove'));
     await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(peer));
   });
 
@@ -254,7 +254,7 @@ describe('AppShell desktop layout', () => {
 
   it('keeps the sidebar on Settings and highlights Settings', async () => {
     shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, settingsRouteToken: '1' });
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    expect(await screen.findByTestId('save-name')).toBeTruthy();
     expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(settingsSelected()).toMatchObject({ selected: true });
   });
@@ -262,14 +262,14 @@ describe('AppShell desktop layout', () => {
   it('routes from the sidebar to Settings', async () => {
     shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME });
     fireEvent.press(await screen.findByTestId('side-settings'));
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    expect(await screen.findByTestId('save-name')).toBeTruthy();
     fireEvent.press(screen.getByTestId('side-devices'));
     expect(await screen.findByText('Your devices')).toBeTruthy();
   });
 
   it('keeps the sidebar inside a thread, and highlights Devices', async () => {
     shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, initialPeerDeviceId: peer.deviceId });
-    await screen.findByLabelText('thread-back');
+    await screen.findByTestId('thread-back');
     expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(devicesSelected()).toMatchObject({ selected: true });
   });

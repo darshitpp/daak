@@ -159,6 +159,19 @@ impl Db {
         Ok(())
     }
 
+    // Set the state only when the row is NOT already 'canceled'. A drain in
+    // flight lost the outbox guard to a cancel or a revoke, but its transfers
+    // write can still land after the cancel's: without this guard it relabels a
+    // canceled share 'failed' (or 'paused'). True only when the write matched.
+    pub fn set_transfer_state_unless_canceled(&self, id: &[u8; 16], state: &str) -> Result<bool> {
+        let n = self.conn().execute(
+            "UPDATE transfers SET state = ?2, updated_at = ?3
+              WHERE transfer_id = ?1 AND state != 'canceled'",
+            rusqlite::params![&id[..], state, now()],
+        )?;
+        Ok(n > 0)
+    }
+
     // Close the open outbound transfers of one peer. The pairing is revoked,
     // so these sends can never move: the outbox rows are gone. The rows stay
     // as history and read canceled with one l. Final rows, inbound rows, and

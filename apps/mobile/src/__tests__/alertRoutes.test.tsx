@@ -94,7 +94,7 @@ describe('update-required', () => {
     render(<App />);
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
-    fireEvent.press(await screen.findByLabelText('update-dismiss'));
+    fireEvent.press(await screen.findByTestId('update-dismiss'));
     expect(screen.queryByText('A new version of Daak is available')).toBeNull();
 
     await announce(outOfStep());
@@ -108,7 +108,7 @@ describe('update-required', () => {
     render(<App />);
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
-    fireEvent.press(await screen.findByLabelText('update-dismiss'));
+    fireEvent.press(await screen.findByTestId('update-dismiss'));
 
     await announce(outOfStep({ peerDeviceId: peerB.deviceId, peerName: peerB.name, peerVersion: 3 }));
     expect(await screen.findByText('A new version of Daak is available')).toBeTruthy();
@@ -121,7 +121,7 @@ describe('update-required', () => {
     render(<App />);
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
-    fireEvent.press(await screen.findByLabelText('update-open'));
+    fireEvent.press(await screen.findByTestId('update-open'));
     expect(open).toHaveBeenCalledWith(RELEASES_URL);
     expect(RELEASES_URL).toBe('https://github.com/darshitpp/daak/releases/latest');
     // The screen stays up. The button does not dismiss it.
@@ -141,7 +141,7 @@ describe('update-required', () => {
     render(<App />);
     await screen.findByTestId('tab-devices');
     await announce(outOfStep());
-    fireEvent.press(await screen.findByLabelText('update-dismiss'));
+    fireEvent.press(await screen.findByTestId('update-dismiss'));
     expect(screen.queryByText('A new version of Daak is available')).toBeNull();
     // "Devices" is both the tab label and a section title, so the test id is
     // the unambiguous proof that the shell is back.
@@ -168,7 +168,7 @@ describe('cant-reach', () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     expect(await screen.findByText("Daak can't reach any devices")).toBeTruthy();
   });
 
@@ -179,10 +179,10 @@ describe('cant-reach', () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([peerA]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     await act(async () => {});
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
-    expect(screen.getByLabelText('save-name')).toBeTruthy();
+    expect(screen.getByTestId('save-name')).toBeTruthy();
   });
 
   // "Nobody is home" and "the check itself failed" are different problems, and
@@ -195,7 +195,7 @@ describe('cant-reach', () => {
     jest.spyOn(engine, 'devices').mockRejectedValue(new Error('discovery socket refused'));
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     // NOT "Daak can't reach any devices": a rejection is not evidence that the
     // network is empty, and the title has to stop claiming it is.
     expect(await screen.findByText('Daak could not finish the search')).toBeTruthy();
@@ -217,7 +217,7 @@ describe('cant-reach', () => {
     ]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     expect(await screen.findByText('Waiting to send')).toBeTruthy();
     expect(screen.getAllByTestId('cant-reach-queued')).toHaveLength(1);
     // The engine's summary carries no display name, so the label is the peer id
@@ -232,13 +232,13 @@ describe('cant-reach', () => {
     const transfers = jest.spyOn(engine, 'listTransfers').mockResolvedValue([]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     await screen.findByText("Daak can't reach any devices");
     const before = devices.mock.calls.length;
     const transfersBefore = transfers.mock.calls.length;
 
     devices.mockResolvedValue([peerA]);
-    fireEvent.press(screen.getByLabelText('cant-reach-retry'));
+    fireEvent.press(screen.getByTestId('cant-reach-retry'));
     await waitFor(() => expect(devices.mock.calls.length).toBeGreaterThan(before));
     // Somebody is there now, so the screen goes away on its own.
     await waitFor(() => expect(screen.queryByText("Daak can't reach any devices")).toBeNull());
@@ -247,10 +247,10 @@ describe('cant-reach', () => {
     // showing the PREVIOUS failure's queue is a screen claiming to describe the
     // present.
     devices.mockResolvedValue([]);
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     await screen.findByText("Daak can't reach any devices");
     const afterOk = transfers.mock.calls.length;
-    fireEvent.press(screen.getByLabelText('cant-reach-retry'));
+    fireEvent.press(screen.getByTestId('cant-reach-retry'));
     await waitFor(() => expect(transfers.mock.calls.length).toBeGreaterThan(afterOk));
   });
 
@@ -263,12 +263,12 @@ describe('cant-reach', () => {
     const transfers = jest.spyOn(engine, 'listTransfers').mockResolvedValue([]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     await screen.findByText("Daak can't reach any devices");
 
     const before = transfers.mock.calls.length;
     devices.mockResolvedValue([peerA]);
-    fireEvent.press(screen.getByLabelText('cant-reach-retry'));
+    fireEvent.press(screen.getByTestId('cant-reach-retry'));
     // React 19: the retry resolves devices() on a microtask outside act.
     await act(async () => {});
     await waitFor(() => expect(screen.queryByText("Daak can't reach any devices")).toBeNull());
@@ -279,10 +279,10 @@ describe('cant-reach', () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     await screen.findByText("Daak can't reach any devices");
-    fireEvent.press(screen.getByLabelText('cant-reach-settings'));
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('cant-reach-settings'));
+    expect(await screen.findByTestId('save-name')).toBeTruthy();
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
   });
 
@@ -294,7 +294,7 @@ describe('cant-reach', () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     await screen.findByText("Daak can't reach any devices");
     // The note title is "Looking on this Wi-Fi". Any other word after "Looking on" names a network.
     expect(screen.queryByText(/Looking on (?!this Wi-Fi)/)).toBeNull();
@@ -306,7 +306,7 @@ describe('cant-reach', () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
-    fireEvent.press(await screen.findByLabelText('settings-check-connection'));
+    fireEvent.press(await screen.findByTestId('settings-check-connection'));
     expect(await screen.findByText('Looking on this Wi-Fi')).toBeTruthy();
     expect(
       screen.getByText('This phone is on this Wi-Fi. The devices you paired need to be on the same network too.'),

@@ -40,6 +40,8 @@ export function fingerprintGroups(hash: string): string {
 
 /** Binary units, because that is what the sender's manifest actually counts. */
 export function humanBytes(n: number): string {
+  // A total of 0 is an unmeasured size, not "0 B". No bytes means no total.
+  if (n <= 0) return '';
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10 * 1024 ? 1 : 0) + ' KB';
   if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';

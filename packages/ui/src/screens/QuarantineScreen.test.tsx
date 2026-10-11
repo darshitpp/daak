@@ -56,7 +56,7 @@ describe('QuarantineScreen, the words of the design', () => {
     mount(fakeEngine());
     await screen.findByText('harbor-lighthouse.jpg');
     expect(screen.queryByTestId('quarantine-why-body')).toBeNull();
-    fireEvent.press(screen.getByLabelText('quarantine-why'));
+    fireEvent.press(screen.getByTestId('quarantine-why'));
     expect(screen.getByTestId('quarantine-why-body')).toBeTruthy();
     expect(screen.getByText(/A fingerprint is a short code Daak works out from a file/)).toBeTruthy();
   });
@@ -68,10 +68,10 @@ describe('QuarantineScreen, Delete it', () => {
     const del = jest.spyOn(engine, 'deleteQuarantined');
     mount(engine, { deviceNoun: 'Mac' });
     await screen.findByText('harbor-lighthouse.jpg');
-    fireEvent.press(screen.getByLabelText('quarantine-delete'));
+    fireEvent.press(screen.getByTestId('quarantine-delete'));
     expect(screen.getByText('Delete this file?')).toBeTruthy();
     expect(screen.getByText('It was never opened. Deleting it only clears the holding area on this Mac.')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('quarantine-delete-cancel'));
+    fireEvent.press(screen.getByTestId('quarantine-delete-cancel'));
     await waitFor(() => expect(screen.queryByText('Delete this file?')).toBeNull());
     expect(del).not.toHaveBeenCalled();
   });
@@ -83,8 +83,8 @@ describe('QuarantineScreen, Delete it', () => {
     const back = jest.fn();
     mount(engine, { deviceNoun: 'phone', onDeleted: deleted, onBack: back });
     await screen.findByText('harbor-lighthouse.jpg');
-    fireEvent.press(screen.getByLabelText('quarantine-delete'));
-    fireEvent.press(screen.getByLabelText('quarantine-delete-confirm'));
+    fireEvent.press(screen.getByTestId('quarantine-delete'));
+    fireEvent.press(screen.getByTestId('quarantine-delete-confirm'));
     expect(await screen.findByText('Deleted')).toBeTruthy();
     expect(screen.getByText('The held-back file is gone. Nothing else on this phone changed.')).toBeTruthy();
     expect(del).toHaveBeenCalledWith(TID, 0);
@@ -104,7 +104,7 @@ describe('QuarantineScreen, Delete it', () => {
     await screen.findByText('harbor-lighthouse.jpg');
     const screenBtn = StyleSheet.flatten(screen.getByTestId('quarantine-delete').props.style);
     expect(screenBtn.backgroundColor).toBe(colors.fg);
-    fireEvent.press(screen.getByLabelText('quarantine-delete'));
+    fireEvent.press(screen.getByTestId('quarantine-delete'));
     const sheetBtn = StyleSheet.flatten(screen.getByTestId('quarantine-delete-confirm').props.style);
     expect(sheetBtn.borderColor).toBe(colors.err);
   });
@@ -112,8 +112,8 @@ describe('QuarantineScreen, Delete it', () => {
   it('says "device" when the host gives no noun', async () => {
     mount(fakeEngine());
     await screen.findByText('harbor-lighthouse.jpg');
-    fireEvent.press(screen.getByLabelText('quarantine-delete'));
-    fireEvent.press(screen.getByLabelText('quarantine-delete-confirm'));
+    fireEvent.press(screen.getByTestId('quarantine-delete'));
+    fireEvent.press(screen.getByTestId('quarantine-delete-confirm'));
     expect(await screen.findByText('The held-back file is gone. Nothing else on this device changed.')).toBeTruthy();
   });
 
@@ -122,8 +122,8 @@ describe('QuarantineScreen, Delete it', () => {
     jest.spyOn(engine, 'deleteQuarantined').mockRejectedValue(new Error('the file is locked'));
     mount(engine);
     await screen.findByText('harbor-lighthouse.jpg');
-    fireEvent.press(screen.getByLabelText('quarantine-delete'));
-    fireEvent.press(screen.getByLabelText('quarantine-delete-confirm'));
+    fireEvent.press(screen.getByTestId('quarantine-delete'));
+    fireEvent.press(screen.getByTestId('quarantine-delete-confirm'));
     expect(await screen.findByText('the file is locked')).toBeTruthy();
     expect(screen.queryByText('Delete this file?')).toBeNull();
     expect(screen.queryByText('Deleted')).toBeNull();

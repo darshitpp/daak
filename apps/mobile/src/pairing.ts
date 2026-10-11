@@ -81,11 +81,15 @@ export async function armHostPairing(engine: DaakEngine): Promise<void> {
 export async function joinWithScan(
   engine: DaakEngine,
   onScanned?: () => void,
+  onPeer?: (peerDeviceId: string) => void,
 ): Promise<{ sas: string; peerDeviceId: string }> {
   const scanned = await scanQr();
   // The scanner has closed. What follows is reading the code and the engine call.
   onScanned?.();
   const { deviceId, cbor, addr } = parsePairingPayload(scanned);
+  // The peer id is known BEFORE `pair` runs, so the caller can arm its unmount
+  // revoke for the exact peer if the scan finished during an unmount (P6 3.9).
+  onPeer?.(deviceId);
   const { sas } = await engine.pair(deviceId, 'qr', cbor, addr);
   return { sas, peerDeviceId: deviceId };
 }

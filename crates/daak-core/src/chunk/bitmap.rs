@@ -46,6 +46,12 @@ impl ChunkBitmap {
         self.len == 0 || self.missing_ranges().is_empty()
     }
 
+    /// How many chunks this bitmap holds. Used to seed resume progress with the
+    /// bytes already on disk, so the bar reaches 100%.
+    pub fn count_ones(&self) -> u64 {
+        self.words.iter().map(|w| w.count_ones() as u64).sum()
+    }
+
     pub fn missing_ranges(&self) -> Vec<Range<u64>> {
         let mut out = Vec::new();
         let mut start: Option<u64> = None;

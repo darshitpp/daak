@@ -92,31 +92,40 @@ pub fn list_thread(
     let mut rows = db.list_peer_transfers_page(peer, after, limit + 1)?;
     let mut has_more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
-    // A daemon frame holds at most 4 MiB. A page of 200 transfers with large
-    // text bodies would not fit. Keep rows while the manifest bytes stay under
-    // the budget, and always keep at least 1 row.
+    // Expand each candidate row into its wire items, newest first. The budget
+    // must bound the JSON the reader RECEIVES, not the raw manifests: the JSON
+    // of a page is larger than its manifests (escaping, field names), so
+    // counting manifests let a page overrun the daemon frame. Keep rows while
+    // that JSON stays under the budget, and always keep 1 row.
+    let mut groups: Vec<Vec<ThreadItem>> = Vec::with_capacity(rows.len());
+    let mut costs: Vec<usize> = Vec::with_capacity(rows.len());
+    for t in &rows {
+        let mut one = Vec::new();
+        expand(db, t, &mut one)?;
+        costs.push(page_json_len(&one));
+        groups.push(one);
+    }
     let mut used = 0usize;
     let mut keep = 0usize;
-    for r in &rows {
-        if keep > 0 && used + r.manifest.len() > THREAD_PAGE_BYTES {
+    while keep < costs.len() {
+        if keep > 0 && used + costs[keep] > THREAD_PAGE_BYTES {
             break;
         }
-        used += r.manifest.len();
+        used += costs[keep];
         keep += 1;
     }
     if keep < rows.len() {
         rows.truncate(keep);
+        groups.truncate(keep);
         has_more = true;
     }
     let older_cursor = match (has_more, rows.last()) {
         (true, Some(last)) => Some(encode_cursor(last.created_at, &last.transfer_id)),
         _ => None,
     };
-    rows.reverse(); // oldest first
-    let mut items = Vec::new();
-    for t in &rows {
-        expand(db, t, &mut items)?;
-    }
+    // Oldest first, so a screen can append. The query order is newest first.
+    groups.reverse();
+    let items: Vec<ThreadItem> = groups.into_iter().flatten().collect();
     Ok(ThreadPage {
         items,
         older_cursor,
@@ -124,6 +133,33 @@ pub fn list_thread(
 }
 // A single transfer whose manifest alone exceeds the frame still fails on the
 // daemon path. The manifest has no size cap today, and this plan adds none.
+
+/// The byte size of the wire JSON for a run of items, EXCLUDING the page
+/// envelope. `list_thread` uses it to bound a page by the JSON the reader
+/// receives, not by the manifest bytes. It mirrors `thread_page_json` in
+/// daakd/daak-ffi: the same keys and the same null-for-None rule.
+fn page_json_len(items: &[ThreadItem]) -> usize {
+    let v: Vec<serde_json::Value> = items
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "transferId": hex::encode(i.transfer_id),
+                "itemIndex": i.item_index,
+                "direction": if i.outbound { "out" } else { "in" },
+                "type": if i.is_text { "text" } else { "file" },
+                "name": i.name,
+                "size": i.size,
+                "text": i.text,
+                "state": i.state,
+                "destPath": i.dest_path,
+                "at": i.at,
+                "transferState": i.transfer_state,
+                "error": i.error,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(v).to_string().len()
+}
 
 fn expand(db: &Db, t: &TransferRow, out: &mut Vec<ThreadItem>) -> Result<()> {
     let outbound = t.direction == "out";
@@ -233,6 +269,29 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.migrate().unwrap();
         db
+    }
+
+    // The exact wire JSON daakd/ffi build for a page (thread_page_json): the
+    // envelope around the shared item JSON the production cap measures.
+    fn whole_page_json_len(page: &ThreadPage) -> usize {
+        let v = serde_json::json!({
+            "items": page.items.iter().map(|i| serde_json::json!({
+                "transferId": hex::encode(i.transfer_id),
+                "itemIndex": i.item_index,
+                "direction": if i.outbound { "out" } else { "in" },
+                "type": if i.is_text { "text" } else { "file" },
+                "name": i.name,
+                "size": i.size,
+                "text": i.text,
+                "state": i.state,
+                "destPath": i.dest_path,
+                "at": i.at,
+                "transferState": i.transfer_state,
+                "error": i.error,
+            })).collect::<Vec<_>>(),
+            "olderCursor": page.older_cursor,
+        });
+        v.to_string().len()
     }
 
     #[test]
@@ -395,8 +454,8 @@ mod tests {
         }
         let first = list_thread(&db, &[3u8; 16], 50, None).unwrap();
         assert!(!first.items.is_empty() && first.items.len() < 4);
-        // A 1 MiB body fills a manifest past 1 MiB, so one page holds few
-        // rows. Walk each page to the end. All 4 transfers appear once.
+        // A 1 MiB body fills the JSON budget fast, so one page holds few rows.
+        // Walk each page to the end. All 4 transfers appear once.
         let mut seen: Vec<[u8; 16]> = first.items.iter().map(|i| i.transfer_id).collect();
         let mut cursor = first.older_cursor.clone();
         while let Some(c) = cursor {
@@ -409,6 +468,72 @@ mod tests {
             cursor = page.older_cursor.clone();
         }
         assert_eq!(seen.len(), 4);
+    }
+
+    // 3.6: the cap must bound the JSON that crosses the wire, not the raw
+    // manifest. Two 1 MiB text bodies have manifests under the cap but a page
+    // JSON over it, because the JSON of a page is larger than its manifests.
+    #[test]
+    fn the_page_cap_bounds_the_wire_json_not_the_manifests() {
+        let db = db();
+        // Many small items. Each item costs ~190 JSON bytes (4*32 hex id + the
+        // field names) but only ~66 CBOR bytes (16 raw id + short keys), so the
+        // page JSON is ~3x the manifest bytes. The manifests of 3 rows fit the
+        // cap while their JSON does not -- exactly what the manifest accounting
+        // got wrong.
+        let items_per_row = 10_000u32;
+        let row_items = |n: u32| {
+            let mut v: Vec<Item> = Vec::new();
+            for i in 0..n {
+                let mut it = Item::text(i, format!("m{i}"));
+                it.size = Some(0);
+                v.push(it);
+            }
+            v
+        };
+        for id in 1u8..=3 {
+            let m = manifest(row_items(items_per_row));
+            put(
+                &db,
+                id,
+                3,
+                "out",
+                "done",
+                id as i64,
+                m.to_cbor().unwrap(),
+                1,
+            );
+        }
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert!(!page.items.is_empty(), "a page always holds one transfer");
+        assert!(
+            whole_page_json_len(&page) <= THREAD_PAGE_BYTES,
+            "the page JSON size {} must stay under the cap {THREAD_PAGE_BYTES}",
+            whole_page_json_len(&page)
+        );
+    }
+
+    // 3.6: small pages are unaffected. Several small transfers still fit two or
+    // more to a page, so the cap does not cut every page to one row.
+    #[test]
+    fn a_page_of_small_transfers_keeps_more_than_one_row() {
+        let db = db();
+        for id in 1u8..=4 {
+            let m = manifest(vec![Item::text(0, format!("t{id}"))]);
+            put(
+                &db,
+                id,
+                3,
+                "out",
+                "done",
+                id as i64,
+                m.to_cbor().unwrap(),
+                1,
+            );
+        }
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert_eq!(page.items.len(), 4);
+        assert!(whole_page_json_len(&page) <= THREAD_PAGE_BYTES);
     }
 
     #[test]

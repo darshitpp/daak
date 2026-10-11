@@ -78,7 +78,7 @@ describe('QR pairing is reachable from the app shell', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Show my code'));
     await waitFor(() => expect(screen.getByText("We couldn't make your code.")).toBeTruthy());
     // The engine text is a diagnostic now, not user copy.
@@ -90,7 +90,7 @@ describe('QR pairing is reachable from the app shell', () => {
   it('mounts the flow lazily: no bundle fetch and no QR until the user asks', () => {
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-      fireEvent.press(screen.getByLabelText('pair-a-device'));
+      fireEvent.press(screen.getByTestId('pair-a-device'));
     expect(screen.getByText('Show my code')).toBeTruthy();
     expect(screen.getByText('Scan a code')).toBeTruthy();
     expect(mockedBundle).not.toHaveBeenCalled();
@@ -106,7 +106,7 @@ describe('QR pairing is reachable from the app shell', () => {
     // wrapper already carries this flex; the phone's did not.
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Show my code'));
     await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
     const frame = screen.getByTestId('pair-frame');
@@ -119,7 +119,7 @@ describe('QR pairing is reachable from the app shell', () => {
     await startEngine();
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-      fireEvent.press(screen.getByLabelText('pair-a-device'));
+      fireEvent.press(screen.getByTestId('pair-a-device'));
 
     const armHostPairing = jest.spyOn(engine, 'armHostPairing');
     fireEvent.press(screen.getByText('Show my code'));
@@ -139,8 +139,8 @@ describe('QR pairing is reachable from the app shell', () => {
     expect(armHostPairing).toHaveBeenCalledWith();
     expect(screen.getByLabelText('pairing-qr')).toBeTruthy();
     // No host-side camera control to press.
-    expect(screen.queryByLabelText('scan-joiner')).toBeNull();
-    expect(screen.queryByLabelText('scan')).toBeNull();
+    expect(screen.queryByTestId('scan-joiner')).toBeNull();
+    expect(screen.queryByTestId('scan')).toBeNull();
 
     const handlers = (
       engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }
@@ -152,7 +152,7 @@ describe('QR pairing is reachable from the app shell', () => {
     await waitFor(() => expect(screen.getByText('111 222')).toBeTruthy());
 
     const confirmPairing = jest.spyOn(engine, 'confirmPairing');
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     // The SAS event named the peer, so confirming needs no other source.
     await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith('aa'.repeat(16)));
     await waitFor(() => expect(screen.getByText('Show my code')).toBeTruthy());
@@ -163,7 +163,7 @@ describe('QR pairing is reachable from the app shell', () => {
   it('offers They match and Does not match once a SAS is on screen', async () => {
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
 
@@ -175,11 +175,11 @@ describe('QR pairing is reachable from the app shell', () => {
     const confirmPairing = jest.spyOn(engine, 'confirmPairing');
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
 
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith('aa'.repeat(16)));
     await waitFor(() => expect(screen.getByText('Scan a code')).toBeTruthy());
   });
@@ -189,11 +189,11 @@ describe('QR pairing is reachable from the app shell', () => {
     const revoke = jest.spyOn(engine, 'revokePairing');
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
 
-    fireEvent.press(screen.getByLabelText('reject'));
+    fireEvent.press(screen.getByTestId('reject'));
     await waitFor(() => expect(revoke).toHaveBeenCalledWith('aa'.repeat(16)));
     expect(screen.queryByText('123 456')).toBeNull();
   });
@@ -202,7 +202,7 @@ describe('QR pairing is reachable from the app shell', () => {
     const pair = jest.spyOn(engine, 'pair');
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-      fireEvent.press(screen.getByLabelText('pair-a-device'));
+      fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Scan a code'));
 
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
@@ -211,7 +211,7 @@ describe('QR pairing is reachable from the app shell', () => {
     // is `undefined` and the joiner falls back to discovery (R42c/R42d).
     expect(pair).toHaveBeenCalledWith('aa'.repeat(16), 'qr', 'ccdd', undefined);
 
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     await waitFor(() => expect(screen.getByText('Scan a code')).toBeTruthy());
   });
 
@@ -223,28 +223,28 @@ describe('QR pairing is reachable from the app shell', () => {
     it('offers a re-arm control BEFORE any SAS has arrived (the finding-1 case)', async () => {
       renderShell();
       fireEvent.press(screen.getByTestId('tab-devices'));
-      fireEvent.press(screen.getByLabelText('pair-a-device'));
+      fireEvent.press(screen.getByTestId('pair-a-device'));
       fireEvent.press(screen.getByText('Show my code'));
       await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
 
       // No SAS. This is the state a burnt arm leaves the host in: the QR is on
       // screen, nothing has paired, and the joiner is about to scan it.
       expect(screen.queryByText('111 222')).toBeNull();
-      expect(screen.getByLabelText('host-retry')).toBeTruthy();
+      expect(screen.getByTestId('host-retry')).toBeTruthy();
     });
 
     it('re-fetches the QR and arms a SECOND time when the retry control is pressed', async () => {
       await startEngine();
       renderShell();
       fireEvent.press(screen.getByTestId('tab-devices'));
-      fireEvent.press(screen.getByLabelText('pair-a-device'));
+      fireEvent.press(screen.getByTestId('pair-a-device'));
 
       const armHostPairing = jest.spyOn(engine, 'armHostPairing');
       fireEvent.press(screen.getByText('Show my code'));
       await waitFor(() => expect(armHostPairing).toHaveBeenCalledTimes(1));
       expect(mockedQr).toHaveBeenCalledTimes(1);
 
-      fireEvent.press(screen.getByLabelText('host-retry'));
+      fireEvent.press(screen.getByTestId('host-retry'));
 
       // The arm is REPLACEABLE, so a second press must reach the engine again --
       // that is the whole recovery. A QR re-render alone would not re-arm.
@@ -257,7 +257,7 @@ describe('QR pairing is reachable from the app shell', () => {
       await startEngine();
       renderShell();
       fireEvent.press(screen.getByTestId('tab-devices'));
-      fireEvent.press(screen.getByLabelText('pair-a-device'));
+      fireEvent.press(screen.getByTestId('pair-a-device'));
       fireEvent.press(screen.getByText('Show my code'));
       await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
 
@@ -271,8 +271,8 @@ describe('QR pairing is reachable from the app shell', () => {
       await waitFor(() => expect(screen.getByText('111 222')).toBeTruthy());
 
       // The design button under the number replaces the flow-level control.
-      expect(screen.getByLabelText('pair-newcode')).toBeTruthy();
-      expect(screen.queryByLabelText('host-retry')).toBeNull();
+      expect(screen.getByTestId('pair-newcode')).toBeTruthy();
+      expect(screen.queryByTestId('host-retry')).toBeNull();
     });
   });
 
@@ -290,12 +290,12 @@ describe('QR pairing is reachable from the app shell', () => {
     const pair = jest.spyOn(engine, 'pair').mockRejectedValue(new Error('unknown device bbbb'));
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(pair).toHaveBeenCalled());
 
     await waitFor(() => expect(screen.getByLabelText('pairing-error')).toBeTruthy());
-    expect(screen.queryByLabelText('confirm')).toBeNull();
+    expect(screen.queryByTestId('confirm')).toBeNull();
     pair.mockRestore();
   });
 });
@@ -349,7 +349,7 @@ describe('the pairing flow uses the words of the design', () => {
     expect(screen.queryByText('Finish pairing')).toBeNull();
     // "They match" is the confirm. The event named the peer, so the id is known.
     const confirmPairing = jest.spyOn(engine, 'confirmPairing');
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith('aa'.repeat(16)));
     await waitFor(() => expect(screen.getByText('Show my code')).toBeTruthy());
   });
@@ -361,11 +361,11 @@ describe('the pairing flow uses the words of the design', () => {
     renderFlow();
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     expect(await screen.findByText(/no pending pairing to confirm/)).toBeTruthy();
     expect(screen.getByText("We couldn't finish pairing.")).toBeTruthy();
     expect(screen.getByText('123 456')).toBeTruthy();
-    expect(screen.getByLabelText('confirm')).toBeTruthy();
+    expect(screen.getByTestId('confirm')).toBeTruthy();
   });
 
   // Commit fffa68b. A link only asks. The user taps Pair before the engine is called.
@@ -384,13 +384,13 @@ describe('the pairing flow uses the words of the design', () => {
     );
     expect(screen.getByText('Pair with Pixel 9?')).toBeTruthy();
     expect(pair).not.toHaveBeenCalled();
-    fireEvent.press(screen.getByLabelText('link-pair-confirm'));
+    fireEvent.press(screen.getByTestId('link-pair-confirm'));
     expect(await screen.findByText('Reading their code…')).toBeTruthy();
     await act(async () => {
       release({ sas: '482917' });
     });
     expect(await screen.findByText('482 917')).toBeTruthy();
-    expect(screen.getByLabelText('confirm')).toBeTruthy();
+    expect(screen.getByTestId('confirm')).toBeTruthy();
   });
 
   it('join: shows the camera heading while the scanner is open', async () => {
@@ -429,7 +429,7 @@ describe('the pairing flow uses the words of the design', () => {
     expect(screen.getByText('Make sure their screen is showing the code, then try again.')).toBeTruthy();
     expect(screen.queryByText(/camera denied/)).toBeNull();
     expect(warn.mock.calls.flat().join(' ')).toContain('camera denied');
-    fireEvent.press(screen.getByLabelText('pair-retry'));
+    fireEvent.press(screen.getByTestId('pair-retry'));
     await waitFor(() => expect(mockedScan).toHaveBeenCalledTimes(2));
     warn.mockRestore();
   });
@@ -443,7 +443,7 @@ describe('the pairing flow uses the words of the design', () => {
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
     expect(screen.queryByTestId('toast')).toBeNull();
-    fireEvent.press(screen.getByLabelText('reject'));
+    fireEvent.press(screen.getByTestId('reject'));
     expect(await screen.findByText('Pairing cancelled')).toBeTruthy();
     expect(screen.getByTestId('toast-text')).toBeTruthy();
     expect(revoke).toHaveBeenCalledTimes(1);
@@ -463,7 +463,7 @@ describe('the pairing flow uses the words of the design', () => {
     // reject control can remove the pending pairing. No event is needed.
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('reject'));
+    fireEvent.press(screen.getByTestId('reject'));
     expect(await screen.findByText(/store is locked/)).toBeTruthy();
     expect(screen.getByText("We couldn't remove that pairing.")).toBeTruthy();
     // The pane is the choose pane: both choices show.
@@ -480,7 +480,7 @@ describe('the pairing flow uses the words of the design', () => {
     expect(screen.queryByText(/engine not started/)).toBeNull();
     expect(warn.mock.calls.flat().join(' ')).toContain('engine not started');
     expect(screen.queryByLabelText('pairing-qr')).toBeNull();
-    fireEvent.press(screen.getByLabelText('pair-retry'));
+    fireEvent.press(screen.getByTestId('pair-retry'));
     await waitFor(() => expect(mockedBundle).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
     warn.mockRestore();
@@ -524,7 +524,7 @@ describe('leaving the pair route rejects a pending pairing', () => {
     const view = renderFlow();
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith(PEER_ID));
     await waitFor(() => expect(screen.getByText('Show my code')).toBeTruthy());
     view.unmount();
@@ -537,7 +537,7 @@ describe('leaving the pair route rejects a pending pairing', () => {
     const view = renderFlow();
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     expect(await screen.findByText(/no pending pairing to confirm/)).toBeTruthy();
     view.unmount();
     expect(revoke).toHaveBeenCalledTimes(1);
@@ -549,7 +549,7 @@ describe('leaving the pair route rejects a pending pairing', () => {
     const view = renderFlow();
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('reject'));
+    fireEvent.press(screen.getByTestId('reject'));
     expect(await screen.findByText('Pairing cancelled')).toBeTruthy();
     expect(revoke).toHaveBeenCalledTimes(1);
     view.unmount();
@@ -565,6 +565,30 @@ describe('leaving the pair route rejects a pending pairing', () => {
     const second = renderFlow();
     second.unmount();
     expect(revoke).not.toHaveBeenCalled();
+  });
+
+  // 3.9: the joiner unmounts WHILE engine.pair is still running. No SAS is on
+  // screen yet, so there is no peer id to revoke. The pairing the engine is
+  // about to commit must not linger, so the flow revokes it when pair settles.
+  it('revokes the pending joiner pairing when it unmounts while engine.pair runs', async () => {
+    const revoke = jest.spyOn(engine, 'revokePairing');
+    let release!: (v: { sas: string }) => void;
+    jest.spyOn(engine, 'pair').mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const view = renderFlow();
+    fireEvent.press(screen.getByText('Scan a code'));
+    expect(await screen.findByText('Reading their code…')).toBeTruthy();
+    expect(revoke).not.toHaveBeenCalled();
+    view.unmount();
+    await act(async () => {
+      release({ sas: '482917' });
+      await Promise.resolve();
+    });
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith(PEER_ID);
   });
 
   it('revokes the host peer named by the pairing.sas event when it unmounts', async () => {
@@ -616,7 +640,7 @@ describe('the FFI fixture drives the host half', () => {
     await startEngine();
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
-    fireEvent.press(screen.getByLabelText('pair-a-device'));
+    fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Show my code'));
     await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
 
@@ -628,9 +652,9 @@ describe('the FFI fixture drives the host half', () => {
         h({ type: 'pairing.sas', peerDeviceId: event.peerDeviceId, sas: event.sas });
     });
     // The control exists ONLY when the event named the peer.
-    await waitFor(() => expect(screen.getByLabelText('confirm')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('confirm')).toBeTruthy());
     const confirmPairing = jest.spyOn(engine, 'confirmPairing');
-    fireEvent.press(screen.getByLabelText('confirm'));
+    fireEvent.press(screen.getByTestId('confirm'));
     await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith(event.peerDeviceId));
   });
 });

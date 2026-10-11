@@ -115,6 +115,19 @@ describe('DaemonClientEngine', () => {
     expect(h.written).toEqual([{ Request: 'Devices' }]);
   });
 
+  it('omits an empty listThread cursor, so the wire shape is the newest page', async () => {
+    // The in-process engine treats '' as no cursor. The daemon path used to
+    // send before:'' and the daemon rejected it as a bad cursor. No before key
+    // is the newest page, and it matches the in-process engine.
+    const h = makeEngine();
+    const p = h.engine.listThread('ab'.repeat(16), { before: '' });
+    expect(h.written).toEqual([
+      { Request: { ListThread: { peer_device_id: 'ab'.repeat(16), limit: 50 } } },
+    ]);
+    h.reply({ Json: { value: '{"items":[],"olderCursor":null}' } });
+    expect(await p).toEqual({ items: [], olderCursor: null });
+  });
+
   it('does NOT record startedWith when Start itself failed', async () => {
     // A Start refused by the daemon (a bad data_dir, a conflicting engine)
     // must leave the client willing to try again. Recording the args BEFORE the

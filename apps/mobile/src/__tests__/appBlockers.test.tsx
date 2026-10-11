@@ -212,7 +212,7 @@ describe('the connection check opens the cannot-reach screen on the phone', () =
     // button is a real Btn, so its testID is its accessibility label.
     fireEvent.press(await screen.findByTestId('tab-devices'));
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
-    fireEvent.press(screen.getByLabelText('devices-check-connection'));
+    fireEvent.press(screen.getByTestId('devices-check-connection'));
 
     await waitFor(() =>
       expect(screen.getByText("Daak can't reach any devices")).toBeTruthy(),

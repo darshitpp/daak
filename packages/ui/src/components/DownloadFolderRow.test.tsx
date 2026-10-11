@@ -13,7 +13,7 @@ it('shows the stored folder and keeps it when the picker is cancelled', async ()
   const choose = async () => null;
   render(<DownloadFolderRow load={load} choose={choose} />);
   expect(await screen.findByText('Downloads')).toBeTruthy();
-  fireEvent.press(screen.getByLabelText('download-folder-choose'));
+  fireEvent.press(screen.getByTestId('download-folder-choose'));
   await waitFor(() => expect(screen.getByText('Downloads')).toBeTruthy());
 });
 
@@ -22,7 +22,7 @@ it('shows the stored folder and keeps it when the picker is cancelled', async ()
 it('says the app keeps its own copy when no folder is chosen', async () => {
   render(<DownloadFolderRow load={async () => null} choose={async () => null} />);
   expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
-  expect(screen.queryByLabelText('download-folder-reset')).toBeNull();
+  expect(screen.queryByTestId('download-folder-reset')).toBeNull();
 });
 
 // A chosen folder is shown, and Reset puts the row back to the default. Reset
@@ -31,11 +31,11 @@ it('adopts a chosen folder and can reset it', async () => {
   const reset = async () => {};
   render(<DownloadFolderRow load={async () => null} choose={async () => 'Photos'} reset={reset} />);
   expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
-  fireEvent.press(screen.getByLabelText('download-folder-choose'));
+  fireEvent.press(screen.getByTestId('download-folder-choose'));
   expect(await screen.findByText('Photos')).toBeTruthy();
   // The design button is "btn-quiet", which is the default quiet variant.
-  expect(StyleSheet.flatten(screen.getByLabelText('download-folder-reset').props.style).borderColor).toBe(colors.border);
-  fireEvent.press(screen.getByLabelText('download-folder-reset'));
+  expect(StyleSheet.flatten(screen.getByTestId('download-folder-reset').props.style).borderColor).toBe(colors.border);
+  fireEvent.press(screen.getByTestId('download-folder-reset'));
   expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
 });
 
@@ -52,7 +52,7 @@ it('toasts where files save after a folder is chosen', async () => {
       <DownloadFolderRow load={async () => null} choose={async () => 'Photos'} title="Save files to" chooseLabel="Change folder" />
     </ToastProvider>,
   );
-  fireEvent.press(await screen.findByLabelText('download-folder-choose'));
+  fireEvent.press(await screen.findByTestId('download-folder-choose'));
   expect(await screen.findByText('Files save to Photos')).toBeTruthy();
 });
 
@@ -62,8 +62,8 @@ it('shows no toast when the picker is cancelled', async () => {
       <DownloadFolderRow load={async () => 'Downloads'} choose={async () => null} />
     </ToastProvider>,
   );
-  fireEvent.press(await screen.findByLabelText('download-folder-choose'));
-  await waitFor(() => expect(screen.getByLabelText('download-folder-choose')).not.toBeDisabled());
+  fireEvent.press(await screen.findByTestId('download-folder-choose'));
+  await waitFor(() => expect(screen.getByTestId('download-folder-choose')).not.toBeDisabled());
   expect(screen.queryByTestId('toast')).toBeNull();
 });
 
@@ -73,13 +73,13 @@ it('shows the no-picker words and no button when the host gives no choose', asyn
   expect(await screen.findByText('Saved to')).toBeTruthy();
   expect(screen.getByText('Daak · On My iPhone')).toBeTruthy();
   expect(screen.getByText("iOS keeps received files in Daak's own folder. There's no folder to pick.")).toBeTruthy();
-  expect(screen.queryByLabelText('download-folder-choose')).toBeNull();
+  expect(screen.queryByTestId('download-folder-choose')).toBeNull();
   expect(screen.queryByText('Files are moved, not copied')).toBeNull();
 });
 
 it('hides the note when asked', async () => {
   render(<DownloadFolderRow load={async () => null} choose={async () => null} hideNote />);
-  await screen.findByLabelText('download-folder-choose');
+  await screen.findByTestId('download-folder-choose');
   expect(screen.queryByText('Files are moved, not copied')).toBeNull();
 });
 

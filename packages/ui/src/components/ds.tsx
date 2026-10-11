@@ -10,9 +10,11 @@ export { Wordmark } from './Wordmark';
  * lines of View+Text in every screen.
  */
 
-export function Btn({ onPress, label, variant = 'quiet', block, disabled, testID, style }: {
+export function Btn({ onPress, label, accessibilityLabel, variant = 'quiet', block, disabled, testID, style }: {
   onPress: () => void;
   label: string;
+  /** A reader label when the visible label is not enough. Defaults to `label`. */
+  accessibilityLabel?: string;
   variant?: 'primary' | 'quiet' | 'ghost' | 'danger';
   block?: boolean;
   disabled?: boolean;
@@ -27,7 +29,7 @@ export function Btn({ onPress, label, variant = 'quiet', block, disabled, testID
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={testID}
+      accessibilityLabel={accessibilityLabel ?? label}
       testID={testID}
       disabled={disabled}
       onPress={onPress}

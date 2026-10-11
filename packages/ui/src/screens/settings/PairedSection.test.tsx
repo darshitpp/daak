@@ -61,7 +61,7 @@ describe('PairedSection', () => {
     const revoke = jest.spyOn(engine, 'revokePairing');
     mount(engine);
     fireEvent.press(await screen.findByTestId('remove-' + iphone.deviceId));
-    fireEvent.press(screen.getByLabelText('keep-paired'));
+    fireEvent.press(screen.getByTestId('keep-paired'));
     expect(revoke).not.toHaveBeenCalled();
     expect(screen.queryByText('Unpair Darshit iPhone?')).toBeNull();
   });
@@ -72,7 +72,7 @@ describe('PairedSection', () => {
     const onUnpair = jest.fn();
     mount(engine, onUnpair);
     fireEvent.press(await screen.findByTestId('remove-' + iphone.deviceId));
-    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    fireEvent.press(screen.getByTestId('confirm-remove'));
     await waitFor(() => expect(revoke).toHaveBeenCalledTimes(1));
     expect(revoke).toHaveBeenCalledWith(iphone.deviceId);
     await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(iphone));
@@ -92,8 +92,8 @@ describe('PairedSection', () => {
     );
     mount(engine);
     fireEvent.press(await screen.findByTestId('remove-' + iphone.deviceId));
-    fireEvent.press(screen.getByLabelText('confirm-remove'));
-    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    fireEvent.press(screen.getByTestId('confirm-remove'));
+    fireEvent.press(screen.getByTestId('confirm-remove'));
     await waitFor(() => expect(revoke).toHaveBeenCalledTimes(1));
     await act(async () => { finish(); });
     expect(revoke).toHaveBeenCalledTimes(1);
@@ -115,7 +115,7 @@ describe('PairedSection', () => {
     const revoke = jest.spyOn(engine, 'revokePairing').mockResolvedValue();
     mount(engine);
     fireEvent.press(await screen.findByTestId('remove-' + tablet.deviceId));
-    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    fireEvent.press(screen.getByTestId('confirm-remove'));
     await waitFor(() => expect(revoke).toHaveBeenCalledWith(tablet.deviceId));
   });
 
@@ -133,7 +133,7 @@ describe('PairedSection', () => {
     const onUnpair = jest.fn();
     mount(engine, onUnpair);
     fireEvent.press(await screen.findByTestId('remove-' + iphone.deviceId));
-    fireEvent.press(screen.getByLabelText('confirm-remove'));
+    fireEvent.press(screen.getByTestId('confirm-remove'));
     // An error needs the user to act, so it stays an inline note. No toast.
     expect(await screen.findByText('database is locked')).toBeTruthy();
     expect(screen.getByTestId('paired-result')).toBeTruthy();

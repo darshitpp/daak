@@ -76,7 +76,7 @@ describe('DashboardScreen (Devices)', () => {
     mount(fakeEngine([]), { onPair });
     expect(await screen.findByText('No paired devices yet')).toBeTruthy();
     expect(screen.getByText('Pair a device on your Wi-Fi and it will show up here.')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('pair-a-device-empty'));
+    fireEvent.press(screen.getByTestId('pair-a-device-empty'));
     expect(onPair).toHaveBeenCalledTimes(1);
   });
 
@@ -87,7 +87,7 @@ describe('DashboardScreen (Devices)', () => {
     // The section title and the row status carry the same design words, so the
     // query returns both.
     expect((await screen.findAllByText('Nearby, not paired yet')).length).toBe(2);
-    fireEvent.press(screen.getByLabelText('pair-with-' + near.deviceId));
+    fireEvent.press(screen.getByTestId('pair-with-' + near.deviceId));
     expect(onPair).toHaveBeenCalled();
   });
 
@@ -120,15 +120,15 @@ describe('DashboardScreen (Devices)', () => {
     const onPair = jest.fn();
     const onCheckConnection = jest.fn();
     const { unmount } = mount(fakeEngine([dev('Pixel', 'online')]), { onPair, onCheckConnection });
-    fireEvent.press(await screen.findByLabelText('pair-a-device'));
-    fireEvent.press(screen.getByLabelText('devices-check-connection'));
+    fireEvent.press(await screen.findByTestId('pair-a-device'));
+    fireEvent.press(screen.getByTestId('devices-check-connection'));
     expect(onPair).toHaveBeenCalled();
     expect(onCheckConnection).toHaveBeenCalled();
     unmount();
     mount(fakeEngine([dev('Pixel', 'online')]));
     await screen.findByText('Pixel');
-    expect(screen.queryByLabelText('pair-a-device')).toBeNull();
-    expect(screen.queryByLabelText('devices-check-connection')).toBeNull();
+    expect(screen.queryByTestId('pair-a-device')).toBeNull();
+    expect(screen.queryByTestId('devices-check-connection')).toBeNull();
   });
 
   // After a relaunch no outbox.queued event has fired yet. The count comes from listTransfers.

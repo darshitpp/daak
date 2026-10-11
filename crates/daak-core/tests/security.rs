@@ -98,7 +98,7 @@ async fn encrypted_transfer_roundtrips_and_writes_file() {
             None,
             &dst_path,
             None,
-            |_, _, _| {},
+            |_, _, _, _, _| {},
             |_| {},
         )
         .await
