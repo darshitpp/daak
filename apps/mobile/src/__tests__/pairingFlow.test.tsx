@@ -644,6 +644,34 @@ describe('leaving the pair route rejects a pending pairing', () => {
   });
 });
 
+// The effect sets `unmounted` in its cleanup, but the effect never reset it on
+// the next mount. A remount of the pair route then looked like an unmount, and
+// the join revoked the pairing it had just committed. The SAS never showed and
+// the confirm had nothing to confirm. StrictMode runs the effect setup, cleanup
+// and setup on ONE instance, which is the same ref-preserving remount that Fast
+// Refresh or a route re-push makes. The fix resets the flag in the effect body.
+describe('a remount is not an unmount', () => {
+  it('keeps the join alive and shows the SAS after the route remounts', async () => {
+    const revoke = jest.spyOn(engine, 'revokePairing');
+    render(
+      <React.StrictMode>
+        <EngineProvider engine={engine}>
+          <ToastProvider>
+            <PairingFlow />
+          </ToastProvider>
+        </EngineProvider>
+      </React.StrictMode>,
+    );
+    fireEvent.press(screen.getByText('Scan a code'));
+    await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
+    // The pairing is live, not revoked by a false unmount.
+    expect(revoke).not.toHaveBeenCalled();
+    const confirmPairing = jest.spyOn(engine, 'confirmPairing');
+    fireEvent.press(screen.getByTestId('confirm'));
+    await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith(PEER_ID));
+  });
+});
+
 // The shared fixture is the FFI's REAL output: crates/daak-ffi/tests/smoke.rs
 // asserts that it equals ffi_event_json(to_pairing_sas_event(...)), so this
 // case fails if the native side ever sends an empty peer id again. That is

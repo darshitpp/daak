@@ -67,15 +67,18 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
   engineRef.current = engine;
   // Only an unmount of the pair route revokes. A re-render does not run this
   // cleanup, and the app going to the background does not unmount the route.
-  useEffect(
-    () => () => {
+  // A remount reuses the ref, so the effect body must reset the flag. Without
+  // the reset a remount is treated as an unmount and the join revokes the
+  // pairing it just committed (Fast Refresh, or a route re-push).
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
       unmounted.current = true;
       const id = pendingRef.current;
       pendingRef.current = '';
       if (id) void engineRef.current.revokePairing(id).catch(() => {});
-    },
-    [],
-  );
+    };
+  }, []);
 
   // 3.9: run `engine.pair` and, when the route unmounts before `pair` settles,
   // revoke the pairing the engine commits. The row does NOT exist until `pair`
