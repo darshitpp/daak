@@ -4,6 +4,11 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.Gravity
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.Button
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -13,6 +18,8 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.ReaderException
@@ -44,7 +51,37 @@ class ScannerActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    setContentView(previewView)
+    // The preview alone gave no sign of a way out. The system Back gesture
+    // worked, but nothing on screen said so (field test 2026-10-11).
+    val density = resources.displayMetrics.density
+    val cancel = Button(this).apply {
+      text = "Cancel"
+      contentDescription = "Cancel scanning"
+      setOnClickListener {
+        // RESULT_CANCELED with no EXTRA_ERROR is a dismissal. The module maps
+        // it to E_SCAN_CANCELLED, which the pairing flow reads as "go back".
+        setResult(android.app.Activity.RESULT_CANCELED)
+        finish()
+      }
+    }
+    val root = FrameLayout(this).apply {
+      addView(previewView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+      addView(
+          cancel,
+          FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+            gravity = Gravity.TOP or Gravity.START
+            marginStart = (16 * density).toInt()
+            topMargin = (16 * density).toInt()
+          })
+    }
+    // Edge to edge: keep the button out from under the status bar.
+    ViewCompat.setOnApplyWindowInsetsListener(cancel) { view, insets ->
+      val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+      (view.layoutParams as FrameLayout.LayoutParams).topMargin = bars.top + (16 * density).toInt()
+      view.requestLayout()
+      insets
+    }
+    setContentView(root)
     if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
       startCamera()
     } else {

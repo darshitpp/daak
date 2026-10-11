@@ -18,11 +18,19 @@ class DaakQrScanner: NSObject {
       guard let root = Self.rootViewController() else {
         reject("E_NO_VC", "no root view controller", nil); return
       }
+      // Every way out dismisses the camera screen first. It was a full-screen
+      // black view with no control, and an error used to reject the promise
+      // and leave that view up.
       let vc = ScannerViewController(
         onResult: { [weak root] value in
           root?.dismiss(animated: true) { resolve(value) }
         },
-        onError: { reject("E_CAMERA", $0, nil) })
+        onError: { [weak root] message in
+          root?.dismiss(animated: true) { reject("E_CAMERA", message, nil) }
+        },
+        onCancel: { [weak root] in
+          root?.dismiss(animated: true) { reject("E_SCAN_CANCELLED", "scan cancelled", nil) }
+        })
       vc.modalPresentationStyle = .fullScreen
       root.present(vc, animated: true)
     }

@@ -19,7 +19,14 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   /// released on BOTH paths, or a cancelled picker leaves JS waiting forever.
   private var pendingChoose: RCTPromiseResolveBlock?
   private var previewSource: DaakPreviewSource?
+  /// The navigation controller that holds the open preview, for the Done button.
+  private weak var previewNav: UINavigationController?
   @objc static func requiresMainQueueSetup() -> Bool { false }
+
+  /// The Done button of the file preview.
+  @objc private func closePreview() {
+    previewNav?.dismiss(animated: true)
+  }
 
   @objc func documentsDir(_ resolve: @escaping RCTPromiseResolveBlock,
                           reject: @escaping RCTPromiseRejectBlock) {
@@ -94,7 +101,16 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       self.previewSource = source
       let preview = QLPreviewController()
       preview.dataSource = source
-      top.present(preview, animated: true) { resolve(true) }
+      // The preview is presented over the app's root, with no sure way out.
+      // An explicit Done in a navigation bar is the way back.
+      preview.navigationItem.leftBarButtonItem = UIBarButtonItem(
+        barButtonSystemItem: .done,
+        target: self,
+        action: #selector(self.closePreview))
+      let nav = UINavigationController(rootViewController: preview)
+      nav.modalPresentationStyle = .fullScreen
+      self.previewNav = nav
+      top.present(nav, animated: true) { resolve(true) }
     }
   }
 
@@ -175,6 +191,12 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       return
     }
     pendingChoose = nil
+    // The picked URL is security scoped. The scope must be OPEN while the
+    // bookmark is made, or the bookmark does not carry the access and every
+    // later move out of the app sandbox is refused (field test 2026-10-11:
+    // the picker worked and received files still stayed in the app folder).
+    let opened = url.startAccessingSecurityScopedResource()
+    defer { if opened { url.stopAccessingSecurityScopedResource() } }
     do {
       let bookmark = try url.bookmarkData(
         options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
@@ -184,6 +206,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       defaults.set(url.path, forKey: Self.pathKey)
       resolve(url.path)
     } catch {
+      NSLog("Daak: the download folder bookmark could not be made: \(error)")
       resolve(nil)
     }
   }
@@ -228,11 +251,15 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       resolvingBookmarkData: bookmark, options: [], relativeTo: nil,
       bookmarkDataIsStale: &stale)
     else {
+      NSLog("Daak: the download folder bookmark did not resolve; files stay in the app folder")
       resolve(paths)
       return
     }
     let scoped = folder.startAccessingSecurityScopedResource()
     defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+    if !scoped {
+      NSLog("Daak: the download folder scope did not open (stale bookmark: \(stale)); the move may be refused")
+    }
 
     let fm = FileManager.default
     var out: [String] = []
@@ -249,13 +276,38 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         n += 1
       }
       do {
-        try fm.moveItem(at: src, to: dest)
+        try Self.place(src, at: dest, fm: fm)
         out.append(dest.path)
       } catch {
+        // The file stays where it is. The log says why, because a silent
+        // fallback looks like a feature that does nothing.
+        NSLog("Daak: could not move \(src.lastPathComponent) into the download folder: \(error)")
         out.append(path)
       }
     }
     resolve(out)
+  }
+
+  /// Put one file at `dest`. A plain move is the first try. A folder served by
+  /// a File Provider (iCloud Drive, another app's folder) can refuse it, so the
+  /// second try is a COORDINATED copy, and the source is removed only after the
+  /// copy succeeded.
+  private static func place(_ src: URL, at dest: URL, fm: FileManager) throws {
+    do {
+      try fm.moveItem(at: src, to: dest)
+      return
+    } catch {
+      NSLog("Daak: a plain move was refused (\(error)); trying a coordinated copy")
+    }
+    var coordinationError: NSError?
+    var copyError: Error?
+    NSFileCoordinator(filePresenter: nil).coordinate(
+      writingItemAt: dest, options: .forReplacing, error: &coordinationError
+    ) { target in
+      do { try fm.copyItem(at: src, to: target) } catch { copyError = error }
+    }
+    if let failure = coordinationError ?? copyError { throw failure }
+    try? fm.removeItem(at: src)
   }
 }
 
