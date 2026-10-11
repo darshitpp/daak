@@ -1,16 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-const pngStub = {
-  name: 'png-stub',
-  enforce: 'pre' as const,
-  load(id: string) {
-    return id.endsWith('.png') ? 'export default 1;' : null;
-  },
-};
-
 export default defineConfig({
-  plugins: [pngStub],
   resolve: {
     // react-native ships Flow, which vite cannot parse. Aliasing it to a typed
     // stub keeps the tests off the real package. It is needed because
