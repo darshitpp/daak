@@ -41,6 +41,9 @@ export function PermissionsScreen({
   onBack?: () => void;
 }) {
   const alerts = rows.find((row) => row.key === 'alerts');
+  // Ruling P2-D: a host that can read the grant reports 'on' or 'off'. The Mac
+  // reports 'unavailable', because its notify module has no grant read, so the
+  // off sentence is a fixed design claim there. A grant-read native method closes it.
   const hint =
     alerts === undefined
       ? null

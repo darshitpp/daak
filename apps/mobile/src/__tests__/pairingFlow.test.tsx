@@ -670,6 +670,33 @@ describe('a remount is not an unmount', () => {
     fireEvent.press(screen.getByTestId('confirm'));
     await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith(PEER_ID));
   });
+
+  // The StrictMode case above is the ref-preserving remount. This case is the
+  // real one a user makes: leave the route, then open it again. The first
+  // unmount revokes the pending pairing. The second mount shows its own SAS and
+  // must not revoke the fresh pairing.
+  it('revokes once on a real unmount, then shows the SAS on a second mount without revoking', async () => {
+    const revoke = jest.spyOn(engine, 'revokePairing');
+    const renderFlow = () =>
+      render(
+        <EngineProvider engine={engine}>
+          <ToastProvider>
+            <PairingFlow />
+          </ToastProvider>
+        </EngineProvider>,
+      );
+    const first = renderFlow();
+    fireEvent.press(screen.getByText('Scan a code'));
+    await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
+    first.unmount();
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith(PEER_ID);
+
+    const second = renderFlow();
+    fireEvent.press(screen.getByText('Scan a code'));
+    await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
+    expect(revoke).toHaveBeenCalledTimes(1);
+  });
 });
 
 // The shared fixture is the FFI's REAL output: crates/daak-ffi/tests/smoke.rs

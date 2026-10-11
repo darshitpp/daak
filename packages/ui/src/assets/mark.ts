@@ -11,7 +11,7 @@
 // A data URI keeps one asset and one component, needs no new dependency, and is
 // served by the image loader on all three platforms.
 //
-// The 3x cut is embedded, so the lockup stays crisp on a retina display.
+// The 6x cut is embedded (the PNG is 81x87), so the lockup stays crisp on a retina display.
 // If Metro ever serves assets from a sibling package, replace this with the file
 // import again (and keep the test that asserts the source is not a bundler id).
 export const MARK_URI =

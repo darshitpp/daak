@@ -8,7 +8,11 @@ import { threadItem, threadPage } from '../testing/threadFixtures';
 import { whenLabel } from '../components/Bubble';
 import { setSelfPresenceLocal } from '../state/selfPresence';
 
-afterEach(() => act(() => setSelfPresenceLocal('online')));
+afterEach(() => {
+  act(() => setSelfPresenceLocal('online'));
+  // A failed assertion must not leave fake timers on for the next test.
+  jest.useRealTimers();
+});
 
 const dev = (name: string, presence: DeviceInfo['presence'], extra: Partial<DeviceInfo> = {}): DeviceInfo => ({
   deviceId: (name.charCodeAt(0).toString(16).padStart(2, '0')).repeat(16),
@@ -207,6 +211,42 @@ describe('DashboardScreen (Devices)', () => {
     expect(screen.queryByText('A note')).toBeNull();
   });
 
+  // The text of a file that left Windows ends its line with a CRLF. The row
+  // must not show the CR.
+  it('strips a trailing CR from a CRLF text line', async () => {
+    const peer = dev('Kitchen Tablet', 'online');
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(
+      threadPage([threadItem({ type: 'text', name: null, text: 'Dinner\r\nSee you at 8' })]),
+    );
+    mount(engine, { onOpenThread: jest.fn() });
+    expect(await screen.findByText('Dinner')).toBeTruthy();
+    // RTL normalizes whitespace, so read the raw text the row rendered.
+    expect(screen.getByText('Dinner').props.children).toBe('Dinner');
+  });
+
+  // An empty text with a real name still shows the name.
+  it('shows the name when the text of a file item is empty', async () => {
+    const peer = dev('Kitchen Tablet', 'online');
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(
+      threadPage([threadItem({ type: 'file', name: 'recipe.txt', text: '' })]),
+    );
+    mount(engine, { onOpenThread: jest.fn() });
+    expect(await screen.findByText('recipe.txt')).toBeTruthy();
+  });
+
+  // A null name and an empty text must show "No items yet", not an empty line.
+  it('shows No items yet for a null name and an empty text', async () => {
+    const peer = dev('Kitchen Tablet', 'online');
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(
+      threadPage([threadItem({ type: 'text', name: null, text: '' })]),
+    );
+    mount(engine, { onOpenThread: jest.fn() });
+    expect(await screen.findByText('No items yet')).toBeTruthy();
+  });
+
   // An older read must not overwrite a newer one. A transfer.done refresh
   // answers before the first mount read does.
   it('ignores an out-of-order refresh', async () => {
@@ -230,6 +270,47 @@ describe('DashboardScreen (Devices)', () => {
     jest.useRealTimers();
   });
 
+  // A steady stream of item events clears the debounce timer again and again.
+  // The 2 s max wait makes the refresh run anyway.
+  it('refreshes at the max wait while item events keep arriving', async () => {
+    jest.useFakeTimers();
+    const peer = dev('Pixel', 'online');
+    const engine = fakeEngine([peer]);
+    const spy = jest.spyOn(engine, 'devices');
+    mount(engine, { onOpenThread: jest.fn() });
+    await act(async () => { await Promise.resolve(); });
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Ten events 250 ms apart: 2500 ms of stream. The 300 ms debounce never
+    // fires, because each event clears it before it runs.
+    for (let i = 0; i < 10; i++) {
+      emit(engine, { type: 'device.presence', deviceId: peer.deviceId, presence: 'away' });
+      await act(async () => { jest.advanceTimersByTime(250); });
+    }
+    expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // A device that leaves the list drops its row. A re-paired device must not
+  // show the old line of the row that is gone.
+  it('drops a gone device row so a re-paired device shows no old line', async () => {
+    const peer = dev('Kitchen Tablet', 'online');
+    const engine = fakeEngine([peer]);
+    const devices = jest.spyOn(engine, 'devices');
+    const list = jest.spyOn(engine, 'listThread')
+      .mockResolvedValueOnce(threadPage([threadItem({ type: 'file', text: null, name: 'old.pdf' })]))
+      .mockRejectedValueOnce(new Error('read failed'));
+    mount(engine, { onOpenThread: jest.fn() });
+    expect(await screen.findByText('old.pdf')).toBeTruthy();
+    // The device leaves the list.
+    devices.mockResolvedValue([]);
+    emit(engine, { type: 'device.presence', deviceId: peer.deviceId, presence: 'away' });
+    await waitFor(() => expect(screen.queryByText('old.pdf')).toBeNull());
+    // The same peer pairs again and the fresh read rejects.
+    devices.mockResolvedValue([peer]);
+    emit(engine, { type: 'pairing.done', deviceId: peer.deviceId });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('old.pdf')).toBeNull();
+  });
+
   // A rejected read keeps the row line and the time it showed before.
   it('keeps the row line and time when a read rejects', async () => {
     const peer = dev('Kitchen Tablet', 'online');
@@ -241,8 +322,11 @@ describe('DashboardScreen (Devices)', () => {
     mount(engine, { onOpenThread: jest.fn() });
     expect(await screen.findByText('Q3-report.pdf')).toBeTruthy();
     expect(screen.getByText(whenLabel(at))).toBeTruthy();
+    // Fake timers, so the debounce advances with no real wait.
+    jest.useFakeTimers();
     emit(engine, { type: 'device.presence', deviceId: peer.deviceId, presence: 'away' });
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await act(async () => { jest.advanceTimersByTime(300); });
+    expect(list).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Q3-report.pdf')).toBeTruthy();
     expect(screen.getByText(whenLabel(at))).toBeTruthy();
   });

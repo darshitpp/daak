@@ -25,13 +25,16 @@ const REFRESH_ON: ReadonlySet<DaakEvent['type']> = new Set<DaakEvent['type']>([
 // is enough, so the refresh waits this long.
 const REFRESH_DEBOUNCE_MS = 300;
 
+// A steady stream of events keeps clearing the debounce timer. The refresh
+// must still run, so it goes at most this long after the first event of a burst.
+const REFRESH_MAX_WAIT_MS = 2000;
+
 /** The design `contact-last` and `contact-when` of one device row. */
 type RowFacts = { lastItem: string; when: string };
 
-/** The first line of a text item. The row shows one line only. */
+/** The first line of a text item. The row shows one line only. A CRLF ends the line. */
 function firstLine(text: string): string {
-  const end = text.indexOf('\n');
-  return end === -1 ? text : text.slice(0, end);
+  return text.split(/\r?\n/, 1)[0];
 }
 
 function shareText(s: { fileCount: number; hasText: boolean }): string {
@@ -67,6 +70,8 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
   const generation = useRef(0);
   const alive = useRef(true);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The start of the current event burst. The max wait counts from here.
+  const burstAt = useRef<number | null>(null);
 
   const refresh = useCallback(() => {
     const gen = ++generation.current;
@@ -90,8 +95,9 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
                     last === undefined
                       ? { lastItem: 'No items yet', when: '' }
                       : // The design shows the file name. A text item has no
-                        // name, so the row shows the first line of the text.
-                        { lastItem: last.name ?? firstLine(last.text ?? ''), when: whenLabel(last.at) };
+                        // name, so the row shows the first line of the text. An
+                        // empty name and an empty text show "No items yet".
+                        { lastItem: last.name || firstLine(last.text ?? '') || 'No items yet', when: whenLabel(last.at) };
                   return [d.deviceId, facts] as const;
                 },
                 // A failed read returns null. The caller then keeps the row's
@@ -102,9 +108,11 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
         ).then((read) => {
           if (stale()) return;
           // Start from the last answer, so a row whose read rejected keeps
-          // its previous line and time.
+          // its previous line and time. Drop a device that left the list, so
+          // a re-paired device does not show an old line.
           setRows((prev) => {
-            const next = { ...prev };
+            const next: Record<string, RowFacts> = {};
+            for (const d of list) if (prev[d.deviceId] !== undefined) next[d.deviceId] = prev[d.deviceId];
             for (const row of read) if (row !== null) next[row[0]] = row[1];
             return next;
           });
@@ -129,11 +137,17 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
   }, [engine]);
 
   const scheduleRefresh = useCallback(() => {
+    const now = Date.now();
+    if (burstAt.current === null) burstAt.current = now;
     if (timer.current !== null) clearTimeout(timer.current);
+    // The debounce wins while the burst is short. The max wait wins while a
+    // steady stream keeps clearing the timer.
+    const left = REFRESH_MAX_WAIT_MS - (now - burstAt.current);
     timer.current = setTimeout(() => {
       timer.current = null;
+      burstAt.current = null;
       refresh();
-    }, REFRESH_DEBOUNCE_MS);
+    }, Math.max(0, Math.min(REFRESH_DEBOUNCE_MS, left)));
   }, [refresh]);
 
   useEffect(() => {
@@ -147,6 +161,7 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
     return () => {
       alive.current = false;
       if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; }
+      burstAt.current = null;
       off();
     };
   }, [engine, refresh, scheduleRefresh]);
