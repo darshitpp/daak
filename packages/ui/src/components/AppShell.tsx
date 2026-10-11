@@ -7,7 +7,7 @@ import { ThreadScreen } from '../screens/ThreadScreen';
 import { QuarantineScreen } from '../screens/QuarantineScreen';
 import type { InboxActions } from '../inbox-actions';
 import type { SettingsHost } from '../screens/settings/host';
-import { TabBar, type Tab } from './TabBar';
+import { Sidebar, TabBar, type Tab } from './TabBar';
 import { Btn, type DeviceNoun } from './ds';
 import { spacing, ui } from '../theme';
 
@@ -93,7 +93,7 @@ export function AppShell({
   layout?: 'mobile' | 'desktop';
   /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
   deviceNoun?: DeviceNoun;
-  /** The desktop window header text. */
+  /** The Mac window chrome. The sidebar footer reads `version`. */
   windowChrome?: { title: string; version?: string };
   /** Lift the composer above the keyboard. The iOS host sets it. */
   keyboardAvoiding?: boolean;
@@ -208,39 +208,48 @@ export function AppShell({
   }
 
   const atRoot = stack.length === 0;
+  // The sidebar highlight (design NAV_FOR): the thread, the pair route, and
+  // the held route all count as Devices.
+  const activeNav: Tab = top === undefined ? root : 'devices';
   return (
     <View style={ui.screen}>
       {blocking ? (
-        // No tab bar: both blocking screens say Daak cannot proceed, and a
-        // tappable tab beside that claim is a lie about what works.
+        // No tab bar and no sidebar: both blocking screens say Daak cannot
+        // proceed, and a tappable destination beside that claim is a lie about
+        // what works.
         <View style={{ flex: 1 }} testID="alert-route">
           {alert}
         </View>
       ) : (
-        <>
-          {layout === 'desktop' && atRoot ? (
-            <TabBar tab={root} onChange={goRoot} layout="desktop" title={windowChrome?.title} trailing={windowChrome?.version} />
+        // The Mac window is a 248px sidebar beside the main column (design
+        // macos.html). The sidebar stays on every route. The phone keeps its
+        // bottom bar, which shows only at a root.
+        <View style={layout === 'desktop' ? ui.desk : ui.fill}>
+          {layout === 'desktop' ? (
+            <Sidebar active={activeNav} onChange={goRoot} version={windowChrome?.version} />
           ) : null}
-          <View
-            style={{ flex: 1 }}
-            pointerEvents={held ? 'none' : 'auto'}
-            accessibilityElementsHidden={held !== undefined}
-            importantForAccessibility={held ? 'no-hide-descendants' : 'auto'}
-          >
-            {screen}
-          </View>
-          {layout === 'mobile' && atRoot ? <TabBar tab={root} onChange={goRoot} layout="mobile" /> : null}
-          {held ? (
-            <View style={[StyleSheet.absoluteFill, ui.screen]} testID="quarantine-route">
-              <QuarantineScreen
-                transferId={held.transferId}
-                itemIndex={held.itemIndex}
-                onBack={pop}
-                deviceNoun={deviceNoun}
-              />
+          <View style={ui.fill}>
+            <View
+              style={{ flex: 1 }}
+              pointerEvents={held ? 'none' : 'auto'}
+              accessibilityElementsHidden={held !== undefined}
+              importantForAccessibility={held ? 'no-hide-descendants' : 'auto'}
+            >
+              {screen}
             </View>
-          ) : null}
-        </>
+            {layout === 'mobile' && atRoot ? <TabBar tab={root} onChange={goRoot} /> : null}
+            {held ? (
+              <View style={[StyleSheet.absoluteFill, ui.screen]} testID="quarantine-route">
+                <QuarantineScreen
+                  transferId={held.transferId}
+                  itemIndex={held.itemIndex}
+                  onBack={pop}
+                  deviceNoun={deviceNoun}
+                />
+              </View>
+            ) : null}
+          </View>
+        </View>
       )}
     </View>
   );

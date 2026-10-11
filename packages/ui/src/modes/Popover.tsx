@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { DaakEngine, DeviceInfo, QuarantineReport } from '@daak/core';
 import type { UiState } from '../state/store';
 import { useConnection } from '../state/useConnection';
+import { CANT_REACH_TOKEN } from '../state/useBlockers';
 import {
   Avatar,
   Btn,
@@ -16,7 +17,8 @@ import {
   type DeviceNoun,
 } from '../components/ds';
 import { NOT_RECORDED, fingerprintGroups, humanBytes } from '../screens/quarantine-facts';
-import { colors, spacing, ui } from '../theme';
+import { RELEASES_URL } from '../screens/about-links';
+import { colors, radius, spacing, ui } from '../theme';
 import { isSelectable, panelDevices, percent, sendLine, sendViewOf, tail } from './panel-model';
 import { useHeldBack } from './useHeldBack';
 import { usePanelTransfer } from './usePanelTransfer';
@@ -28,7 +30,8 @@ import { usePanelTransfer } from './usePanelTransfer';
  * done pane, and the failed pane. A queued send to an offline device does not
  * take a pane. It shows as a note above the panes, so the user can still pick
  * another device. The held-back card and the "Open the full app" button show on
- * every pane. A blocking alert replaces the panes.
+ * every pane. An update notice is a BANNER above the panes, so the panes stay
+ * usable. Only the cannot-reach screen replaces the panes.
  *
  * `onExpand` opens the dashboard WINDOW. That is the host shell's job. The
  * engine has no such verb, so this must never call `engine.start()`.
@@ -64,7 +67,10 @@ export function Popover({
   /** The word for this device in the held-back text. The host sets it. */
   deviceNoun?: DeviceNoun | 'device';
 }) {
-  const blocking = alertRouteToken !== undefined && alert;
+  // The token says which notice it is (see `useBlockers`). Only Cannot reach
+  // replaces the panes. Update available is a banner above them.
+  const unreachable = alert !== undefined && alertRouteToken === CANT_REACH_TOKEN;
+  const update = alert !== undefined && alertRouteToken !== undefined && !unreachable;
   const connection = useConnection(engine);
   const transfer = usePanelTransfer(engine);
   const held = useHeldBack(engine);
@@ -309,11 +315,11 @@ export function Popover({
     <View style={{ width: 320, flex: 1, backgroundColor: colors.bg }} testID="popover-root">
       <View style={{ padding: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm }}>
         <Wordmark size="sm" />
-        {blocking ? null : <Status tone={conn.tone} label={conn.label} />}
+        {unreachable ? null : <Status tone={conn.tone} label={conn.label} />}
       </View>
-      {blocking ? (
-        // REPLACES the panes. Both blocking screens say Daak cannot proceed, and
-        // a Send control beside that claim would contradict it.
+      {unreachable ? (
+        // REPLACES the panes. The screen says Daak cannot reach a device, and a
+        // Send control beside that claim would contradict it.
         <View style={{ padding: spacing.lg }}>{alert}</View>
       ) : (
         <>
@@ -322,6 +328,7 @@ export function Popover({
             contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}
             keyboardShouldPersistTaps="handled"
           >
+            {update ? <UpdateBanner /> : null}
             {waitingNote}
             {pane}
             {held ? <HeldCard report={held} deviceNoun={deviceNoun} /> : null}
@@ -334,6 +341,43 @@ export function Popover({
     </View>
   );
 }
+
+/**
+ * The update notice of the design (`macos-menubar.html`, `#update-banner`).
+ *
+ * It is a BANNER and not a view, so the device list, Send, and "Open the full
+ * app" stay reachable while it is showing. The button opens the releases page
+ * through the platform, as the Settings links do (ruling D2: no updater).
+ */
+function UpdateBanner() {
+  return (
+    <View style={styles.banner} testID="popover-update-banner">
+      <Text style={ui.noteTxt}>
+        A newer version of Daak is out. Some devices may not connect until you update.
+      </Text>
+      <Btn
+        variant="quiet"
+        block
+        testID="popover-update-download"
+        label="Open the download page"
+        onPress={() => void Linking.openURL(RELEASES_URL).catch(() => {})}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  // The design `.pop-banner`: a warn-tinted block, 8 by 12 padding.
+  banner: {
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.warnTint,
+    borderRadius: radius.sm,
+    backgroundColor: colors.warnTint,
+  },
+});
 
 /**
  * A device row. An offline device shows and cannot be chosen (design:

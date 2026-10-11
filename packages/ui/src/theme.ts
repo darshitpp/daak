@@ -175,10 +175,6 @@ export const ui = StyleSheet.create({
   kvK: { fontSize: type.sm, color: colors.muted },
   kvV: { fontSize: type.sm, color: colors.fg, textAlign: 'right' },
 
-  seg: { flexDirection: 'row', gap: spacing.xs, padding: spacing.xs, borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill },
-  segItem: { flex: 1, minHeight: 40, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: spacing.sm, borderRadius: radius.pill },
-  segItemOn: { backgroundColor: colors.fg },
-
   // Navigation. The bottom bar is the phone; the 248px rail is the desktop.
   tabbar: {
     flexDirection: 'row',
@@ -204,20 +200,32 @@ export const ui = StyleSheet.create({
   tabLabel: { fontSize: type.xs, lineHeight: 14, color: colors.muted },
   tabLabelOn: { color: colors.fg, fontWeight: '600' },
 
-  // Window header (desktop layout): title, a two-segment control, a trailing line.
-  deskbar: {
+  // The macOS window (design macos.html): a 248px rail beside the main column.
+  desk: { flex: 1, flexDirection: 'row' },
+  sidebar: {
+    width: control.sidebarWidth,
+    gap: spacing.xl,
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.md,
+    borderRightWidth: 1,
+    borderRightColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  sidebarBrand: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md },
+  sidebarNav: { gap: 2 },
+  sidebarItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingHorizontal: spacing.lg,
+    minHeight: control.minHeight,
     paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.bg,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.sm,
   },
-  deskTitle: { flex: 1, fontSize: type.lg, fontWeight: '600', color: colors.fg },
-  deskVer: { fontSize: type.xs, color: colors.muted },
-  segTab: { minHeight: control.minHeight, minWidth: 96, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg, borderRadius: radius.pill },
+  sidebarItemOn: { backgroundColor: colors.hover },
+  sidebarItemTxt: { fontSize: type.body, color: colors.fg2 },
+  sidebarItemTxtOn: { color: colors.fg, fontWeight: '600' },
+  sidebarFoot: { marginTop: 'auto', paddingHorizontal: spacing.md, fontSize: type.xs, color: colors.muted },
 
   wordmark: { flexDirection: 'row', alignItems: 'baseline' },
   btnBlock: { alignSelf: 'stretch' },

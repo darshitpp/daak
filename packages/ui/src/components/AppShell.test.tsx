@@ -236,21 +236,67 @@ describe('AppShell tokens', () => {
 
 });
 
+// The macOS window draws the design sidebar on EVERY route (design: macos.html,
+// `.sidebar`), with the version footer at the bottom. The header with the two
+// segments is gone.
 describe('AppShell desktop layout', () => {
-  it('draws the window header with the host title and no sidebar', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: { title: 'Daak for Mac', version: 'Version 1.0 (build 7)' } });
-    expect(await screen.findByText('Daak for Mac')).toBeTruthy();
-    expect(screen.getByText('Version 1.0 (build 7)')).toBeTruthy();
-    expect(screen.getByTestId('window-wordmark')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('tab-settings'));
-    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+  const CHROME = { title: 'Daak for Mac', version: 'Version 0.4.2 (build 1180)' };
+  const devicesSelected = () => screen.getByLabelText('Devices').props.accessibilityState;
+  const settingsSelected = () => screen.getByLabelText('Settings').props.accessibilityState;
+
+  it('draws the sidebar and its version footer on the Devices route', async () => {
+    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME });
+    expect(await screen.findByTestId('window-sidebar')).toBeTruthy();
+    expect(screen.getByText('Version 0.4.2 (build 1180)')).toBeTruthy();
+    expect(devicesSelected()).toMatchObject({ selected: true });
+    expect(screen.queryByTestId('tab-devices')).toBeNull();
   });
 
-  it('hides the window header inside a thread', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: { title: 'Daak for Mac' }, initialPeerDeviceId: peer.deviceId });
+  it('keeps the sidebar on Settings and highlights Settings', async () => {
+    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, settingsRouteToken: '1' });
+    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    expect(screen.getByTestId('window-sidebar')).toBeTruthy();
+    expect(settingsSelected()).toMatchObject({ selected: true });
+  });
+
+  it('routes from the sidebar to Settings', async () => {
+    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME });
+    fireEvent.press(await screen.findByTestId('side-settings'));
+    expect(await screen.findByLabelText('save-name')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('side-devices'));
+    expect(await screen.findByText('Your devices')).toBeTruthy();
+  });
+
+  it('keeps the sidebar inside a thread, and highlights Devices', async () => {
+    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, initialPeerDeviceId: peer.deviceId });
     await screen.findByLabelText('thread-back');
-    expect(screen.queryByText('Daak for Mac')).toBeNull();
-    expect(screen.queryByTestId('window-wordmark')).toBeNull();
+    expect(screen.getByTestId('window-sidebar')).toBeTruthy();
+    expect(devicesSelected()).toMatchObject({ selected: true });
+  });
+
+  it('keeps the sidebar on the pair route, and highlights Devices', async () => {
+    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, pair: <Text>pair-ui</Text>, pairBundle: '{"cbor":"aabb"}' });
+    expect(await screen.findByText('pair-ui')).toBeTruthy();
+    expect(screen.getByTestId('window-sidebar')).toBeTruthy();
+    expect(devicesSelected()).toMatchObject({ selected: true });
+  });
+
+  it('keeps the sidebar on the held route, and highlights Devices', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ type: 'file', text: null, name: 'bad.jpg', state: 'quarantined', transferId: TID, itemIndex: 1 }),
+    ]));
+    shell(engine, { layout: 'desktop', windowChrome: CHROME, initialPeerDeviceId: peer.deviceId });
+    fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
+    expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
+    expect(screen.getByTestId('window-sidebar')).toBeTruthy();
+    expect(devicesSelected()).toMatchObject({ selected: true });
+  });
+
+  it('hides the sidebar while a notice shows', async () => {
+    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, alert: <Text>blocked</Text>, alertRouteToken: 'p' });
+    expect(screen.getByText('blocked')).toBeTruthy();
+    expect(screen.queryByTestId('window-sidebar')).toBeNull();
   });
 });
 

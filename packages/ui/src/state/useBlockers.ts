@@ -41,6 +41,13 @@ export interface BlockerHost {
   openUrl?: (url: string) => void | Promise<unknown>;
 }
 
+/**
+ * The alert route token that means Cannot reach. Every other token is the peer
+ * id of an Update available notice, so the menu-bar panel can tell the two
+ * apart from the token alone.
+ */
+export const CANT_REACH_TOKEN = 'cant-reach';
+
 export function useBlockers(
   engine: DaakEngine,
   incompatible: IncompatiblePeer[],
@@ -266,7 +273,7 @@ export function useBlockers(
 
   return {
     alert,
-    alertRouteToken: updateToken ?? (noDevices === undefined ? undefined : 'cant-reach'),
+    alertRouteToken: updateToken ?? (noDevices === undefined ? undefined : CANT_REACH_TOKEN),
     // 0 means nothing asked yet, and a token of '0' would route Settings on
     // mount. undefined is the honest resting value.
     settingsRouteToken: settingsToken === 0 ? undefined : String(settingsToken),

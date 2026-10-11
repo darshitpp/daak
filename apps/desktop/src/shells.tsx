@@ -140,8 +140,9 @@ export function DaakDashboardShell({ engine, runtime }: {
     [],
   );
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
-  // appInfo is async (P2). The window header reads it in an effect and shows
-  // the version line after the answer. The About row reads it on its own.
+  // appInfo is async (P2). The window chrome reads it in an effect, and the
+  // sidebar footer shows the version line after the answer. The About row reads
+  // it on its own.
   // Memoized: a new host object on every render would be harmless to
   // ArrivalSection (it depends on the functions), but it costs a re-render
   // of Settings for nothing. No osAlerts: the desktop has no stored OS answer

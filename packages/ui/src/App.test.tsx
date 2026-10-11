@@ -6,6 +6,7 @@ import { createUiRuntime } from './headless';
 import { fakeEngine } from './testing/fakeEngine';
 import { useToast } from './components/Toast';
 import type { UiState } from './state/store';
+import { CANT_REACH_TOKEN } from './state/useBlockers';
 import type { DaakEvent } from '@daak/core';
 
 describe('DaakUiApp', () => {
@@ -59,7 +60,7 @@ describe('DaakUiApp', () => {
   // blocking-screen suite is source-shape only, so a shell could satisfy every
   // source pin and still drop the node on the way into Popover. This mounts the
   // real tree with the real host props and asserts on what is drawn.
-  it('renders the blocking alert in the popover when the host opens it', () => {
+  it('renders the cannot-reach screen in the popover, and no panel', () => {
     const engine = fakeEngine();
     const runtime = createUiRuntime(engine);
     render(
@@ -67,8 +68,8 @@ describe('DaakUiApp', () => {
         mode="popover"
         engine={engine}
         runtime={runtime}
-        alert={<Text testID="blocking-alert">Update Required</Text>}
-        alertRouteToken="peer-1"
+        alert={<Text testID="blocking-alert">Cannot reach</Text>}
+        alertRouteToken={CANT_REACH_TOKEN}
       />,
     );
     expect(screen.getByTestId('blocking-alert')).toBeTruthy();
@@ -84,6 +85,27 @@ describe('DaakUiApp', () => {
     // `aak` as two separate Text nodes, so a text query for "Daak" finds
     // nothing at all. The label on the wrapping View is the real handle.
     expect(screen.getAllByLabelText('Daak').length).toBeGreaterThan(0);
+  });
+
+  // P6 ruling: Update available is a BANNER above the list, so the panel STAYS
+  // and Send keeps working. The panel draws its own two-line banner with the
+  // design words, so the alert node is not drawn for it. The cannot-reach case
+  // above still proves the node reaches the popover.
+  it('keeps the panel for an update notice, and shows the banner', () => {
+    const engine = fakeEngine();
+    const runtime = createUiRuntime(engine);
+    render(
+      <DaakUiApp
+        mode="popover"
+        engine={engine}
+        runtime={runtime}
+        alert={<Text testID="blocking-alert">Update Required</Text>}
+        alertRouteToken="peer-1"
+      />,
+    );
+    expect(screen.getByTestId('popover-update-banner')).toBeTruthy();
+    expect(screen.queryByTestId('blocking-alert')).toBeNull();
+    expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
   });
 
   // The negative half. Without it, a shell that renders the alert over the
@@ -116,7 +138,13 @@ function ToastProbe() {
 }
 
 describe('DaakUiApp mounts the shared toast', () => {
-  it.each(['dashboard', 'popover'] as const)('shows a toast that a child raises in %s mode', async (mode) => {
+  // The alert slot is the way to seed a child in either mode. P6 draws no alert
+  // node for an update token in the popover, so the popover case uses the
+  // cannot-reach token, which does draw one.
+  it.each([
+    ['dashboard', 'probe-1'],
+    ['popover', CANT_REACH_TOKEN],
+  ] as const)('shows a toast that a child raises in %s mode', async (mode, token) => {
     const engine = fakeEngine();
     render(
       <DaakUiApp
@@ -124,7 +152,7 @@ describe('DaakUiApp mounts the shared toast', () => {
         engine={engine}
         runtime={createUiRuntime(engine)}
         alert={<ToastProbe />}
-        alertRouteToken="probe-1"
+        alertRouteToken={token}
       />,
     );
     expect(await screen.findByTestId('toast-probe')).toBeTruthy();

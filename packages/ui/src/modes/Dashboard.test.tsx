@@ -26,10 +26,10 @@ function spyEngine(devices: DeviceInfo[] = [peer]): { engine: DaakEngine; sent: 
 }
 
 describe('Dashboard (window mode)', () => {
-  it('opens on Devices with the window header and no sidebar', async () => {
+  it('opens on Devices with the window sidebar and its version footer', async () => {
     render(<Dashboard state={initialUiState} engine={fakeEngine([])} windowChrome={{ title: 'Daak for Mac', version: 'Version 1.0 (build 7)' }} />);
     expect(await screen.findByText('No paired devices yet')).toBeTruthy();
-    expect(screen.getByText('Daak for Mac')).toBeTruthy();
+    expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(screen.getByText('Version 1.0 (build 7)')).toBeTruthy();
   });
 

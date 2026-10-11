@@ -1,10 +1,12 @@
 import React from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { Linking, StyleSheet, Text } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, DeviceInfo, QuarantineReport, SendRequest, TransferSummary } from '@daak/core';
 import { Popover } from './Popover';
 import { fakeEngine } from '../testing/fakeEngine';
 import { initialUiState } from '../state/store';
+import { CANT_REACH_TOKEN } from '../state/useBlockers';
+import { RELEASES_URL } from '../screens/about-links';
 
 const mk = (name: string, presence: DeviceInfo['presence'], paired = true): DeviceInfo => ({
   deviceId: name.toLowerCase().replace(/\W/g, '').padEnd(32, '0').slice(0, 32),
@@ -98,13 +100,38 @@ describe('the panel frame', () => {
     expect(onExpand).toHaveBeenCalled();
   });
 
-  // The blocking screens replace the panel, as they replace the tab bar.
-  it('shows a blocking alert and no device list', () => {
+  // The update notice is a BANNER above the list (design macos-menubar.html,
+  // #update-banner), so the list, Send, and Open the full app stay usable.
+  it('shows the update banner above a still-usable list', () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel], { alert: <Text>blocked</Text>, alertRouteToken: 'x' });
-    expect(screen.getByText('blocked')).toBeTruthy();
+    mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
+    expect(
+      screen.getByText('A newer version of Daak is out. Some devices may not connect until you update.'),
+    ).toBeTruthy();
+    expect(screen.getByText('Open the download page')).toBeTruthy();
+    expect(screen.getByLabelText('send-to-' + pixel.deviceId)).toBeTruthy();
+    open(pixel);
+    expect(screen.getByLabelText('popover-send')).toBeTruthy();
+    expect(screen.getByLabelText('open-dashboard')).toBeTruthy();
+  });
+
+  it('opens the download page from the banner', async () => {
+    const openUrl = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+    const { engine } = spyEngine([pixel]);
+    mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
+    fireEvent.press(screen.getByTestId('popover-update-download'));
+    await waitFor(() => expect(openUrl).toHaveBeenCalledWith(RELEASES_URL));
+  });
+
+  // The cannot-reach screen still replaces the panel, as it replaces the tab
+  // bar. It is not a banner.
+  it('replaces the panel for a cannot-reach notice', () => {
+    const { engine } = spyEngine([pixel]);
+    mount(engine, [pixel], { alert: <Text>unreachable</Text>, alertRouteToken: CANT_REACH_TOKEN });
+    expect(screen.getByText('unreachable')).toBeTruthy();
     expect(screen.queryByLabelText('send-to-' + pixel.deviceId)).toBeNull();
     expect(screen.queryByLabelText('open-dashboard')).toBeNull();
+    expect(screen.queryByText('Open the download page')).toBeNull();
   });
 });
 

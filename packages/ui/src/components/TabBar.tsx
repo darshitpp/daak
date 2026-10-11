@@ -67,8 +67,7 @@ const styles = StyleSheet.create({
   icon: { width: ICON, height: ICON },
 });
 
-function Tabs({ tab, onChange, layout }: { tab: Tab; onChange: (t: Tab) => void; layout: 'mobile' | 'desktop' }) {
-  const desktop = layout === 'desktop';
+function Tabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   return (
     <>
       {TABS.map((t) => {
@@ -85,21 +84,13 @@ function Tabs({ tab, onChange, layout }: { tab: Tab; onChange: (t: Tab) => void;
             accessibilityState={{ selected: on }}
             onPress={() => onChange(t.id)}
             style={({ pressed }) => [
-              desktop ? ui.segTab : ui.tab,
-              on ? (desktop ? ui.segItemOn : ui.tabOn) : null,
+              ui.tab,
+              on ? ui.tabOn : null,
               pressed ? ui.pressed : null,
             ]}
           >
-            {desktop ? null : <TabIcon kind={t.id} color={on ? colors.fg : colors.muted} />}
-            <Text
-              style={
-                desktop
-                  ? { fontSize: 14, color: on ? colors.onAccent : colors.fg }
-                  : [ui.tabLabel, on ? ui.tabLabelOn : null]
-              }
-            >
-              {t.label}
-            </Text>
+            <TabIcon kind={t.id} color={on ? colors.fg : colors.muted} />
+            <Text style={[ui.tabLabel, on ? ui.tabLabelOn : null]}>{t.label}</Text>
           </Pressable>
         );
       })}
@@ -107,30 +98,56 @@ function Tabs({ tab, onChange, layout }: { tab: Tab; onChange: (t: Tab) => void;
   );
 }
 
-export function TabBar({ tab, onChange, layout = 'mobile', title, trailing }: {
-  tab: Tab;
-  onChange: (t: Tab) => void;
-  layout?: 'mobile' | 'desktop';
-  title?: string;
-  trailing?: string;
-}) {
-  if (layout === 'desktop') {
-    // No accessibilityRole on the containers. `tabbar` exists on iOS only, and
-    // the Android enum has no TABBAR member, so fromValue would throw.
-    return (
-      <View style={ui.deskbar}>
-        <View testID="window-wordmark"><Wordmark size="sm" /></View>
-        <Text style={ui.deskTitle} accessibilityRole="header">{title ?? ''}</Text>
-        <View style={ui.seg}>
-          <Tabs tab={tab} onChange={onChange} layout="desktop" />
-        </View>
-        {trailing ? <Text style={ui.deskVer}>{trailing}</Text> : null}
-      </View>
-    );
-  }
+export function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   return (
     <View style={ui.tabbar}>
-      <Tabs tab={tab} onChange={onChange} layout="mobile" />
+      <Tabs tab={tab} onChange={onChange} />
+    </View>
+  );
+}
+
+/**
+ * The macOS window sidebar (design `macos.html`, `.sidebar`).
+ *
+ * The window draws it on EVERY route, so the user can leave a thread, a
+ * pairing, or Settings at any time. `active` is the highlight: the thread, the
+ * pair route, and the held route all highlight Devices (design NAV_FOR). The
+ * footer holds the version line the host reads from `appInfo`.
+ */
+export function Sidebar({ active, onChange, version }: {
+  active: Tab;
+  onChange: (t: Tab) => void;
+  version?: string;
+}) {
+  return (
+    <View style={ui.sidebar} testID="window-sidebar">
+      <View style={ui.sidebarBrand}>
+        <Wordmark />
+      </View>
+      <View style={ui.sidebarNav}>
+        {TABS.map((t) => {
+          const on = active === t.id;
+          return (
+            <Pressable
+              key={t.id}
+              accessibilityRole="button"
+              accessibilityLabel={t.label}
+              accessibilityState={{ selected: on }}
+              testID={'side-' + t.id}
+              onPress={() => onChange(t.id)}
+              style={({ pressed }) => [
+                ui.sidebarItem,
+                on ? ui.sidebarItemOn : null,
+                pressed ? ui.pressed : null,
+              ]}
+            >
+              <TabIcon kind={t.id} color={on ? colors.fg : colors.fg2} />
+              <Text style={[ui.sidebarItemTxt, on ? ui.sidebarItemTxtOn : null]}>{t.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {version ? <Text style={ui.sidebarFoot}>{version}</Text> : null}
     </View>
   );
 }

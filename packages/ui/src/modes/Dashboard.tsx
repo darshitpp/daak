@@ -43,7 +43,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   };
   /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
   deviceNoun?: DeviceNoun;
-  /** The desktop window header text. */
+  /** The Mac window chrome. The sidebar footer reads `version`. */
   windowChrome?: { title: string; version?: string };
   /** Lift the composer above the keyboard. The iOS host sets it. */
   keyboardAvoiding?: boolean;
