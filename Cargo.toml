@@ -11,7 +11,7 @@ exclude = ["proto/gen", "crates/daak-core/fuzz"]
 
 [workspace.package]
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 rust-version = "1.78"
 
 [workspace.dependencies]
