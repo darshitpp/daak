@@ -1,138 +1,214 @@
-# Daak
+<p align="center">
+  <img src="docs/assets/hero.png" alt="Daak: send anything to your own devices, straight over Wi-Fi" width="100%">
+</p>
 
-End-to-end encrypted LAN file and text sharing. No internet, no accounts.
+<p align="center">
+  <!-- Add these after the repo is public and has a release and a CI run:
+  <a href="https://github.com/darshitpp/daak/releases"><img alt="Release" src="https://img.shields.io/github/v/release/darshitpp/daak?include_prereleases"></a>
+  <a href="https://github.com/darshitpp/daak/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/darshitpp/daak/actions/workflows/ci.yml/badge.svg"></a>
+  -->
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+</p>
 
-Daak runs on Android, macOS, and iOS today. Windows and Linux are not released.
-Two devices on the same Wi-Fi find each other, pair once, and then send text,
-files, and folders directly. Nothing leaves the local network.
+<p align="center">
+  <b><a href="https://github.com/darshitpp/daak/releases">Download for Android, macOS, or iOS</a></b>
+</p>
 
-## How it works
+Daak (डाक, "post") moves photos, files, folders, and text between your own
+devices over your local network. Nothing goes through the internet. Nothing
+goes through a server. You do not create an account.
 
-- **Discovery.** Devices advertise `_daak._tcp` over mDNS. A sealed presence
-  beacon shows when a paired device is online.
-- **Pairing.** One device shows a QR code. The other scans it. Both show a 6-digit
-  number. Pair only when the two numbers match, and press "They match" on each
-  device. A pairing grants nothing until you confirm it.
-- **Transfer.** Every session runs the Noise XX handshake
-  (`Noise_XX_25519_ChaChaPoly_BLAKE2s`) and encrypts each chunk with
-  ChaCha20-Poly1305. The receiver checks each item's BLAKE2b hash. A file that
-  fails the check goes to quarantine.
-- **Offline sends.** A send to a device that is away waits in a durable queue
-  and goes out when the device returns.
-- **Unpair.** Unpairing on one device tells the other. A device that is offline
-  learns when it returns.
+You have a photo on your phone and you need it on your Mac. You do not want to
+email it to yourself, sign in to a cloud app, or find a cable. With Daak, you
+pair the two devices once. After that, you pick the item and send it.
+
+## Try it in 3 steps
+
+1. **Install** Daak on two devices. [Get it here](#install).
+2. **Pair** them once. Scan a QR code and check that both screens show the same number.
+3. **Send.** Pick a photo, file, or text. It arrives on the other device.
+
+## Why Daak
+
+| You want | Daak gives you |
+| --- | --- |
+| To send between an iPhone, an Android phone, and a Mac | One app on all three. No platform lock-in. |
+| To keep your data private | End-to-end encryption. Your data never leaves your Wi-Fi. |
+| No sign-up | No account, no email, no phone number. |
+| To send a big video | Daak streams in 1 MiB chunks, so size is not a problem for memory. |
+| To send when the other device is away | Daak queues the item and sends it when the device returns. |
+| To know the file arrived intact | Daak checks every item. A bad file goes to quarantine, not to your folder. |
+| To trust the code | The source is open under Apache 2.0. Read it, or build it yourself. |
+
+## Contents
+
+- [Try it in 3 steps](#try-it-in-3-steps)
+- [Why Daak](#why-daak)
+- [Supported systems](#supported-systems)
+- [Install](#install)
+- [Pair two devices](#pair-two-devices)
+- [Send and receive](#send-and-receive)
+- [Troubleshooting](#troubleshooting)
+- [What Daak does not do](#what-daak-does-not-do)
+- [Build from source](#build-from-source)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+## Supported systems
+
+| System | Minimum version | Release file |
+| --- | --- | --- |
+| Android | Android 8.0 (API 26) | `.apk` |
+| iOS | iOS 16 | `.ipa` (you sign it yourself) |
+| macOS | macOS 14 (Sonoma) | `.dmg` |
+
+Windows and Linux are not released.
 
 ## Install
 
-Daak ships three targets. Download each artifact from the GitHub Releases page
-of `darshitpp/daak`. Windows and Linux are not released.
+Download the file for your system from the
+[Releases page](https://github.com/darshitpp/daak/releases).
+
+Daak is not in an app store. The release files are not signed with a paid
+developer account. Each system shows a warning. Follow the steps for your
+system.
 
 ### Android
 
-Android 8.0 or newer is required. The package is `dev.darshit.daak`. The version name is 0.1.0. The version code
-is 1. Three APK files are available.
+1. Download an APK on your phone:
 
-| APK | Use |
-| --- | --- |
-| `daak-0.1.0-arm64-v8a.apk` | A modern 64-bit phone |
-| `daak-0.1.0-armeabi-v7a.apk` | An older 32-bit phone |
-| `daak-0.1.0-universal.apk` | A user who does not know the device ABI. It holds both ABIs |
+   | File | Use |
+   | --- | --- |
+   | `daak-0.1.0-arm64-v8a.apk` | A modern 64-bit phone |
+   | `daak-0.1.0-armeabi-v7a.apk` | An older 32-bit phone |
+   | `daak-0.1.0-universal.apk` | You do not know the phone type |
 
-Download the APK that matches the device. Download the universal APK when the
-device ABI is unknown. Each file holds the Hermes VM.
+2. Open the file.
+3. Allow the install from this source when Android asks.
 
-1. Download the APK.
-2. Open the file on the device.
-3. Allow the install from this source when the system asks.
+To verify the signer before you install, run `apksigner verify --print-certs <apk>`.
+The printed `SHA-256 digest` must be:
 
-Verify the signer before you install the file. Run this command:
+```text
+0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5
+```
 
-    apksigner verify --print-certs <apk>
-
-`apksigner` ships in the Android build-tools.
-
-The printed `SHA-256 digest` must equal this fingerprint:
-
-    0D:82:5C:DC:00:69:C9:17:6B:C9:23:2F:4B:E5:A5:26:6D:51:88:8F:54:C8:FC:2F:F1:23:C5:B4:1F:8F:9D:F5
-
-`apksigner` prints the digest in lowercase and with no colons. The printed
-value is therefore:
-
-    0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5
-
-Both values are the same digest. Compare the printed value with the lowercase
-value above. You must use the lowercase value, because that is the form
-`apksigner` writes.
-
-A different digest means that a different key signed the file. Stop. You must
-not install the file.
+A different digest means a different key signed the file. Do not install it.
 
 ### macOS
 
-Download `Daak-0.1.0.dmg`. An Apple Development certificate signs the app.
-Apple did not notarize the app. Gatekeeper rejects the app on the first open.
-This behavior is expected.
-
 1. Open `Daak-0.1.0.dmg`.
 2. Move `Daak.app` to the Applications folder.
-3. Right-click `Daak.app` then click Open.
+3. Right-click `Daak.app` and choose **Open**.
 
-You can also remove the quarantine attribute:
+Apple has not notarized the app, so macOS blocks the first open. This is
+expected. You can also remove the quarantine flag:
 
-    xattr -dr com.apple.quarantine /Applications/Daak.app
+```bash
+xattr -dr com.apple.quarantine /Applications/Daak.app
+```
 
 ### iOS
 
-Download `Daak-0.1.0.ipa`. No signature covers this file. Sign the file with a
-free Apple ID through AltStore or SideStore. The profile lasts 7 days. After 7
-days, sign the file again.
+`Daak-0.1.0.ipa` has no signature. Sign it with a free Apple ID through
+AltStore or SideStore.
 
-The app holds no share extension. The iOS share sheet cannot send a file to
-Daak.
-
-1. Install AltStore or SideStore on the device.
+1. Install AltStore or SideStore on your iPhone.
 2. Download `Daak-0.1.0.ipa`.
-3. Sign and install the file with the free Apple ID.
-4. Open the app and finish onboarding.
+3. Sign and install the file with your Apple ID.
+4. Open Daak and finish the setup.
 
-## Develop
+A free Apple ID profile lasts 7 days. After 7 days, the app stops opening. Sign
+it again. Your pairings and data stay on the device.
 
-The repository is a Rust workspace (`crates/`) and a pnpm workspace (`apps/`,
-`packages/`, `modules/`). Rust is the only implementation of the protocol.
-`daak-core` is the engine. `daak-ffi` exposes it to the apps through UniFFI.
-`apps/mobile` and `apps/desktop` are React Native shells.
+The iOS share sheet cannot send a file to Daak. Open Daak and add the item there.
 
-Run these before a commit:
+## Pair two devices
+
+You pair two devices one time. Both devices must be on the same network.
+
+1. Open Daak on both devices.
+2. On the first device, choose to add a device. It shows a QR code.
+3. On the second device, scan the QR code. If you cannot scan, use the
+   short code.
+4. Both devices show a 6-digit number. If the numbers match, press
+   **They match** on both devices.
+
+If the numbers do not match, reject the pairing. Someone else can be on your
+network.
+
+A new pairing stays pending until you confirm it.
+
+## Send and receive
+
+1. Open a paired device in Daak.
+2. Add text, a file, a photo, or a video.
+3. Send.
+
+The other device shows a notification. Received files go to the save folder
+that you choose in **Settings**.
+
+If the other device is not reachable, Daak queues the item. It retries
+with a growing delay until the device returns.
+
+## Troubleshooting
+
+| Problem | Cause | What to do |
+| --- | --- | --- |
+| A device does not appear | The devices are on different networks, or the router blocks device-to-device traffic | Join both devices to the same network. Turn off "AP isolation" or "client isolation" in the router. Guest networks often block it. |
+| A device does not appear on iPhone | Local Network permission is off | Open **Settings > Daak** and turn on **Local Network**. |
+| The send stays in the queue | The other device is asleep, closed, or away | Open Daak on the other device. The queue sends on its own. |
+| An item is in quarantine | The received data did not match its checksum | Send the item again from the sending device. The receiver cannot ask for it again. |
+| The iOS app does not open | The 7-day profile expired | Sign the `.ipa` again. |
+| macOS says the app is damaged | The app is not notarized | Use the `xattr` command in [Install](#macos). |
+| A device you removed still shows as paired | The other device was offline when you unpaired | It learns about the unpair when it returns. Until then, remove the pairing on that device by hand. |
+
+## What Daak does not do
+
+- Daak does not send data over the internet.
+- Daak does not back up your files.
+- Daak is not a chat app. It has no read receipts and no groups.
+- Daak does not keep transfers running on desktop after you quit the app.
+- Daak does not support Windows or Linux releases.
+
+## Build from source
+
+You need these tools:
+
+- Rust (stable) and `cargo`
+- Node.js and `pnpm` 9
+- Xcode (for iOS and macOS) or Android Studio with the Android SDK and NDK (for Android)
 
 ```bash
-cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
+git clone https://github.com/darshitpp/daak.git
+cd daak
+pnpm install
 cargo test --workspace
 pnpm -r typecheck
 pnpm -r test
 ```
 
-Run one Rust test, or one integration test file:
+Native build steps for each system are in
+[`apps/mobile/README.md`](apps/mobile/README.md).
 
-```bash
-cargo test -p daak-core --lib -- <name filter>
-cargo test -p daak-core --test <file name without .rs>
-```
+## Contributing
 
-Two-terminal smoke test with the CLI:
+Bug reports, ideas, and pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) first.
 
-```bash
-cargo run -p daak-cli -- serve --dir /tmp/daak-recv
-cargo run -p daak-cli -- send --to 127.0.0.1:<port> --files Cargo.toml
-```
+## Security
 
-Build the release artifacts:
+Do not report a security problem in a public issue. Use
+[private vulnerability reporting](https://github.com/darshitpp/daak/security/advisories/new)
+on GitHub.
 
-```bash
-./scripts/sign-android.sh                          # three signed APKs
-bash apps/desktop/macos/scripts/package-dmg.sh     # signed, not notarized
-bash apps/mobile/scripts/package-ipa.sh            # unsigned
-```
+## License
 
-The wire schemas are `proto/*.cddl`. `proto/gen` is generated by
-`proto/codegen.sh` and is committed.
+Daak uses the [Apache License 2.0](LICENSE).
+
+You can use, change, and share the code, including in a commercial product. You
+must keep the copyright notice and the [NOTICE](NOTICE) file. You must say what
+you changed.
+
+Copyright 2026 Darshit Patel.
