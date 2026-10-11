@@ -119,17 +119,19 @@ export function Avatar({ letter }: { letter: string }) {
   );
 }
 
-export function Note({ title, body, tone = 'plain', testID }: {
+export function Note({ title, body, tone = 'plain', testID, accessibilityLabel }: {
   title?: string;
   body: string;
   tone?: 'plain' | 'ok' | 'warn' | 'err';
   testID?: string;
+  /** A reader label. Defaults to the title. A test id is never a label. */
+  accessibilityLabel?: string;
 }) {
   const fill =
     tone === 'ok' ? ui.noteOk : tone === 'warn' ? ui.noteWarn : tone === 'err' ? ui.noteErr : null;
   const dot = tone === 'ok' ? colors.ok : tone === 'warn' ? colors.warnInk : tone === 'err' ? colors.err : colors.meta;
   return (
-    <View style={[ui.note, fill]} testID={testID} accessibilityLabel={testID}>
+    <View style={[ui.note, fill]} testID={testID} accessibilityLabel={accessibilityLabel ?? title}>
       <View style={[ui.dot, { backgroundColor: dot }, ui.noteDot]} />
       <View style={ui.fill}>
         {title ? <Text style={ui.noteTtl}>{title}</Text> : null}

@@ -294,7 +294,7 @@ describe('QR pairing is reachable from the app shell', () => {
     fireEvent.press(screen.getByText('Scan a code'));
     await waitFor(() => expect(pair).toHaveBeenCalled());
 
-    await waitFor(() => expect(screen.getByLabelText('pairing-error')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('pairing-error')).toBeTruthy());
     expect(screen.queryByTestId('confirm')).toBeNull();
     pair.mockRestore();
   });
@@ -514,6 +514,30 @@ describe('leaving the pair route rejects a pending pairing', () => {
     );
     expect(revoke).not.toHaveBeenCalled();
     view.unmount();
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith(PEER_ID);
+  });
+
+  // 3.9: the joiner unmounts WHILE the scanner is still open, so `engine.pair`
+  // has not even started. The row appears only when `pair` resolves, so the
+  // settle handler must revoke it -- an unmount-time revoke would be a no-op.
+  it('revokes the pending joiner pairing when it unmounts during the scan', async () => {
+    const revoke = jest.spyOn(engine, 'revokePairing');
+    let releaseScan!: (v: string) => void;
+    mockedScan.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseScan = resolve;
+      }),
+    );
+    const view = renderFlow();
+    fireEvent.press(screen.getByText('Scan a code'));
+    expect(await screen.findByText('Point the camera at their square')).toBeTruthy();
+    expect(revoke).not.toHaveBeenCalled();
+    view.unmount();
+    await act(async () => {
+      releaseScan(JSON.stringify({ cbor: 'ccdd', name: 'peer', device_id: PEER_ID }));
+      await Promise.resolve();
+    });
     expect(revoke).toHaveBeenCalledTimes(1);
     expect(revoke).toHaveBeenCalledWith(PEER_ID);
   });

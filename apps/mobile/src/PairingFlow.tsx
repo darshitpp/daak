@@ -31,7 +31,9 @@ const pad = { padding: 16, gap: 24 } as const;
  *
  * Leaving the route is "Does not match". `pendingRef` holds the peer id of a
  * number that is on screen and that the user has not answered. The unmount
- * cleanup revokes that pairing, so it does not linger until a restart.
+ * cleanup revokes that pairing, so it does not linger until a restart. If the
+ * route unmounts while `engine.pair` is still running, no number is on screen
+ * yet, so the settle handler revokes the pairing after the engine commits it.
  *
  * "Pairing cancelled" is the shared toast. The first-run flow renders instead of
  * the shell, so `PairingFlow` adds its own provider when it is embedded.
@@ -57,10 +59,9 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
   // The peer id of a number that is on screen and not yet answered. A ref, so
   // the unmount cleanup reads the latest value without a stale closure.
   const pendingRef = useRef('');
-  // 3.9: the peer id of a `pair` that is still running. The unmount cleanup
-  // must revoke it too, because no SAS is on screen yet and `pendingRef` is
-  // still empty while `pair` is in flight.
-  const inFlightRef = useRef('');
+  // Set in the unmount cleanup. A `pair` that is still running has no SAS on
+  // screen and no peer in `pendingRef`, so its settle handler must check this
+  // flag to revoke the pairing the engine commits after the unmount (3.9).
   const unmounted = useRef(false);
   const engineRef = useRef(engine);
   engineRef.current = engine;
@@ -69,26 +70,24 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
   useEffect(
     () => () => {
       unmounted.current = true;
-      const id = pendingRef.current || inFlightRef.current;
+      const id = pendingRef.current;
       pendingRef.current = '';
-      inFlightRef.current = '';
       if (id) void engineRef.current.revokePairing(id).catch(() => {});
     },
     [],
   );
 
-  // 3.9: run `engine.pair` and, if the route unmounts before it settles,
-  // revoke the pairing the engine just committed. No SAS is on screen yet, so
-  // `pendingRef` is empty and the unmount cleanup cannot see the peer.
+  // 3.9: run `engine.pair` and, when the route unmounts before `pair` settles,
+  // revoke the pairing the engine commits. The row does NOT exist until `pair`
+  // resolves, so the revoke must wait for it: a revoke at unmount time would be
+  // a no-op. The unmount cleanup covers the SAS-on-screen window instead.
   const pairOrRevoke = (
     peer: string,
     start: () => Promise<{ sas: string }>,
   ): Promise<{ sas: string }> => {
-    inFlightRef.current = peer;
     const p = start();
     void p.then(
       () => {
-        inFlightRef.current = '';
         if (unmounted.current) {
           pendingRef.current = '';
           void engineRef.current.revokePairing(peer).catch(() => {});
@@ -151,7 +150,6 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
       engine.pair(parsed.deviceId, 'qr', parsed.cbor, addr ?? parsed.addr),
     ).then(
       ({ sas: received }) => {
-        inFlightRef.current = '';
         // Unmounted mid-pair: `pairOrRevoke` already revoked. Do not resurrect
         // the SAS on a dead route.
         if (unmounted.current) return;
@@ -161,7 +159,6 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
         setBusy(null);
       },
       (e: unknown) => {
-        inFlightRef.current = '';
         setBusy(null);
         setError(e instanceof Error ? e.message : 'that pairing link did not work');
       },
@@ -202,28 +199,23 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
     setConfirmError('');
     setPhase({ kind: 'join' });
     setBusy(null);
-    // 3.9: `onPeer` arms the in-flight peer once the scan names it, so an
-    // unmount during the scan AND during the engine call both revoke.
-    void joinWithScan(
-      engine,
-      () => setBusy('reading'),
-      (peer) => {
-        inFlightRef.current = peer;
-        if (unmounted.current) {
-          inFlightRef.current = '';
-          void engineRef.current.revokePairing(peer).catch(() => {});
-        }
-      },
-    ).then(
+    // 3.9: the scan and the engine call both run before any SAS is on screen,
+    // so `pendingRef` is empty. When this settles after an unmount, revoke the
+    // pairing the engine just committed -- an unmount-time revoke would be a
+    // no-op, because the row does not exist until `pair` resolves.
+    void joinWithScan(engine, () => setBusy('reading')).then(
       ({ sas: received, peerDeviceId }) => {
-        inFlightRef.current = '';
+        if (unmounted.current) {
+          pendingRef.current = '';
+          void engineRef.current.revokePairing(peerDeviceId).catch(() => {});
+          return;
+        }
         setSas(received);
         setPeerId(peerDeviceId);
         pendingRef.current = peerDeviceId;
         setBusy(null);
       },
       (e: unknown) => {
-        inFlightRef.current = '';
         setBusy(null);
         setError(e instanceof Error ? e.message : 'scan failed');
       },

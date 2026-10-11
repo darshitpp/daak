@@ -61,6 +61,24 @@ describe('usePanelTransfer', () => {
     expect(result.current.row?.transferId).toBe('zz'.repeat(16));
   });
 
+  // 3.7: a real cancel KEEPS the row and writes 'canceled' on it. The panel
+  // must treat that row as gone and adopt the new running transfer.
+  it('adopts a new running transfer when the tracked row is kept as canceled', async () => {
+    const engine = fakeEngine();
+    const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([row()]);
+    const { result } = renderHook(() => usePanelTransfer(engine));
+    await flush();
+    expect(result.current.send?.transferId).toBe(TID);
+    list.mockResolvedValue([
+      row({ state: 'canceled' }),
+      row({ transferId: 'zz'.repeat(16), updatedAt: 8 }),
+    ]);
+    emit(engine, { type: 'transfer.failed', transferId: TID, error: 'canceled elsewhere' });
+    await flush();
+    expect(result.current.send?.transferId).toBe('zz'.repeat(16));
+    expect(result.current.row?.transferId).toBe('zz'.repeat(16));
+  });
+
   it('follows its own transfer after begin and polls while it runs', async () => {
     const engine = fakeEngine();
     const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([]);

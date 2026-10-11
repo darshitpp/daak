@@ -58,25 +58,27 @@ export function usePanelTransfer(engine: DaakEngine) {
         return;
       }
       const mine = all.find((t) => t.transferId === current.transferId);
-      if (mine !== undefined) {
+      // A row the engine still lists is NOT gone -- UNLESS a cancel wrote
+      // 'canceled' on it. A cancel KEEPS the row, so its state is the only
+      // cancel signal the panel gets. Do not keep pinning a canceled transfer.
+      if (mine !== undefined && mine.state !== 'canceled') {
         setRow(mine);
         return;
       }
-      // The tracked transfer is gone. If it was still running, another surface
-      // canceled it. The listTransfers rows are the only cancel signal, so
-      // adopt the newest running outbound transfer, or clear when none runs.
-      // A gone row that was already done stayed as read.
-      if (rowRef.current !== null && isRunning(rowRef.current)) {
-        const running = newestRunningOut(all);
-        if (running !== undefined) {
-          sendRef.current = { transferId: running.transferId, peerDeviceId: running.peerDeviceId, label: '' };
-          setSend(sendRef.current);
-        } else {
-          sendRef.current = null;
-          setSend(null);
-        }
-        setRow(running ?? null);
+      // Gone: absent from the list, or present as 'canceled'. Adopt the newest
+      // running outbound transfer, or clear when none runs. An absent row with
+      // no running state left is a stale read, not a cancel, so keep the panel.
+      const canceled = mine !== undefined;
+      if (!canceled && !(rowRef.current !== null && isRunning(rowRef.current))) return;
+      const running = newestRunningOut(all);
+      if (running !== undefined) {
+        sendRef.current = { transferId: running.transferId, peerDeviceId: running.peerDeviceId, label: '' };
+        setSend(sendRef.current);
+      } else {
+        sendRef.current = null;
+        setSend(null);
       }
+      setRow(running ?? null);
     } catch {
       // A failed read keeps the last row. The next event or poll reads again.
     }

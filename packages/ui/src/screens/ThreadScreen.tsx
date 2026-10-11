@@ -432,7 +432,8 @@ export function ThreadScreen({
                   key={p}
                   onPress={() => setFiles((f) => f.filter((x) => x !== p))}
                   accessibilityRole="button"
-                  accessibilityLabel={`remove-${base(p)}`}
+                  accessibilityLabel={`Remove ${base(p)}`}
+                  testID={`remove-${base(p)}`}
                   style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
                 >
                   <Text style={ui.chipLabel} numberOfLines={1}>{base(p)}</Text>

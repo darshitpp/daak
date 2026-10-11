@@ -323,6 +323,23 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
+/// The bytes a receive already holds on disk, from the loaded bitmaps: one
+/// chunk length per set bit of each binary item, capped at the item size. A
+/// fresh receive has empty bitmaps, so this is 0 -- the progress bar must NOT
+/// start one chunk ahead (P6 3.2). A partial last chunk is truncated to the
+/// item size by the cap.
+fn bytes_held(manifest: &Manifest, bitmaps: &[Option<ChunkBitmap>]) -> u64 {
+    manifest
+        .binary_items()
+        .filter_map(|i| {
+            let bm = bitmaps.get(i.index as usize).and_then(|b| b.as_ref())?;
+            let chunk_size = i.chunk_size? as u64;
+            let size = i.size?;
+            Some(bm.count_ones().saturating_mul(chunk_size).min(size))
+        })
+        .sum()
+}
+
 pub async fn receive_transfer<T: FrameTransport>(
     conn: &mut T,
     out_dir: &Path,
@@ -519,19 +536,10 @@ pub async fn receive_transfer_from<T: FrameTransport>(
         bitmaps.push(Some(bitmap));
     }
 
-    // The bytes a resume already holds: the chunk length summed over the bits
-    // the persisted bitmap has set. Exact, because these chunks are the ones
-    // the sender will NOT re-send.
-    let bytes_held: u64 = manifest
-        .binary_items()
-        .filter_map(|i| {
-            let bm = bitmaps.get(i.index as usize).and_then(|b| b.as_ref())?;
-            let chunk_size = i.chunk_size? as u64;
-            let size = i.size?;
-            let whole = bm.count_ones().saturating_sub(1) * chunk_size;
-            Some((whole + chunk_size).min(size))
-        })
-        .sum();
+    // The bytes a resume already holds: one chunk length for each bit the
+    // persisted bitmap has set, capped at the item size. Zero for a fresh
+    // receive, so the bar does not start one chunk ahead (P6 3.2).
+    let bytes_held = bytes_held(&manifest, &bitmaps);
 
     let all_received = |bitmaps: &[Option<ChunkBitmap>]| {
         bitmaps
@@ -811,6 +819,41 @@ mod tests {
             device_id: [7u8; 16],
             name: "s".into(),
         }
+    }
+
+    fn binary_manifest(size: u64, chunk_size: u32, chunk_count: u64) -> Manifest {
+        let item = Item {
+            index: 0,
+            item_type: ItemType::Document,
+            name: Some("a.bin".into()),
+            size: Some(size),
+            chunk_size: Some(chunk_size),
+            chunk_count: Some(chunk_count),
+            ..Default::default()
+        };
+        Manifest::new(PayloadKind::Media, dev(), vec![item])
+    }
+
+    // 3.2: a fresh receive has an empty bitmap and holds NO bytes. The old
+    // formula added one chunk length, so the bar reached 100% one chunk early.
+    #[test]
+    fn bytes_held_is_zero_for_an_empty_bitmap() {
+        let m = binary_manifest(200, 64, 4);
+        assert_eq!(bytes_held(&m, &[Some(ChunkBitmap::new(4))]), 0);
+        // Two of four chunks: two chunk lengths.
+        let mut bm = ChunkBitmap::new(4);
+        bm.set(0);
+        bm.set(1);
+        assert_eq!(bytes_held(&m, &[Some(bm)]), 128);
+        // A complete bitmap is capped at the item size, so a partial last chunk
+        // does not overshoot.
+        let mut full = ChunkBitmap::new(4);
+        for i in 0..4 {
+            full.set(i);
+        }
+        assert_eq!(bytes_held(&m, &[Some(full)]), 200);
+        // A non-binary item has no bitmap and contributes nothing.
+        assert_eq!(bytes_held(&Manifest::text("hi"), &[None]), 0);
     }
 
     async fn receive_manifest_only(manifest: Manifest, out: &std::path::Path) -> Result<Manifest> {

@@ -92,31 +92,26 @@ pub fn list_thread(
     let mut rows = db.list_peer_transfers_page(peer, after, limit + 1)?;
     let mut has_more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
-    // Expand each candidate row into its wire items, newest first. The budget
-    // must bound the JSON the reader RECEIVES, not the raw manifests: the JSON
-    // of a page is larger than its manifests (escaping, field names), so
-    // counting manifests let a page overrun the daemon frame. Keep rows while
-    // that JSON stays under the budget, and always keep 1 row.
+    // Expand rows into their wire items, newest first, and STOP at the byte
+    // budget. The budget must bound the JSON the reader RECEIVES, not the raw
+    // manifests: the JSON of a page is larger than its manifests (field names,
+    // hex ids), so counting manifests let a page overrun the daemon frame.
+    // Always keep 1 row, and do not expand a row past the budget.
     let mut groups: Vec<Vec<ThreadItem>> = Vec::with_capacity(rows.len());
-    let mut costs: Vec<usize> = Vec::with_capacity(rows.len());
+    let mut used = 0usize;
     for t in &rows {
         let mut one = Vec::new();
         expand(db, t, &mut one)?;
-        costs.push(page_json_len(&one));
-        groups.push(one);
-    }
-    let mut used = 0usize;
-    let mut keep = 0usize;
-    while keep < costs.len() {
-        if keep > 0 && used + costs[keep] > THREAD_PAGE_BYTES {
+        let cost = page_json_len(&one);
+        if !groups.is_empty() && used + cost > THREAD_PAGE_BYTES {
             break;
         }
-        used += costs[keep];
-        keep += 1;
+        used += cost;
+        groups.push(one);
     }
+    let keep = groups.len();
     if keep < rows.len() {
         rows.truncate(keep);
-        groups.truncate(keep);
         has_more = true;
     }
     let older_cursor = match (has_more, rows.last()) {

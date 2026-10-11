@@ -80,7 +80,7 @@ describe('ThreadScreen', () => {
     expect(await screen.findByText('a.pdf')).toBeTruthy();
     // The count comes as the design toast, not as a line in the composer.
     expect(screen.getByTestId('toast-text')).toHaveTextContent('2 files ready');
-    fireEvent.press(screen.getByLabelText('remove-a.pdf'));
+    fireEvent.press(screen.getByTestId('remove-a.pdf'));
     expect(screen.queryByText('a.pdf')).toBeNull();
     expect(screen.getByText('b.png')).toBeTruthy();
   });
