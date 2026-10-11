@@ -128,6 +128,23 @@ describe('DaemonClientEngine', () => {
     expect(await p).toEqual({ items: [], olderCursor: null });
   });
 
+  it('sends GetItemText with snake_case keys and returns the text of the Json answer', async () => {
+    const h = makeEngine();
+    const p = h.engine.getItemText('ab'.repeat(16), 2);
+    expect(h.written).toEqual([
+      { Request: { GetItemText: { transfer_id: 'ab'.repeat(16), item_index: 2 } } },
+    ]);
+    h.reply({ Json: { value: JSON.stringify({ text: 'whole "text"\n' }) } });
+    expect(await p).toBe('whole "text"\n');
+  });
+
+  it('rejects when the GetItemText answer has no text', async () => {
+    const h = makeEngine();
+    const p = h.engine.getItemText('ab'.repeat(16), 0);
+    h.reply({ Json: { value: '{}' } });
+    await expect(p).rejects.toThrow(/getItemText/);
+  });
+
   it('does NOT record startedWith when Start itself failed', async () => {
     // A Start refused by the daemon (a bad data_dir, a conflicting engine)
     // must leave the client willing to try again. Recording the args BEFORE the

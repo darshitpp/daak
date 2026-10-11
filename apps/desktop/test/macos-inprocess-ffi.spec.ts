@@ -141,6 +141,7 @@ describe('macOS runs the engine in-process', () => {
       'retry:',
       'listTransfers:',
       'listThread:',
+      'getItemText:',
       'listInbox:',
       'setDisplayName:',
       'setPresence:',

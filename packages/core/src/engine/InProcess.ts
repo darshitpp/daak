@@ -168,6 +168,10 @@ export class InProcessEngine implements DaakEngine {
     }
     return pg as ThreadPage;
   }
+  async getItemText(transferId: string, itemIndex: number): Promise<string> {
+    // The native module returns the text itself, not JSON.
+    return this.native.getItemText(transferId, itemIndex);
+  }
 
   async selfProfile(): Promise<SelfProfile> {
     const parsed: unknown = JSON.parse(await this.native.selfProfile());

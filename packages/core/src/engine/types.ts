@@ -309,6 +309,13 @@ export interface DaakEngine {
    * does not parse rejects.
    */
   listThread(peerDeviceId: string, opts?: { limit?: number; before?: string }): Promise<ThreadPage>;
+  /**
+   * The whole text of one text item. A thread page cuts a long text to fit
+   * its budget (`textTruncated`), so a copy of the page text can lose data.
+   * Rejects for an id that does not parse, a transfer or item that does not
+   * exist, an item that is not a text, and a text longer than 3 MiB.
+   */
+  getItemText(transferId: string, itemIndex: number): Promise<string>;
   selfProfile(): Promise<SelfProfile>;
   setDisplayName(name: string): Promise<void>;
   setPresence(state: 'online' | 'away'): Promise<void>;

@@ -243,6 +243,9 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun listThread(peerId: String, limit: Double, before: String, promise: Promise) =
         resolve(promise) { handle().listThread(peerId, itemIndexArg(limit), before) }
+    @ReactMethod
+    override fun getItemText(transferId: String, itemIndex: Double, promise: Promise) =
+        resolve(promise) { handle().getItemText(transferId, itemIndexArg(itemIndex)) }
 
     @ReactMethod
     override fun listInbox(promise: Promise) = resolve(promise) { handle().listInbox() }

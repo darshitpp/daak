@@ -263,6 +263,14 @@ export class DaemonClientEngine implements DaakEngine {
     }
     return pg as ThreadPage;
   }
+  async getItemText(transferId: string, itemIndex: number): Promise<string> {
+    const parsed: unknown = JSON.parse(
+      await this.json({ GetItemText: { transfer_id: transferId, item_index: itemIndex } }),
+    );
+    const text = (parsed as { text?: unknown } | null)?.text;
+    if (typeof text !== 'string') throw new Error('getItemText did not return a text');
+    return text;
+  }
 
   async selfProfile(): Promise<SelfProfile> {
     const parsed: unknown = JSON.parse(await this.json('SelfProfile'));

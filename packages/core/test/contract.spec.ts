@@ -11,7 +11,7 @@ import type { Spec as NativeDaakSpec } from '../src/NativeDaak';
 const METHODS: (keyof DaakEngine)[] = [
   'start', 'stop', 'devices', 'pair', 'send', 'cancel',
    'retry', 'quarantineReport', 'deleteQuarantined', 'listQuarantineReports',
-   'listTransfers', 'listThread', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+   'listTransfers', 'listThread', 'getItemText', 'listInbox', 'setDisplayName', 'setPresence', 'on',
   'offerPairing', 'selfProfile',
   'armHostPairing',
   // The per-item re-arm. PARKED and on no screen: `retry` alone cannot reach a
@@ -79,6 +79,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   listQuarantineReports: true,
   listTransfers: true,
   listThread: true,
+  getItemText: true,
   listInbox: true,
   selfProfile: true,
   setDisplayName: true,
@@ -107,7 +108,7 @@ describe('contract types', () => {
       replaceInboxPaths: true,
       retry: true, quarantineReport: true, deleteQuarantined: true,
       listQuarantineReports: true,
-      listTransfers: true, listThread: true, listInbox: true, selfProfile: true, setDisplayName: true,
+      listTransfers: true, listThread: true, getItemText: true, listInbox: true, selfProfile: true, setDisplayName: true,
       setPresence: true, on: true, offerPairing: true, armHostPairing: true,
       retryItem: true, backgroundWake: true,
     };
@@ -154,7 +155,8 @@ describe('contract types', () => {
     // confirm_pairing (the SAS gate) is the 28th: a UDL method and a TurboModule
     // override on all three native modules.
     // list_thread (this plan) is the 29th: a UDL method and a TurboModule override on all three native modules.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(29);
+    // item_text (P7) is the 30th, on all three native modules too.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(30);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -241,6 +243,12 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
       if (!/^[0-9a-f]{32}$/.test(peerId)) throw new Error('bad peer id');
       if (before !== '' && !/^[0-9]+:[0-9a-f]{32}$/.test(before)) throw new Error('bad thread cursor');
       return JSON.stringify({ items: [], olderCursor: null });
+    },
+    // A fresh engine holds no transfer, so a well-formed id names nothing.
+    getItemText: async (transferId: string, itemIndex: number) => {
+      void itemIndex;
+      if (!/^[0-9a-f]{32}$/i.test(transferId)) throw new Error(`bad transfer id: ${transferId}`);
+      throw new Error('no such transfer');
     },
     // The quarantine surface, in the BASE rather than in the suite's
     // fakeNative({...}) override, because what these three model is the shape
@@ -486,6 +494,22 @@ describe('InProcessEngine', () => {
     const got = await engine.listThread('00'.repeat(16));
     expect(got.items[0].truncated).toBe(true);
     expect(got.items[0].textTruncated).toBe(true);
+  });
+
+  it('getItemText returns the text that the native module returns, whole and unparsed', async () => {
+    const text = 'é"\\\n'.repeat(1000); // quotes, a backslash and a newline survive
+    const calls: Array<[string, number]> = [];
+    const engine = new InProcessEngine(
+      fakeNative({
+        getItemText: async (id: string, index: number) => {
+          calls.push([id, index]);
+          return text;
+        },
+      }),
+      () => () => {},
+    );
+    expect(await engine.getItemText('ab'.repeat(16), 3)).toBe(text);
+    expect(calls).toEqual([['ab'.repeat(16), 3]]);
   });
 
   it('keeps a corrupt saved_paths row as null rather than coercing it to []', async () => {

@@ -7,7 +7,7 @@ import { Encoder } from 'cbor-x';
 const enc = new Encoder({ mapsAsObjects: true, useRecords: false, variableMapSize: true });
 // Kept in lockstep with IPC_VERSION in packages/core/src/ipc/transport.ts.
 const IPC_MAJOR = 1;
-const IPC_MINOR = 5;
+const IPC_MINOR = 6;
 const v = (IPC_MAJOR << 8) | IPC_MINOR;
 
 const snake = { data_dir: '/tmp/x', display_name: 'daak', listen_port: 0 };

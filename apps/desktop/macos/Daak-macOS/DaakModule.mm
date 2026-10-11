@@ -98,6 +98,10 @@ RCT_EXTERN_METHOD(listThread:(NSString *)peerId
                   before:(NSString *)before
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(getItemText:(NSString *)transferId
+                  itemIndex:(double)itemIndex
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(listInbox:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)

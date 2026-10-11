@@ -33,6 +33,7 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     listInbox: async () => '[]',
     listTransfers: async () => '[]',
     listThread: async () => JSON.stringify({ items: [], olderCursor: null }),
+    getItemText: async () => '',
     cancel: async () => {},
     retry: async () => {},
     retryItem: async () => {},

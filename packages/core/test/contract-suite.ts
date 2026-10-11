@@ -32,7 +32,7 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     const methods: (keyof DaakEngine)[] = [
       'start', 'stop', 'devices', 'pair', 'send', 'cancel',
       'retry', 'quarantineReport', 'deleteQuarantined', 'listQuarantineReports',
-      'listTransfers', 'listThread', 'listInbox', 'setDisplayName', 'setPresence', 'on',
+      'listTransfers', 'listThread', 'getItemText', 'listInbox', 'setDisplayName', 'setPresence', 'on',
       'armHostPairing', 'selfProfile',
     ];
     for (const m of methods) expect(typeof e[m], `${name}.${m}`).toBe('function');
@@ -192,6 +192,16 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
     await expect(e.listThread('ab'.repeat(16), { before: 'nope' })).rejects.toThrow();
     // A peer id that is not 32 hex characters must reject.
     await expect(e.listThread('zz')).rejects.toThrow();
+    await e.stop();
+  });
+
+  it(`${name}: getItemText rejects a bad id and a transfer that does not exist`, async () => {
+    const e = await factory();
+    await e.start();
+    // A transfer id that is not 32 hex characters must reject.
+    await expect(e.getItemText('zz', 0)).rejects.toThrow();
+    // A well-formed id that names no transfer must reject, not answer ''.
+    await expect(e.getItemText('ab'.repeat(16), 0)).rejects.toThrow();
     await e.stop();
   });
 }

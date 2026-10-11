@@ -230,6 +230,15 @@ final class Daak: RCTEventEmitter, EventSink {
       try self.need().listThread(peerId: peerId, limit: UInt32(min(max(0, limit.isFinite ? limit : 0), 4294967295)), before: before)
     }
   }
+  // The whole text of one text item. The thread page cuts a long text.
+  @objc func getItemText(_ transferId: String,
+                         itemIndex: Double,
+                         resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().getItemText(transferId: transferId, itemIndex: UInt32(min(max(0, itemIndex.isFinite ? itemIndex : 0), 4294967295)))
+    }
+  }
 
   @objc func listInbox(_ resolve: @escaping RCTPromiseResolveBlock,
                       reject: @escaping RCTPromiseRejectBlock) {
