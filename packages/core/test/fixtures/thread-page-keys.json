@@ -1,0 +1,17 @@
+{
+  "itemKeys": [
+    "at",
+    "destPath",
+    "direction",
+    "error",
+    "itemIndex",
+    "name",
+    "size",
+    "state",
+    "text",
+    "transferId",
+    "transferState",
+    "type"
+  ],
+  "pageKeys": ["items", "olderCursor"]
+}

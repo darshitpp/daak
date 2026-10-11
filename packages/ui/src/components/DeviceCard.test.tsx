@@ -63,6 +63,21 @@ describe('DeviceCard', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  // Every Pair button must read as "Pair <device>", not just "Pair", so a
+  // screen reader can tell two unpaired devices apart.
+  it('gives the Pair button a unique accessibility label', () => {
+    const other: DeviceInfo = { ...device, deviceId: 'bb'.repeat(16), name: 'Ana Pixel', paired: false };
+    render(
+      <>
+        <DeviceCard device={{ ...device, paired: false }} onPair={jest.fn()} />
+        <DeviceCard device={other} onPair={jest.fn()} />
+      </>,
+    );
+    expect(screen.getByLabelText('Pair Pixel 9')).toBeTruthy();
+    expect(screen.getByLabelText('Pair Ana Pixel')).toBeTruthy();
+    expect(screen.getByTestId('pair-with-' + device.deviceId)).toBeTruthy();
+  });
+
   // HEAD 824b3d7: a new pairing stays pending until the user confirms the SAS.
   // The engine reports a pending peer with paired false (Engine::is_trusted) and
   // no presence. The row must not look paired or sendable.

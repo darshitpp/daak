@@ -60,3 +60,46 @@ fn a_one_mebibyte_non_ascii_body_survives_serialization() {
     assert_eq!(back["items"][0]["text"], body.as_str());
     assert!(back["olderCursor"].is_null());
 }
+
+fn key_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/core/test/fixtures/thread-page-keys.json");
+    let raw = std::fs::read_to_string(path).expect("shared key fixture must exist");
+    serde_json::from_str(&raw).expect("fixture is JSON")
+}
+
+fn keys_of(v: &serde_json::Value) -> Vec<String> {
+    let mut keys: Vec<String> = v
+        .as_object()
+        .expect("a JSON object")
+        .keys()
+        .cloned()
+        .collect();
+    keys.sort();
+    keys
+}
+
+fn pinned(v: &serde_json::Value) -> Vec<String> {
+    let mut keys: Vec<String> = v
+        .as_array()
+        .expect("an array of keys")
+        .iter()
+        .map(|k| k.as_str().expect("a key is a string").to_string())
+        .collect();
+    keys.sort();
+    keys
+}
+
+// The daakd and daak-core page builders must produce the same item keys as
+// this one. The shared fixture pins all three.
+#[test]
+fn item_keys_match_the_pinned_list() {
+    let fx = key_fixture();
+    let p = ThreadPage {
+        items: vec![item(Some("hi"), true)],
+        older_cursor: Some("5:00".into()),
+    };
+    let v = thread_page_json(&p);
+    assert_eq!(keys_of(&v["items"][0]), pinned(&fx["itemKeys"]));
+    assert_eq!(keys_of(&v), pinned(&fx["pageKeys"]));
+}

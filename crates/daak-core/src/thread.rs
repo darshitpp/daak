@@ -131,29 +131,36 @@ pub fn list_thread(
 
 /// The byte size of the wire JSON for a run of items, EXCLUDING the page
 /// envelope. `list_thread` uses it to bound a page by the JSON the reader
-/// receives, not by the manifest bytes. It mirrors `thread_page_json` in
-/// daakd/daak-ffi: the same keys and the same null-for-None rule.
+/// receives, not by the manifest bytes.
+///
+/// This function must have the same item keys as two builders:
+/// `thread_page_json` in daakd/src/lib.rs, and `thread_page_json` in
+/// daak-ffi/src/lib.rs. All three must move together. The test
+/// `page_json_len_counts_the_pinned_item_keys` here, and the daak-ffi test
+/// `item_keys_match_the_pinned_list`, pin the key set to the shared fixture
+/// packages/core/test/fixtures/thread-page-keys.json.
 fn page_json_len(items: &[ThreadItem]) -> usize {
-    let v: Vec<serde_json::Value> = items
-        .iter()
-        .map(|i| {
-            serde_json::json!({
-                "transferId": hex::encode(i.transfer_id),
-                "itemIndex": i.item_index,
-                "direction": if i.outbound { "out" } else { "in" },
-                "type": if i.is_text { "text" } else { "file" },
-                "name": i.name,
-                "size": i.size,
-                "text": i.text,
-                "state": i.state,
-                "destPath": i.dest_path,
-                "at": i.at,
-                "transferState": i.transfer_state,
-                "error": i.error,
-            })
-        })
-        .collect();
+    let v: Vec<serde_json::Value> = items.iter().map(page_item_json).collect();
     serde_json::Value::Array(v).to_string().len()
+}
+
+/// One item as the wire JSON. The page cap counts this shape, so it must have
+/// the same keys and the same null-for-None rule as the two page builders.
+fn page_item_json(i: &ThreadItem) -> serde_json::Value {
+    serde_json::json!({
+        "transferId": hex::encode(i.transfer_id),
+        "itemIndex": i.item_index,
+        "direction": if i.outbound { "out" } else { "in" },
+        "type": if i.is_text { "text" } else { "file" },
+        "name": i.name,
+        "size": i.size,
+        "text": i.text,
+        "state": i.state,
+        "destPath": i.dest_path,
+        "at": i.at,
+        "transferState": i.transfer_state,
+        "error": i.error,
+    })
 }
 
 fn expand(db: &Db, t: &TransferRow, out: &mut Vec<ThreadItem>) -> Result<()> {
@@ -287,6 +294,59 @@ mod tests {
             "olderCursor": page.older_cursor,
         });
         v.to_string().len()
+    }
+
+    fn pinned_item_keys() -> Vec<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/core/test/fixtures/thread-page-keys.json");
+        let raw = std::fs::read_to_string(path).expect("shared key fixture must exist");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
+        v["itemKeys"]
+            .as_array()
+            .expect("itemKeys is an array")
+            .iter()
+            .map(|k| k.as_str().expect("a key is a string").to_string())
+            .collect()
+    }
+
+    // The page cap counts the wire JSON of one item. The daakd and daak-ffi
+    // page builders must produce the same item keys. The shared fixture pins
+    // all three.
+    #[test]
+    fn page_json_len_counts_the_pinned_item_keys() {
+        let item = ThreadItem {
+            transfer_id: [0xab; 16],
+            item_index: 2,
+            outbound: true,
+            is_text: true,
+            name: None,
+            size: None,
+            text: Some("hi".into()),
+            state: "done".into(),
+            dest_path: None,
+            at: 123,
+            transfer_state: "done".into(),
+            error: None,
+        };
+        let one = page_item_json(&item);
+        let mut keys: Vec<String> = one
+            .as_object()
+            .expect("an item is an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        let mut want = pinned_item_keys();
+        want.sort();
+        assert_eq!(
+            keys, want,
+            "page_json_len drifted from the pinned item keys"
+        );
+        // The cap counts exactly this shape.
+        assert_eq!(
+            page_json_len(std::slice::from_ref(&item)),
+            serde_json::Value::Array(vec![one]).to_string().len(),
+        );
     }
 
     #[test]

@@ -64,7 +64,12 @@ export function DeviceCard({ device, queued = 0, onOpen, onPair, openLabel, last
         </View>
       ) : null}
       {!paired && onPair ? (
-        <Btn label="Pair" onPress={onPair} testID={`pair-with-${device.deviceId}`} />
+        <Btn
+          label="Pair"
+          accessibilityLabel={'Pair ' + label}
+          onPress={onPair}
+          testID={`pair-with-${device.deviceId}`}
+        />
       ) : null}
     </>
   );

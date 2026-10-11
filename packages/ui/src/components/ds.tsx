@@ -150,9 +150,9 @@ export function Empty({ title, body, action }: { title: string; body: string; ac
   );
 }
 
-export function Section({ title, children }: { title: string; children: React.ReactNode }) {
+export function Section({ title, testID, children }: { title: string; testID?: string; children: React.ReactNode }) {
   return (
-    <View style={ui.stack}>
+    <View style={ui.stack} testID={testID}>
       <Text style={ui.sectionT}>{title}</Text>
       {children}
     </View>

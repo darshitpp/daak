@@ -158,7 +158,7 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
         </Section>
 
         {nearby.length > 0 ? (
-          <Section title="Nearby, not paired yet">
+          <Section title="Nearby, not paired yet" testID="nearby-section">
             <View style={ui.list}>
               {nearby.map((d) => (
                 <DeviceCard key={d.deviceId} device={d} onPair={onPair} />

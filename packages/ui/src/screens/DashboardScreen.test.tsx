@@ -85,8 +85,10 @@ describe('DashboardScreen (Devices)', () => {
     const onPair = jest.fn();
     mount(fakeEngine([near]), { onPair });
     // The section title and the row status carry the same design words, so the
-    // query returns both.
-    expect((await screen.findAllByText('Nearby, not paired yet')).length).toBe(2);
+    // nearby section holds both. Scope to the section so another match on the
+    // screen does not break the count.
+    const nearby = await screen.findByTestId('nearby-section');
+    expect(within(nearby).getAllByText('Nearby, not paired yet')).toHaveLength(2);
     fireEvent.press(screen.getByTestId('pair-with-' + near.deviceId));
     expect(onPair).toHaveBeenCalled();
   });
@@ -98,7 +100,8 @@ describe('DashboardScreen (Devices)', () => {
     const pending = dev('Ana Pixel', undefined, { paired: false, online: true });
     const onOpenThread = jest.fn();
     mount(fakeEngine([pending]), { onOpenThread });
-    expect((await screen.findAllByText('Nearby, not paired yet')).length).toBe(2);
+    const nearby = await screen.findByTestId('nearby-section');
+    expect(within(nearby).getAllByText('Nearby, not paired yet')).toHaveLength(2);
     expect(screen.getByText('No paired devices yet')).toBeTruthy();
     expect(screen.queryByTestId('open-' + pending.deviceId)).toBeNull();
     expect(onOpenThread).not.toHaveBeenCalled();
