@@ -195,6 +195,17 @@ impl ExportDebugBundleRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct GetItemTextRequest {
+    pub get_item_text: ItemRef,
+}
+
+impl GetItemTextRequest {
+    pub fn new(get_item_text: ItemRef) -> Self {
+        Self { get_item_text }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct InboxReceivedArgs {
     pub payload_json: String,
 }
@@ -365,6 +376,7 @@ pub enum IpcRequest {
     DeleteQuarantinedRequest(DeleteQuarantinedRequest),
     ListTransfersRequest(ListTransfersRequest),
     ListThreadRequest(ListThreadRequest),
+    GetItemTextRequest(GetItemTextRequest),
     ListInboxRequest(ListInboxRequest),
     SelfProfileRequest(SelfProfileRequest),
     SetDisplayNameRequest(SetDisplayNameRequest),
@@ -432,6 +444,10 @@ impl IpcRequest {
 
     pub fn new_list_thread_request(list_thread_request: ListThreadRequest) -> Self {
         Self::ListThreadRequest(list_thread_request)
+    }
+
+    pub fn new_get_item_text_request(get_item_text_request: GetItemTextRequest) -> Self {
+        Self::GetItemTextRequest(get_item_text_request)
     }
 
     pub fn new_list_inbox_request(list_inbox_request: ListInboxRequest) -> Self {

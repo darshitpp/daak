@@ -138,6 +138,39 @@ pub fn list_thread(
         older_cursor,
     })
 }
+// The longest text that item_text returns, in raw bytes. A text item crossed the
+// wire in one 4 MiB frame. The daemon wraps the answer in a JSON string, so the
+// text is escaped twice. 3 MiB leaves room for that. A longer text is an error.
+pub const ITEM_TEXT_MAX_BYTES: usize = 3 * 1024 * 1024;
+
+// The whole text of one item. The thread page cuts a long text to its budget,
+// and a copy of the cut text would lose data. This reads the same manifest
+// blob as the page, so it needs no second decoder.
+pub fn item_text(db: &Db, transfer_id: &[u8; 16], item_index: u32) -> Result<String> {
+    let t = db
+        .get_transfer(transfer_id)?
+        .ok_or_else(|| CoreError::Protocol("no such transfer".into()))?;
+    let m = Manifest::from_cbor(&t.manifest)?;
+    let item = m
+        .items
+        .iter()
+        .find(|i| i.index == item_index)
+        .ok_or_else(|| CoreError::Protocol("no such item".into()))?;
+    if !matches!(item.item_type, ItemType::Text) {
+        return Err(CoreError::Protocol("the item is not a text".into()));
+    }
+    let text = item
+        .text
+        .as_deref()
+        .ok_or_else(|| CoreError::Protocol("the text item has no text".into()))?;
+    if text.len() > ITEM_TEXT_MAX_BYTES {
+        return Err(CoreError::Protocol(
+            "the text is too long to return in one piece".into(),
+        ));
+    }
+    Ok(text.to_string())
+}
+
 // A single transfer whose manifest alone exceeds the frame still fails on the
 // daemon path. The manifest has no size cap today, and this plan adds none.
 
@@ -712,6 +745,41 @@ mod tests {
         assert!(
             page_json_len(&page.items) <= THREAD_PAGE_BYTES,
             "the kept row must fit the budget"
+        );
+    }
+
+    // P7: the whole text of one item, past the page budget.
+    #[test]
+    fn item_text_returns_the_whole_text_past_the_page_budget() {
+        let db = db();
+        let body = "é".repeat(1_500_000); // 3 MB of UTF-8, over the 1 MiB budget
+        let m = manifest(vec![Item::text(0, body.clone())]);
+        put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 1);
+        // The page cuts it ...
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert!(page.items[0].text_truncated);
+        // ... and item_text does not.
+        assert_eq!(item_text(&db, &[1u8; 16], 0).unwrap(), body);
+    }
+
+    #[test]
+    fn item_text_refuses_a_file_a_bad_index_an_unknown_transfer_and_a_text_over_the_limit() {
+        let db = db();
+        let m = manifest(vec![file(0, "a.pdf", 10), Item::text(1, "note")]);
+        put(&db, 1, 3, "in", "done", 10, m.to_cbor().unwrap(), 2);
+        assert!(item_text(&db, &[1u8; 16], 0).is_err(), "a file item");
+        assert!(item_text(&db, &[1u8; 16], 9).is_err(), "no such index");
+        assert!(item_text(&db, &[2u8; 16], 1).is_err(), "no such transfer");
+        assert_eq!(item_text(&db, &[1u8; 16], 1).unwrap(), "note");
+
+        let big = manifest(vec![Item::text(0, "y".repeat(ITEM_TEXT_MAX_BYTES + 1))]);
+        put(&db, 5, 3, "out", "done", 11, big.to_cbor().unwrap(), 1);
+        assert!(item_text(&db, &[5u8; 16], 0).is_err(), "over the limit");
+        let edge = manifest(vec![Item::text(0, "y".repeat(ITEM_TEXT_MAX_BYTES))]);
+        put(&db, 6, 3, "out", "done", 12, edge.to_cbor().unwrap(), 1);
+        assert_eq!(
+            item_text(&db, &[6u8; 16], 0).unwrap().len(),
+            ITEM_TEXT_MAX_BYTES
         );
     }
 

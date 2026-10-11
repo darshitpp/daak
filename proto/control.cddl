@@ -1,4 +1,6 @@
-hello = { "device_id": bstr .size 16 }
+; "pair" is present, and true, only on the first frame of a QR pairing
+; connection. A transfer Hello has no "pair" key.
+hello = { "device_id": bstr .size 16, ? "pair": bool }
 ack   = { "transfer_id": bstr .size 16, "item_index": uint, "complete": bool, "hash_ok": bool }
 
 ; Named, not inline: the pinned cddl-codegen rejects an array under a * marker

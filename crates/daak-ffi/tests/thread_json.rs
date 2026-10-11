@@ -105,3 +105,22 @@ fn item_keys_match_the_pinned_list() {
     assert_eq!(keys_of(&v["items"][0]), pinned(&fx["itemKeys"]));
     assert_eq!(keys_of(&v), pinned(&fx["pageKeys"]));
 }
+
+// The cut flags must carry their VALUES to the JavaScript side, not only their
+// keys. The UI reads `truncated` and `textTruncated`.
+#[test]
+fn the_cut_flags_carry_their_values() {
+    let mut cut_list = item(Some("a"), false);
+    cut_list.truncated = true;
+    let mut cut_text = item(Some("b"), false);
+    cut_text.text_truncated = true;
+    let p = ThreadPage {
+        items: vec![cut_list, cut_text],
+        older_cursor: None,
+    };
+    let v = thread_page_json(&p);
+    assert_eq!(v["items"][0]["truncated"], true);
+    assert_eq!(v["items"][0]["textTruncated"], false);
+    assert_eq!(v["items"][1]["truncated"], false);
+    assert_eq!(v["items"][1]["textTruncated"], true);
+}

@@ -1055,3 +1055,82 @@ async fn list_thread_returns_a_queued_send_and_rejects_a_bad_peer_id_and_a_bad_c
         .await;
     assert!(matches!(bad_cursor, IpcResponse::Error { .. }));
 }
+
+// A thread page cuts a long text to its 1 MiB budget. GetItemText returns the
+// whole text, so a copy of a cut bubble loses nothing.
+#[tokio::test]
+async fn get_item_text_returns_the_whole_text_that_the_page_cut() {
+    let d = Daemon::spawn().await;
+    let mut s = connect(&d.sock).await;
+    d.start_engine(&mut s).await;
+
+    let body = "é".repeat(1_100_000); // 2.2 MB of UTF-8, over the page budget
+    let sent = d
+        .call(
+            &mut s,
+            IpcRequest::Send {
+                peer_device_id: OFFLINE_PEER.into(),
+                text: Some(body.clone()),
+                files: vec![],
+            },
+        )
+        .await;
+    assert!(matches!(sent, IpcResponse::Json { .. }), "got {sent:?}");
+
+    let page = d
+        .call(
+            &mut s,
+            IpcRequest::ListThread {
+                peer_device_id: OFFLINE_PEER.into(),
+                limit: 50,
+                before: None,
+            },
+        )
+        .await;
+    let IpcResponse::Json { value } = page else {
+        panic!("ListThread must answer Json: {page:?}")
+    };
+    let v: serde_json::Value = serde_json::from_str(&value).unwrap();
+    assert_eq!(
+        v["items"][0]["textTruncated"], true,
+        "the page cuts the text"
+    );
+    let transfer_id = v["items"][0]["transferId"].as_str().unwrap().to_string();
+
+    let r = d
+        .call(
+            &mut s,
+            IpcRequest::GetItemText {
+                transfer_id: transfer_id.clone(),
+                item_index: 0,
+            },
+        )
+        .await;
+    let IpcResponse::Json { value } = r else {
+        panic!("GetItemText must answer Json: {r:?}")
+    };
+    let v: serde_json::Value = serde_json::from_str(&value).unwrap();
+    assert_eq!(v["text"].as_str().unwrap(), body);
+
+    // A malformed id and an index with no item are errors, not an empty text.
+    let bad_id = d
+        .call(
+            &mut s,
+            IpcRequest::GetItemText {
+                transfer_id: "zz".into(),
+                item_index: 0,
+            },
+        )
+        .await;
+    assert!(matches!(bad_id, IpcResponse::Error { .. }));
+    let no_item = d
+        .call(
+            &mut s,
+            IpcRequest::GetItemText {
+                transfer_id,
+                item_index: 9,
+            },
+        )
+        .await;
+    assert!(matches!(no_item, IpcResponse::Error { .. }));
+}

@@ -30,8 +30,14 @@ async fn engine_on(dir: &Path, name: &str, db: Arc<Db>, store: Arc<MemorySecretS
     .unwrap()
 }
 
+// A peer the engine saw on the network stays listed after the unpair, as a
+// nearby device that is NOT paired. The user can pair it again. Before, the
+// engine removed it, and a device that never re-announces (mDNS sends nothing
+// new for a device that stays on the Wi-Fi) never came back to the list.
+// A peer that is only a SAVED address (seeded at start, never seen this launch)
+// is dropped: nothing says it is there.
 #[tokio::test]
-async fn a_revoked_peer_leaves_the_map_and_stays_gone_after_a_restart() {
+async fn a_revoked_peer_that_was_seen_stays_listed_as_unpaired_and_stays_gone_after_a_restart() {
     let joiner_dir = tempfile::tempdir().unwrap();
     let host_dir = tempfile::tempdir().unwrap();
 
@@ -74,13 +80,27 @@ async fn a_revoked_peer_leaves_the_map_and_stays_gone_after_a_restart() {
 
     host.revoke_pairing(joiner_id).await.unwrap();
 
+    let after = host
+        .devices()
+        .await
+        .into_iter()
+        .find(|d| d.device_id == joiner_id)
+        .expect("a peer that was just on the network stays in the list");
     assert!(
-        !host
-            .devices()
-            .await
-            .iter()
-            .any(|d| d.device_id == joiner_id),
-        "a revoked peer must leave the live map"
+        !after.paired,
+        "a revoked peer must read as unpaired in the live map"
+    );
+    let view = host
+        .peer_views()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|v| v.device_id == joiner_id)
+        .expect("the UI list shows the revoked peer as nearby");
+    assert!(!view.paired, "and the UI list says it is not paired");
+    assert!(
+        view.presence.is_none(),
+        "an unpaired device has no presence"
     );
     assert_eq!(
         host_db.get_pairing(&joiner_id).unwrap().unwrap().state,
@@ -107,6 +127,65 @@ async fn a_revoked_peer_leaves_the_map_and_stays_gone_after_a_restart() {
             .iter()
             .any(|d| d.device_id == joiner_id),
         "a revoked peer must not come back on the next launch"
+    );
+}
+
+// A paired peer that is only a saved address (the engine restarted and has not
+// seen the peer on the network) is dropped on revoke. Listing it as "nearby"
+// would show a device that may not be there.
+#[tokio::test]
+async fn a_revoked_peer_that_is_only_a_saved_address_leaves_the_list() {
+    let joiner_dir = tempfile::tempdir().unwrap();
+    let host_dir = tempfile::tempdir().unwrap();
+    let joiner_db = Arc::new(Db::open(&joiner_dir.path().join("daak.db")).unwrap());
+    joiner_db.migrate().unwrap();
+    let joiner = engine_on(
+        joiner_dir.path(),
+        "joiner",
+        joiner_db,
+        Arc::new(MemorySecretStore::default()),
+    )
+    .await;
+    let host_db = Arc::new(Db::open(&host_dir.path().join("daak.db")).unwrap());
+    host_db.migrate().unwrap();
+    let host_store = Arc::new(MemorySecretStore::default());
+    let host =
+        Arc::new(engine_on(host_dir.path(), "host", host_db.clone(), host_store.clone()).await);
+
+    let joiner_id = joiner.pairing_bundle().await.identity.device_id;
+    let host_addr = host.local_addr();
+    host.offer_inbound_pairing(PairMode::Qr).await.unwrap();
+    let accepted = tokio::spawn({
+        let host = host.clone();
+        async move { host.accept_pairing_once().await.unwrap() }
+    });
+    joiner
+        .pair_with(host_addr, host.pairing_bundle().await)
+        .await
+        .unwrap();
+    accepted.await.unwrap();
+    host.shutdown().await.unwrap();
+    drop(host);
+
+    // After the restart the peer is in the list only because of its saved
+    // address. Nothing has announced it on the network.
+    let restarted = engine_on(host_dir.path(), "host", host_db.clone(), host_store).await;
+    assert!(
+        restarted
+            .devices()
+            .await
+            .iter()
+            .any(|d| d.device_id == joiner_id),
+        "the restart seeds the paired peer from its saved address"
+    );
+    restarted.revoke_pairing(joiner_id).await.unwrap();
+    assert!(
+        !restarted
+            .devices()
+            .await
+            .iter()
+            .any(|d| d.device_id == joiner_id),
+        "a peer that is only a saved address is dropped on revoke"
     );
 }
 

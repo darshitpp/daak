@@ -173,6 +173,8 @@ interface DaakEngine {
   // malformed peerDeviceId are FfiError.Protocol, not a silent unfiltered list.
   [Throws=FfiError] string list_transfers(string filter_json);
   [Throws=FfiError] string list_thread(string peer_id, u32 limit, string before);
+  // The whole text of one text item of a thread. The page cuts a long text; this does not.
+  [Throws=FfiError] string get_item_text(string transfer_id, u32 item_index);
   [Throws=FfiError] string list_inbox();
   // R42p: record where the platform MOVED this payload's files. The move
   // happens outside the engine (an Android SAF tree has no path the engine can

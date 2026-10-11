@@ -87,6 +87,9 @@ export type IpcRequestJSON =
       ListThreadRequest: ListThreadRequestJSON;
     }
   | {
+      GetItemTextRequest: GetItemTextRequestJSON;
+    }
+  | {
       ListInboxRequest: ListInboxRequestJSON;
     }
   | {
@@ -248,6 +251,9 @@ export interface ExportDebugBundleArgsJSON {
 }
 export interface ExportDebugBundleRequestJSON {
   export_debug_bundle: ExportDebugBundleArgsJSON;
+}
+export interface GetItemTextRequestJSON {
+  get_item_text: ItemRefJSON;
 }
 export interface IpcFrameJSON {
   msg: IpcMessageJSON;

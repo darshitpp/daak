@@ -83,13 +83,15 @@ async fn unpairing_on_one_device_unpairs_the_other() {
         .await
         .expect("the peer must revoke its own pairing when told");
 
+    // The peer that unpaired us has just connected, so it is on the network.
+    // It may stay in the map as a nearby device, but never as a paired one.
     assert!(
-        !host
-            .devices()
+        host.devices()
             .await
             .iter()
-            .any(|d| d.device_id == joiner_id),
-        "the peer must leave the notified device's map"
+            .filter(|d| d.device_id == joiner_id)
+            .all(|d| !d.paired),
+        "the peer must not read as paired on the notified device"
     );
     let mut saw_event = false;
     while let Ok(ev) = host_events.try_recv() {

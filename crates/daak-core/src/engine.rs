@@ -370,6 +370,47 @@ async fn handle_lost(
     }
 }
 
+/// The address to dial for a peer. The live device map comes first, because it
+/// holds the newest address. The stored address of a TRUSTED peer is the
+/// fallback: a spurious mDNS "lost" event removes the live entry, and the send
+/// would otherwise fail with "not discovered" for a peer that did not move.
+async fn resolve_peer_addr(
+    devices: &Mutex<HashMap<[u8; 16], DeviceInfo>>,
+    db: &Db,
+    peer: &[u8; 16],
+) -> Result<SocketAddr> {
+    if let Some(d) = devices.lock().await.get(peer) {
+        return Ok(d.addr);
+    }
+    if let Some(addr) = db.peer_addr(peer)? {
+        return Ok(addr);
+    }
+    Err(CoreError::Protocol(format!(
+        "peer {} is not discovered",
+        hex::encode(peer)
+    )))
+}
+
+/// Record a peer that mDNS found. Returns true when the peer was not in the
+/// map before. A TRUSTED peer whose address changed also gets the new address
+/// saved, because a peer picks a new port on every launch and the stored
+/// address would otherwise stay the one from the day of pairing.
+async fn note_found(
+    db: &Db,
+    devices: &Mutex<HashMap<[u8; 16], DeviceInfo>>,
+    seeded: &Mutex<std::collections::HashSet<[u8; 16]>>,
+    info: &DeviceInfo,
+) -> bool {
+    // The network says the peer is there, so it is no longer only a saved address.
+    seeded.lock().await.remove(&info.device_id);
+    let old = devices.lock().await.insert(info.device_id, info.clone());
+    if info.paired && old.as_ref().map(|o| o.addr) != Some(info.addr) {
+        // A failed write must not stop discovery. The live map has the address.
+        let _ = db.set_peer_addr(&info.device_id, info.addr);
+    }
+    old.is_none()
+}
+
 /// The discovered-peer map, shared by name because `Engine` holds it and the
 /// accept loop hands it to `handle_inbound`. R42d.
 pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
@@ -392,6 +433,11 @@ pub struct Engine {
     /// emits no `StatusChange`, so the engine re-announces online when the
     /// tracker says the peer is online but this set still holds the peer.
     announced_offline: Arc<tokio::sync::Mutex<std::collections::HashSet<[u8; 16]>>>,
+    /// Peers that are in the live map ONLY because `start` seeded them from a
+    /// saved address. A sighting on the network (note_found) removes the peer
+    /// from this set. A revoke drops a seeded peer from the list, because
+    /// nothing says it is there, and keeps a seen peer as a nearby device.
+    seeded: Arc<tokio::sync::Mutex<std::collections::HashSet<[u8; 16]>>>,
     /// The RESOLVED name (base name plus any collision suffix). It changes at
     /// runtime -- set_display_name re-resolves and re-advertises -- so it and
     /// the mDNS Advertiser built from it are behind one lock, swapped together
@@ -657,10 +703,14 @@ impl Engine {
         //
         // A read failure is logged, not fatal: a corrupt row must not stop the
         // app from launching. Discovery still populates the map in that case.
+        let seeded: Arc<tokio::sync::Mutex<std::collections::HashSet<[u8; 16]>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
         match cfg.db.paired_addrs() {
             Ok(peers) => {
                 let mut map = devices.lock().await;
+                let mut seeded_ids = seeded.lock().await;
                 for (id, name, addr) in peers {
+                    seeded_ids.insert(id);
                     map.insert(
                         id,
                         DeviceInfo {
@@ -804,18 +854,7 @@ impl Engine {
                 let identity = identity.clone();
                 let devices = devices.clone();
                 Box::pin(async move {
-                    let addr =
-                        devices
-                            .lock()
-                            .await
-                            .get(&peer)
-                            .map(|d| d.addr)
-                            .ok_or_else(|| {
-                                CoreError::Protocol(format!(
-                                    "peer {} is not discovered",
-                                    hex::encode(peer)
-                                ))
-                            })?;
+                    let addr = resolve_peer_addr(&devices, &db, &peer).await?;
                     let pairing = db
                         .get_pairing(&peer)?
                         .filter(|p| p.state == "trusted")
@@ -968,6 +1007,7 @@ impl Engine {
             // from a paired one, and the engine still needs `db` below. A clone
             // of the Arc, exactly as the accept loop above does.
             let db = db.clone();
+            let seeded = seeded.clone();
             let me = device_id;
             let outbox = outbox.clone();
             let identity = identity.clone();
@@ -1015,10 +1055,7 @@ impl Engine {
                         // row exists, and the UI offers Pair for it.
                         paired: db.is_trusted(&device_id),
                     };
-                    let is_new = {
-                        let mut map = devices.lock().await;
-                        map.insert(device_id, info.clone()).is_none()
-                    };
+                    let is_new = note_found(&db, &devices, &seeded, &info).await;
                     if is_new {
                         let _ = tx.send(EngineEvent::DeviceFound(info));
                     }
@@ -1223,6 +1260,7 @@ impl Engine {
             heartbeat_task,
             status,
             announced_offline,
+            seeded,
             identity,
             db,
             staging,
@@ -1435,8 +1473,11 @@ impl Engine {
         db.revoke_pairing(&peer)?;
         db.delete_outbox_for_peer(&peer)?;
         db.cancel_outbound_transfers_for_peer(&peer)?;
-        if devices.lock().await.remove(&peer).is_some() {
-            let _ = tx.send(EngineEvent::DeviceLost(peer));
+        // The peer just connected to us, so it is on the network. It stays in the
+        // list as a nearby device that is not paired, so the user can pair it
+        // again. Removing it would hide a device that is still there.
+        if let Some(d) = devices.lock().await.get_mut(&peer) {
+            d.paired = false;
         }
         let _ = tx.send(EngineEvent::PairingRevoked(peer));
         tracing::info!(peer = %hex::encode(peer), "pairing revoked by the peer");
@@ -1568,12 +1609,28 @@ impl Engine {
         self.sessions.lock().await.remove(&peer_device_id);
         self.status.lock().await.forget(&peer_device_id);
 
-        let removed = self.devices.lock().await.remove(&peer_device_id);
-        if removed.is_some() {
-            let _ = self.tx.send(EngineEvent::DeviceLost(peer_device_id));
-        }
+        // A peer that the network showed us stays in the list as a nearby device
+        // that is NOT paired, so the user can pair it again. A device that stays
+        // on the Wi-Fi announces nothing new after an unpair, so a removed entry
+        // would never come back. A peer that is only a saved address (seeded at
+        // start, never seen) is dropped: nothing says it is there.
+        let only_saved = self.seeded.lock().await.remove(&peer_device_id);
+        let nearby = {
+            let mut map = self.devices.lock().await;
+            if only_saved {
+                if map.remove(&peer_device_id).is_some() {
+                    let _ = self.tx.send(EngineEvent::DeviceLost(peer_device_id));
+                }
+                false
+            } else if let Some(d) = map.get_mut(&peer_device_id) {
+                d.paired = false;
+                true
+            } else {
+                false
+            }
+        };
         let _ = self.tx.send(EngineEvent::PairingRevoked(peer_device_id));
-        self.announce_device_state(peer_device_id, false).await;
+        self.announce_device_state(peer_device_id, nearby).await;
         // Revocation forgets the peer, so drop the announced-offline record
         // too. A later re-pair learns a fresh state and must not be held back.
         self.announced_offline.lock().await.remove(&peer_device_id);
@@ -1746,6 +1803,12 @@ impl Engine {
         before: Option<&str>,
     ) -> Result<crate::thread::ThreadPage> {
         crate::thread::list_thread(&self.db, &peer_device_id, limit, before)
+    }
+
+    // The whole text of one thread item. The page cuts a long text, and this
+    // does not. See crate::thread::item_text.
+    pub fn item_text(&self, transfer_id: [u8; 16], item_index: u32) -> Result<String> {
+        crate::thread::item_text(&self.db, &transfer_id, item_index)
     }
 
     /// R42p: record where the platform MOVED this payload's files.
@@ -1931,12 +1994,7 @@ impl Engine {
         conn.send(
             0,
             RecordType::Control,
-            Bytes::from(
-                Hello {
-                    device_id: self.identity.device_id(),
-                }
-                .to_cbor()?,
-            ),
+            Bytes::from(Hello::pairing(self.identity.device_id()).to_cbor()?),
         )
         .await?;
         // The host may have armed the OPEN slot (spec 3.3 Mode A: the joiner is
@@ -1992,12 +2050,7 @@ impl Engine {
         conn.send(
             0,
             RecordType::Control,
-            Bytes::from(
-                Hello {
-                    device_id: self.identity.device_id(),
-                }
-                .to_cbor()?,
-            ),
+            Bytes::from(Hello::pairing(self.identity.device_id()).to_cbor()?),
         )
         .await?;
         conn.send(
@@ -2476,8 +2529,17 @@ impl Engine {
             // commit, after the handshake.
             // Only a LIVE pairing means "this is a transfer". A revoked row
             // stays in the table, and its owner must be able to pair again.
+            //
+            // A trusted device that says it is PAIRING (`Hello::pairing`) is
+            // not a transfer either. The user of this host showed the QR on
+            // purpose, and a device that lost its side of the pairing (a
+            // reinstall, a wiped app) must be able to scan it. A device id is
+            // the hash of the identity key, so only the device that holds the
+            // key can claim a trusted id, and the new pairing still waits for
+            // the numbers to be compared when the gate is on. A Hello from a
+            // version without the flag reads as a transfer, as before.
             Some(p) if p.arm == PendingArm::Open => {
-                if db.is_trusted(&hello.device_id) {
+                if db.is_trusted(&hello.device_id) && !hello.pair {
                     None
                 } else {
                     Some(p)
@@ -3092,7 +3154,17 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
         ) {
             // 3.3: a cancel or a revoke that lands during this drain already
             // wrote 'canceled'. Do not relabel it 'failed' or 'paused'.
-            let _ = db.set_transfer_state_unless_canceled(&row.id, state);
+            let wrote = db
+                .set_transfer_state_unless_canceled(&row.id, state)
+                .unwrap_or(false);
+            // The last attempt is an end. A retry (paused) is not, so only the
+            // end sends an event.
+            if wrote && state == "failed" {
+                let _ = ctx.tx.send(EngineEvent::TransferFailed {
+                    transfer_id: row.id,
+                    error: "the device could not be reached after repeated attempts".into(),
+                });
+            }
         }
     };
 
@@ -3116,7 +3188,17 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             // there forever is the one state the UI cannot explain. The outbox
             // write is the authority, so this is gated on it.
             // 3.3: a cancel or a revoke during this drain must keep 'canceled'.
-            let _ = db.set_transfer_state_unless_canceled(&row.id, "failed");
+            if db
+                .set_transfer_state_unless_canceled(&row.id, "failed")
+                .unwrap_or(false)
+            {
+                // The sender must say that it ended. The thread refetches on
+                // this event, and the Android foreground service stops on it.
+                let _ = ctx.tx.send(EngineEvent::TransferFailed {
+                    transfer_id: row.id,
+                    error: why,
+                });
+            }
         }
     };
 
@@ -3193,7 +3275,18 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 // a missing row must not turn a successful send into a failed
                 // drain.
                 // 3.3: a cancel during this drain keeps 'canceled'.
-                let _ = db.set_transfer_state_unless_canceled(&row.id, "done");
+                if db
+                    .set_transfer_state_unless_canceled(&row.id, "done")
+                    .unwrap_or(false)
+                {
+                    // The sender must say that it finished. Without this the
+                    // thread kept its old bubble until an unrelated event, and
+                    // the Android foreground service (started by the first
+                    // transfer.progress) never stopped.
+                    let _ = ctx.tx.send(EngineEvent::TransferDone {
+                        transfer_id: row.id,
+                    });
+                }
             }
         }
         Err(e) => {
@@ -3375,6 +3468,151 @@ mod tests {
         handle_lost(&devices, &tx, [9u8; 16], id).await;
         assert!(devices.lock().await.get(&id).is_none());
         assert!(matches!(rx.try_recv(), Ok(EngineEvent::DeviceLost(got)) if got == id));
+    }
+
+    fn trusted_in(db: &Db, id: [u8; 16], addr: Option<&str>) {
+        db.upsert_pairing(&Pairing {
+            peer_device_id: id,
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [1u8; 32],
+            static_dh_pub: [2u8; 32],
+            label: Some("peer".into()),
+        })
+        .unwrap();
+        if let Some(a) = addr {
+            db.set_peer_addr(&id, a.parse().unwrap()).unwrap();
+        }
+    }
+
+    // The send path needs an address. The live map is the first choice. The
+    // stored address is the fallback, so a spurious mDNS "lost" event (which
+    // removes the live entry) does not turn a paired peer into "not discovered".
+    #[tokio::test]
+    async fn the_live_address_wins_over_the_stored_one() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [4u8; 16];
+        trusted_in(&db, id, Some("10.0.0.4:1111"));
+        let mut live = test_device(id);
+        live.addr = "10.0.0.4:2222".parse().unwrap();
+        let devices = Mutex::new(HashMap::from([(id, live)]));
+        let got = resolve_peer_addr(&devices, &db, &id).await.unwrap();
+        assert_eq!(got, "10.0.0.4:2222".parse().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_paired_peer_missing_from_the_live_map_uses_its_stored_address() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [5u8; 16];
+        trusted_in(&db, id, Some("10.0.0.5:3333"));
+        let devices = Mutex::new(HashMap::new());
+        let got = resolve_peer_addr(&devices, &db, &id).await.unwrap();
+        assert_eq!(got, "10.0.0.5:3333".parse().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_peer_with_no_live_entry_and_no_stored_address_is_not_discovered() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [6u8; 16];
+        trusted_in(&db, id, None);
+        let devices = Mutex::new(HashMap::new());
+        let err = resolve_peer_addr(&devices, &db, &id).await.unwrap_err();
+        assert!(err.to_string().contains("not discovered"), "got {err}");
+        // An unknown peer says the same.
+        let err = resolve_peer_addr(&devices, &db, &[7u8; 16])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not discovered"), "got {err}");
+    }
+
+    // A found event for a TRUSTED peer saves the new address, because the peer
+    // picks a new port on every launch. Without this the stored address stays
+    // the one from the day of pairing.
+    #[tokio::test]
+    async fn a_found_event_for_a_trusted_peer_saves_its_new_address() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [8u8; 16];
+        trusted_in(&db, id, Some("10.0.0.8:1000"));
+        let devices = Mutex::new(HashMap::new());
+        let seeded = Mutex::new(std::collections::HashSet::new());
+        let mut info = test_device(id);
+        info.paired = true;
+        info.addr = "10.0.0.8:2000".parse().unwrap();
+        assert!(
+            note_found(&db, &devices, &seeded, &info).await,
+            "first sighting is new"
+        );
+        assert_eq!(
+            db.peer_addr(&id).unwrap(),
+            Some("10.0.0.8:2000".parse().unwrap())
+        );
+        assert_eq!(devices.lock().await.get(&id).unwrap().addr, info.addr);
+        // The same peer again, same address: not new.
+        assert!(!note_found(&db, &devices, &seeded, &info).await);
+    }
+
+    #[tokio::test]
+    async fn a_found_event_for_an_unpaired_device_saves_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [9u8; 16];
+        let devices = Mutex::new(HashMap::new());
+        let seeded = Mutex::new(std::collections::HashSet::new());
+        let info = test_device(id); // paired: false
+        assert!(note_found(&db, &devices, &seeded, &info).await);
+        assert_eq!(db.peer_addr(&id).unwrap(), None);
+    }
+
+    // The OTHER device unpaired us. That peer has just connected to us, so it is
+    // on the network. It stays in the live map as an unpaired nearby device,
+    // and the UI is told the pairing is gone, not that the device is lost.
+    #[tokio::test]
+    async fn a_remote_unpair_keeps_the_peer_listed_as_unpaired() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [11u8; 16];
+        trusted_in(&db, id, Some("127.0.0.1:9"));
+        let mut info = test_device(id);
+        info.paired = true;
+        let devices: SharedDevices = Arc::new(Mutex::new(HashMap::from([(id, info)])));
+        let (tx, mut rx) = broadcast::channel(8);
+
+        Engine::revoke_remote(&db, &devices, &tx, id).await.unwrap();
+
+        assert_eq!(db.get_pairing(&id).unwrap().unwrap().state, "revoked");
+        let kept = devices.lock().await.get(&id).cloned();
+        assert!(
+            kept.as_ref().is_some_and(|d| !d.paired),
+            "the peer stays listed as unpaired, got {kept:?}"
+        );
+        let mut seen = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            seen.push(e);
+        }
+        assert!(seen
+            .iter()
+            .any(|e| matches!(e, EngineEvent::PairingRevoked(got) if *got == id)));
+        assert!(
+            !seen.iter().any(|e| matches!(e, EngineEvent::DeviceLost(_))),
+            "the device is not lost, got {seen:?}"
+        );
+    }
+
+    // A sighting on the network ends "only a saved address". A revoke keeps a
+    // seen peer in the list as a nearby device, and drops a merely seeded one.
+    #[tokio::test]
+    async fn a_found_event_marks_a_seeded_peer_as_seen() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let id = [10u8; 16];
+        let devices = Mutex::new(HashMap::new());
+        let seeded = Mutex::new(std::collections::HashSet::from([id]));
+        note_found(&db, &devices, &seeded, &test_device(id)).await;
+        assert!(!seeded.lock().await.contains(&id));
     }
 
     #[tokio::test]
@@ -4002,17 +4240,18 @@ mod tests {
         staging: &Arc<Staging>,
         sessions: SharedSessions<crate::net::secure::MemConn>,
         id: [u8; 16],
-    ) {
+    ) -> Vec<EngineEvent> {
         assert!(
             db.mark_outbox_sending(&id).unwrap(),
             "the drain claims its row"
         );
         let row = db.get_outbox(&id).unwrap().unwrap();
+        let (tx, mut rx) = broadcast::channel(64);
         drain_outbox_row(
             DrainCtx {
                 db: db.clone(),
                 staging: staging.clone(),
-                tx: broadcast::channel(8).0,
+                tx,
                 sessions,
                 max_backoff_secs: 600,
                 observability: Arc::new(Observability::default()),
@@ -4020,6 +4259,12 @@ mod tests {
             row,
         )
         .await;
+        // The drain has returned, so every event it sent is already queued.
+        let mut seen = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            seen.push(e);
+        }
+        seen
     }
 
     /// B4 core: a hash-mismatch ack must NOT go through the generic retry
@@ -4035,7 +4280,15 @@ mod tests {
         let id = enqueued_file(&db, &staging);
 
         let (sessions, _connects) = stub_peer_registry(false, 0);
-        drain_one(&db, &staging, sessions, id).await;
+        let events = drain_one(&db, &staging, sessions, id).await;
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::TransferFailed { transfer_id, error }
+                    if *transfer_id == id && error.contains("quarantined")
+            )),
+            "a terminal failure sends TransferFailed with the reason, got {events:?}"
+        );
 
         let row = db.get_outbox(&id).unwrap().unwrap();
         assert_eq!(
@@ -4092,7 +4345,15 @@ mod tests {
         let id = enqueued_file(&db, &staging);
 
         let (sessions, connects) = stub_peer_registry(true, 0);
-        drain_one(&db, &staging, sessions, id).await;
+        let events = drain_one(&db, &staging, sessions, id).await;
+        // The sender must say that it finished. The thread refetches on this
+        // event, and the Android foreground service stops on it.
+        assert!(
+            events.iter().any(
+                |e| matches!(e, EngineEvent::TransferDone { transfer_id } if *transfer_id == id)
+            ),
+            "a delivered share sends TransferDone, got {events:?}"
+        );
         assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "done");
         assert_eq!(
             db.get_transfer(&id).unwrap().unwrap().state,
@@ -4130,7 +4391,16 @@ mod tests {
                 ) as crate::session::BoxConnect<crate::net::secure::MemConn>,
             )));
 
-        drain_one(&db, &staging, sessions, id).await;
+        let events = drain_one(&db, &staging, sessions, id).await;
+        // A retry is not an end. Neither TransferDone nor TransferFailed may
+        // go out, or the UI would show a failure for a send that still runs.
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                EngineEvent::TransferDone { .. } | EngineEvent::TransferFailed { .. }
+            )),
+            "a backed-off attempt sends no end event, got {events:?}"
+        );
         let row = db.get_outbox(&id).unwrap().unwrap();
         assert_eq!(
             row.state, "pending",
@@ -4147,6 +4417,59 @@ mod tests {
             None,
             "a transport failure quarantines nothing, and invents no item row"
         );
+    }
+
+    /// The LAST allowed attempt is an end, so the sender says so. The attempt
+    /// before it is a retry and says nothing (the unreachable-peer test above).
+    #[tokio::test]
+    async fn the_last_attempt_that_gives_up_sends_transfer_failed() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let id = enqueued_file(&db, &staging);
+        let sessions: SharedSessions<crate::net::secure::MemConn> =
+            Arc::new(Mutex::new(SessionRegistry::new(
+                std::time::Duration::from_secs(30),
+                Box::new(
+                    |_p: [u8; 16]| -> crate::session::BoxFutureConn<crate::net::secure::MemConn> {
+                        Box::pin(async {
+                            Err(CoreError::Io(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionRefused,
+                                "peer gone",
+                            )))
+                        })
+                    },
+                ) as crate::session::BoxConnect<crate::net::secure::MemConn>,
+            )));
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        let mut row = db.get_outbox(&id).unwrap().unwrap();
+        row.attempts = MAX_DELIVERY_ATTEMPTS - 1;
+        let (tx, mut rx) = broadcast::channel(64);
+        drain_outbox_row(
+            DrainCtx {
+                db: db.clone(),
+                staging: staging.clone(),
+                tx,
+                sessions,
+                max_backoff_secs: 600,
+                observability: Arc::new(Observability::default()),
+            },
+            row,
+        )
+        .await;
+        let mut seen = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            seen.push(e);
+        }
+        assert!(
+            seen.iter().any(|e| matches!(
+                e,
+                EngineEvent::TransferFailed { transfer_id, .. } if *transfer_id == id
+            )),
+            "the give-up sends TransferFailed, got {seen:?}"
+        );
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "failed");
     }
 
     /// The receiver reports only the FIRST failed item and AckMsg has room for

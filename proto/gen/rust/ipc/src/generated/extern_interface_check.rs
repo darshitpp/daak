@@ -51,6 +51,8 @@ fn _extern_interface_self_check() {
     _assert_deserialize::<crate::generated::ExportDebugBundleArgs>();
     _assert_serialize::<crate::generated::ExportDebugBundleRequest>();
     _assert_deserialize::<crate::generated::ExportDebugBundleRequest>();
+    _assert_serialize::<crate::generated::GetItemTextRequest>();
+    _assert_deserialize::<crate::generated::GetItemTextRequest>();
     _assert_serialize::<crate::generated::InboxReceivedArgs>();
     _assert_deserialize::<crate::generated::InboxReceivedArgs>();
     _assert_serialize::<crate::generated::InboxReceivedEvent>();

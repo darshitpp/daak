@@ -66,6 +66,7 @@ ipc-request =
   / delete-quarantined-request
   / list-transfers-request
   / list-thread-request
+  / get-item-text-request
   / list-inbox-request
   / self-profile-request
   / set-display-name-request
@@ -126,6 +127,10 @@ list-transfers-request   = list-transfers-args
 ; the previous page and is OPTIONAL: the Rust field skips None.
 list-thread-request = { "ListThread": list-thread-args }
 list-thread-args = { "peer_device_id": tstr, "limit": uint, ? "before": tstr }
+; The WHOLE text of one text item. A thread page cuts a long text to fit its
+; budget, so a copy of the page text can lose data. The answer is a JSON
+; string {"text": ...}. The daemon refuses a text longer than 3 MiB.
+get-item-text-request = { "GetItemText": item-ref }
 list-inbox-request       = "ListInbox"
 ; This device's OWN advertised name and device id -- the READ half of
 ; SetDisplayName, sitting next to it in the Rust enum for that reason. A UI can

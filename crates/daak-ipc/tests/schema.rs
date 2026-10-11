@@ -231,6 +231,10 @@ fn every_request_validates_against_the_cddl() {
             limit: 50,
             before: Some("5:00".into()),
         }),
+        IpcMessage::Request(IpcRequest::GetItemText {
+            transfer_id: "d1".into(),
+            item_index: 2,
+        }),
         IpcMessage::Request(IpcRequest::ListInbox),
         // A unit variant, like Devices/Subscribe -- but it is a NEW wire key, so
         // it has to be pinned here or the cddl can keep refusing the very frame

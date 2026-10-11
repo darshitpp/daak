@@ -648,7 +648,16 @@ impl cbor_event::se::Serialize for Hello {
         &self,
         serializer: &'se mut Serializer,
     ) -> cbor_event::Result<&'se mut Serializer> {
-        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_map(cbor_event::Len::Len(
+            1 + match &self.pair {
+                Some(_) => 1,
+                None => 0,
+            },
+        ))?;
+        if let Some(field) = &self.pair {
+            serializer.write_text("pair")?;
+            serializer.write_special(cbor_event::Special::Bool(*field))?;
+        }
         serializer.write_text("device_id")?;
         serializer.write_bytes(&self.device_id)?;
         Ok(serializer)
@@ -661,7 +670,7 @@ impl Deserialize for Hello {
             let len = raw.map()?;
             let mut read_len = CBORReadLen::from(len);
             read_len.read_elems(1)?;
-            read_len.finish()?;
+            let mut pair = None;
             let mut device_id = None;
             let mut read = 0;
             while match len {
@@ -676,6 +685,21 @@ impl Deserialize for Hello {
                         .into());
                     }
                     cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "pair" => {
+                            if pair.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "pair".into(),
+                                ))
+                                .into());
+                            }
+                            pair = Some(
+                                (|| -> Result<_, DeserializeError> {
+                                    read_len.read_elems(1)?;
+                                    bool::deserialize(raw)
+                                })()
+                                .map_err(|e| e.annotate("pair"))?,
+                            );
+                        }
                         "device_id" => {
                             if device_id.is_some() {
                                 return Err(DeserializeFailure::DuplicateKey(Key::Str(
@@ -731,7 +755,8 @@ impl Deserialize for Hello {
                         .into());
                     }
                 };
-            Ok(Self { device_id })
+            read_len.finish()?;
+            Ok(Self { device_id, pair })
         })()
         .map_err(|e| e.annotate("Hello"))
     }

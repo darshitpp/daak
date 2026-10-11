@@ -46,9 +46,7 @@ async fn a_stray_connection_does_not_burn_the_pairing_code() {
     // A stray connection: a valid Hello from an unknown device, then a hang-up.
     {
         let mut stray = tcp::dial(host.local_addr()).await.unwrap();
-        let hello = Hello {
-            device_id: [0xEE; 16],
-        };
+        let hello = Hello::transfer([0xEE; 16]);
         stray
             .send(
                 CONTROL_STREAM,

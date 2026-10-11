@@ -8,9 +8,36 @@ use std::net::SocketAddr;
 pub struct Hello {
     #[serde(with = "crate::manifest::byte_array")]
     pub device_id: [u8; 16],
+    /// The sender is the joiner of a QR pairing, not a transfer. Absent on the
+    /// wire when false, so a transfer Hello is unchanged, and a Hello from a
+    /// version without this key reads as a transfer. A host that shows an open
+    /// QR reads it to let a device it already trusts pair again: a trusted
+    /// device otherwise looks like a transfer up to the next frame.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pair: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Hello {
+    /// The first frame of a transfer connection.
+    pub fn transfer(device_id: [u8; 16]) -> Self {
+        Self {
+            device_id,
+            pair: false,
+        }
+    }
+
+    /// The first frame of a QR pairing connection.
+    pub fn pairing(device_id: [u8; 16]) -> Self {
+        Self {
+            device_id,
+            pair: true,
+        }
+    }
+
     pub fn to_cbor(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         ciborium::ser::into_writer(self, &mut out).map_err(|e| CoreError::Cbor(e.to_string()))?;
@@ -164,13 +191,51 @@ mod tests {
         }
     }
 
+    // A Hello that is not a pairing request encodes exactly as it did before the
+    // `pair` field existed: one key, device_id. Every transfer sends this one.
+    #[test]
+    fn a_transfer_hello_encodes_with_only_the_device_id() {
+        use ciborium::value::Value;
+        let h = Hello::transfer([5u8; 16]);
+        let value: Value = ciborium::de::from_reader(h.to_cbor().unwrap().as_slice()).unwrap();
+        let Value::Map(entries) = &value else {
+            panic!("expected map, got {value:?}");
+        };
+        assert_eq!(entries.len(), 1, "no pair key on a transfer: {entries:?}");
+    }
+
+    // The joiner of a QR pairing says so. The host uses it to tell a pairing
+    // from a transfer, because a device the host already trusts looks the same
+    // up to this frame.
+    #[test]
+    fn a_pairing_hello_carries_the_pair_flag_and_round_trips() {
+        let h = Hello::pairing([6u8; 16]);
+        assert!(h.pair);
+        let back = Hello::from_cbor(&h.to_cbor().unwrap()).unwrap();
+        assert_eq!(back, h);
+        assert!(back.pair);
+    }
+
+    // A Hello from a version that has no `pair` key reads as a transfer.
+    #[test]
+    fn an_old_hello_without_the_pair_key_reads_as_not_pairing() {
+        use ciborium::value::Value;
+        let old = Value::Map(vec![(
+            Value::Text("device_id".into()),
+            Value::Bytes(vec![7u8; 16]),
+        )]);
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&old, &mut bytes).unwrap();
+        let h = Hello::from_cbor(&bytes).unwrap();
+        assert_eq!(h.device_id, [7u8; 16]);
+        assert!(!h.pair);
+    }
+
     #[test]
     fn hello_device_id_encodes_as_cbor_bytes() {
         use ciborium::value::Value;
 
-        let h = Hello {
-            device_id: [3u8; 16],
-        };
+        let h = Hello::transfer([3u8; 16]);
         assert_eq!(Hello::from_cbor(&h.to_cbor().unwrap()).unwrap(), h);
 
         let value: Value = ciborium::de::from_reader(h.to_cbor().unwrap().as_slice()).unwrap();

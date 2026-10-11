@@ -202,7 +202,7 @@ pub async fn open_secure<T: FrameTransport + Send>(
     peer_static: &[u8; 32],
     device_id: [u8; 16],
 ) -> Result<SecureConnection<T>> {
-    let hello = Hello { device_id };
+    let hello = Hello::transfer(device_id);
     conn.send(0, RecordType::Control, Bytes::from(hello.to_cbor()?))
         .await?;
 

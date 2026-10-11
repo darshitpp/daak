@@ -58,6 +58,23 @@ fn engine_constructs_and_reports_not_started_instead_of_panicking() {
     engine.shutdown().unwrap();
 }
 
+/// get_item_text follows the surface rules: a malformed id is a protocol error even
+/// before start(), and a well-formed id before start() is an engine error.
+#[test]
+fn get_item_text_rejects_a_bad_id_and_an_engine_that_is_not_started() {
+    let engine = FfiEngine::new(Box::new(Recorder {
+        events: Mutex::new(Vec::new()),
+    }));
+    assert!(matches!(
+        engine.get_item_text("nope".into(), 0),
+        Err(FfiError::Protocol(_))
+    ));
+    assert!(matches!(
+        engine.get_item_text("00".repeat(16), 0),
+        Err(FfiError::Engine(_))
+    ));
+}
+
 /// list_transfers takes a JSON STRING because the UDL has no map type, so the
 /// filter crosses the boundary as text. An unparseable filter must be a
 /// PROTOCOL error, and a malformed peerDeviceId inside a parseable filter must

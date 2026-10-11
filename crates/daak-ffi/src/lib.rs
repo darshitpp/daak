@@ -817,6 +817,13 @@ impl DaakEngine {
         serde_json::to_string(&thread_page_json(&page)).map_err(protocol_err)
     }
 
+    /// The whole text of one text item. The thread page cuts a long text, so a
+    /// copy of the page text can lose data. This returns the text itself.
+    pub fn get_item_text(&self, transfer_id: String, item_index: u32) -> Result<String, FfiError> {
+        let id = parse_id(&transfer_id)?;
+        self.engine()?.item_text(id, item_index).map_err(engine_err)
+    }
+
     /// R42p: record where the platform MOVED this payload's files.
     ///
     /// The engine writes the paths it was told; it does not check them. The

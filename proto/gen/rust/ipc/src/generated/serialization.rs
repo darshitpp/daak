@@ -1558,6 +1558,89 @@ impl Deserialize for ExportDebugBundleRequest {
     }
 }
 
+impl cbor_event::se::Serialize for GetItemTextRequest {
+    fn serialize<'se>(
+        &self,
+        serializer: &'se mut Serializer,
+    ) -> cbor_event::Result<&'se mut Serializer> {
+        serializer.write_map(cbor_event::Len::Len(1))?;
+        serializer.write_text("GetItemText")?;
+        self.get_item_text.serialize(serializer)?;
+        Ok(serializer)
+    }
+}
+
+impl Deserialize for GetItemTextRequest {
+    fn deserialize(raw: &mut Deserializer) -> Result<Self, DeserializeError> {
+        (|| -> Result<_, DeserializeError> {
+            let len = raw.map()?;
+            let mut read_len = CBORReadLen::from(len);
+            read_len.read_elems(1)?;
+            read_len.finish()?;
+            let mut get_item_text = None;
+            let mut read = 0;
+            while match len {
+                cbor_event::Len::Len(n) => read < n,
+                cbor_event::Len::Indefinite => true,
+            } {
+                match raw.cbor_type()? {
+                    cbor_event::Type::UnsignedInteger => {
+                        return Err(DeserializeFailure::UnknownKey(Key::Uint(
+                            raw.unsigned_integer()?,
+                        ))
+                        .into());
+                    }
+                    cbor_event::Type::Text => match raw.text()?.as_str() {
+                        "GetItemText" => {
+                            if get_item_text.is_some() {
+                                return Err(DeserializeFailure::DuplicateKey(Key::Str(
+                                    "GetItemText".into(),
+                                ))
+                                .into());
+                            }
+                            get_item_text = Some(
+                                ItemRef::deserialize(raw)
+                                    .map_err(|e: DeserializeError| e.annotate("get_item_text"))?,
+                            );
+                        }
+                        unknown_key => {
+                            return Err(DeserializeFailure::UnknownKey(Key::Str(
+                                unknown_key.to_owned(),
+                            ))
+                            .into());
+                        }
+                    },
+                    cbor_event::Type::Special => match len {
+                        cbor_event::Len::Len(_) => {
+                            return Err(DeserializeFailure::BreakInDefiniteLen.into());
+                        }
+                        cbor_event::Len::Indefinite => match raw.special()? {
+                            cbor_event::Special::Break => break,
+                            _ => return Err(DeserializeFailure::EndingBreakMissing.into()),
+                        },
+                    },
+                    other_type => {
+                        return Err(DeserializeFailure::UnexpectedKeyType(other_type).into());
+                    }
+                }
+                read += 1;
+            }
+            let get_item_text =
+                match get_item_text {
+                    Some(x) => x,
+                    None => {
+                        return Err(DeserializeFailure::MandatoryFieldMissing(Key::Str(
+                            String::from("GetItemText"),
+                        ))
+                        .into());
+                    }
+                };
+            Ok(Self { get_item_text })
+        })()
+        .map_err(|e| e.annotate("GetItemTextRequest"))
+    }
+}
+
 impl cbor_event::se::Serialize for InboxReceivedArgs {
     fn serialize<'se>(
         &self,
@@ -2317,6 +2400,9 @@ impl cbor_event::se::Serialize for IpcRequest {
             IpcRequest::ListThreadRequest(list_thread_request) => {
                 list_thread_request.serialize(serializer)
             }
+            IpcRequest::GetItemTextRequest(get_item_text_request) => {
+                get_item_text_request.serialize(serializer)
+            }
             IpcRequest::ListInboxRequest(list_inbox_request) => {
                 list_inbox_request.serialize(serializer)
             }
@@ -2458,6 +2544,16 @@ impl Deserialize for IpcRequest {
                 Ok(list_thread_request) => return Ok(Self::ListThreadRequest(list_thread_request)),
                 Err(e) => {
                     errs.push(e.annotate("ListThreadRequest"));
+                    raw.set_position(initial_position).unwrap();
+                }
+            };
+            let deser_variant: Result<_, DeserializeError> = GetItemTextRequest::deserialize(raw);
+            match deser_variant {
+                Ok(get_item_text_request) => {
+                    return Ok(Self::GetItemTextRequest(get_item_text_request));
+                }
+                Err(e) => {
+                    errs.push(e.annotate("GetItemTextRequest"));
                     raw.set_position(initial_position).unwrap();
                 }
             };

@@ -95,6 +95,7 @@ impl Beacon {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct Hello {
     pub device_id: [u8; 16],
+    pub pair: Option<bool>,
 }
 
 impl Hello {
@@ -107,7 +108,10 @@ impl Hello {
                     min: Some(16),
                     max: Some(16),
                 })?;
-        Ok(Self { device_id })
+        Ok(Self {
+            device_id,
+            pair: None,
+        })
     }
 }
 

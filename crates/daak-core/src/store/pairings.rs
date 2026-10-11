@@ -30,6 +30,26 @@ impl Db {
         Ok(())
     }
 
+    /// The last address stored for one TRUSTED peer, or None. The send path
+    /// falls back to this when the live device map has no entry, for example
+    /// after a spurious mDNS "lost" event. A revoked or unknown peer has none.
+    pub fn peer_addr(&self, id: &[u8; 16]) -> Result<Option<SocketAddr>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT d.last_seen_addr
+               FROM devices d
+               JOIN pairings p ON p.peer_device_id = d.device_id
+              WHERE d.device_id = ?1 AND p.state = 'trusted'
+                AND d.last_seen_addr IS NOT NULL AND d.last_seen_addr <> ''",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![&id[..]])?;
+        match rows.next()? {
+            // A row that does not parse is a corrupt row: no address.
+            Some(r) => Ok(r.get::<_, String>(0)?.parse::<SocketAddr>().ok()),
+            None => Ok(None),
+        }
+    }
+
     /// Every live pairing that has a proven address, so `Engine::start` can
     /// seed the device map without waiting for an announce.
     pub fn paired_addrs(&self) -> Result<Vec<([u8; 16], String, SocketAddr)>> {
@@ -273,6 +293,41 @@ mod tests {
         assert_eq!(
             db.get_pairing(&p.peer_device_id).unwrap().unwrap().state,
             "revoked"
+        );
+    }
+
+    #[test]
+    fn peer_addr_answers_for_a_trusted_peer_that_has_an_address() {
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let p = example(6);
+        db.upsert_pairing(&p).unwrap();
+        // No address stored yet.
+        assert_eq!(db.peer_addr(&p.peer_device_id).unwrap(), None);
+        let addr: SocketAddr = "192.168.1.9:40123".parse().unwrap();
+        db.set_peer_addr(&p.peer_device_id, addr).unwrap();
+        assert_eq!(db.peer_addr(&p.peer_device_id).unwrap(), Some(addr));
+        // A newer address replaces the old one.
+        let newer: SocketAddr = "192.168.1.9:50555".parse().unwrap();
+        db.set_peer_addr(&p.peer_device_id, newer).unwrap();
+        assert_eq!(db.peer_addr(&p.peer_device_id).unwrap(), Some(newer));
+    }
+
+    #[test]
+    fn peer_addr_is_none_for_an_unknown_peer_and_for_a_revoked_one() {
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        assert_eq!(db.peer_addr(&[8u8; 16]).unwrap(), None, "unknown peer");
+        let mut p = example(7);
+        db.upsert_pairing(&p).unwrap();
+        db.set_peer_addr(&p.peer_device_id, "10.0.0.7:4000".parse().unwrap())
+            .unwrap();
+        p.state = "revoked".into();
+        db.upsert_pairing(&p).unwrap();
+        assert_eq!(
+            db.peer_addr(&p.peer_device_id).unwrap(),
+            None,
+            "a revoked peer must not be dialled"
         );
     }
 

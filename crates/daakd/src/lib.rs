@@ -783,6 +783,19 @@ async fn dispatch(
                 },
             },
         },
+        IpcRequest::GetItemText {
+            transfer_id,
+            item_index,
+        } => match state.engine().await {
+            Err(e) => e,
+            Ok(engine) => match parse_id(&transfer_id) {
+                Err(e) => e,
+                Ok(id) => match engine.item_text(id, item_index) {
+                    Ok(text) => json(serde_json::json!({ "text": text })),
+                    Err(e) => err(e),
+                },
+            },
+        },
         IpcRequest::ListInbox => match state.engine().await {
             Err(e) => e,
             Ok(engine) => match engine.list_inbox() {
@@ -1062,6 +1075,38 @@ mod tests {
             sorted_keys(v.as_object().expect("a page object")),
             pinned(&fx["pageKeys"])
         );
+    }
+
+    /// The cut flags must carry their VALUES to the wire, not only their keys.
+    /// The UI reads `truncated` and `textTruncated` to say that an item list
+    /// or a text is not whole.
+    #[test]
+    fn thread_page_json_carries_the_cut_flag_values() {
+        let item = |truncated: bool, text_truncated: bool| daak_core::thread::ThreadItem {
+            transfer_id: [0xab; 16],
+            item_index: 0,
+            outbound: false,
+            is_text: true,
+            name: None,
+            size: None,
+            text: Some("cut".into()),
+            state: "done".into(),
+            dest_path: None,
+            at: 1,
+            transfer_state: "done".into(),
+            error: None,
+            truncated,
+            text_truncated,
+        };
+        let page = daak_core::thread::ThreadPage {
+            items: vec![item(true, false), item(false, true)],
+            older_cursor: None,
+        };
+        let v = thread_page_json(&page);
+        assert_eq!(v["items"][0]["truncated"], true);
+        assert_eq!(v["items"][0]["textTruncated"], false);
+        assert_eq!(v["items"][1]["truncated"], false);
+        assert_eq!(v["items"][1]["textTruncated"], true);
     }
 
     /// B6: a user attaches the bundle to a bug report, and its `recent log`

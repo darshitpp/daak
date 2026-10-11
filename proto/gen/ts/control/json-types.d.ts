@@ -97,6 +97,7 @@ export interface HelloJSON {
     number,
     number
   ];
+  pair?: boolean | null;
 }
 export interface NackJSON {
   item_index: number;
