@@ -64,10 +64,6 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     resolve(false)
   }
 
-  /// `FileManager.fileExists(atPath:)` rather than a stat: it is the same
-  /// answer the OS gives a document picker, and it returns false instead of
-  /// throwing for a path that is not there. "No such file" is an ANSWER -- a
-  /// reveal action must not die on a rejected promise.
   /// Opens a received file in QuickLook, the iOS viewer for the file's type.
   ///
   /// A file that the user moved into the chosen download folder sits outside
@@ -115,6 +111,10 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     return folder
   }
 
+  /// `FileManager.fileExists(atPath:)` rather than a stat: it is the same
+  /// answer the OS gives a document picker, and it returns false instead of
+  /// throwing for a path that is not there. "No such file" is an ANSWER -- a
+  /// reveal action must not die on a rejected promise.
   @objc func exists(_ path: String,
                     resolve: @escaping RCTPromiseResolveBlock,
                     reject: @escaping RCTPromiseRejectBlock) {

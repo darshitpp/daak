@@ -233,7 +233,6 @@ describe('AppShell tokens', () => {
     expect(load).toHaveBeenCalled();
   });
 
-
 });
 
 // The macOS window draws the design sidebar on EVERY route (design: macos.html,

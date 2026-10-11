@@ -110,7 +110,6 @@ export function deviceLabel(d: Pick<DeviceInfo, 'name' | 'deviceId'>): string {
   return name === '' ? 'Device ' + d.deviceId.slice(0, 8) : name;
 }
 
-
 export function Avatar({ letter }: { letter: string }) {
   return (
     <View style={ui.avatar}>

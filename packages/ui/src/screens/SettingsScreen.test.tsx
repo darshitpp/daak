@@ -308,7 +308,6 @@ describe('SettingsScreen sections', () => {
   });
 });
 
-
 describe('SettingsScreen paired devices', () => {
   it('shows the paired devices and removes one through the engine', async () => {
     const d = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online' as const, paired: true };

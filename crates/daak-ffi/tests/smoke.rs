@@ -588,6 +588,15 @@ fn sample_events(hex: &str) -> Vec<(&'static str, FfiEvent)> {
             },
         ),
         (
+            "DevicePresence",
+            FfiEvent::DevicePresence {
+                data: daak_ffi::DevicePresenceEvent {
+                    device_id: hex.into(),
+                    presence: "away".into(),
+                },
+            },
+        ),
+        (
             "PairingSas",
             // Through the PRODUCTION constructor, not a raw struct. A raw
             // struct here is how an empty peer id shipped: the fixture test

@@ -20,7 +20,7 @@ export const desktopInboxActions: InboxActions = {
   // NO `copy`. modules/rn-clipboard is not in apps/desktop/macos/Podfile.lock,
   // so NativeDaakClipboard's getEnforcing('DaakClipboard') throws at
   // module-eval time and would take the whole desktop bundle down with it. The
-  // button stays hidden here (HistoryScreen renders it only when the host
+  // button stays hidden here (ThreadScreen renders it only when the host
   // supplies the verb) until the pod is added and the app is rebuilt.
 };
 

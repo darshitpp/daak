@@ -5,7 +5,7 @@ import { mockPlatformHost } from '../testPlatformMock';
 
 // The Inbox row's verbs are INJECTED, and that injection is invisible at
 // runtime: a host that forgets to pass them renders a row with no buttons, which
-// looks identical to a row whose buttons do nothing. HistoryScreen.test.tsx
+// looks identical to a row whose buttons do nothing. ThreadScreen.test.tsx
 // proves the UI honours what it is given; this proves the app GIVES it the
 // native calls.
 jest.mock('@daak/platform', () => mockPlatformHost());

@@ -21,7 +21,7 @@ import { Dashboard } from './modes/Dashboard';
  * as it did.
  *
  * `onPickFiles` is threaded for the same reason: the composer's file picker is
- * INJECTED (see ComposerScreen), and DaakUiApp is where the desktop shell hands
+ * INJECTED (see ThreadScreen), and DaakUiApp is where the desktop shell hands
  * its NSOpenPanel-backed picker down. The POPOVER also has a real send now
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.

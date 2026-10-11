@@ -4,7 +4,7 @@ import { desktopPermissionRows, type DesktopCapability } from './onboarding';
 
 /**
  * The prototype's DESKTOP first-run flow: sc-welcome -> sc-name-device ->
- * sc-permissions, from the design file macos.html onwards.
+ * sc-permissions -> sc-save-location, from the design file macos.html onwards.
  *
  * WHY THIS IS NOT apps/mobile/src/OnboardingFlow.tsx, which it otherwise
  * mirrors step for step:
@@ -63,8 +63,9 @@ export function DesktopOnboardingFlow({
         name={name}
         onNameChange={setName}
         onBack={() => setStep('welcome')}
-        // One step remains at this commit (alerts), so the design sentence
-        // "Three quick steps left." would be false. Task 5 sets the final one.
+        // Two steps remain (alerts and the save folder), so the design sentence
+        // "Three quick steps left." would be false: the Mac flow has no pairing
+        // step to count. The Save-location step prints no sentence.
         footer="Two quick steps left."
         onContinue={() => {
           if (name.trim() === '') return;

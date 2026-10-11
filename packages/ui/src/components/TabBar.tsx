@@ -152,5 +152,3 @@ export function Sidebar({ active, onChange, version }: {
   );
 }
 
-export const TAB_LABELS = TABS.map((t) => t.label);
-

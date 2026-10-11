@@ -2,7 +2,6 @@ export { EngineProvider, useEngine } from './EngineContext';
 export { AppShell } from './components/AppShell';
 export { TabBar, type Tab } from './components/TabBar';
 export { DeviceCard } from './components/DeviceCard';
-export { ProgressRow } from './components/ProgressRow';
 export { BackgroundHint } from './components/BackgroundHint';
 export { QrView } from './components/QrView';
 export { Avatar, Btn, Empty, Note, ProgressBar, Section, Status, Wordmark, byPresence, deviceLabel, devicePresence, presenceOf, type DeviceNoun, type PeerPresenceView } from './components/ds';

@@ -88,4 +88,3 @@ it('keeps the note by default', async () => {
   expect(await screen.findByText('Files are moved, not copied')).toBeTruthy();
 });
 
-

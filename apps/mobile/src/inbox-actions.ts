@@ -5,7 +5,7 @@ import type { InboxActions } from '@daak/ui';
 //
 // openFile starts a viewer on every platform: QuickLook on iOS, ACTION_VIEW
 // through the FileProvider on Android. It resolves FALSE when no viewer
-// started, and HistoryScreen then shows a note. presentShare is the OS share
+// started, and the thread then shows a toast. presentShare is the OS share
 // sheet. Neither is a send: the encrypted send goes through the engine's
 // outbox.
 //

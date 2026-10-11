@@ -1130,9 +1130,8 @@ pub fn to_ffi_event(ev: EngineEvent) -> FfiEvent {
                 state,
                 // TransferItemEvent.dest_path is a plain string, and the
                 // daemon's IpcEvent::TransferItem is too, so None becomes the
-                // empty string -- the same convention to_pairing_sas_event uses
-                // for an unknown peer id. NOT null: DaemonClient reads this
-                // with str(), which throws on a null.
+                // empty string. NOT null: DaemonClient reads this with str(),
+                // which throws on a null.
                 dest_path: dest_path.unwrap_or_default(),
             },
         },

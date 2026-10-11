@@ -140,13 +140,16 @@ async fn a_file_send_reports_progress_on_both_sides() {
     )
     .unwrap();
     let total = size as u64;
+    // Subscribe BEFORE the send. The engine reports progress from the first
+    // chunk, so a receiver created after enqueue_outbox_send would miss the
+    // early events.
+    let mut sender_events = join.events();
+    let mut receiver_events = host.events();
     let id = join
         .enqueue_outbox_send(host_id, manifest, sources)
         .await
         .unwrap();
 
-    let mut sender_events = join.events();
-    let mut receiver_events = host.events();
     let (sender_seen, receiver_seen) =
         collect_progress(&mut sender_events, &mut receiver_events, &join, id).await;
 
@@ -191,13 +194,14 @@ async fn a_text_send_reports_no_progress() {
         device_id: join_id,
         name: join_name.clone(),
     };
+    // Subscribe before the send, for the same reason as the file case above.
+    let mut sender_events = join.events();
+    let mut receiver_events = host.events();
     let id = join
         .enqueue_outbox_send(host_id, manifest, vec![])
         .await
         .unwrap();
 
-    let mut sender_events = join.events();
-    let mut receiver_events = host.events();
     let (sender_seen, receiver_seen) =
         collect_progress(&mut sender_events, &mut receiver_events, &join, id).await;
     assert!(

@@ -36,9 +36,9 @@ fn transfer_item_json_carries_exactly_the_four_keys_the_ts_union_reads() {
 
 /// A TEXT item is never materialised, so dest_path is None on the Rust side
 /// while TransferItemEvent.dest_path is a plain (non-optional) string. The
-/// file's own convention for an absent string is the empty one -- to_pairing_sas_event
-/// (lib.rs:684) uses String::new() for exactly this -- and DaemonClient reads
-/// it with str(), which would fail on a null. So None maps to "", never "null".
+/// file's own convention for an absent string is the empty one, and
+/// DaemonClient reads it with str(), which would fail on a null. So None maps
+/// to "", never "null".
 #[test]
 fn a_none_dest_path_maps_to_the_empty_string_not_json_null() {
     let FfiEvent::TransferItem { data } = to_ffi_event(EngineEvent::TransferItem {

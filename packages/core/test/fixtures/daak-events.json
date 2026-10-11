@@ -8,6 +8,11 @@
     },
     "type": "device.discovered"
   },
+  "DevicePresence": {
+    "deviceId": "abababababababababababababababab",
+    "presence": "away",
+    "type": "device.presence"
+  },
   "DeviceState": {
     "deviceId": "abababababababababababababababab",
     "state": "online",

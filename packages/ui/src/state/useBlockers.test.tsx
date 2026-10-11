@@ -181,8 +181,8 @@ describe('useBlockers, the reachability check', () => {
       result.current.onCheckConnection();
     });
     render(<>{result.current.alert}</>);
-    // Note carries its testID as the accessibilityLabel, which is what the
-    // OnboardingScreens cases query. getByTestId finds nothing here.
+    // Note keeps a real label (the title) beside its testID, so the two are no
+    // longer the same string. This case queries the test id.
     expect(screen.getByTestId('cant-reach-error')).toBeTruthy();
     expect(screen.getByText('daakd is not answering')).toBeTruthy();
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();

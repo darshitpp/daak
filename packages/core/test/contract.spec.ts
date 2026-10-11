@@ -176,6 +176,7 @@ describe('contract types', () => {
     const required: Record<string, Record<string, string>> = {
       'device.discovered': { device: 'object' },
       'device.state': { deviceId: 'string', state: 'string' },
+      'device.presence': { deviceId: 'string', presence: 'string' },
       'pairing.sas': { peerDeviceId: 'string', sas: 'string' },
       'pairing.done': { deviceId: 'string' },
       'transfer.progress': { transferId: 'string', bytesDone: 'number', bytesTotal: 'number' },
