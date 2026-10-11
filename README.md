@@ -14,7 +14,7 @@
   <b><a href="https://github.com/darshitpp/daak/releases">Download for Android, macOS, or iOS</a></b>
 </p>
 
-Daak (डाक, "post") moves photos, files, folders, and text between your own
+Daak (डाक, "post") moves photos, files, and text between your own
 devices over your local network. Nothing goes through the internet. Nothing
 goes through a server. You do not create an account.
 
