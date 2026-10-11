@@ -193,6 +193,20 @@ describe('DashboardScreen (Devices)', () => {
     expect(list).toHaveBeenCalledWith(b.deviceId, { limit: 1 });
   });
 
+  // Design renderDevices (index.html:1381-1397): the row shows the file name
+  // of the last item. A text item has no name, so the row shows the text. The
+  // row shows the first line only.
+  it('shows the first line of a text item as the row line', async () => {
+    const peer = dev('Kitchen Tablet', 'online');
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(
+      threadPage([threadItem({ type: 'text', name: null, text: 'Dinner is in the fridge\nSee you at 8' })]),
+    );
+    mount(engine, { onOpenThread: jest.fn() });
+    expect(await screen.findByText('Dinner is in the fridge')).toBeTruthy();
+    expect(screen.queryByText('A note')).toBeNull();
+  });
+
   // An older read must not overwrite a newer one. A transfer.done refresh
   // answers before the first mount read does.
   it('ignores an out-of-order refresh', async () => {

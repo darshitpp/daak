@@ -28,6 +28,12 @@ const REFRESH_DEBOUNCE_MS = 300;
 /** The design `contact-last` and `contact-when` of one device row. */
 type RowFacts = { lastItem: string; when: string };
 
+/** The first line of a text item. The row shows one line only. */
+function firstLine(text: string): string {
+  const end = text.indexOf('\n');
+  return end === -1 ? text : text.slice(0, end);
+}
+
 function shareText(s: { fileCount: number; hasText: boolean }): string {
   const files = s.fileCount === 0 ? '' : s.fileCount === 1 ? '1 file' : s.fileCount + ' files';
   const note = s.hasText ? 'a note' : '';
@@ -83,9 +89,9 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
                   const facts: RowFacts =
                     last === undefined
                       ? { lastItem: 'No items yet', when: '' }
-                      : // A text item carries no name. "A note" is the honest
-                        // word for it; the design shows file names only.
-                        { lastItem: last.name ?? 'A note', when: whenLabel(last.at) };
+                      : // The design shows the file name. A text item has no
+                        // name, so the row shows the first line of the text.
+                        { lastItem: last.name ?? firstLine(last.text ?? ''), when: whenLabel(last.at) };
                   return [d.deviceId, facts] as const;
                 },
                 // A failed read returns null. The caller then keeps the row's
