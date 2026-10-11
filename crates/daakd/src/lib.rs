@@ -1006,6 +1006,60 @@ pub async fn serve_with_store(_path: &Path, _store: Arc<dyn SecretStore>) -> std
 mod tests {
     use super::*;
 
+    /// The shared fixture pins the thread page key set of daak-core,
+    /// daak-ffi, and daakd. This builder is the third copy, so it reads the
+    /// same fixture as the daak-ffi test does.
+    #[test]
+    fn thread_page_json_matches_the_pinned_key_list() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/core/test/fixtures/thread-page-keys.json");
+        let raw = std::fs::read_to_string(path).expect("shared key fixture must exist");
+        let fx: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
+
+        let page = daak_core::thread::ThreadPage {
+            items: vec![daak_core::thread::ThreadItem {
+                transfer_id: [0xab; 16],
+                item_index: 2,
+                outbound: true,
+                is_text: true,
+                name: None,
+                size: None,
+                text: Some("hi".into()),
+                state: "done".into(),
+                dest_path: None,
+                at: 123,
+                transfer_state: "done".into(),
+                error: None,
+            }],
+            older_cursor: Some("5:00".into()),
+        };
+        let v = thread_page_json(&page);
+
+        let sorted_keys = |o: &serde_json::Map<String, serde_json::Value>| {
+            let mut keys: Vec<String> = o.keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let pinned = |arr: &serde_json::Value| {
+            let mut keys: Vec<String> = arr
+                .as_array()
+                .expect("an array of keys")
+                .iter()
+                .map(|k| k.as_str().expect("a key is a string").to_string())
+                .collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(
+            sorted_keys(v["items"][0].as_object().expect("an item object")),
+            pinned(&fx["itemKeys"])
+        );
+        assert_eq!(
+            sorted_keys(v.as_object().expect("a page object")),
+            pinned(&fx["pageKeys"])
+        );
+    }
+
     /// B6: a user attaches the bundle to a bug report, and its `recent log`
     /// section is a ring buffer of FORMATTED lines. Asserting on the ring is
     /// therefore asserting on the exact bytes the user reads, not on some side

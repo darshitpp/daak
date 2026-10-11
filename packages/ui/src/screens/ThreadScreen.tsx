@@ -418,7 +418,10 @@ export function ThreadScreen({
       {offline && result === null ? (
         <View style={{ paddingHorizontal: 12 }}>
           {/* Design #cd-offline-note. The peer is Offline, not Away. */}
-          <Note body={`${name} is not on this Wi-Fi. What you send waits here and goes when they are back.`} />
+          <Note
+            icon={<WifiOffIcon />}
+            body={`${name} is not on this Wi-Fi. What you send waits here and goes when they are back.`}
+          />
         </View>
       ) : null}
 
@@ -474,6 +477,78 @@ export function ThreadScreen({
           {`Nothing has reached ${name} yet. If you stop now, the items stay on this ${deviceNoun}.`}
         </Text>
       </Sheet>
+    </View>
+  );
+}
+
+// The design `#cd-offline-note` icon: a wifi-off mark. react-native-svg is not
+// a dependency, so three arcs, a dot, and a slash are View elements at the
+// design geometry (viewBox 24). A number below is a design unit times K.
+const WIFI_ICON = 20;
+const WIFI_K = WIFI_ICON / 24;
+const WIFI_STROKE = 1.75 * WIFI_K;
+const WIFI_OX = 12 * WIFI_K; // The arcs spray from this point.
+const WIFI_OY = 20 * WIFI_K;
+const WIFI_RADII = [15, 10, 5]; // The three arc radii of the design.
+const WIFI_SLASH = 20 * Math.SQRT2 * WIFI_K; // The slash runs 2,2 to 22,22.
+
+/** One wifi arc. A quarter ring, turned to sit symmetric about the vertical. */
+function WifiArc({ r, color }: { r: number; color: string }) {
+  const d = r * WIFI_K;
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: WIFI_OX,
+        top: WIFI_OY - d,
+        width: d,
+        height: d,
+        borderTopWidth: WIFI_STROKE,
+        borderRightWidth: WIFI_STROKE,
+        borderTopColor: color,
+        borderRightColor: color,
+        borderTopRightRadius: d,
+        transformOrigin: 'bottom left',
+        transform: [{ rotate: '-45deg' }],
+      }}
+    />
+  );
+}
+
+/**
+ * The offline note icon of the design: a wifi mark with a slash. The stroke
+ * uses the muted tone. The icon replaces the note dot.
+ */
+function WifiOffIcon({ color = colors.muted }: { color?: string }) {
+  return (
+    <View style={{ width: WIFI_ICON, height: WIFI_ICON }} testID="wifi-off-icon">
+      {WIFI_RADII.map((r) => (
+        <WifiArc key={r} r={r} color={color} />
+      ))}
+      <View
+        style={{
+          position: 'absolute',
+          left: WIFI_OX - WIFI_STROKE / 2,
+          top: WIFI_OY - WIFI_STROKE / 2,
+          width: WIFI_STROKE,
+          height: WIFI_STROKE,
+          borderRadius: WIFI_STROKE / 2,
+          backgroundColor: color,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          left: 12 * WIFI_K - WIFI_SLASH / 2,
+          top: 12 * WIFI_K - WIFI_STROKE / 2,
+          width: WIFI_SLASH,
+          height: WIFI_STROKE,
+          borderRadius: WIFI_STROKE / 2,
+          backgroundColor: color,
+          transform: [{ rotate: '45deg' }],
+        }}
+      />
     </View>
   );
 }

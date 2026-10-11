@@ -352,7 +352,7 @@ export function Popover({
 function UpdateBanner() {
   return (
     <View style={styles.banner} testID="popover-update-banner">
-      <Text style={ui.noteTxt}>
+      <Text style={ui.bannerTxt}>
         A newer version of Daak is out. Some devices may not connect until you update.
       </Text>
       <Btn

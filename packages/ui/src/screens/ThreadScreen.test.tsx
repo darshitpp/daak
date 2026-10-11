@@ -6,6 +6,7 @@ import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
 import { threadItem, threadPage } from '../testing/threadFixtures';
 import { ToastProvider } from '../components/Toast';
+import { Note } from '../components/ds';
 import { ThreadScreen } from './ThreadScreen';
 
 const peer: DeviceInfo = {
@@ -515,10 +516,19 @@ describe('ThreadScreen', () => {
     expect(
       await screen.findByText('Pixel 9 is not on this Wi-Fi. What you send waits here and goes when they are back.'),
     ).toBeTruthy();
+    // The design draws the wifi-off icon in place of the tone dot.
+    expect(screen.getByTestId('wifi-off-icon')).toBeTruthy();
     first.unmount();
     mount(fakeEngine([{ ...peer, presence: 'away' as const }]));
     expect(await screen.findByText('Pixel 9')).toBeTruthy();
     expect(screen.queryByText(/is not on this Wi-Fi/)).toBeNull();
+    expect(screen.queryByTestId('wifi-off-icon')).toBeNull();
+  });
+
+  // A plain Note keeps the tone dot, so it carries no wifi-off icon.
+  it('draws no wifi-off icon on a plain Note', () => {
+    render(<Note body="just a note" />);
+    expect(screen.queryByTestId('wifi-off-icon')).toBeNull();
   });
 
   // Review Focus 4.

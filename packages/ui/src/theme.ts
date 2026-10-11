@@ -167,6 +167,10 @@ export const ui = StyleSheet.create({
   noteErr: { backgroundColor: colors.errTint },
   noteTtl: { fontSize: type.sm, fontWeight: '600', lineHeight: 19, color: colors.fg },
   noteTxt: { fontSize: type.sm, lineHeight: 19, color: colors.fg2 },
+  // The mac menu-bar banner text. The design `.pop-banner-t` uses 14 pt, a
+  // line height of 1.45, and the full foreground colour. It is stronger than
+  // the muted note text.
+  bannerTxt: { fontSize: type.sm, lineHeight: 20, color: colors.fg },
 
   empty: { gap: spacing.sm, padding: spacing.xxl, paddingHorizontal: spacing.lg, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.meta, borderRadius: radius.md },
 

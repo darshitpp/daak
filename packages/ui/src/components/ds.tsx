@@ -118,20 +118,22 @@ export function Avatar({ letter }: { letter: string }) {
   );
 }
 
-export function Note({ title, body, tone = 'plain', testID, accessibilityLabel }: {
+export function Note({ title, body, tone = 'plain', testID, accessibilityLabel, icon }: {
   title?: string;
   body: string;
   tone?: 'plain' | 'ok' | 'warn' | 'err';
   testID?: string;
   /** A reader label. Defaults to the title. A test id is never a label. */
   accessibilityLabel?: string;
+  /** A replacement for the tone dot. The note draws the dot when this is absent. */
+  icon?: React.ReactNode;
 }) {
   const fill =
     tone === 'ok' ? ui.noteOk : tone === 'warn' ? ui.noteWarn : tone === 'err' ? ui.noteErr : null;
   const dot = tone === 'ok' ? colors.ok : tone === 'warn' ? colors.warnInk : tone === 'err' ? colors.err : colors.meta;
   return (
     <View style={[ui.note, fill]} testID={testID} accessibilityLabel={accessibilityLabel ?? title}>
-      <View style={[ui.dot, { backgroundColor: dot }, ui.noteDot]} />
+      {icon ?? <View style={[ui.dot, { backgroundColor: dot }, ui.noteDot]} />}
       <View style={ui.fill}>
         {title ? <Text style={ui.noteTtl}>{title}</Text> : null}
         <Text style={ui.noteTxt}>{body}</Text>

@@ -7,6 +7,7 @@ import { fakeEngine } from '../testing/fakeEngine';
 import { initialUiState } from '../state/store';
 import { CANT_REACH_TOKEN } from '../state/useBlockers';
 import { RELEASES_URL } from '../screens/about-links';
+import { colors, ui } from '../theme';
 
 const mk = (name: string, presence: DeviceInfo['presence'], paired = true): DeviceInfo => ({
   deviceId: name.toLowerCase().replace(/\W/g, '').padEnd(32, '0').slice(0, 32),
@@ -121,6 +122,18 @@ describe('the panel frame', () => {
     mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
     fireEvent.press(screen.getByTestId('popover-update-download'));
     await waitFor(() => expect(openUrl).toHaveBeenCalledWith(RELEASES_URL));
+  });
+
+  // The design `.pop-banner-t` uses the full foreground colour, not the muted
+  // note text. So the banner text takes `ui.bannerTxt`.
+  it('gives the update banner text the full-strength banner style', () => {
+    const { engine } = spyEngine([pixel]);
+    mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
+    const t = screen.getByText(
+      'A newer version of Daak is out. Some devices may not connect until you update.',
+    );
+    expect(StyleSheet.flatten(t.props.style)).toEqual(StyleSheet.flatten(ui.bannerTxt));
+    expect(StyleSheet.flatten(t.props.style).color).toBe(colors.fg);
   });
 
   // The cannot-reach screen still replaces the panel, as it replaces the tab
