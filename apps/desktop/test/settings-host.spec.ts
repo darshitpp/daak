@@ -38,8 +38,7 @@ describe('the desktop dashboard shell wires the Settings and window inputs', () 
     expect(shells).not.toMatch(/from '@daak\/platform'/);
   });
 
-  it('keeps the title and the version line in the window chrome', () => {
-    expect(shells).toMatch(/title:\s*'Daak for Mac'/);
+  it('keeps the version line in the window chrome', () => {
     expect(shells).toMatch(/formatAppInfo\(/);
   });
 });

@@ -158,7 +158,6 @@ export function DaakDashboardShell({ engine, runtime }: {
   );
   const windowChrome = useMemo(
     () => ({
-      title: 'Daak for Mac',
       version: info !== undefined && info.version !== 'unknown' ? formatAppInfo(info) : undefined,
     }),
     [info],

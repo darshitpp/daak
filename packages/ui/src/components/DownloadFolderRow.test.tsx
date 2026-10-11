@@ -33,6 +33,8 @@ it('adopts a chosen folder and can reset it', async () => {
   expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
   fireEvent.press(screen.getByTestId('download-folder-choose'));
   expect(await screen.findByText('Photos')).toBeTruthy();
+  // The design button uses a plain ASCII apostrophe (index.html:701).
+  expect(screen.getByText("Use the app's own storage")).toBeTruthy();
   // The design button is "btn-quiet", which is the default quiet variant.
   expect(StyleSheet.flatten(screen.getByTestId('download-folder-reset').props.style).borderColor).toBe(colors.border);
   fireEvent.press(screen.getByTestId('download-folder-reset'));

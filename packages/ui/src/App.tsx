@@ -61,8 +61,8 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   };
   /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
   deviceNoun?: DeviceNoun;
-  /** The desktop window header text. */
-  windowChrome?: { title: string; version?: string };
+  /** The Mac window chrome. The sidebar footer reads `version`. */
+  windowChrome?: { version?: string };
   /** Lift the composer above the keyboard. The iOS host sets it. */
   keyboardAvoiding?: boolean;
   /** The Mac design puts the toast nearer the bottom edge than the phone design does. */

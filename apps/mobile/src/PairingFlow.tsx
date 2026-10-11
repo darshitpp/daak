@@ -69,7 +69,7 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
   // cleanup, and the app going to the background does not unmount the route.
   // A remount reuses the ref, so the effect body must reset the flag. Without
   // the reset a remount is treated as an unmount and the join revokes the
-  // pairing it just committed (Fast Refresh, or a route re-push).
+  // pairing it just committed (Fast Refresh).
   useEffect(() => {
     unmounted.current = false;
     return () => {

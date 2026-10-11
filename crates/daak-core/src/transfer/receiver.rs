@@ -1476,7 +1476,6 @@ mod tests {
         );
     }
 
-    /// C-1: db:None can only report ONE failed item, and it must be the FIRST.
     // 3.1: a duplicate payload (payload_seen) writes no row, so the progress
     // callback must report credited == false. The engine closure maps that to
     // "no bytes_done write and no TransferProgress event".

@@ -239,7 +239,7 @@ describe('AppShell tokens', () => {
 // `.sidebar`), with the version footer at the bottom. The header with the two
 // segments is gone.
 describe('AppShell desktop layout', () => {
-  const CHROME = { title: 'Daak for Mac', version: 'Version 0.4.2 (build 1180)' };
+  const CHROME = { version: 'Version 0.4.2 (build 1180)' };
   const devicesSelected = () => screen.getByLabelText('Devices').props.accessibilityState;
   const settingsSelected = () => screen.getByLabelText('Settings').props.accessibilityState;
 
