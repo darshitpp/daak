@@ -616,16 +616,20 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             .ok_or_else(|| CoreError::Protocol(format!("chunk for unknown item {item_index}")))?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;
         file.write_all(&data).await?;
+        let bitmap = bitmaps[idx].as_mut().ok_or_else(|| {
+            CoreError::Protocol(format!("chunk for non-binary item {item_index}"))
+        })?;
+        // T5: a chunk whose bit is already set re-writes bytes the receiver
+        // already HOLDS. The engine seeded the bar with those bytes, so crediting
+        // them again would count them twice and reach 100% before the last byte.
+        let already_held = bitmap.is_set(chunk_index);
         on_progress(
             manifest.payload_id,
             data.len() as u64,
             bytes_total,
             bytes_held,
-            !dedupe,
+            !dedupe && !already_held,
         );
-        let bitmap = bitmaps[idx].as_mut().ok_or_else(|| {
-            CoreError::Protocol(format!("chunk for non-binary item {item_index}"))
-        })?;
         if !bitmap.set(chunk_index) {
             return Err(CoreError::Protocol(format!(
                 "chunk index {chunk_index} out of range for item {item_index}"
@@ -1524,6 +1528,89 @@ mod tests {
         assert!(
             credited.iter().all(|c| !c),
             "a duplicate payload must credit no bytes, got {credited:?}"
+        );
+    }
+
+    // T5: the resume seed counts held bytes twice when a re-sent chunk whose
+    // bitmap bit is already set is credited again. Chunks 0 and 1 are held from
+    // a prior attempt, so a full resend of them must not credit bytes. The
+    // engine bar (seed + credited bytes) must reach 100% only on the last byte.
+    #[tokio::test]
+    async fn a_resumed_send_credits_only_the_bytes_that_land() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let path = src.path().join("a.bin");
+        // Chunk size 64 KiB: chunks 0, 1, 2 are full, chunk 3 has 100 bytes.
+        let chunk = CHUNK_SIZE_MIN as u64;
+        let total = chunk * 3 + 100;
+        std::fs::write(&path, vec![7u8; total as usize]).unwrap();
+        let item = Item::from_file(0, &path, CHUNK_SIZE_MIN).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = crate::store::Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        // A prior partial receive holds chunks 0 and 1.
+        let mut held = ChunkBitmap::new(4);
+        held.set(0);
+        held.set(1);
+        db.save_bitmap(&manifest.payload_id, 0, &held).unwrap();
+        // The bitmap is a hint: those bytes must really be on disk, or the
+        // final hash quarantines the item.
+        std::fs::write(dst.path().join("a.bin"), vec![7u8; (chunk * 2) as usize]).unwrap();
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            crate::transfer::send_transfer(&mut theirs, &m, &[Some(path.clone())], &[], |_| {})
+                .await
+                .unwrap();
+        });
+
+        // (initial bytes_held, new chunk bytes, credited) for each chunk.
+        let mut calls: Vec<(u64, u64, bool)> = Vec::new();
+        receive_transfer_from(
+            &mut mine,
+            None,
+            dst.path(),
+            |_, written, _, initial, credited| calls.push((initial, written, credited)),
+            Some(&db),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        sender.await.unwrap();
+
+        // Chunks 0 and 1 are held, so a full resend must not credit them.
+        let credited: Vec<bool> = calls.iter().map(|c| c.2).collect();
+        assert_eq!(
+            credited,
+            vec![false, false, true, true],
+            "a re-sent chunk the bitmap already holds must not be credited"
+        );
+        assert_eq!(calls[0].0, chunk * 2, "the seed is the two held chunks");
+
+        // Rebuild the engine bar exactly as the engine closure does: seed on the
+        // first credited chunk, then add each credited chunk, capped at the total.
+        let mut bar = 0u64;
+        let mut seeded = false;
+        let mut reached_at: Option<usize> = None;
+        for (i, (initial, written, ok)) in calls.iter().enumerate() {
+            if !ok {
+                continue;
+            }
+            if !seeded {
+                bar = (*initial).min(total);
+                seeded = true;
+            }
+            bar = (bar + written).min(total);
+            if bar == total {
+                reached_at = Some(i);
+                break;
+            }
+        }
+        assert_eq!(
+            reached_at,
+            Some(calls.len() - 1),
+            "the bar must reach 100% only on the last byte"
         );
     }
 
