@@ -1,9 +1,12 @@
 name: CI
 
+# Disabled for now. It runs only when you start it by hand from the Actions tab.
+# To enable it again, restore these triggers:
+#   push:
+#     branches: [main]
+#   pull_request:
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
