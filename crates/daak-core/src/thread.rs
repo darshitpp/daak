@@ -14,10 +14,11 @@ use crate::store::Db;
 // A page never holds more than this many transfers.
 pub const THREAD_MAX_LIMIT: u32 = 200;
 
-// A page never holds more than this many manifest bytes, except that it always
-// holds 1 transfer. The daemon frame limit is 4 MiB, and the JSON of a page is
-// larger than its manifests, so the budget is half of it.
-pub const THREAD_PAGE_BYTES: usize = 2 * 1024 * 1024;
+// A page never holds more than this many bytes of wire JSON, except that it
+// always holds 1 transfer. The daemon frame limit is 4 MiB. One raw byte
+// becomes at most two JSON bytes (a quote or a backslash), so the budget is a
+// quarter of the frame.
+pub const THREAD_PAGE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadItem {
@@ -102,9 +103,16 @@ pub fn list_thread(
     for t in &rows {
         let mut one = Vec::new();
         expand(db, t, &mut one)?;
-        let cost = page_json_len(&one);
+        let mut cost = page_json_len(&one);
         if !groups.is_empty() && used + cost > THREAD_PAGE_BYTES {
             break;
+        }
+        // A page always keeps 1 row. A text item can hold the 4 MiB wire frame,
+        // so that row alone can overrun the budget and the daemon frame. Cut
+        // the text of the first row to fit the budget.
+        if groups.is_empty() && cost > THREAD_PAGE_BYTES {
+            trim_text_to_budget(&mut one);
+            cost = page_json_len(&one);
         }
         used += cost;
         groups.push(one);
@@ -146,7 +154,7 @@ fn page_json_len(items: &[ThreadItem]) -> usize {
 
 /// One item as the wire JSON. The page cap counts this shape, so it must have
 /// the same keys and the same null-for-None rule as the two page builders.
-fn page_item_json(i: &ThreadItem) -> serde_json::Value {
+pub(crate) fn page_item_json(i: &ThreadItem) -> serde_json::Value {
     serde_json::json!({
         "transferId": hex::encode(i.transfer_id),
         "itemIndex": i.item_index,
@@ -161,6 +169,41 @@ fn page_item_json(i: &ThreadItem) -> serde_json::Value {
         "transferState": i.transfer_state,
         "error": i.error,
     })
+}
+
+/// Cut the text fields of one row until the wire JSON of the row fits the page
+/// budget. A page always keeps 1 row, and a text item can hold the 4 MiB wire
+/// frame, so the text of that row can overrun the budget on its own.
+///
+/// A raw byte becomes at least one JSON byte, because escaping never shrinks a
+/// character. So dropping N raw bytes drops at least N JSON bytes, and one pass
+/// brings the JSON under the budget.
+///
+/// shortcut: a row of many non-text items can still overrun the budget, add an
+/// item-count cap when a real transfer reaches that size.
+fn trim_text_to_budget(items: &mut [ThreadItem]) {
+    let mut excess = page_json_len(items).saturating_sub(THREAD_PAGE_BYTES);
+    if excess == 0 {
+        return;
+    }
+    // Longest text first, so the fewest fields change.
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(items[i].text.as_deref().map_or(0, str::len)));
+    for i in order {
+        if excess == 0 {
+            break;
+        }
+        let Some(text) = items[i].text.as_mut() else {
+            continue;
+        };
+        // Keep the head. A UTF-8 boundary stops the cut.
+        let mut keep = text.len().saturating_sub(excess);
+        while keep > 0 && !text.is_char_boundary(keep) {
+            keep -= 1;
+        }
+        excess = excess.saturating_sub(text.len() - keep);
+        text.truncate(keep);
+    }
 }
 
 fn expand(db: &Db, t: &TransferRow, out: &mut Vec<ThreadItem>) -> Result<()> {
@@ -273,24 +316,15 @@ mod tests {
         db
     }
 
+    // The daemon frame limit: IPC_MAX_FRAME in crates/daak-ipc (4 MiB).
+    // daak-core does not depend on daak-ipc, so this test repeats the literal.
+    const DAEMON_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
     // The exact wire JSON daakd/ffi build for a page (thread_page_json): the
     // envelope around the shared item JSON the production cap measures.
     fn whole_page_json_len(page: &ThreadPage) -> usize {
         let v = serde_json::json!({
-            "items": page.items.iter().map(|i| serde_json::json!({
-                "transferId": hex::encode(i.transfer_id),
-                "itemIndex": i.item_index,
-                "direction": if i.outbound { "out" } else { "in" },
-                "type": if i.is_text { "text" } else { "file" },
-                "name": i.name,
-                "size": i.size,
-                "text": i.text,
-                "state": i.state,
-                "destPath": i.dest_path,
-                "at": i.at,
-                "transferState": i.transfer_state,
-                "error": i.error,
-            })).collect::<Vec<_>>(),
+            "items": page.items.iter().map(page_item_json).collect::<Vec<_>>(),
             "olderCursor": page.older_cursor,
         });
         v.to_string().len()
@@ -531,12 +565,12 @@ mod tests {
     #[test]
     fn the_page_cap_bounds_the_wire_json_not_the_manifests() {
         let db = db();
-        // Many small items. Each item costs ~190 JSON bytes (4*32 hex id + the
+        // Many small items. Each item costs ~200 JSON bytes (4*32 hex id + the
         // field names) but only ~66 CBOR bytes (16 raw id + short keys), so the
         // page JSON is ~3x the manifest bytes. The manifests of 3 rows fit the
         // cap while their JSON does not -- exactly what the manifest accounting
         // got wrong.
-        let items_per_row = 10_000u32;
+        let items_per_row = 4_000u32;
         let row_items = |n: u32| {
             let mut v: Vec<Item> = Vec::new();
             for i in 0..n {
@@ -591,6 +625,54 @@ mod tests {
         assert!(whole_page_json_len(&page) <= THREAD_PAGE_BYTES);
     }
 
+    // A page of text full of quotes and backslashes doubles when JSON escapes
+    // it. The cap measures the escaped JSON, so the page stays under the frame.
+    #[test]
+    fn a_page_of_escaped_text_stays_below_the_daemon_frame() {
+        let db = db();
+        // 2 MiB of a quote and a backslash becomes 4 MiB when JSON escapes it.
+        // One row alone escapes past the 4 MiB frame without the text cut.
+        let body = "\"\\".repeat(1024 * 1024);
+        for id in 1u8..=3 {
+            let m = manifest(vec![Item::text(0, body.clone())]);
+            put(
+                &db,
+                id,
+                3,
+                "out",
+                "done",
+                id as i64,
+                m.to_cbor().unwrap(),
+                1,
+            );
+        }
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert!(!page.items.is_empty());
+        let measured = whole_page_json_len(&page);
+        assert!(
+            measured <= DAEMON_FRAME_BYTES,
+            "escaped page JSON {measured} must stay under the daemon frame {DAEMON_FRAME_BYTES}"
+        );
+    }
+
+    // A text item can hold the 4 MiB wire frame, so one row alone can overrun
+    // the budget. The page always keeps 1 row, so its text is cut to fit.
+    #[test]
+    fn a_single_huge_text_row_is_truncated_to_the_budget() {
+        let db = db();
+        let body = "y".repeat(3 * 1024 * 1024);
+        let m = manifest(vec![Item::text(0, body.clone())]);
+        put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 1);
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert_eq!(page.items.len(), 1);
+        let kept = page.items[0].text.as_deref().expect("a text item");
+        assert!(kept.len() < body.len(), "the text must be truncated");
+        assert!(
+            page_json_len(&page.items) <= THREAD_PAGE_BYTES,
+            "the kept row must fit the budget"
+        );
+    }
+
     #[test]
     fn the_thread_survives_a_revoke_and_a_new_pairing() {
         use crate::store::pairings::Pairing;
@@ -620,9 +702,9 @@ mod tests {
     }
 
     #[test]
-    fn a_one_mebibyte_text_body_round_trips() {
+    fn a_text_body_under_the_page_budget_round_trips() {
         let db = db();
-        let body = "\\u{e9}".repeat(512 * 1024); // 1 MiB in UTF-8
+        let body = "x".repeat(600 * 1024); // 600 KiB of text
         let m = manifest(vec![Item::text(0, body.clone())]);
         put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 1);
         let page = list_thread(&db, &[3u8; 16], 5, None).unwrap();
