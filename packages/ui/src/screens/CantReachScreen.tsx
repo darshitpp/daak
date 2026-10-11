@@ -75,9 +75,9 @@ export function CantReachScreen({
           <Note
             tone="warn"
             title="Looking on this Wi-Fi"
-            body={`This ${deviceNoun} is on this Wi-Fi. The devices you paired need to be on ${
-              deviceNoun === 'Mac' ? 'the same network' : 'this Wi-Fi'
-            } too.`}
+            // The design phone copy (index.html, cant-reach) and the design Mac
+            // copy (macos.html) both say "the same network".
+            body={`This ${deviceNoun} is on this Wi-Fi. The devices you paired need to be on the same network too.`}
           />
         ) : (
           <>

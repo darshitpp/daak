@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { QrView } from '../components/QrView';
 import { Accordion } from '../components/Onboarding';
@@ -37,6 +37,7 @@ export function PairingScreen({
   busy,
   error,
   onRetry,
+  onNewCode,
 }: {
   role: 'host' | 'join';
   qrUri: string;
@@ -59,9 +60,18 @@ export function PairingScreen({
   /** The real message of the last failure. */
   error?: string;
   onRetry?: () => void;
+  /**
+   * Make a new code. The design puts this button under the number
+   * (index.html:567). It does not revoke a pending pairing.
+   */
+  onNewCode?: () => void;
 }) {
   const shown = formatSas(sas);
   const spoken = /^\d{3} \d{3}$/.test(shown) ? shown.replace(/ /g, '').split('').join(' ') : shown;
+  // The engine text is a DIAGNOSTIC, not user copy. It goes to the log.
+  useEffect(() => {
+    if (error !== undefined && error !== '') console.warn('daak: pairing failed:', error);
+  }, [error]);
   const body = (
     <>
       {role === 'host' ? (
@@ -79,7 +89,12 @@ export function PairingScreen({
           {busy === 'reading' ? (
             <Busy label="Reading their code…" />
           ) : sas || error ? null : (
-            <Text style={ui.hint}>Hold steady for a second.</Text>
+            <>
+              {/* Design pair-scan-panel: the scan frame line, then the
+                  hold-steady line. */}
+              <Text style={ui.hint}>Their square should fill the frame.</Text>
+              <Text style={ui.hint}>Hold steady for a second.</Text>
+            </>
           )}
           {/* Spec 3.3 Mode A is ONE QR and ONE scan. Only the joiner scans. A
               host never holds a joiner QR, so a host-side scan control would
@@ -98,9 +113,15 @@ export function PairingScreen({
             {shown}
           </Text>
           {role === 'host' ? (
-            <Accordion label="Why check the numbers" testID="pair-why">
-              <Text style={ui.hint}>{`If both screens show ${shown}, only your two devices are in the room.`}</Text>
-            </Accordion>
+            <>
+              {/* Design index.html:567: a quiet, block button under the number. */}
+              {onNewCode ? (
+                <Btn variant="quiet" block testID="pair-newcode" label="Show a new code" onPress={onNewCode} />
+              ) : null}
+              <Accordion label="Why check the numbers" testID="pair-why">
+                <Text style={ui.hint}>{`If both screens show ${shown}, only your two devices are in the room.`}</Text>
+              </Accordion>
+            </>
           ) : null}
         </View>
       ) : null}
@@ -120,18 +141,13 @@ export function PairingScreen({
             title={role === 'host' ? "We couldn't make your code." : "We couldn't read that code."}
             body={
               role === 'host'
-                ? `Make sure this device is on Wi-Fi, then try again. ${error}`
-                : `Make sure their screen is showing the code, then try again. ${error}`
+                ? 'Make sure this device is on Wi-Fi, then try again.'
+                : 'Make sure their screen is showing the code, then try again.'
             }
             testID="pairing-error"
           />
           {onRetry ? <Btn variant="ghost" label="Try again" testID="pair-retry" onPress={onRetry} /> : null}
         </View>
-      ) : null}
-      {sas ? (
-        <Text style={ui.hint}>
-          That number is derived from both devices' keys. If it does not match, stop and pair again.
-        </Text>
       ) : null}
       <Text style={ui.hint}>Both devices need to be on the same Wi-Fi.</Text>
     </>

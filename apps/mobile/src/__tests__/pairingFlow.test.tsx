@@ -73,13 +73,18 @@ describe('QR pairing is reachable from the app shell', () => {
   // Same class as the missing bounded wait: the flow must never swallow the
   // reason a host screen failed to render. A fixed "hosting failed" tells the
   // user nothing and tells the next debugging round nothing either.
-  it('shows the real hosting error, not a fixed string', async () => {
+  it('sends the hosting error to the log, not to the user', async () => {
     mockedBundle.mockRejectedValueOnce(new Error('engine not started'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     renderShell();
     fireEvent.press(screen.getByTestId('tab-devices'));
     fireEvent.press(screen.getByLabelText('pair-a-device'));
     fireEvent.press(screen.getByText('Show my code'));
-    await waitFor(() => expect(screen.getByText(/engine not started/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("We couldn't make your code.")).toBeTruthy());
+    // The engine text is a diagnostic now, not user copy.
+    expect(screen.queryByText(/engine not started/)).toBeNull();
+    expect(warn.mock.calls.flat().join(' ')).toContain('engine not started');
+    warn.mockRestore();
   });
 
   it('mounts the flow lazily: no bundle fetch and no QR until the user asks', () => {
@@ -248,7 +253,7 @@ describe('QR pairing is reachable from the app shell', () => {
       expect(armHostPairing).toHaveBeenCalledWith();
     });
 
-    it('keeps the retry control available after a SAS arrived', async () => {
+    it('keeps the re-arm control available after a SAS arrived', async () => {
       await startEngine();
       renderShell();
       fireEvent.press(screen.getByTestId('tab-devices'));
@@ -265,7 +270,9 @@ describe('QR pairing is reachable from the app shell', () => {
       });
       await waitFor(() => expect(screen.getByText('111 222')).toBeTruthy());
 
-      expect(screen.getByLabelText('host-retry')).toBeTruthy();
+      // The design button under the number replaces the flow-level control.
+      expect(screen.getByLabelText('pair-newcode')).toBeTruthy();
+      expect(screen.queryByLabelText('host-retry')).toBeNull();
     });
   });
 
@@ -415,12 +422,16 @@ describe('the pairing flow uses the words of the design', () => {
 
   it('shows the design error and runs the scan again on Try again', async () => {
     mockedScan.mockRejectedValueOnce(new Error('camera denied'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     renderFlow();
     fireEvent.press(screen.getByText('Scan a code'));
     expect(await screen.findByText("We couldn't read that code.")).toBeTruthy();
-    expect(screen.getByText(/camera denied/)).toBeTruthy();
+    expect(screen.getByText('Make sure their screen is showing the code, then try again.')).toBeTruthy();
+    expect(screen.queryByText(/camera denied/)).toBeNull();
+    expect(warn.mock.calls.flat().join(' ')).toContain('camera denied');
     fireEvent.press(screen.getByLabelText('pair-retry'));
     await waitFor(() => expect(mockedScan).toHaveBeenCalledTimes(2));
+    warn.mockRestore();
   });
 
   // Design v3. "Does not match" cancels the pairing, shows the toast "Pairing
@@ -462,14 +473,17 @@ describe('the pairing flow uses the words of the design', () => {
 
   it('shows the design error and fetches the bundle again when the host failed', async () => {
     mockedBundle.mockRejectedValueOnce(new Error('engine not started'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     renderFlow();
     fireEvent.press(screen.getByText('Show my code'));
-    expect(await screen.findByText(/engine not started/)).toBeTruthy();
-    expect(screen.getByText("We couldn't make your code.")).toBeTruthy();
+    expect(await screen.findByText("We couldn't make your code.")).toBeTruthy();
+    expect(screen.queryByText(/engine not started/)).toBeNull();
+    expect(warn.mock.calls.flat().join(' ')).toContain('engine not started');
     expect(screen.queryByLabelText('pairing-qr')).toBeNull();
     fireEvent.press(screen.getByLabelText('pair-retry'));
     await waitFor(() => expect(mockedBundle).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByLabelText('pairing-qr')).toBeTruthy());
+    warn.mockRestore();
   });
 });
 

@@ -343,7 +343,8 @@ export default function App() {
   return (
     <SafeAreaView style={{ flex: 1 }}>
       <EngineProvider engine={engine}>
-        <ToastProvider>
+        {/* The phone design shows the toast as a full-width bar. */}
+        <ToastProvider layout="bar">
         {fault === null ? null : (
           <View style={{ padding: 16, paddingBottom: 0 }}>
             <Note

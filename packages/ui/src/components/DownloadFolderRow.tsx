@@ -101,7 +101,6 @@ export function DownloadFolderRow({ load, choose, reset, title, chooseLabel, hid
       />
       {name && reset ? (
         <Btn
-          variant="ghost"
           block
           // A JS EXPRESSION, not a bare attribute: JSX attribute text is not a
           // JavaScript string, so \u2019 in `label="..."` renders the six

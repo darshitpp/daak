@@ -456,6 +456,6 @@ describe('useBlockers, the host argument', () => {
       result.current.onCheckConnection();
     });
     render(<>{result.current.alert}</>);
-    expect(screen.getByText('This device is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.')).toBeTruthy();
+    expect(screen.getByText('This device is on this Wi-Fi. The devices you paired need to be on the same network too.')).toBeTruthy();
   });
 });

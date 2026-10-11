@@ -1,7 +1,9 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { DeviceInfo } from '@daak/core';
 import { DeviceCard } from './DeviceCard';
+import { colors } from '../theme';
 
 const device: DeviceInfo = {
   deviceId: 'aa'.repeat(16),
@@ -69,9 +71,18 @@ describe('DeviceCard', () => {
     const pending: DeviceInfo = { ...device, paired: false, presence: undefined, online: true };
     render(<DeviceCard device={pending} onOpen={onOpen} />);
     expect(screen.queryByTestId('open-' + device.deviceId)).toBeNull();
-    expect(screen.getByText('Not paired yet')).toBeTruthy();
+    expect(screen.getByText('Nearby, not paired yet')).toBeTruthy();
     expect(screen.queryByText('On this network')).toBeNull();
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  // Design index.html:660. A nearby, unpaired device shows an ok dot and the
+  // words "Nearby, not paired yet".
+  it('shows the design word and the ok dot for an unpaired device', () => {
+    render(<DeviceCard device={{ ...device, paired: false }} onPair={jest.fn()} />);
+    expect(screen.getByText('Nearby, not paired yet')).toBeTruthy();
+    const dot = screen.getByTestId('status-dot-' + device.deviceId);
+    expect(StyleSheet.flatten(dot.props.style).backgroundColor).toBe(colors.ok);
   });
 
   // An engine that predates the flag sends no `paired`. The safe reading is "not paired".

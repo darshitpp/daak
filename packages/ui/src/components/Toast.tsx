@@ -22,7 +22,17 @@ export function useToast(): ToastApi {
  * time: a new `show` replaces the current one and restarts the timer. The
  * timer is cleared on unmount.
  */
-export function ToastProvider({ children, durationMs = 2600, bottomOffset = 96 }: { children: React.ReactNode; durationMs?: number; bottomOffset?: number }) {
+export function ToastProvider({ children, durationMs = 2600, bottomOffset = 96, layout = 'pill' }: {
+  children: React.ReactNode;
+  durationMs?: number;
+  bottomOffset?: number;
+  /**
+   * The shape of the toast. The phone design (index.html, android.html) is a
+   * full-width bar. The Mac design (macos.html) is a pill. A prop, because
+   * this package has no platform check.
+   */
+  layout?: 'bar' | 'pill';
+}) {
   const [message, setMessage] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -53,8 +63,17 @@ export function ToastProvider({ children, durationMs = 2600, bottomOffset = 96 }
       <View style={styles.root}>
         {children}
         {message !== null ? (
-          <View testID="toast-wrap" pointerEvents="none" style={[styles.wrap, { bottom: bottomOffset }]}>
-            <View testID="toast" accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.pill}>
+          <View
+            testID="toast-wrap"
+            pointerEvents="none"
+            style={[styles.wrap, layout === 'bar' ? styles.wrapBar : null, { bottom: bottomOffset }]}
+          >
+            <View
+              testID="toast"
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
+              style={layout === 'bar' ? styles.bar : styles.pill}
+            >
               <Text style={styles.glyph} accessibilityElementsHidden importantForAccessibility="no">✓</Text>
               <Text testID="toast-text" style={styles.text}>{message}</Text>
             </View>
@@ -70,6 +89,20 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   // `bottom` comes from the `bottomOffset` prop (default 96, the phone design). The Mac design uses 24.
   wrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 30, elevation: 8 },
+  // Design .toast: left and right 16.
+  wrapBar: { alignItems: 'stretch', paddingHorizontal: spacing.lg },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.sm,
+    backgroundColor: colors.fg,
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',

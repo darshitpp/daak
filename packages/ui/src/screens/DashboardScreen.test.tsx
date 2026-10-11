@@ -4,6 +4,8 @@ import type { DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
 import { DashboardScreen } from './DashboardScreen';
 import { fakeEngine } from '../testing/fakeEngine';
+import { threadItem, threadPage } from '../testing/threadFixtures';
+import { whenLabel } from '../components/Bubble';
 import { setSelfPresenceLocal } from '../state/selfPresence';
 
 afterEach(() => act(() => setSelfPresenceLocal('online')));
@@ -82,7 +84,9 @@ describe('DashboardScreen (Devices)', () => {
     const near = dev('Ana Pixel', 'online', { paired: false });
     const onPair = jest.fn();
     mount(fakeEngine([near]), { onPair });
-    expect(await screen.findByText('Nearby, not paired yet')).toBeTruthy();
+    // The section title and the row status carry the same design words, so the
+    // query returns both.
+    expect((await screen.findAllByText('Nearby, not paired yet')).length).toBe(2);
     fireEvent.press(screen.getByLabelText('pair-with-' + near.deviceId));
     expect(onPair).toHaveBeenCalled();
   });
@@ -94,7 +98,7 @@ describe('DashboardScreen (Devices)', () => {
     const pending = dev('Ana Pixel', undefined, { paired: false, online: true });
     const onOpenThread = jest.fn();
     mount(fakeEngine([pending]), { onOpenThread });
-    expect(await screen.findByText('Nearby, not paired yet')).toBeTruthy();
+    expect((await screen.findAllByText('Nearby, not paired yet')).length).toBe(2);
     expect(screen.getByText('No paired devices yet')).toBeTruthy();
     expect(screen.queryByTestId('open-' + pending.deviceId)).toBeNull();
     expect(onOpenThread).not.toHaveBeenCalled();
@@ -105,7 +109,7 @@ describe('DashboardScreen (Devices)', () => {
     const peer = dev('Ana Pixel', undefined, { paired: false, online: true });
     const engine = fakeEngine([peer]);
     mount(engine, { onOpenThread: jest.fn() });
-    await screen.findByText('Nearby, not paired yet');
+    await screen.findAllByText('Nearby, not paired yet');
     jest.spyOn(engine, 'devices').mockResolvedValue([{ ...peer, paired: true, presence: 'online' }]);
     emit(engine, { type: 'pairing.done', deviceId: peer.deviceId });
     expect(await screen.findByTestId('open-' + peer.deviceId)).toBeTruthy();
@@ -164,6 +168,26 @@ describe('DashboardScreen (Devices)', () => {
     mount(fakeEngine([dev('Pixel', 'online')]), { pendingShare: { fileCount: 2, hasText: true } });
     expect(await screen.findByText('Pick a device for what you shared')).toBeTruthy();
     expect(screen.getByText('2 files and a note are ready. Tap a device to send them.')).toBeTruthy();
+  });
+
+  // Design renderDevices (index.html:1381-1397): each paired row shows the
+  // last item and its time. One limit-1 read for each paired device.
+  it('shows the last item and its time on each paired row', async () => {
+    const a = dev('Kitchen Tablet', 'online');
+    const b = dev('Living Room iPad', 'away');
+    const at = 1_700_000_000;
+    const engine = fakeEngine([a, b]);
+    const list = jest.spyOn(engine, 'listThread').mockImplementation(async (id: string) =>
+      id === a.deviceId
+        ? threadPage([threadItem({ type: 'file', text: null, name: 'Q3-report.pdf', at })])
+        : threadPage([]),
+    );
+    mount(engine, { onOpenThread: jest.fn() });
+    expect(await screen.findByText('Q3-report.pdf')).toBeTruthy();
+    expect(screen.getByText(whenLabel(at))).toBeTruthy();
+    expect(screen.getByText('No items yet')).toBeTruthy();
+    expect(list).toHaveBeenCalledWith(a.deviceId, { limit: 1 });
+    expect(list).toHaveBeenCalledWith(b.deviceId, { limit: 1 });
   });
 });
 

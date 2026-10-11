@@ -5,13 +5,9 @@ import { useEngine } from '../EngineContext';
 import { AppBar } from '../components/Onboarding';
 import { Btn, Empty, Note, type DeviceNoun } from '../components/ds';
 import { Sheet } from '../components/Sheet';
+import { useToast } from '../components/Toast';
 import { ui } from '../theme';
 import { NOT_RECORDED, arrivedAt, fingerprintGroups, humanBytes, senderLabel } from './quarantine-facts';
-
-function noop(): void {
-  // A host may omit onBack. A Pressable still needs a function, and a crash on a
-  // security screen is worse than an inert button. AppShell always supplies it.
-}
 
 /**
  * The Held-back screen (design route `quarantine`), with real data in place of
@@ -49,6 +45,7 @@ export function QuarantineScreen({
   deviceNoun?: DeviceNoun | 'device';
 }) {
   const engine = useEngine();
+  const toast = useToast();
   const [report, setReport] = useState<QuarantineReport | null>(null);
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -85,6 +82,10 @@ export function QuarantineScreen({
         setConfirming(false);
         setGone(true);
         onDeleted?.();
+        // Design: the toast says the file is gone, and the app returns to the
+        // conversation. The Deleted pane is what a host with no onBack sees.
+        toast.show('File deleted');
+        onBack?.();
       },
       (e: unknown) => {
         setDeleting(false);
@@ -102,13 +103,6 @@ export function QuarantineScreen({
           <Empty
             title="Deleted"
             body={`The held-back file is gone. Nothing else on this ${deviceNoun} changed.`}
-          />
-          <Btn
-            variant="ghost"
-            block
-            label="Back to conversation"
-            onPress={onBack ?? noop}
-            testID="quarantine-gone-back"
           />
         </ScrollView>
       </View>
@@ -156,7 +150,7 @@ export function QuarantineScreen({
         {report === null ? null : (
           <View style={ui.stackSm}>
             <Btn
-              variant="danger"
+              variant="primary"
               block
               label="Delete it"
               onPress={() => setConfirming(true)}

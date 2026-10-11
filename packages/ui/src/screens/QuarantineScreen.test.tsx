@@ -1,16 +1,21 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
+import { ToastProvider } from '../components/Toast';
 import { fakeEngine } from '../testing/fakeEngine';
 import { QuarantineScreen } from './QuarantineScreen';
+import { colors } from '../theme';
 
 const TID = 'cc'.repeat(16);
 
 function mount(engine: DaakEngine, props: Partial<React.ComponentProps<typeof QuarantineScreen>> = {}) {
   return render(
     <EngineProvider engine={engine}>
-      <QuarantineScreen transferId={TID} itemIndex={0} {...props} />
+      <ToastProvider>
+        <QuarantineScreen transferId={TID} itemIndex={0} {...props} />
+      </ToastProvider>
     </EngineProvider>,
   );
 }
@@ -84,9 +89,24 @@ describe('QuarantineScreen, Delete it', () => {
     expect(screen.getByText('The held-back file is gone. Nothing else on this phone changed.')).toBeTruthy();
     expect(del).toHaveBeenCalledWith(TID, 0);
     expect(deleted).toHaveBeenCalledTimes(1);
-    fireEvent.press(screen.getByLabelText('quarantine-gone-back'));
+    // The design toasts "File deleted" and returns to the conversation. The
+    // Deleted pane keeps no button of its own.
+    expect(await screen.findByText('File deleted')).toBeTruthy();
     expect(back).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Back to conversation')).toBeTruthy();
+    expect(screen.queryByTestId('quarantine-gone-back')).toBeNull();
+    expect(screen.queryByText('Back to conversation')).toBeNull();
+  });
+
+  // Design: "Delete it" on the screen is a primary button. Only the sheet
+  // confirm is danger.
+  it('draws the screen Delete it as a primary button and the sheet one as danger', async () => {
+    mount(fakeEngine());
+    await screen.findByText('harbor-lighthouse.jpg');
+    const screenBtn = StyleSheet.flatten(screen.getByTestId('quarantine-delete').props.style);
+    expect(screenBtn.backgroundColor).toBe(colors.fg);
+    fireEvent.press(screen.getByLabelText('quarantine-delete'));
+    const sheetBtn = StyleSheet.flatten(screen.getByTestId('quarantine-delete-confirm').props.style);
+    expect(sheetBtn.borderColor).toBe(colors.err);
   });
 
   it('says "device" when the host gives no noun', async () => {

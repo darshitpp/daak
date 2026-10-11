@@ -131,6 +131,35 @@ describe('Bubble', () => {
     expect(screen.getByText('Stopped')).toBeTruthy();
   });
 
+  // Design .bubble-state: the state word shows on every bubble type. A text
+  // bubble keeps its Copy action in both states.
+  it('shows the state word and keeps Copy on a failed outbound text item', () => {
+    const onCopy = jest.fn();
+    render(
+      <Bubble
+        item={threadItem({ direction: 'out', text: 'hi there', state: 'failed', transferState: 'failed', error: 'timed out' })}
+        onCopy={onCopy}
+      />,
+    );
+    expect(screen.getByText("Couldn't send")).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Copy text'));
+    expect(onCopy).toHaveBeenCalledWith('hi there');
+  });
+
+  it('shows the state word and keeps Copy on a waiting outbound text item', () => {
+    const onCopy = jest.fn();
+    render(
+      <Bubble
+        item={threadItem({ direction: 'out', text: 'hi there', state: 'pending', transferState: 'queued' })}
+        onCopy={onCopy}
+      />,
+    );
+    expect(screen.getByText('Waiting to send')).toBeTruthy();
+    expect(screen.getByText('Waiting')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Copy text'));
+    expect(onCopy).toHaveBeenCalledWith('hi there');
+  });
+
   it('keeps every action at 44 points or more', () => {
     render(<Bubble item={file()} onPreview={jest.fn()} onShare={jest.fn()} />);
     const style = screen.getByLabelText('Preview Q3-report.pdf').props.style;

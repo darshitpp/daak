@@ -67,3 +67,12 @@ it('keeps each tab target at 44 points or more', () => {
   expect(flat.minHeight).toBeGreaterThanOrEqual(44);
 });
 
+// Design: the tab bar uses the SVG icons, not glyphs.
+it('draws the design icon for each phone tab, and no glyph', () => {
+  render(<TabBar tab="devices" onChange={() => {}} layout="mobile" />);
+  expect(screen.getByTestId('tab-icon-devices')).toBeTruthy();
+  expect(screen.getByTestId('tab-icon-settings')).toBeTruthy();
+  expect(screen.queryByText('▣')).toBeNull();
+  expect(screen.queryByText('⚙')).toBeNull();
+});
+

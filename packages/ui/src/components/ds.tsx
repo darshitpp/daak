@@ -50,11 +50,11 @@ export function Btn({ onPress, label, variant = 'quiet', block, disabled, testID
  * measures 1.75:1 on cream, so a dot alone would be invisible, and every state
  * has to survive a greyscale screenshot anyway.
  */
-export function Status({ tone, label }: { tone: 'ok' | 'warn' | 'off'; label: string }) {
+export function Status({ tone, label, testID }: { tone: 'ok' | 'warn' | 'off'; label: string; testID?: string }) {
   const fill = tone === 'ok' ? colors.ok : tone === 'warn' ? colors.warn : colors.meta;
   return (
     <View style={ui.statusRow}>
-      <View style={[ui.dot, { backgroundColor: fill }]} />
+      <View style={[ui.dot, { backgroundColor: fill }]} testID={testID} />
       <Text style={ui.statusTxt}>{label}</Text>
     </View>
   );

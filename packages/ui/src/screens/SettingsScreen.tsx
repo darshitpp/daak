@@ -209,7 +209,6 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
       <ScrollView contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
         <Section title="Device name">
           <View style={ui.stackSm}>
-            {savedAs ? <Text style={ui.hint}>{'Saved as ' + savedAs}</Text> : null}
             <TextInput
               value={name}
               // THE ONE place the box is written by hand. nameRef follows it
@@ -225,13 +224,12 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
               style={ui.input}
             />
             <Text style={ui.hint}>Short names are easier to spot. You can change this later.</Text>
-            <Btn
-              label="Save"
-              testID="save-name"
-              disabled={busy}
-              onPress={saveName}
-              block
-            />
+            {/* Design index.html Settings: the "Saved as" hint and the Save
+                button share one row. */}
+            <View style={ui.row} testID="name-save-row">
+              {savedAs ? <Text style={[ui.hint, ui.fill]}>{'Saved as ' + savedAs}</Text> : <View style={ui.fill} />}
+              <Btn label="Save" testID="save-name" disabled={busy} onPress={saveName} />
+            </View>
           </View>
         </Section>
 
@@ -244,6 +242,8 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
             load={downloadFolder.load}
             choose={downloadFolder.choose}
             reset={downloadFolder.reset}
+            // The design has no "Files are moved, not copied" note here.
+            hideNote
           />
         ) : null}
 

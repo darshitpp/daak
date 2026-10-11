@@ -135,9 +135,14 @@ it('asks before it joins a pair link, and Cancel joins nothing', async () => {
 
 it('says so when a pair link is not a bundle', async () => {
   jest.spyOn(engine, 'pair').mockResolvedValue({ sas: 'x' });
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   render(<App />);
   emit('daak://pair?bundle=' + encodeURIComponent('not json'));
-  expect(await screen.findByText(/bad JSON/)).toBeTruthy();
+  // The reason goes to the log. The screen shows the design note.
+  expect(await screen.findByText("We couldn't read that code.")).toBeTruthy();
+  expect(screen.queryByText(/bad JSON/)).toBeNull();
+  expect(warn.mock.calls.flat().join(' ')).toContain('bad JSON');
+  warn.mockRestore();
 });
 
 // The bug a naive mount effect would have shipped: PairingFlow is mounted

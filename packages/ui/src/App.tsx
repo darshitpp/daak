@@ -26,7 +26,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, settingsHost }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -67,6 +67,8 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   keyboardAvoiding?: boolean;
   /** The Mac design puts the toast nearer the bottom edge than the phone design does. */
   toastBottomOffset?: number;
+  /** The Mac design shows a pill. The phone design shows a full-width bar. */
+  toastLayout?: 'bar' | 'pill';
   /** The injected Settings functions: arrival prefs, app version, OS grant. */
   settingsHost?: SettingsHost;
 }) {
@@ -81,7 +83,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
     () => runtime.getState(),
   );
   return (
-    <ToastProvider bottomOffset={toastBottomOffset}>
+    <ToastProvider bottomOffset={toastBottomOffset} layout={toastLayout}>
     <View style={{ flex: 1 }}>
       {mode === 'popover'
         ? <Popover

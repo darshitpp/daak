@@ -142,23 +142,55 @@ describe('PairingScreen words of the design', () => {
     expect(screen.queryByText('Why check the numbers')).toBeNull();
   });
 
-  it('shows the design error title, keeps the real message, and runs Try again', () => {
+  // The raw engine text is a log line, not user copy.
+  it('shows the design error title, drops the raw engine text, and runs Try again', () => {
     const retry = jest.fn();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     render(<PairingScreen role="join" qrUri="" onScan={noop} sas="" error="camera denied" onRetry={retry} />);
     expect(screen.getByText("We couldn't read that code.")).toBeTruthy();
-    expect(screen.getByText(/Make sure their screen is showing the code, then try again\. camera denied/)).toBeTruthy();
+    expect(screen.getByText('Make sure their screen is showing the code, then try again.')).toBeTruthy();
+    expect(screen.queryByText(/camera denied/)).toBeNull();
+    expect(warn).toHaveBeenCalled();
     fireEvent.press(screen.getByLabelText('pair-retry'));
     expect(retry).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it('shows no QR when the host failed', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     render(<PairingScreen role="host" qrUri="" onScan={noop} sas="" error="engine not started" onRetry={noop} />);
     expect(screen.queryByLabelText('pairing-qr')).toBeNull();
-    expect(screen.getByText(/engine not started/)).toBeTruthy();
     // The host reads no code, so the joiner title does not fit.
     expect(screen.getByText("We couldn't make your code.")).toBeTruthy();
     expect(screen.queryByText("We couldn't read that code.")).toBeNull();
-    expect(screen.getByText(/Make sure this device is on Wi-Fi, then try again\./)).toBeTruthy();
+    expect(screen.getByText('Make sure this device is on Wi-Fi, then try again.')).toBeTruthy();
+    warn.mockRestore();
+  });
+
+  // Design index.html:567: a quiet, block button under the number.
+  it('host: offers Show a new code only with a SAS, and calls onNewCode', () => {
+    const onNewCode = jest.fn();
+    const { rerender } = render(
+      <PairingScreen role="host" qrUri="u" onScan={noop} sas="" onNewCode={onNewCode} />,
+    );
+    expect(screen.queryByLabelText('pair-newcode')).toBeNull();
+    rerender(<PairingScreen role="host" qrUri="u" onScan={noop} sas="482917" onNewCode={onNewCode} />);
+    expect(screen.getByText('Show a new code')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('pair-newcode'));
+    expect(onNewCode).toHaveBeenCalledTimes(1);
+  });
+
+  // Design pair-scan-panel: the scan frame line sits above the hold-steady hint.
+  it('join: shows the scan frame line next to the hold-steady hint', () => {
+    render(<PairingScreen role="join" qrUri="" onScan={noop} sas="" />);
+    expect(screen.getByText('Their square should fill the frame.')).toBeTruthy();
+    expect(screen.getByText('Hold steady for a second.')).toBeTruthy();
+  });
+
+  // The design has no "derived from both devices' keys" sentence.
+  it('never prints the derived-from-keys sentence', () => {
+    render(<PairingScreen role="host" qrUri="u" onScan={noop} sas="482917" />);
+    expect(screen.queryByText(/derived from both devices/)).toBeNull();
   });
 });
 

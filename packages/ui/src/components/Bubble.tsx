@@ -74,6 +74,16 @@ export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, 
   const size = item.size === null ? '' : humanBytes(item.size);
   const hasPath = item.destPath !== null;
 
+  // Design .bubble-state: "Couldn't send" and "Waiting to send". A failed
+  // inbound item has no design, so its engine error stands in. "Stopped" is
+  // also an addition. The line shows on every bubble type, so it is not part
+  // of the file branch.
+  const state =
+    kind === 'failed' ? (out ? "Couldn't send" : item.error ?? 'It did not arrive')
+    : kind === 'waiting' ? 'Waiting to send'
+    : kind === 'stopped' ? 'Stopped'
+    : null;
+
   let content: React.ReactNode;
   if (item.type === 'text' && kind !== 'held') {
     if (item.text === null) {
@@ -91,19 +101,10 @@ export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, 
     // Design `msgFileHTML`: the size line, then " · Held back" for a held item.
     const receiving = !out && (item.state === 'pending' || item.state === 'receiving' || item.state === 'verifying');
     const sub = [size, kind === 'held' ? 'Held back' : receiving ? 'Receiving' : ''].filter(Boolean).join(' · ');
-    // Design `.bubble-state`: "Couldn't send" and "Waiting to send". A failed
-    // inbound item has no design, so its engine error stands in. "Stopped" is
-    // also an addition.
-    const state =
-      kind === 'failed' ? (out ? "Couldn't send" : item.error ?? 'It did not arrive')
-      : kind === 'waiting' ? 'Waiting to send'
-      : kind === 'stopped' ? 'Stopped'
-      : null;
     content = (
       <>
         <Text style={ui.rowTitle} numberOfLines={2}>{name}</Text>
         <Text style={ui.hint}>{sub}</Text>
-        {state !== null ? <Text style={kind === 'failed' ? ui.bubbleState : ui.hint}>{state}</Text> : null}
       </>
     );
   }
@@ -111,6 +112,7 @@ export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, 
   const bubble = (
     <View style={[ui.bubble, out ? ui.bubbleOut : null, kind === 'failed' || kind === 'held' ? ui.bubbleWarn : null]}>
       {content}
+      {state !== null ? <Text style={kind === 'failed' ? ui.bubbleState : ui.hint}>{state}</Text> : null}
       <Text style={ui.msgWhen}>{kind === 'waiting' ? 'Waiting' : whenLabel(item.at)}</Text>
     </View>
   );
@@ -124,7 +126,9 @@ export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, 
         ) : null}
       </View>
       <View style={ui.msgActions}>
-        {kind === 'text' && onCopy && item.text !== null ? (
+        {/* A text bubble keeps Copy in every state, including failed and
+            waiting. Only a held item has no Copy. */}
+        {item.type === 'text' && kind !== 'held' && onCopy && item.text !== null ? (
           <Quick label="Copy text" text="Copy" onPress={() => onCopy(item.text ?? '')} />
         ) : null}
         {kind === 'file' && onPreview && hasPath ? (

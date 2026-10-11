@@ -135,8 +135,9 @@ describe('Cant reach any devices', () => {
     render(<CantReachScreen onRetry={noop} onOpenSettings={noop} deviceNoun="phone" />);
     expect(screen.queryByText(/Home-5G/)).toBeNull();
     expect(screen.getByText('Looking on this Wi-Fi')).toBeTruthy();
+    // The design phone copy (index.html, cant-reach) says "the same network".
     expect(
-      screen.getByText('This phone is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.'),
+      screen.getByText('This phone is on this Wi-Fi. The devices you paired need to be on the same network too.'),
     ).toBeTruthy();
   });
 
@@ -144,7 +145,7 @@ describe('Cant reach any devices', () => {
     const { rerender } = render(<CantReachScreen onRetry={noop} onOpenSettings={noop} deviceNoun="Mac" />);
     expect(screen.getByText('This Mac is on this Wi-Fi. The devices you paired need to be on the same network too.')).toBeTruthy();
     rerender(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
-    expect(screen.getByText('This device is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.')).toBeTruthy();
+    expect(screen.getByText('This device is on this Wi-Fi. The devices you paired need to be on the same network too.')).toBeTruthy();
   });
 
   it('says conversations and not Inbox in the reassurance', () => {

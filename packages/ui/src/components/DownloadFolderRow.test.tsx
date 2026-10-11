@@ -1,7 +1,9 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { DownloadFolderRow } from './DownloadFolderRow';
 import { ToastProvider } from './Toast';
+import { colors } from '../theme';
 
 // R42p: the row shows where received files go, and a CANCELLED picker must not
 // change what it says. `null` is an answer -- the user closed the panel -- not
@@ -31,6 +33,8 @@ it('adopts a chosen folder and can reset it', async () => {
   expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
   fireEvent.press(screen.getByLabelText('download-folder-choose'));
   expect(await screen.findByText('Photos')).toBeTruthy();
+  // The design button is "btn-quiet", which is the default quiet variant.
+  expect(StyleSheet.flatten(screen.getByLabelText('download-folder-reset').props.style).borderColor).toBe(colors.border);
   fireEvent.press(screen.getByLabelText('download-folder-reset'));
   expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
 });

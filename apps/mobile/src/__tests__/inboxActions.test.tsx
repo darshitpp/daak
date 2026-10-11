@@ -84,5 +84,6 @@ it('warns when this device cannot open a file', async () => {
   render(<App />);
   fireEvent.press(await screen.findByTestId('open-' + DEVICE.deviceId));
   fireEvent.press(await screen.findByLabelText('Preview report.pdf'));
-  expect(await screen.findByTestId('thread-no-open')).toBeTruthy();
+  // Ruling: the warning is the design toast, not a note.
+  expect(await screen.findByText('This device cannot open files.')).toBeTruthy();
 });

@@ -172,8 +172,10 @@ describe('AppShell held route', () => {
     expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
     expect(screen.getByLabelText('Back to conversation')).toBeTruthy();
     fireEvent.press(screen.getByLabelText('quarantine-delete'));
+    expect(screen.getByText('It was never opened. Deleting it only clears the holding area on this Mac.')).toBeTruthy();
     fireEvent.press(screen.getByLabelText('quarantine-delete-confirm'));
-    expect(await screen.findByText('The held-back file is gone. Nothing else on this Mac changed.')).toBeTruthy();
+    // The design returns to the conversation after the delete.
+    await waitFor(() => expect(screen.queryByTestId('quarantine-route')).toBeNull());
   });
 });
 

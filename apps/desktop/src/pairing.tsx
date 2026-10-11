@@ -156,10 +156,13 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
         busy={phase.making ? 'making' : undefined}
         error={error || undefined}
         onRetry={showQr}
+        // The design puts "Show a new code" under the number.
+        onNewCode={sas ? showQr : undefined}
       />
-      {/* The arm is one-shot. One button arms again. */}
+      {/* The arm is one-shot. One button arms again. It shows only before a SAS,
+          because the screen then draws the design button under the number. */}
       <View style={{ padding: 16, gap: 24 }}>
-        <Btn variant="quiet" block testID="host-retry" label="Show a new code" onPress={showQr} />
+        {sas ? null : <Btn variant="quiet" block testID="host-retry" label="Show a new code" onPress={showQr} />}
         {confirmError ? (
           <Note tone="err" title="We couldn't finish pairing." body={confirmError} testID="pairing-confirm-error" />
         ) : null}

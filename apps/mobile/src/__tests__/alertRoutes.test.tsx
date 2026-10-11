@@ -309,7 +309,7 @@ describe('cant-reach', () => {
     fireEvent.press(await screen.findByLabelText('settings-check-connection'));
     expect(await screen.findByText('Looking on this Wi-Fi')).toBeTruthy();
     expect(
-      screen.getByText('This phone is on this Wi-Fi. The devices you paired need to be on this Wi-Fi too.'),
+      screen.getByText('This phone is on this Wi-Fi. The devices you paired need to be on the same network too.'),
     ).toBeTruthy();
   });
 });

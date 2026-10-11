@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { act, render, screen } from '@testing-library/react-native';
 import { ToastProvider, useToast } from './Toast';
+import { radius, spacing } from '../theme';
 
 // The latest `show` that a child got from the hook.
 let show: (message: string) => void = () => {};
@@ -87,6 +88,21 @@ describe('Toast', () => {
     render(<Capture />);
     expect(() => ping('Copied')).not.toThrow();
     expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  // Design index.html .toast: a full-width bar (left and right 16, radius-sm,
+  // padding 12). macos.html shows a pill.
+  it('draws a full-width bar in the bar layout and a pill by default', () => {
+    const { unmount } = render(<ToastProvider layout="bar"><Capture /></ToastProvider>);
+    ping('Saved');
+    const bar = StyleSheet.flatten(screen.getByTestId('toast').props.style);
+    expect(bar.borderRadius).toBe(radius.sm);
+    expect(bar.padding).toBe(spacing.md);
+    expect(StyleSheet.flatten(screen.getByTestId('toast-wrap').props.style).paddingHorizontal).toBe(spacing.lg);
+    unmount();
+    render(<ToastProvider><Capture /></ToastProvider>);
+    ping('Saved');
+    expect(StyleSheet.flatten(screen.getByTestId('toast').props.style).borderRadius).toBe(radius.pill);
   });
 });
 

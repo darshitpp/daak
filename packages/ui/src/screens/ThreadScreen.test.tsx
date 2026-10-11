@@ -381,6 +381,23 @@ describe('ThreadScreen', () => {
     expect(cancel).not.toHaveBeenCalled();
   });
 
+  // Design #cd-transfer-stop: the stop sheet names the peer and this device.
+  it('names the peer and this device in the stop sheet body', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
+    const first = mount(engine, { deviceNoun: 'Mac' });
+    fireEvent.press(await screen.findByLabelText('thread-stop-' + TID));
+    expect(
+      screen.getByText('Nothing has reached Pixel 9 yet. If you stop now, the items stay on this Mac.'),
+    ).toBeTruthy();
+    first.unmount();
+    mount(engine, { deviceNoun: 'phone' });
+    fireEvent.press(await screen.findByLabelText('thread-stop-' + TID));
+    expect(
+      screen.getByText('Nothing has reached Pixel 9 yet. If you stop now, the items stay on this phone.'),
+    ).toBeTruthy();
+  });
+
   // Correction 2: the engine emits no progress, so 0 bytes must not read as 0%.
   it('shows no percentage while no byte count is known', async () => {
     const engine = fakeEngine([peer]);
@@ -429,6 +446,8 @@ describe('ThreadScreen', () => {
     mount(engine);
     fireEvent.press(await screen.findByLabelText('Retry sending a.pdf'));
     await waitFor(() => expect(retry).toHaveBeenCalledWith(TID));
+    // The app shows "Sent to {name}" after a Retry.
+    expect(await screen.findByText('Sent to Pixel 9')).toBeTruthy();
   });
 
   // Review Focus 7.
@@ -476,14 +495,30 @@ describe('ThreadScreen', () => {
     expect(screen.queryByLabelText('Share r.pdf')).toBeNull();
   });
 
-  it('warns when the host could not open the file', async () => {
+  // Ruling: a Preview that no app can open is a toast, not a note.
+  it('toasts when the host could not open the file', async () => {
     const engine = fakeEngine([peer]);
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
       threadItem({ type: 'file', text: null, name: 'r.pdf', destPath: '/d/r.pdf' }),
     ]));
     mount(engine, { actions: { open: async () => false } });
     fireEvent.press(await screen.findByLabelText('Preview r.pdf'));
-    expect(await screen.findByTestId('thread-no-open')).toBeTruthy();
+    expect(await screen.findByText('This device cannot open files.')).toBeTruthy();
+    expect(screen.queryByTestId('thread-no-open')).toBeNull();
+  });
+
+  // Design #cd-offline-note: the note shows when the peer is Offline. Away is
+  // still on the network, so it shows nothing.
+  it('shows the offline note for an offline peer and not for an away peer', async () => {
+    const off = { ...peer, presence: 'offline' as const, online: false };
+    const first = mount(fakeEngine([off]));
+    expect(
+      await screen.findByText('Pixel 9 is not on this Wi-Fi. What you send waits here and goes when they are back.'),
+    ).toBeTruthy();
+    first.unmount();
+    mount(fakeEngine([{ ...peer, presence: 'away' as const }]));
+    expect(await screen.findByText('Pixel 9')).toBeTruthy();
+    expect(screen.queryByText(/is not on this Wi-Fi/)).toBeNull();
   });
 
   // Review Focus 4.

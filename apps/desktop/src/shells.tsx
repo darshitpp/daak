@@ -216,6 +216,7 @@ export function DaakDashboardShell({ engine, runtime }: {
           deviceNoun="Mac"
           windowChrome={windowChrome}
           toastBottomOffset={24}
+          toastLayout="pill"
         />
       </DesktopOnboardingGate>
     </>

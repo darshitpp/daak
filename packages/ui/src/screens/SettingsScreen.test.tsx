@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text, View } from 'react-native';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
 import { SettingsScreen } from './SettingsScreen';
@@ -324,6 +324,39 @@ describe('SettingsScreen paired devices', () => {
     fireEvent.press(screen.getByLabelText('confirm-remove'));
     await waitFor(() => expect(revoke).toHaveBeenCalledWith(d.deviceId));
     await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(d));
+  });
+});
+
+describe('SettingsScreen Save files to', () => {
+  it('hides the note and shows the reset button only for a custom folder', async () => {
+    render(
+      <EngineProvider engine={fakeEngine([])}>
+        <SettingsScreen
+          downloadFolder={{ load: async () => null, choose: async () => 'Photos', reset: async () => {} }}
+        />
+      </EngineProvider>,
+    );
+    await screen.findByLabelText('download-folder-choose');
+    // The design has no "Files are moved, not copied" note here.
+    expect(screen.queryByText('Files are moved, not copied')).toBeNull();
+    // No folder chosen: nothing to reset.
+    expect(screen.queryByLabelText('download-folder-reset')).toBeNull();
+    fireEvent.press(screen.getByLabelText('download-folder-choose'));
+    expect(await screen.findByLabelText('download-folder-reset')).toBeTruthy();
+  });
+
+  // Design index.html Settings: the "Saved as" hint and the Save button share
+  // one row.
+  it('puts the Save button in the row with the saved-name hint', async () => {
+    const engine = fakeEngine([]);
+    engine.selfProfile = async () => ({ name: 'Desk', baseName: 'Desk', deviceId: 'dd'.repeat(16) });
+    render(
+      <EngineProvider engine={engine}>
+        <SettingsScreen />
+      </EngineProvider>,
+    );
+    expect(await screen.findByText('Saved as Desk')).toBeTruthy();
+    expect(within(screen.getByTestId('name-save-row')).getByLabelText('save-name')).toBeTruthy();
   });
 });
 

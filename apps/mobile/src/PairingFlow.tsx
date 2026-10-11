@@ -40,7 +40,8 @@ type PairingFlowProps = { bundle?: string; addr?: string; embedded?: boolean };
 
 export function PairingFlow(props: PairingFlowProps = {}) {
   const body = <PairingFlowBody {...props} />;
-  return props.embedded ? <ToastProvider>{body}</ToastProvider> : body;
+  // The phone design shows the toast as a full-width bar.
+  return props.embedded ? <ToastProvider layout="bar">{body}</ToastProvider> : body;
 }
 
 function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
@@ -262,9 +263,14 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
         busy={busy ?? undefined}
         error={error || undefined}
         onRetry={phase.kind === 'host' ? startHost : startJoin}
+        // The design puts "Show a new code" under the number. The screen draws
+        // it once a SAS is on it.
+        onNewCode={phase.kind === 'host' && sas ? startHost : undefined}
       />
-      {/* The arm is one-shot. `startHost` arms again. */}
-      {phase.kind === 'host' ? (
+      {/* The arm is one-shot. `startHost` arms again. Before a SAS arrives the
+          screen shows no button of its own, so this one is the only recovery
+          from a burnt arm. It goes once the screen draws its own button. */}
+      {phase.kind === 'host' && !sas ? (
         <View style={pad}>
           <Btn variant="quiet" block testID="host-retry" label="Show a new code" onPress={startHost} />
         </View>

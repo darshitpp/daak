@@ -96,7 +96,6 @@ export function ThreadScreen({
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<Result>(null);
   const [stopFor, setStopFor] = useState<string | null>(null);
-  const [noOpen, setNoOpen] = useState(false);
 
   const alive = useRef(true);
   const seq = useRef(0);
@@ -276,6 +275,8 @@ export function ThreadScreen({
   const retry = async (transferId: string) => {
     try {
       await engine.retry(transferId);
+      // The task order: the app shows the design success word after a Retry.
+      toast.show(`Sent to ${name}`);
     } catch (e) {
       setResult({ title: 'Try again did not work', body: errText(e, 'The engine refused.') });
     }
@@ -364,7 +365,11 @@ export function ThreadScreen({
               actions?.open
                 ? (i) => {
                     const open = actions.open;
-                    if (open && i.destPath !== null) void open(i.destPath).then((ok) => setNoOpen(!ok), () => setNoOpen(true));
+                    // Ruling: a Preview that no app can open is a toast.
+                    const noApp = () => toast.show('This device cannot open files.');
+                    if (open && i.destPath !== null) {
+                      void open(i.destPath).then((ok) => { if (!ok) noApp(); }, noApp);
+                    }
                   }
                 : undefined
             }
@@ -374,14 +379,6 @@ export function ThreadScreen({
             onStop={(i) => void stopWaiting(i.transferId)}
           />
         ))}
-        {noOpen ? (
-          <Note
-            tone="warn"
-            title="This device cannot open files"
-            body="Opening a file is not available here. Use Share to send it somewhere else."
-            testID="thread-no-open"
-          />
-        ) : null}
       </ScrollView>
 
       {active.map((s) => {
@@ -418,7 +415,8 @@ export function ThreadScreen({
       ) : null}
       {offline && result === null ? (
         <View style={{ paddingHorizontal: 12 }}>
-          <Note body={`${name} is not on this Wi-Fi. What you send waits here and goes when it is back.`} />
+          {/* Design #cd-offline-note. The peer is Offline, not Away. */}
+          <Note body={`${name} is not on this Wi-Fi. What you send waits here and goes when they are back.`} />
         </View>
       ) : null}
 
@@ -470,7 +468,7 @@ export function ThreadScreen({
         }
       >
         <Text style={ui.lead}>
-          {`The items stay on this ${deviceNoun}. You can send them to ${name} again later.`}
+          {`Nothing has reached ${name} yet. If you stop now, the items stay on this ${deviceNoun}.`}
         </Text>
       </Sheet>
     </View>

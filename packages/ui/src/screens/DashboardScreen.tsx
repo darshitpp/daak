@@ -3,6 +3,7 @@ import { ScrollView, Text, View } from 'react-native';
 import type { DaakEvent, DeviceInfo } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { DeviceCard } from '../components/DeviceCard';
+import { whenLabel } from '../components/Bubble';
 import { Avatar, Btn, Empty, Note, Section, Status, byPresence } from '../components/ds';
 import { useSelfPresence } from '../state/selfPresence';
 import { ui } from '../theme';
@@ -15,6 +16,9 @@ const REFRESH_ON: ReadonlySet<DaakEvent['type']> = new Set<DaakEvent['type']>([
   'pairing.done',
   'pairing.revoked',
 ]);
+
+/** The design `contact-last` and `contact-when` of one device row. */
+type RowFacts = { lastItem: string; when: string };
 
 function shareText(s: { fileCount: number; hasText: boolean }): string {
   const files = s.fileCount === 0 ? '' : s.fileCount === 1 ? '1 file' : s.fileCount + ' files';
@@ -40,6 +44,7 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
   const [selfName, setSelfName] = useState('This device');
   const [error, setError] = useState('');
   const [queueDepth, setQueueDepth] = useState<Record<string, number>>({});
+  const [rows, setRows] = useState<Record<string, RowFacts>>({});
   // The value the user chose in Settings (design: `#this-device-status`).
   const self = useSelfPresence();
 
@@ -48,6 +53,34 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
       (list) => {
         setDevices(list);
         setError('');
+        // Design renderDevices: each paired row shows the newest item and its
+        // time. One limit-1 read for each paired device. The page is bounded,
+        // so the cost is one small read for each paired device on each load.
+        void Promise.all(
+          list
+            .filter((d) => d.paired === true)
+            .map((d) =>
+              engine.listThread(d.deviceId, { limit: 1 }).then(
+                (page) => {
+                  const last = page.items[page.items.length - 1];
+                  const facts: RowFacts =
+                    last === undefined
+                      ? { lastItem: 'No items yet', when: '' }
+                      : // A text item carries no name. "A note" is the honest
+                        // word for it; the design shows file names only.
+                        { lastItem: last.name ?? 'A note', when: whenLabel(last.at) };
+                  return [d.deviceId, facts] as const;
+                },
+                // A failed read leaves the row without these two facts. It must
+                // not hide the row itself.
+                () => null,
+              ),
+            ),
+        ).then((read) => {
+          const next: Record<string, RowFacts> = {};
+          for (const row of read) if (row !== null) next[row[0]] = row[1];
+          setRows(next);
+        });
       },
       (e: unknown) => setError(e instanceof Error ? e.message : 'the engine did not answer with a device list'),
     );
@@ -111,7 +144,14 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
           ) : (
             <View style={ui.list}>
               {paired.map((d) => (
-                <DeviceCard key={d.deviceId} device={d} queued={queueDepth[d.deviceId] ?? 0} onOpen={onOpenThread} />
+                <DeviceCard
+                  key={d.deviceId}
+                  device={d}
+                  queued={queueDepth[d.deviceId] ?? 0}
+                  lastItem={rows[d.deviceId]?.lastItem}
+                  when={rows[d.deviceId]?.when}
+                  onOpen={onOpenThread}
+                />
               ))}
             </View>
           )}
