@@ -223,12 +223,11 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
               autoCorrect={false}
               style={ui.input}
             />
-            <Text style={ui.hint}>Short names are easier to spot. You can change this later.</Text>
             {/* Design index.html Settings: the "Saved as" hint and the Save
                 button share one row. */}
             <View style={ui.row} testID="name-save-row">
               {savedAs ? <Text style={[ui.hint, ui.fill]}>{'Saved as ' + savedAs}</Text> : <View style={ui.fill} />}
-              <Btn label="Save" testID="save-name" disabled={busy} onPress={saveName} />
+              <Btn label="Save" size="sm" testID="save-name" disabled={busy} onPress={saveName} />
             </View>
           </View>
         </Section>

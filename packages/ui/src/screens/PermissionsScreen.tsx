@@ -9,7 +9,8 @@ import { ui } from '../theme';
  *
  * Omitting `onPress` locks the row. A locked row is the same signal that makes a
  * `SwitchRow` not pressable, so no second flag can disagree with the control.
- * A row in the state `unavailable` makes no claim about the grant.
+ * A row in the state `unavailable` is a locked switch: this host cannot read
+ * or change the grant. The design off sentence still prints under the row.
  */
 export interface PermissionRowSpec {
   /** Stable id, used for the row testID. */
@@ -26,7 +27,9 @@ const LEAD = 'Daak finds other devices on your Wi-Fi by itself. Alerts are optio
  * The Permissions step (design route `permissions`, titled "Optional alerts").
  *
  * The design has one row and does not block Continue. The hint under the row
- * states the grant when the host can read it.
+ * states the grant when the host can read it. A host that cannot read the grant
+ * (macOS) sets the row to 'unavailable'; the row keeps the design switch and the
+ * design off sentence, because the alerts are off and there is nothing to read.
  */
 export function PermissionsScreen({
   rows,
@@ -39,11 +42,11 @@ export function PermissionsScreen({
 }) {
   const alerts = rows.find((row) => row.key === 'alerts');
   const hint =
-    alerts?.state === 'on'
-      ? 'Alerts are on.'
-      : alerts?.state === 'off'
-        ? 'Alerts are off. You can continue without them.'
-        : null;
+    alerts === undefined
+      ? null
+      : alerts.state === 'on'
+        ? 'Alerts are on.'
+        : 'Alerts are off. You can continue without them.';
   return (
     <OnboardingScreen
       title="Optional alerts"

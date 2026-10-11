@@ -103,11 +103,13 @@ describe('Permissions', () => {
     expect(screen.getByTestId('permissions-hint').props.children).toBe('Alerts are on.');
   });
 
-  // A host that cannot change the grant sets the row to 'unavailable'. The
-  // screen then makes no claim about the state.
-  it('shows no on or off sentence for a row the host cannot change', () => {
+  // A host that cannot read the grant sets the row to 'unavailable'. The row
+  // keeps the design hint and its locked switch. The design macos.html shows
+  // the hint for the alerts row, and the desktop has no way to read the grant,
+  // so the off sentence prints.
+  it('shows the design off sentence and a locked switch for a row the host cannot read', () => {
     render(<PermissionsScreen rows={[{ ...off, state: 'unavailable' }]} onContinue={noop} />);
-    expect(screen.queryByTestId('permissions-hint')).toBeNull();
+    expect(screen.getByTestId('permissions-hint').props.children).toBe('Alerts are off. You can continue without them.');
     expect(screen.getByTestId('perm-alerts').props.onPress).toBeUndefined();
   });
 

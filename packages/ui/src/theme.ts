@@ -125,6 +125,8 @@ export const ui = StyleSheet.create({
   btnOnDark: { fontSize: type.body, fontWeight: '600', color: colors.paper },
   btnLabel: { fontSize: type.body, color: colors.fg },
   btnLabelSm: { fontSize: type.sm, color: colors.fg },
+  /** The design `btn-sm`: smaller padding and label than a `btn`. */
+  btnSm: { paddingHorizontal: spacing.md },
   btnDisabled: { opacity: 0.45 },
 
   chip: {

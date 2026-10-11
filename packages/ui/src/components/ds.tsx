@@ -10,7 +10,7 @@ export { Wordmark } from './Wordmark';
  * lines of View+Text in every screen.
  */
 
-export function Btn({ onPress, label, accessibilityLabel, variant = 'quiet', block, disabled, testID, style }: {
+export function Btn({ onPress, label, accessibilityLabel, variant = 'quiet', block, disabled, testID, style, size }: {
   onPress: () => void;
   label: string;
   /** A reader label when the visible label is not enough. Defaults to `label`. */
@@ -20,6 +20,8 @@ export function Btn({ onPress, label, accessibilityLabel, variant = 'quiet', blo
   disabled?: boolean;
   testID?: string;
   style?: ViewStyle;
+  /** The design `btn-sm`. Smaller padding and label than the default `btn`. */
+  size?: 'sm';
 }) {
   const tone =
     variant === 'primary' ? ui.btnPrimary
@@ -36,13 +38,20 @@ export function Btn({ onPress, label, accessibilityLabel, variant = 'quiet', blo
       style={({ pressed }) => [
         ui.btn,
         tone,
+        size === 'sm' ? ui.btnSm : null,
         block ? ui.btnBlock : null,
         disabled ? ui.btnDisabled : null,
         pressed ? ui.pressed : null,
         style,
       ]}
     >
-      <Text style={[variant === 'primary' ? { color: colors.onAccent } : ui.btnLabel]}>{label}</Text>
+      <Text
+        style={[
+          variant === 'primary' ? { color: colors.onAccent } : size === 'sm' ? ui.btnLabelSm : ui.btnLabel,
+        ]}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }

@@ -1,10 +1,11 @@
 import React from 'react';
-import { Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
 import { SettingsScreen } from './SettingsScreen';
 import { ToastProvider } from '../components/Toast';
+import { spacing } from '../theme';
 
 // The background-sync affordance is a SLOT, not a hard import. packages/ui
 // depends on @daak/core and nothing else: requestBatteryExemption is a
@@ -356,6 +357,33 @@ describe('SettingsScreen Save files to', () => {
     );
     expect(await screen.findByText('Saved as Desk')).toBeTruthy();
     expect(within(screen.getByTestId('name-save-row')).getByTestId('save-name')).toBeTruthy();
+  });
+});
+
+// Design macos.html Settings: the Save button is btn-sm, and the "Short names"
+// hint lives only in onboarding (name-device), not in Settings.
+describe('SettingsScreen matches the mock settings row', () => {
+  it('shows the Save button at the small size', async () => {
+    const engine = fakeEngine([]);
+    engine.selfProfile = async () => ({ name: 'Desk', baseName: 'Desk', deviceId: 'dd'.repeat(16) });
+    render(
+      <EngineProvider engine={engine}>
+        <SettingsScreen />
+      </EngineProvider>,
+    );
+    const save = await screen.findByTestId('save-name');
+    // The design btn-sm halves the horizontal padding: 12, not the btn default 16.
+    expect(StyleSheet.flatten(save.props.style).paddingHorizontal).toBe(spacing.md);
+  });
+
+  it('keeps the onboarding name hint out of Settings', async () => {
+    render(
+      <EngineProvider engine={fakeEngine([])}>
+        <SettingsScreen />
+      </EngineProvider>,
+    );
+    await screen.findByTestId('save-name');
+    expect(screen.queryByText('Short names are easier to spot. You can change this later.')).toBeNull();
   });
 });
 
