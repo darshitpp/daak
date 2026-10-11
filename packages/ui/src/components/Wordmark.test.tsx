@@ -1,13 +1,14 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render, screen } from '@testing-library/react-native';
-import { Wordmark } from './Wordmark';
+import { PAD, Wordmark } from './Wordmark';
 import { Wordmark as FromDs } from './ds';
 
 /**
  * The lockup from the design: the mark, then the letters "aak". The design
  * sizes it with one number, --wm-size (17, 22 or 19 px). The mark is 1.024 and
- * 1.1 times that size. These cases pin the lockup, not the pixels of the PNG.
+ * 1.1 times that size. The Image is PAD larger on each side, so the PNG keeps
+ * the whole stroke. These cases pin the lockup, not the pixels of the PNG.
  */
 describe('Wordmark', () => {
   it('shows the mark and the letters aak, and not a letter D', () => {
@@ -32,15 +33,15 @@ describe('Wordmark', () => {
   it('is 22 px by default, the large size of the design', () => {
     render(<Wordmark />);
     const mark = StyleSheet.flatten(screen.getByTestId('wordmark-mark').props.style);
-    expect(mark.width).toBeCloseTo(22 * 1.024, 5);
-    expect(mark.height).toBeCloseTo(22 * 1.1, 5);
+    expect(mark.width).toBeCloseTo(22 * (1.024 + 2 * PAD), 5);
+    expect(mark.height).toBeCloseTo(22 * (1.1 + 2 * PAD), 5);
     expect(StyleSheet.flatten(screen.getByText('aak').props.style).fontSize).toBe(22);
   });
 
   it('is 17 px for sm', () => {
     render(<Wordmark size="sm" />);
     const mark = StyleSheet.flatten(screen.getByTestId('wordmark-mark').props.style);
-    expect(mark.height).toBeCloseTo(17 * 1.1, 5);
+    expect(mark.height).toBeCloseTo(17 * (1.1 + 2 * PAD), 5);
     expect(StyleSheet.flatten(screen.getByText('aak').props.style).fontSize).toBe(17);
   });
 
@@ -48,10 +49,18 @@ describe('Wordmark', () => {
     render(<Wordmark size={19} />);
     const mark = StyleSheet.flatten(screen.getByTestId('wordmark-mark').props.style);
     const text = StyleSheet.flatten(screen.getByText('aak').props.style);
-    expect(mark.width).toBeCloseTo(19 * 1.024, 5);
-    expect(mark.height).toBeCloseTo(19 * 1.1, 5);
+    expect(mark.width).toBeCloseTo(19 * (1.024 + 2 * PAD), 5);
+    expect(mark.height).toBeCloseTo(19 * (1.1 + 2 * PAD), 5);
     expect(text.fontSize).toBe(19);
     expect(text.letterSpacing).toBeCloseTo(-0.02 * 19, 5);
+  });
+
+  it('gives the extra room back with negative margins, so the D does not move', () => {
+    render(<Wordmark />);
+    const mark = StyleSheet.flatten(screen.getByTestId('wordmark-mark').props.style);
+    expect(mark.marginLeft).toBeCloseTo(-22 * PAD, 5);
+    expect(mark.marginBottom).toBeCloseTo(-22 * PAD, 5);
+    expect(mark.marginRight).toBeCloseTo(1 - 22 * (0.03 + PAD), 5);
   });
 
   it('is the same component that ds.tsx exports', () => {

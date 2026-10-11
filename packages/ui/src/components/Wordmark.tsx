@@ -18,8 +18,16 @@ import { MARK_URI } from '../assets/mark';
 const SIZES = { sm: 17, lg: 22 } as const;
 
 /**
+ * The PNG holds the whole ink box, so no edge of the D is clipped. The ink
+ * reaches half a stroke (0.875 SVG units) past the 13.5 x 14.5 viewBox of the
+ * design. That is PAD times the size on each side. Negative margins give the
+ * extra room back, so the D and the text stay where the design puts them.
+ */
+export const PAD = (0.875 * 1.024) / 13.5;
+
+/**
  * "mark + aak". Every measure is a multiple of `size`, as in the design CSS:
- * the mark is 1.024 wide and 1.1 high, it overlaps the text by 0.03, the gap
+ * the D is 1.024 wide and 1.1 high (the Image adds PAD on each side), it overlaps the text by 0.03, the gap
  * is 1 px, and the text has a letter spacing of -0.02. The row aligns on the
  * baseline. An Image has no baseline, so Yoga uses its bottom edge, which is
  * what an inline SVG does in CSS.
@@ -33,7 +41,13 @@ export function Wordmark({ size = 'lg' }: { size?: number | 'sm' | 'lg' }) {
         accessible={false}
         resizeMode="contain"
         testID="wordmark-mark"
-        style={{ width: s * 1.024, height: s * 1.1, marginRight: 1 - s * 0.03 }}
+        style={{
+          width: s * (1.024 + 2 * PAD),
+          height: s * (1.1 + 2 * PAD),
+          marginLeft: -s * PAD,
+          marginBottom: -s * PAD,
+          marginRight: 1 - s * (0.03 + PAD),
+        }}
       />
       <Text
         style={{

@@ -113,17 +113,16 @@ func out(_ rel: String) -> URL { root.appendingPathComponent(rel) }
 
 // The Wordmark mark is the embedded PNG data URI in packages/ui/src/assets/mark.ts.
 // Check it BEFORE any write, so a stale embed fails before the script touches an
-// icon. Redraw it at the embedded size 81 x 87. Do not compare the encoded
+// icon. Redraw it at the embedded size 92 x 98, the whole ink box. Do not compare the encoded
 // bytes, because two encoders can differ; compare the decoded pixel size and the
 // alpha channel only. This writes no file.
 let markTs = try! String(contentsOf: out("packages/ui/src/assets/mark.ts"), encoding: .utf8)
-let markW = 81, markH = 87
-let markScale = CGFloat(markW) / viewBox.width
+let markW = 92, markH = 98
+let markScale: CGFloat = 6
 let markPng = render(markW, markH, opaque: false) { c in
     drawMark(c, s: markScale,
-             at: CGPoint(x: CGFloat(markW) / 2 + (inkCenter.x - viewBox.midX) * markScale,
-                         y: CGFloat(markH) / 2 + (inkCenter.y - viewBox.midY) * markScale),
-             color: ink, clip: true)
+             at: CGPoint(x: CGFloat(markW) / 2, y: CGFloat(markH) / 2),
+             color: ink)
 }
 let markPrefix = "data:image/png;base64,"
 let markParts = markTs.components(separatedBy: markPrefix)
