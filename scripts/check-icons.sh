@@ -45,11 +45,6 @@ xxhdpi 324 144
 xxxhdpi 432 192
 DENSITIES
 
-UI=packages/ui/src/assets
-check "$UI/daak-mark.png" 24 26 yes
-check "$UI/daak-mark@2x.png" 48 52 yes
-check "$UI/daak-mark@3x.png" 72 78 yes
-
 # Every Contents.json entry must name a file that exists.
 for cj in "$IOS/Contents.json" "$MAC/AppIcon.appiconset/Contents.json" "$MAC/MenuBarIcon.imageset/Contents.json"; do
   dir="$(dirname "$ROOT/$cj")"

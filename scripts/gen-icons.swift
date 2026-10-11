@@ -220,15 +220,21 @@ for d in densities {
     }, out("\(res)/mipmap-\(d.name)/ic_launcher_round.png"))
 }
 
-// In-app mark for the Wordmark. It keeps the viewBox clip of the design.
-// The 1x file is 24 x 26 px. The viewBox of 13.5 x 14.5 units fills the file.
-for scale in [1, 2, 3] {
-    let w = 24 * scale
-    let h = 26 * scale
-    let s = CGFloat(w) / viewBox.width
-    write(render(w, h, opaque: false) { c in
-        drawMark(c, s: s, at: CGPoint(x: CGFloat(w) / 2 + (inkCenter.x - viewBox.midX) * s,
-                                      y: CGFloat(h) / 2 + (inkCenter.y - viewBox.midY) * s),
-                 color: ink, clip: true)
-    }, out("packages/ui/src/assets/daak-mark\(scale == 1 ? "" : "@\(scale)x").png"))
+// The Wordmark mark is the embedded PNG data URI in packages/ui/src/assets/mark.ts.
+// Redraw it at the embedded size and compare the bytes. This makes the embed
+// reproducible. It writes no file. A difference means the embed is stale.
+let markTs = try! String(contentsOf: out("packages/ui/src/assets/mark.ts"), encoding: .utf8)
+let markW = 81, markH = 87
+let markScale = CGFloat(markW) / viewBox.width
+let markPng = render(markW, markH, opaque: false) { c in
+    drawMark(c, s: markScale,
+             at: CGPoint(x: CGFloat(markW) / 2 + (inkCenter.x - viewBox.midX) * markScale,
+                         y: CGFloat(markH) / 2 + (inkCenter.y - viewBox.midY) * markScale),
+             color: ink, clip: true)
 }
+let markData = NSMutableData()
+let markDest = CGImageDestinationCreateWithData(markData, UTType.png.identifier as CFString, 1, nil)!
+CGImageDestinationAddImage(markDest, markPng, nil)
+precondition(CGImageDestinationFinalize(markDest), "cannot encode the mark")
+let markUri = "data:image/png;base64," + (markData as Data).base64EncodedString()
+precondition(markTs.contains(markUri), "mark.ts does not match a fresh 81 x 87 render")

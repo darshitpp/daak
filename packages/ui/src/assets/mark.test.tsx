@@ -1,5 +1,4 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync } from 'node:fs';
 import { MARK_URI } from './mark';
 
 /**
@@ -13,9 +12,7 @@ describe('mark assets', () => {
   });
 
   it('keeps no dead mark assets', () => {
-    const dead = ['daak-mark.png', 'daak-mark@2x.png', 'daak-mark@3x.png', 'png.d.ts'];
-    for (const name of dead) {
-      expect(existsSync(join(__dirname, name))).toBe(false);
-    }
+    const strays = readdirSync(__dirname).filter((f) => f.endsWith('.png') || f.endsWith('.d.ts'));
+    expect(strays).toEqual([]);
   });
 });
