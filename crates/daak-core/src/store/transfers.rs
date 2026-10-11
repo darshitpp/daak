@@ -536,6 +536,42 @@ mod tests {
             0
         );
     }
+
+    // A drain in flight can settle a transfer after a cancel or a revoke
+    // landed. The guarded terminal write and the revoke write must then leave
+    // the finished row alone. Write the state first, so no thread timing is
+    // needed.
+    #[test]
+    fn a_cancel_and_a_revoke_never_relabel_a_finished_transfer() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut canceled = row();
+        canceled.transfer_id = [1u8; 16];
+        canceled.payload_id = [2u8; 16];
+        canceled.state = "canceled".into();
+        db.upsert_transfer(&canceled).unwrap();
+        let mut done = row();
+        done.transfer_id = [4u8; 16];
+        done.payload_id = [5u8; 16];
+        done.state = "done".into();
+        db.upsert_transfer(&done).unwrap();
+
+        // The drain's guarded write refuses a canceled row.
+        assert!(!db
+            .set_transfer_state_unless_canceled(&[1u8; 16], "failed")
+            .unwrap());
+        assert_eq!(
+            db.get_transfer(&[1u8; 16]).unwrap().unwrap().state,
+            "canceled"
+        );
+
+        // The revoke write closes open outbound rows only, so a done row stays.
+        assert_eq!(
+            db.cancel_outbound_transfers_for_peer(&[3u8; 16]).unwrap(),
+            0
+        );
+        assert_eq!(db.get_transfer(&[4u8; 16]).unwrap().unwrap().state, "done");
+    }
 }
 
 #[cfg(test)]

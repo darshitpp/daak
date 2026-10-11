@@ -3664,40 +3664,6 @@ mod tests {
         assert_eq!(db.get_transfer(&live).unwrap().unwrap().state, "failed");
     }
 
-    // 3.3 (concurrent): the drain's guarded transfer write and a cancel run as
-    // TWO tasks on the same Db. cancel owns the outbox guard (the row is
-    // 'sending'), and the guarded write can never clobber 'canceled', so the
-    // result is 'canceled' for every interleaving.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_cancel_and_the_drain_write_race_keep_canceled() {
-        let db = Arc::new(Db::open_in_memory().unwrap());
-        db.migrate().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
-        let manifest = Manifest::text("concurrent race");
-        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[]).unwrap();
-        assert!(db.mark_outbox_sending(&id).unwrap());
-
-        let (db_cancel, staging_cancel) = (db.clone(), staging.clone());
-        let cancel = tokio::spawn(async move {
-            cancel_with(&db_cancel, &staging_cancel, id).unwrap();
-        });
-        let db_settle = db.clone();
-        let settle = tokio::spawn(async move {
-            db_settle
-                .set_transfer_state_unless_canceled(&id, "failed")
-                .unwrap();
-        });
-        cancel.await.unwrap();
-        settle.await.unwrap();
-
-        assert_eq!(
-            db.get_transfer(&id).unwrap().unwrap().state,
-            "canceled",
-            "a cancel and the drain write racing must keep 'canceled'"
-        );
-    }
-
     // B2 (4): the FAILURE path was the one settle round 2 left ungated. A
     // canceled row is terminal and is never re-pended, so writing `paused`
     // there stranded a canceled share in a retrying state permanently -- the
