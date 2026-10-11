@@ -220,6 +220,12 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
       },
       (e: unknown) => {
         setBusy(null);
+        // The user left the camera screen (Cancel, or the system Back). That is
+        // an answer, not a failed read: back to the choice, with no error.
+        if ((e as { code?: unknown } | null)?.code === 'E_SCAN_CANCELLED') {
+          setPhase({ kind: 'choose' });
+          return;
+        }
         setError(e instanceof Error ? e.message : 'scan failed');
       },
     );

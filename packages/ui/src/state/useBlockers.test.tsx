@@ -168,6 +168,43 @@ describe('useBlockers, the reachability check', () => {
     expect(engine.devices).toHaveBeenCalledTimes(1);
   });
 
+  // devices() lists EVERY paired device, offline ones included, so a list that
+  // is not empty no longer means that everybody is showing. The link says "a
+  // device you paired isn't showing", and it must open for that device.
+  const paired = (deviceId: string, online: boolean) => ({ deviceId, paired: true, online, presence: online ? 'online' : 'offline' });
+
+  it('opens cannot-reach when one paired device is offline, even though another one is online', async () => {
+    const list = [paired('aa', true), paired('bb', false)];
+    const engine = stubEngine({ devices: jest.fn(async () => list) });
+    const { result } = renderHook(() => useBlockers(engine, []));
+    await act(async () => {
+      result.current.onCheckConnection();
+    });
+    render(<>{result.current.alert}</>);
+    expect(screen.getByTestId('screen-cant-reach')).toBeTruthy();
+    expect(result.current.alertRouteToken).toBe('cant-reach');
+  });
+
+  it('opens cannot-reach when the only paired device is offline', async () => {
+    const list = [paired('aa', false)];
+    const engine = stubEngine({ devices: jest.fn(async () => list) });
+    const { result } = renderHook(() => useBlockers(engine, []));
+    await act(async () => {
+      result.current.onCheckConnection();
+    });
+    expect(result.current.alertRouteToken).toBe('cant-reach');
+  });
+
+  it('stays quiet when every paired device is online, and ignores a nearby unpaired device', async () => {
+    const list = [paired('aa', true), { deviceId: 'cc', paired: false, online: true }];
+    const engine = stubEngine({ devices: jest.fn(async () => list) });
+    const { result } = renderHook(() => useBlockers(engine, []));
+    await act(async () => {
+      result.current.onCheckConnection();
+    });
+    expect(result.current.alert).toBeUndefined();
+  });
+
   // A rejected check is NOT nobody at home. The engine is up and not answering,
   // and the screen must say which of the two happened.
   it('says the check failed, and not that nobody is home, when devices() rejects', async () => {

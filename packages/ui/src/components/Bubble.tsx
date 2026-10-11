@@ -15,7 +15,9 @@ export function bubbleKind(i: ThreadItem): BubbleKind {
   if (i.state === 'quarantined') return 'held';
   if (i.state === 'failed' || (out && i.transferState === 'failed')) return 'failed';
   if (out && i.transferState === 'canceled') return 'stopped';
-  if (out && i.transferState === 'queued') return 'waiting';
+  // paused is the retry back-off: the drain could not reach the peer and will
+  // try again. It reads as waiting too, or a send that never left looks sent.
+  if (out && (i.transferState === 'queued' || i.transferState === 'paused')) return 'waiting';
   return i.type === 'text' ? 'text' : 'file';
 }
 
@@ -59,9 +61,11 @@ function prefix(text: string): { shown: string; cut: boolean } {
  * OUTBOUND item only: the protocol is push-only, and a receiver cannot ask for
  * the bytes again.
  */
-export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, onStop }: {
+export function Bubble({ item, onCopy, onCopyWhole, onPreview, onShare, onOpenHeld, onRetry, onStop }: {
   item: ThreadItem;
   onCopy?: (text: string) => void;
+  /** Copy of a text that the engine cut (`textTruncated`): the host fetches the whole text. */
+  onCopyWhole?: (i: ThreadItem) => void;
   onPreview?: (i: ThreadItem) => void;
   onShare?: (i: ThreadItem) => void;
   onOpenHeld?: (i: ThreadItem) => void;
@@ -80,7 +84,7 @@ export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, 
   // of the file branch.
   const state =
     kind === 'failed' ? (out ? "Couldn't send" : item.error ?? 'It did not arrive')
-    : kind === 'waiting' ? 'Waiting to send'
+    : kind === 'waiting' ? (item.transferState === 'paused' ? 'Trying again' : 'Waiting to send')
     : kind === 'stopped' ? 'Stopped'
     : null;
 
@@ -93,7 +97,15 @@ export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, 
       content = (
         <>
           <Text style={ui.bubbleTxt} testID="bubble-text" selectable>{shown}</Text>
-          {cut ? <Text style={ui.hint}>Showing the first 4000 characters. Copy text to get all of it.</Text> : null}
+          {item.textTruncated === true ? (
+            <Text style={ui.hint}>
+              {onCopyWhole
+                ? 'This text is too long to show in full. Copy text copies all of it.'
+                : 'This text is too long to show in full. Copy text copies only the part you see.'}
+            </Text>
+          ) : cut ? (
+            <Text style={ui.hint}>Showing the first 4000 characters. Copy text to get all of it.</Text>
+          ) : null}
         </>
       );
     }
@@ -127,9 +139,15 @@ export function Bubble({ item, onCopy, onPreview, onShare, onOpenHeld, onRetry, 
       </View>
       <View style={ui.msgActions}>
         {/* A text bubble keeps Copy in every state, including failed and
-            waiting. Only a held item has no Copy. */}
+            waiting. Only a held item has no Copy. A text that the engine cut
+            copies the whole text through onCopyWhole, because the page text is
+            only the start of it. */}
         {item.type === 'text' && kind !== 'held' && onCopy && item.text !== null ? (
-          <Quick label="Copy text" text="Copy" onPress={() => onCopy(item.text ?? '')} />
+          <Quick
+            label="Copy text"
+            text="Copy"
+            onPress={() => (item.textTruncated === true && onCopyWhole ? onCopyWhole(item) : onCopy(item.text ?? ''))}
+          />
         ) : null}
         {kind === 'file' && onPreview && hasPath ? (
           <Quick label={`Preview ${name}`} text="Preview" onPress={() => onPreview(item)} />

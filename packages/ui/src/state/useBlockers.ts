@@ -179,7 +179,12 @@ export function useBlockers(
     let outcome: 'reachable' | 'empty' | 'failed' = 'reachable';
     try {
       const devices = await engine.devices();
-      if (devices.length > 0) {
+      // devices() lists EVERY paired device, offline ones included. A list that
+      // is not empty therefore no longer means that everybody is showing. A
+      // paired device that is reported offline is exactly the "device you
+      // paired isn't showing" that the user asks about.
+      const pairedOffline = devices.some((d) => d.paired === true && d.online === false);
+      if (devices.length > 0 && !pairedOffline) {
         // Deliberately NOT an early return. Retry has to refresh the QUEUE as
         // well as the answer: the screen it just dismissed can come back with
         // stale rows, and a user who tapped Retry to clear a stuck send would

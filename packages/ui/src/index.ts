@@ -37,7 +37,7 @@ export {
 } from './components/Onboarding';
 export { fakeEngine } from './testing/fakeEngine';
 
-export { Sheet } from './components/Sheet';
+export { Sheet, SheetProvider } from './components/Sheet';
 export { Bubble } from './components/Bubble';
 export { ToastProvider, useToast } from './components/Toast';
 export { threadItem, threadPage } from './testing/threadFixtures';

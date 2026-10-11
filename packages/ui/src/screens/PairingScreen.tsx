@@ -146,6 +146,11 @@ export function PairingScreen({
             }
             testID="pairing-error"
           />
+          {/* Not in the design. The apps keep no log, so without this line a
+              release build hides why a pairing failed. */}
+          <Text style={ui.hint} selectable testID="pairing-error-detail">
+            {error}
+          </Text>
           {onRetry ? <Btn variant="ghost" label="Try again" testID="pair-retry" onPress={onRetry} /> : null}
         </View>
       ) : null}

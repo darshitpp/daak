@@ -142,14 +142,16 @@ describe('PairingScreen words of the design', () => {
     expect(screen.queryByText('Why check the numbers')).toBeNull();
   });
 
-  // The raw engine text is a log line, not user copy.
-  it('shows the design error title, drops the raw engine text, and runs Try again', () => {
+  // The design title and body stay. The engine's own message shows in a small
+  // separate line, because the apps keep no log and a release build otherwise
+  // hides the reason (field test 2026-10-11: a QR scan failed with no reason).
+  it('shows the design error title, the engine message in its own line, and runs Try again', () => {
     const retry = jest.fn();
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     render(<PairingScreen role="join" qrUri="" onScan={noop} sas="" error="camera denied" onRetry={retry} />);
     expect(screen.getByText("We couldn't read that code.")).toBeTruthy();
     expect(screen.getByText('Make sure their screen is showing the code, then try again.')).toBeTruthy();
-    expect(screen.queryByText(/camera denied/)).toBeNull();
+    expect(screen.getByTestId('pairing-error-detail')).toHaveTextContent('camera denied');
     expect(warn).toHaveBeenCalled();
     fireEvent.press(screen.getByTestId('pair-retry'));
     expect(retry).toHaveBeenCalledTimes(1);

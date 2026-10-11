@@ -73,7 +73,7 @@ describe('QR pairing is reachable from the app shell', () => {
   // Same class as the missing bounded wait: the flow must never swallow the
   // reason a host screen failed to render. A fixed "hosting failed" tells the
   // user nothing and tells the next debugging round nothing either.
-  it('sends the hosting error to the log, not to the user', async () => {
+  it('shows the hosting error in its own small line and sends it to the log', async () => {
     mockedBundle.mockRejectedValueOnce(new Error('engine not started'));
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     renderShell();
@@ -81,8 +81,8 @@ describe('QR pairing is reachable from the app shell', () => {
     fireEvent.press(screen.getByTestId('pair-a-device'));
     fireEvent.press(screen.getByText('Show my code'));
     await waitFor(() => expect(screen.getByText("We couldn't make your code.")).toBeTruthy());
-    // The engine text is a diagnostic now, not user copy.
-    expect(screen.queryByText(/engine not started/)).toBeNull();
+    // The design title stays; the engine's message is a separate small line.
+    expect(screen.getByTestId('pairing-error-detail')).toHaveTextContent('engine not started');
     expect(warn.mock.calls.flat().join(' ')).toContain('engine not started');
     warn.mockRestore();
   });
@@ -427,10 +427,30 @@ describe('the pairing flow uses the words of the design', () => {
     fireEvent.press(screen.getByText('Scan a code'));
     expect(await screen.findByText("We couldn't read that code.")).toBeTruthy();
     expect(screen.getByText('Make sure their screen is showing the code, then try again.')).toBeTruthy();
-    expect(screen.queryByText(/camera denied/)).toBeNull();
+    expect(screen.getByTestId('pairing-error-detail')).toHaveTextContent('camera denied');
     expect(warn.mock.calls.flat().join(' ')).toContain('camera denied');
     fireEvent.press(screen.getByTestId('pair-retry'));
     await waitFor(() => expect(mockedScan).toHaveBeenCalledTimes(2));
+    warn.mockRestore();
+  });
+
+  // Field test 2026-10-11: the camera screen had no way back. The user leaves it
+  // with a Cancel button (iOS and Android) or the system Back. The native side
+  // rejects with E_SCAN_CANCELLED. That is not a failed read: no error note, and
+  // the screen is back on the choice.
+  it('returns to the choice, without an error, when the scan is cancelled', async () => {
+    mockedScan.mockRejectedValueOnce(
+      Object.assign(new Error('scan cancelled'), { code: 'E_SCAN_CANCELLED' }),
+    );
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    renderFlow();
+    fireEvent.press(screen.getByText('Scan a code'));
+    await waitFor(() => expect(mockedScan).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Show my code')).toBeTruthy();
+    expect(screen.getByText('Scan a code')).toBeTruthy();
+    expect(screen.queryByText("We couldn't read that code.")).toBeNull();
+    expect(screen.queryByTestId('pairing-error-detail')).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
@@ -477,7 +497,7 @@ describe('the pairing flow uses the words of the design', () => {
     renderFlow();
     fireEvent.press(screen.getByText('Show my code'));
     expect(await screen.findByText("We couldn't make your code.")).toBeTruthy();
-    expect(screen.queryByText(/engine not started/)).toBeNull();
+    expect(screen.getByTestId('pairing-error-detail')).toHaveTextContent('engine not started');
     expect(warn.mock.calls.flat().join(' ')).toContain('engine not started');
     expect(screen.queryByLabelText('pairing-qr')).toBeNull();
     fireEvent.press(screen.getByTestId('pair-retry'));

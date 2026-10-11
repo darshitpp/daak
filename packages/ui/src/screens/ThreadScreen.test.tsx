@@ -53,6 +53,29 @@ describe('ThreadScreen', () => {
     expect(screen.getByText('Away')).toBeTruthy();
   });
 
+  // The engine cut the item list of one send. The note shows once, after the
+  // last kept item of that send, and not after a send that is whole.
+  it('says once that some items of a cut send are not shown', async () => {
+    const engine = fakeEngine([peer]);
+    const CUT = 'dd'.repeat(16);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ transferId: CUT, itemIndex: 0, text: 'one', truncated: true }),
+      threadItem({ transferId: CUT, itemIndex: 1, text: 'two', truncated: true }),
+      threadItem({ transferId: 'cc'.repeat(16), itemIndex: 0, text: 'whole send' }),
+    ]));
+    mount(engine);
+    expect(await screen.findByText('whole send')).toBeTruthy();
+    expect(screen.getAllByText('Some items of this send are not shown.')).toHaveLength(1);
+  });
+
+  it('shows no cut note when no item is cut', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([threadItem({ text: 'plain' })]));
+    mount(engine);
+    expect(await screen.findByText('plain')).toBeTruthy();
+    expect(screen.queryByText('Some items of this send are not shown.')).toBeNull();
+  });
+
   it('renders the history oldest first with text, file, and time', async () => {
     const engine = fakeEngine([peer]);
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
@@ -462,6 +485,46 @@ describe('ThreadScreen', () => {
     // Design v2: the held bubble offers Review, which opens the held route.
     fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
     expect(onOpenHeld).toHaveBeenCalledWith({ transferId: TID, itemIndex: 2 });
+  });
+
+  // P7: a text that the engine cut copies the WHOLE text, not the cut part.
+  it('copies the whole text from getItemText when the page cut the text', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ text: 'start of a long note', textTruncated: true, itemIndex: 4 }),
+    ]));
+    const whole = jest.spyOn(engine, 'getItemText').mockResolvedValue('start of a long note and all the rest');
+    const actions = { copy: jest.fn() };
+    mount(engine, { actions });
+    fireEvent.press(await screen.findByLabelText('Copy text'));
+    expect(await screen.findByText('Copied')).toBeTruthy();
+    expect(whole).toHaveBeenCalledWith(TID, 4);
+    expect(actions.copy).toHaveBeenCalledWith('start of a long note and all the rest');
+  });
+
+  it('copies nothing and says so when the whole text cannot be fetched', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ text: 'start', textTruncated: true }),
+    ]));
+    jest.spyOn(engine, 'getItemText').mockRejectedValue(new Error('too long'));
+    const actions = { copy: jest.fn() };
+    mount(engine, { actions });
+    fireEvent.press(await screen.findByLabelText('Copy text'));
+    expect(await screen.findByText('Could not copy the whole text.')).toBeTruthy();
+    expect(actions.copy).not.toHaveBeenCalled();
+    expect(screen.queryByText('Copied')).toBeNull();
+  });
+
+  it('copies the page text and does not call getItemText for a text that was not cut', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([threadItem({ text: 'short note' })]));
+    const whole = jest.spyOn(engine, 'getItemText');
+    const actions = { copy: jest.fn() };
+    mount(engine, { actions });
+    fireEvent.press(await screen.findByLabelText('Copy text'));
+    expect(actions.copy).toHaveBeenCalledWith('short note');
+    expect(whole).not.toHaveBeenCalled();
   });
 
   // Host verbs.

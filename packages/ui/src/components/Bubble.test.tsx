@@ -15,6 +15,26 @@ describe('bubbleKind', () => {
     expect(bubbleKind(file({ direction: 'out', transferState: 'queued', state: 'pending' }))).toBe('waiting');
     expect(bubbleKind(file({ direction: 'out', transferState: 'canceled' }))).toBe('stopped');
   });
+  // The outbox drain moves an unreachable send from queued to paused within
+  // milliseconds. A paused bubble drew as a normal sent bubble, with no state
+  // and no error, so a send that never left the phone looked delivered.
+  it('calls a paused outbound row waiting, and says it is trying again', () => {
+    expect(bubbleKind(file({ direction: 'out', transferState: 'paused', state: 'pending' }))).toBe('waiting');
+    render(<Bubble item={file({ direction: 'out', transferState: 'paused', state: 'pending' })} onStop={jest.fn()} />);
+    expect(screen.getByText('Trying again')).toBeTruthy();
+    expect(screen.queryByText('Waiting to send')).toBeNull();
+  });
+
+  it('keeps the words Waiting to send for a queued outbound row', () => {
+    render(<Bubble item={file({ direction: 'out', transferState: 'queued', state: 'pending' })} />);
+    expect(screen.getByText('Waiting to send')).toBeTruthy();
+    expect(screen.queryByText('Trying again')).toBeNull();
+  });
+
+  it('does not call an inbound paused row waiting', () => {
+    expect(bubbleKind(file({ direction: 'in', transferState: 'paused' }))).toBe('file');
+  });
+
   // A queued INBOUND row is not "waiting to send".
   it('does not call an inbound queued row waiting', () => {
     expect(bubbleKind(file({ direction: 'in', transferState: 'queued' }))).toBe('file');
@@ -33,6 +53,33 @@ describe('whenLabel', () => {
 });
 
 describe('Bubble', () => {
+  // The engine cut this text to fit the page. Copy asks the host for the whole
+  // text (onCopyWhole), because the page text is only the start of it.
+  it('says a text cut by the engine is not whole and copies the whole text through onCopyWhole', () => {
+    const onCopy = jest.fn();
+    const onCopyWhole = jest.fn();
+    const item = threadItem({ text: 'start of a long note', textTruncated: true });
+    render(<Bubble item={item} onCopy={onCopy} onCopyWhole={onCopyWhole} />);
+    expect(screen.getByText('start of a long note')).toBeTruthy();
+    expect(screen.getByText('This text is too long to show in full. Copy text copies all of it.')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Copy text'));
+    expect(onCopyWhole).toHaveBeenCalledWith(item);
+    expect(onCopy).not.toHaveBeenCalled();
+  });
+
+  it('copies the page text for a cut text when the host gives no onCopyWhole', () => {
+    const onCopy = jest.fn();
+    render(<Bubble item={threadItem({ text: 'start', textTruncated: true })} onCopy={onCopy} />);
+    fireEvent.press(screen.getByLabelText('Copy text'));
+    expect(onCopy).toHaveBeenCalledWith('start');
+  });
+
+  it('keeps Copy and shows no cut line for a text that the engine did not cut', () => {
+    render(<Bubble item={threadItem({ text: 'short', textTruncated: false })} onCopy={jest.fn()} />);
+    expect(screen.queryByText(/too long to show in full/)).toBeNull();
+    expect(screen.getByLabelText('Copy text')).toBeTruthy();
+  });
+
   it('copies a text bubble', () => {
     const onCopy = jest.fn();
     render(<Bubble item={threadItem({ text: 'hello there' })} onCopy={onCopy} />);

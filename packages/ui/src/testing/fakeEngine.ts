@@ -50,6 +50,7 @@ export function fakeEngine(devices: DeviceInfo[] = [
     listTransfers: async () => [],
     listInbox: async () => [],
     listThread: async () => ({ items: [], olderCursor: null }),
+    getItemText: async () => '',
     // A real shape, not a placeholder: Settings PREFILLS its name box from
     // this, and onboarding needs the device id. A test that must prove the
     // prefills spy on this.

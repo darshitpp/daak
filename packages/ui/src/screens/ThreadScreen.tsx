@@ -349,15 +349,29 @@ export function ThreadScreen({
         {device !== undefined && thread.items.length === 0 && loadError === '' ? (
           <Empty title="Nothing here yet" body="Send the first file or note with the buttons below. It travels straight to this device over your Wi-Fi." />
         ) : null}
-        {thread.items.map((it) => (
+        {thread.items.map((it, idx) => (
+          <React.Fragment key={itemKey(it)}>
           <Bubble
-            key={itemKey(it)}
             item={it}
             onCopy={
               actions?.copy
                 ? (t) => {
                     actions.copy?.(t);
                     toast.show('Copied');
+                  }
+                : undefined
+            }
+            onCopyWhole={
+              actions?.copy
+                ? (i) => {
+                    // The page cut this text. Copy the whole text, or copy nothing.
+                    void engine.getItemText(i.transferId, i.itemIndex).then(
+                      (whole) => {
+                        actions.copy?.(whole);
+                        toast.show('Copied');
+                      },
+                      () => toast.show('Could not copy the whole text.'),
+                    );
                   }
                 : undefined
             }
@@ -378,6 +392,11 @@ export function ThreadScreen({
             onRetry={(i) => void retry(i.transferId)}
             onStop={(i) => void stopWaiting(i.transferId)}
           />
+          {/* The engine cut the item list of this send. Say so once, after its last kept item. */}
+          {it.truncated === true && thread.items[idx + 1]?.transferId !== it.transferId ? (
+            <Text style={ui.hint}>Some items of this send are not shown.</Text>
+          ) : null}
+          </React.Fragment>
         ))}
       </ScrollView>
 

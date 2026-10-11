@@ -4,6 +4,7 @@ import type { DaakEngine, DeviceInfo } from '@daak/core';
 import type { AppMode, UiRuntime } from './headless';
 import type { InboxActions } from './inbox-actions';
 import { ToastProvider } from './components/Toast';
+import { SheetProvider } from './components/Sheet';
 import type { DeviceNoun } from './components/ds';
 import type { SettingsHost } from './screens/settings/host';
 import { Popover } from './modes/Popover';
@@ -84,6 +85,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   );
   return (
     <ToastProvider bottomOffset={toastBottomOffset} layout={toastLayout}>
+    <SheetProvider>
     <View style={{ flex: 1 }}>
       {mode === 'popover'
         ? <Popover
@@ -114,6 +116,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             settingsHost={settingsHost}
           />}
     </View>
+    </SheetProvider>
     </ToastProvider>
   );
 }

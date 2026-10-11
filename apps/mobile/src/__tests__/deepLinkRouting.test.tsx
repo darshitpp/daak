@@ -138,9 +138,9 @@ it('says so when a pair link is not a bundle', async () => {
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   render(<App />);
   emit('daak://pair?bundle=' + encodeURIComponent('not json'));
-  // The reason goes to the log. The screen shows the design note.
+  // The screen shows the design note and the reason in its own small line. The log has it too.
   expect(await screen.findByText("We couldn't read that code.")).toBeTruthy();
-  expect(screen.queryByText(/bad JSON/)).toBeNull();
+  expect(screen.getByTestId('pairing-error-detail')).toHaveTextContent(/bad JSON/);
   expect(warn.mock.calls.flat().join(' ')).toContain('bad JSON');
   warn.mockRestore();
 });
