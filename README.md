@@ -22,6 +22,13 @@ You have a photo on your phone and you need it on your Mac. You do not want to
 email it to yourself, sign in to a cloud app, or find a cable. With Daak, you
 pair the two devices once. After that, you pick the item and send it.
 
+> **Note: this project is fully vibe coded.** An AI coding assistant wrote all
+> of the code, the tests, and the documentation. The author gave the
+> direction and tested the apps by hand. No person wrote or reviewed the code
+> line by line, and no independent security review has been done. Daak
+> encrypts all traffic, but read the code before you trust it with sensitive
+> files. Expect bugs.
+
 ## Try it in 3 steps
 
 1. **Install** Daak on two devices. [Get it here](#install).
