@@ -324,7 +324,7 @@ export function ThreadScreen({
   }
 
   const active = summaries.filter((s) => s.direction === 'out' && s.state === 'active');
-  const offline = device != null && presenceOf(device).rank >= 2;
+  const offline = device != null && device.presence === 'offline';
 
   return (
     <View style={ui.screen}>

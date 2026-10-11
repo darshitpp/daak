@@ -531,6 +531,20 @@ describe('ThreadScreen', () => {
     expect(screen.queryByTestId('wifi-off-icon')).toBeNull();
   });
 
+  // Design #cd-offline-note: only an explicit offline presence gets the note.
+  // A device the engine did not mark offline is not known to be offline.
+  it('shows no offline note for a device with no presence field', async () => {
+    const bare: DeviceInfo = { deviceId: peer.deviceId, name: 'Pixel 9', addr: '', paired: true };
+    const first = mount(fakeEngine([bare]));
+    expect(await screen.findByText('Pixel 9')).toBeTruthy();
+    expect(screen.queryByText(/is not on this Wi-Fi/)).toBeNull();
+    first.unmount();
+    mount(fakeEngine([{ ...peer, presence: 'offline' as const, online: false }]));
+    expect(
+      await screen.findByText('Pixel 9 is not on this Wi-Fi. What you send waits here and goes when they are back.'),
+    ).toBeTruthy();
+  });
+
   // Review Focus 4.
   it('shows Not paired any more for a device the engine does not list', async () => {
     const engine = fakeEngine([]);
