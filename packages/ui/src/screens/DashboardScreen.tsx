@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import type { DaakEvent, DeviceInfo } from '@daak/core';
 import { useEngine } from '../EngineContext';
@@ -15,7 +15,15 @@ const REFRESH_ON: ReadonlySet<DaakEvent['type']> = new Set<DaakEvent['type']>([
   'device.presence',
   'pairing.done',
   'pairing.revoked',
+  // A new send or receive changes the row line and its time.
+  'transfer.done',
+  'transfer.item',
+  'inbox.received',
 ]);
+
+// A presence flap arrives as many events in a burst. One read after the burst
+// is enough, so the refresh waits this long.
+const REFRESH_DEBOUNCE_MS = 300;
 
 /** The design `contact-last` and `contact-when` of one device row. */
 type RowFacts = { lastItem: string; when: string };
@@ -48,9 +56,18 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
   // The value the user chose in Settings (design: `#this-device-status`).
   const self = useSelfPresence();
 
+  // Only the newest refresh may write state. `alive` stops a write after
+  // unmount. `timer` holds the pending debounce.
+  const generation = useRef(0);
+  const alive = useRef(true);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const refresh = useCallback(() => {
+    const gen = ++generation.current;
+    const stale = () => gen !== generation.current || !alive.current;
     void engine.devices().then(
       (list) => {
+        if (stale()) return;
         setDevices(list);
         setError('');
         // Design renderDevices: each paired row shows the newest item and its
@@ -71,23 +88,32 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
                         { lastItem: last.name ?? 'A note', when: whenLabel(last.at) };
                   return [d.deviceId, facts] as const;
                 },
-                // A failed read leaves the row without these two facts. It must
-                // not hide the row itself.
+                // A failed read returns null. The caller then keeps the row's
+                // previous line and time, and the row stays visible.
                 () => null,
               ),
             ),
         ).then((read) => {
-          const next: Record<string, RowFacts> = {};
-          for (const row of read) if (row !== null) next[row[0]] = row[1];
-          setRows(next);
+          if (stale()) return;
+          // Start from the last answer, so a row whose read rejected keeps
+          // its previous line and time.
+          setRows((prev) => {
+            const next = { ...prev };
+            for (const row of read) if (row !== null) next[row[0]] = row[1];
+            return next;
+          });
         });
       },
-      (e: unknown) => setError(e instanceof Error ? e.message : 'the engine did not answer with a device list'),
+      (e: unknown) => {
+        if (stale()) return;
+        setError(e instanceof Error ? e.message : 'the engine did not answer with a device list');
+      },
     );
     // The queue count survives a relaunch only in the database. Count the
     // queued outbound transfers for each peer. A failed read keeps the old counts.
     void engine.listTransfers({ state: 'queued' }).then(
       (rows) => {
+        if (stale()) return;
         const counts: Record<string, number> = {};
         for (const t of rows) if (t.direction === 'out' && t.state === 'queued') counts[t.peerDeviceId] = (counts[t.peerDeviceId] ?? 0) + 1;
         setQueueDepth(counts);
@@ -96,14 +122,28 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
     );
   }, [engine]);
 
+  const scheduleRefresh = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      refresh();
+    }, REFRESH_DEBOUNCE_MS);
+  }, [refresh]);
+
   useEffect(() => {
+    alive.current = true;
     refresh();
-    void engine.selfProfile().then((p) => setSelfName(p.name), () => {});
-    return engine.on((e) => {
+    void engine.selfProfile().then((p) => { if (alive.current) setSelfName(p.name); }, () => {});
+    const off = engine.on((e) => {
       if (e.type === 'outbox.queued') setQueueDepth((q) => ({ ...q, [e.deviceId]: e.queued }));
-      if (REFRESH_ON.has(e.type)) refresh();
+      if (REFRESH_ON.has(e.type)) scheduleRefresh();
     });
-  }, [engine, refresh]);
+    return () => {
+      alive.current = false;
+      if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; }
+      off();
+    };
+  }, [engine, refresh, scheduleRefresh]);
 
   const paired = devices.filter((d) => d.paired === true).sort(byPresence);
   const nearby = devices.filter((d) => d.paired !== true);

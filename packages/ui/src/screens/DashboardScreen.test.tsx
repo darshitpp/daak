@@ -192,5 +192,45 @@ describe('DashboardScreen (Devices)', () => {
     expect(list).toHaveBeenCalledWith(a.deviceId, { limit: 1 });
     expect(list).toHaveBeenCalledWith(b.deviceId, { limit: 1 });
   });
+
+  // An older read must not overwrite a newer one. A transfer.done refresh
+  // answers before the first mount read does.
+  it('ignores an out-of-order refresh', async () => {
+    jest.useFakeTimers();
+    const peer = dev('Pixel', 'online');
+    const engine = fakeEngine([peer]);
+    const pending: Array<(v: DeviceInfo[]) => void> = [];
+    jest.spyOn(engine, 'devices').mockImplementation(
+      () => new Promise<DeviceInfo[]>((resolve) => { pending.push(resolve); }),
+    );
+    mount(engine, { onOpenThread: jest.fn() });
+    // transfer.done starts a second read after the debounce window.
+    emit(engine, { type: 'transfer.done', transferId: 'cc'.repeat(16) });
+    await act(async () => { jest.advanceTimersByTime(300); });
+    expect(pending).toHaveLength(2);
+    // The newer read answers first.
+    await act(async () => { pending[1]([dev('Pixel', 'away')]); });
+    // The older read answers last with the stale list.
+    await act(async () => { pending[0]([peer]); });
+    expect(screen.getByText('Away')).toBeTruthy();
+    jest.useRealTimers();
+  });
+
+  // A rejected read keeps the row line and the time it showed before.
+  it('keeps the row line and time when a read rejects', async () => {
+    const peer = dev('Kitchen Tablet', 'online');
+    const at = 1_700_000_000;
+    const engine = fakeEngine([peer]);
+    const list = jest.spyOn(engine, 'listThread')
+      .mockResolvedValueOnce(threadPage([threadItem({ type: 'file', text: null, name: 'Q3-report.pdf', at })]))
+      .mockRejectedValueOnce(new Error('read failed'));
+    mount(engine, { onOpenThread: jest.fn() });
+    expect(await screen.findByText('Q3-report.pdf')).toBeTruthy();
+    expect(screen.getByText(whenLabel(at))).toBeTruthy();
+    emit(engine, { type: 'device.presence', deviceId: peer.deviceId, presence: 'away' });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Q3-report.pdf')).toBeTruthy();
+    expect(screen.getByText(whenLabel(at))).toBeTruthy();
+  });
 });
 
