@@ -143,6 +143,10 @@ export interface ThreadItem {
   at: number;
   transferState: string;
   error: string | null;
+  /** The item list of this transfer was cut to fit the page budget. */
+  truncated?: boolean;
+  /** The text of this item was cut to fit the page budget. */
+  textTruncated?: boolean;
 }
 
 export interface ThreadPage {

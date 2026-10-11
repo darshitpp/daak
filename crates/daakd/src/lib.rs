@@ -224,6 +224,8 @@ fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value {
                 "at": i.at,
                 "transferState": i.transfer_state,
                 "error": i.error,
+                "truncated": i.truncated,
+                "textTruncated": i.text_truncated,
             })
         })
         .collect();
@@ -1030,6 +1032,8 @@ mod tests {
                 at: 123,
                 transfer_state: "done".into(),
                 error: None,
+                truncated: false,
+                text_truncated: false,
             }],
             older_cursor: Some("5:00".into()),
         };

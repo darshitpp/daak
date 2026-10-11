@@ -111,6 +111,34 @@ func contents(_ rows: [String]) -> String {
 let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 func out(_ rel: String) -> URL { root.appendingPathComponent(rel) }
 
+// The Wordmark mark is the embedded PNG data URI in packages/ui/src/assets/mark.ts.
+// Check it BEFORE any write, so a stale embed fails before the script touches an
+// icon. Redraw it at the embedded size 81 x 87. Do not compare the encoded
+// bytes, because two encoders can differ; compare the decoded pixel size and the
+// alpha channel only. This writes no file.
+let markTs = try! String(contentsOf: out("packages/ui/src/assets/mark.ts"), encoding: .utf8)
+let markW = 81, markH = 87
+let markScale = CGFloat(markW) / viewBox.width
+let markPng = render(markW, markH, opaque: false) { c in
+    drawMark(c, s: markScale,
+             at: CGPoint(x: CGFloat(markW) / 2 + (inkCenter.x - viewBox.midX) * markScale,
+                         y: CGFloat(markH) / 2 + (inkCenter.y - viewBox.midY) * markScale),
+             color: ink, clip: true)
+}
+let markPrefix = "data:image/png;base64,"
+let markParts = markTs.components(separatedBy: markPrefix)
+precondition(markParts.count > 1, "mark.ts holds no png data URI")
+let base64 = markParts[1].prefix { $0.isLetter || $0.isNumber || $0 == "+" || $0 == "/" || $0 == "=" }
+guard let embedded = Data(base64Encoded: String(base64)),
+      let src = CGImageSourceCreateWithData(embedded as CFData, nil),
+      let embeddedMark = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+    preconditionFailure("mark.ts png data URI does not decode")
+}
+precondition(embeddedMark.width == markW && embeddedMark.height == markH,
+             "mark.ts is \(embeddedMark.width) x \(embeddedMark.height), not \(markW) x \(markH)")
+precondition(embeddedMark.alphaInfo != .none && markPng.alphaInfo != .none,
+             "the mark must keep an alpha channel")
+
 // iOS. A full square with no alpha. The system applies the corner mask.
 // The size 1024 matches daak-app-icon.svg pixel for pixel (Task 2 Step 3).
 let iosDir = "apps/mobile/ios/Daak/Images.xcassets/AppIcon.appiconset"
@@ -220,21 +248,3 @@ for d in densities {
     }, out("\(res)/mipmap-\(d.name)/ic_launcher_round.png"))
 }
 
-// The Wordmark mark is the embedded PNG data URI in packages/ui/src/assets/mark.ts.
-// Redraw it at the embedded size and compare the bytes. This makes the embed
-// reproducible. It writes no file. A difference means the embed is stale.
-let markTs = try! String(contentsOf: out("packages/ui/src/assets/mark.ts"), encoding: .utf8)
-let markW = 81, markH = 87
-let markScale = CGFloat(markW) / viewBox.width
-let markPng = render(markW, markH, opaque: false) { c in
-    drawMark(c, s: markScale,
-             at: CGPoint(x: CGFloat(markW) / 2 + (inkCenter.x - viewBox.midX) * markScale,
-                         y: CGFloat(markH) / 2 + (inkCenter.y - viewBox.midY) * markScale),
-             color: ink, clip: true)
-}
-let markData = NSMutableData()
-let markDest = CGImageDestinationCreateWithData(markData, UTType.png.identifier as CFString, 1, nil)!
-CGImageDestinationAddImage(markDest, markPng, nil)
-precondition(CGImageDestinationFinalize(markDest), "cannot encode the mark")
-let markUri = "data:image/png;base64," + (markData as Data).base64EncodedString()
-precondition(markTs.contains(markUri), "mark.ts does not match a fresh 81 x 87 render")

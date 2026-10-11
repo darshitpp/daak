@@ -37,6 +37,10 @@ pub struct ThreadItem {
     // transfers.state. The UI reads it to show Waiting to send.
     pub transfer_state: String,
     pub error: Option<String>,
+    // The item list of this transfer was cut to fit the page budget (A1).
+    pub truncated: bool,
+    // The text of this item was cut to fit the page budget (A2).
+    pub text_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,24 +172,27 @@ pub(crate) fn page_item_json(i: &ThreadItem) -> serde_json::Value {
         "at": i.at,
         "transferState": i.transfer_state,
         "error": i.error,
+        "truncated": i.truncated,
+        "textTruncated": i.text_truncated,
     })
 }
 
-/// Cut the text fields of one row until the wire JSON of the row fits the page
-/// budget. A page always keeps 1 row, and a text item can hold the 4 MiB wire
-/// frame, so the text of that row can overrun the budget on its own.
+/// Cut one row until its wire JSON fits the page budget. A page always keeps 1
+/// row, and a row can overrun the budget on its own: a text item can hold the
+/// 4 MiB wire frame, and a transfer can hold MAX_ITEMS = 65536 small items
+/// (about 13 MiB of JSON).
+///
+/// First cut the text fields. Then, if the row still overruns, keep the first
+/// items that fit and mark the row cut.
 ///
 /// A raw byte becomes at least one JSON byte, because escaping never shrinks a
 /// character. So dropping N raw bytes drops at least N JSON bytes, and one pass
 /// brings the JSON under the budget.
-///
-/// shortcut: a row of many non-text items can still overrun the budget, add an
-/// item-count cap when a real transfer reaches that size.
-fn trim_text_to_budget(items: &mut [ThreadItem]) {
-    let mut excess = page_json_len(items).saturating_sub(THREAD_PAGE_BYTES);
-    if excess == 0 {
+fn trim_text_to_budget(items: &mut Vec<ThreadItem>) {
+    if page_json_len(items) <= THREAD_PAGE_BYTES {
         return;
     }
+    let mut excess = page_json_len(items).saturating_sub(THREAD_PAGE_BYTES);
     // Longest text first, so the fewest fields change.
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(items[i].text.as_deref().map_or(0, str::len)));
@@ -193,16 +200,47 @@ fn trim_text_to_budget(items: &mut [ThreadItem]) {
         if excess == 0 {
             break;
         }
-        let Some(text) = items[i].text.as_mut() else {
+        let len = items[i].text.as_deref().map_or(0, str::len);
+        if len == 0 {
             continue;
-        };
+        }
         // Keep the head. A UTF-8 boundary stops the cut.
-        let mut keep = text.len().saturating_sub(excess);
+        let mut keep = len.saturating_sub(excess);
+        let text = items[i].text.as_deref().expect("a text item");
         while keep > 0 && !text.is_char_boundary(keep) {
             keep -= 1;
         }
-        excess = excess.saturating_sub(text.len() - keep);
-        text.truncate(keep);
+        if keep < len {
+            items[i].text.as_mut().expect("a text item").truncate(keep);
+            items[i].text_truncated = true;
+            excess = excess.saturating_sub(len - keep);
+        }
+    }
+    // A1: a row of many small items can still overrun the budget after the text
+    // cut. Keep the first items that fit and mark the row cut. The array JSON is
+    // the sum of the item lengths plus the commas and the brackets, so the drop
+    // is counted in one pass.
+    if page_json_len(items) > THREAD_PAGE_BYTES {
+        let lens: Vec<usize> = items
+            .iter()
+            .map(|i| {
+                serde_json::to_string(&page_item_json(i))
+                    .expect("an item is JSON")
+                    .len()
+            })
+            .collect();
+        let mut running = lens.iter().sum::<usize>() + items.len() + 1;
+        let mut keep = items.len();
+        while keep > 1 && running > THREAD_PAGE_BYTES {
+            keep -= 1;
+            running -= lens[keep] + 1;
+        }
+        if keep < items.len() {
+            items.truncate(keep);
+            for i in items.iter_mut() {
+                i.truncated = true;
+            }
+        }
     }
 }
 
@@ -231,6 +269,8 @@ fn expand(db: &Db, t: &TransferRow, out: &mut Vec<ThreadItem>) -> Result<()> {
             at: t.created_at,
             transfer_state: t.state.clone(),
             error: t.error.clone(),
+            truncated: false,
+            text_truncated: false,
         }
     };
     match Manifest::from_cbor(&t.manifest) {
@@ -361,6 +401,8 @@ mod tests {
             at: 123,
             transfer_state: "done".into(),
             error: None,
+            truncated: false,
+            text_truncated: false,
         };
         let one = page_item_json(&item);
         let mut keys: Vec<String> = one
@@ -709,5 +751,57 @@ mod tests {
         put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 1);
         let page = list_thread(&db, &[3u8; 16], 5, None).unwrap();
         assert_eq!(page.items[0].text.as_deref(), Some(body.as_str()));
+        assert!(!page.items[0].text_truncated);
+    }
+
+    // A1: a transfer can hold MAX_ITEMS = 65536 small items (receiver.rs),
+    // about 13 MiB of JSON. A page always keeps 1 row, so the row alone would
+    // overrun the 4 MiB daemon frame. The item cap keeps the first items that
+    // fit the 1 MiB budget and marks every kept item cut.
+    #[test]
+    fn a_many_item_row_is_capped_and_marked_cut() {
+        let db = db();
+        let items: Vec<Item> = (0..65536u32)
+            .map(|i| {
+                let mut it = Item::text(i, format!("m{i}"));
+                it.size = Some(0);
+                it
+            })
+            .collect();
+        let m = manifest(items);
+        put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 65536);
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert!(!page.items.is_empty(), "a page always keeps the transfer");
+        assert!(page.items.len() < 65536, "the row must be cut");
+        assert!(
+            page.items.iter().all(|i| i.truncated),
+            "every kept item must mark the row cut"
+        );
+        assert!(
+            page_json_len(&page.items) <= THREAD_PAGE_BYTES,
+            "the kept row must fit the budget"
+        );
+        let measured = whole_page_json_len(&page);
+        assert!(
+            measured <= DAEMON_FRAME_BYTES,
+            "page JSON {measured} must stay under the daemon frame {DAEMON_FRAME_BYTES}"
+        );
+    }
+
+    // A2: a cut text sets text_truncated on the item, so the UI can show the
+    // cut. A single cut item is not an item-list cut.
+    #[test]
+    fn a_cut_text_marks_the_item() {
+        let db = db();
+        let body = "y".repeat(3 * 1024 * 1024);
+        let m = manifest(vec![Item::text(0, body)]);
+        put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 1);
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(
+            page.items[0].text_truncated,
+            "a cut text must set text_truncated"
+        );
+        assert!(!page.items[0].truncated, "1 item is not an item-list cut");
     }
 }

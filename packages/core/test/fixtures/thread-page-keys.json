@@ -9,8 +9,10 @@
     "size",
     "state",
     "text",
+    "textTruncated",
     "transferId",
     "transferState",
+    "truncated",
     "type"
   ],
   "pageKeys": ["items", "olderCursor"]

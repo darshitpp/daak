@@ -465,6 +465,29 @@ describe('InProcessEngine', () => {
     ]);
   });
 
+  it('passes the thread cut markers through unchanged', async () => {
+    // A1/A2: the page carries the cut markers, and InProcess passes them
+    // through unchanged so a screen can show that a row or a text is cut.
+    const page = {
+      items: [
+        {
+          transferId: '00'.repeat(16), itemIndex: 0, direction: 'out', type: 'text',
+          name: null, size: null, text: 'hi', state: 'done', destPath: null,
+          at: 1, transferState: 'done', error: null,
+          truncated: true, textTruncated: true,
+        },
+      ],
+      olderCursor: null,
+    };
+    const engine = new InProcessEngine(
+      fakeNative({ listThread: async () => JSON.stringify(page) }),
+      () => () => {},
+    );
+    const got = await engine.listThread('00'.repeat(16));
+    expect(got.items[0].truncated).toBe(true);
+    expect(got.items[0].textTruncated).toBe(true);
+  });
+
   it('keeps a corrupt saved_paths row as null rather than coercing it to []', async () => {
     // SHOULD-FIX 4. Both engines map an unparseable saved_paths JSON blob to
     // `null`, because `[]` is a REAL answer ("this payload saved no files") and

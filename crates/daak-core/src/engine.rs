@@ -2758,11 +2758,11 @@ const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// The engine reports progress at most once per this interval, plus one final
 /// event for the last chunk. Without the gate, every 1 MiB chunk would cross
 /// the FFI or the IPC boundary.
-const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+pub(crate) const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Accumulates chunk lengths and decides when a progress event is due. The
 /// clock is passed in, so a test drives it without sleeping.
-struct ProgressGate {
+pub(crate) struct ProgressGate {
     done: u64,
     total: u64,
     last: std::time::Instant,
@@ -2773,7 +2773,7 @@ impl ProgressGate {
     /// `initial` is the bytes already done when this gate starts: the bytes a
     /// resumed receive already HOLDS, else 0. Without it a resume that skips
     /// chunks grows only by the new bytes and never reaches 100%.
-    fn new(
+    pub(crate) fn new(
         initial: u64,
         total: u64,
         interval: std::time::Duration,
@@ -2789,7 +2789,7 @@ impl ProgressGate {
 
     /// Add one chunk length. Returns the new (done, total) when an event is
     /// due. A zero total never reports: a text payload moves no bytes.
-    fn add(&mut self, delta: u64, now: std::time::Instant) -> Option<(u64, u64)> {
+    pub(crate) fn add(&mut self, delta: u64, now: std::time::Instant) -> Option<(u64, u64)> {
         // Cap at the total: a resume already seeded with bytes the receiver
         // holds must not overshoot the end of the bar.
         self.done = (self.done + delta).min(self.total);

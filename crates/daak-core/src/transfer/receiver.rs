@@ -323,11 +323,10 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-/// The bytes a receive already holds on disk, from the loaded bitmaps: one
-/// chunk length per set bit of each binary item, capped at the item size. A
-/// fresh receive has empty bitmaps, so this is 0 -- the progress bar must NOT
-/// start one chunk ahead (P6 3.2). A partial last chunk is truncated to the
-/// item size by the cap.
+/// The bytes a receive already holds on disk, from the loaded bitmaps. A fresh
+/// receive has empty bitmaps, so this is 0 -- the progress bar must NOT start
+/// one chunk ahead (P6 3.2). Every held chunk counts a full chunk length, except
+/// the LAST chunk of an item, which can be partial and counts its real length.
 fn bytes_held(manifest: &Manifest, bitmaps: &[Option<ChunkBitmap>]) -> u64 {
     manifest
         .binary_items()
@@ -335,7 +334,16 @@ fn bytes_held(manifest: &Manifest, bitmaps: &[Option<ChunkBitmap>]) -> u64 {
             let bm = bitmaps.get(i.index as usize).and_then(|b| b.as_ref())?;
             let chunk_size = i.chunk_size? as u64;
             let size = i.size?;
-            Some(bm.count_ones().saturating_mul(chunk_size).min(size))
+            let held = bm.count_ones();
+            let chunk_count = size.div_ceil(chunk_size.max(1));
+            // The last chunk is short when the item size is not a chunk
+            // multiple: size - (chunk_count - 1) * chunk_size. A held last
+            // chunk counts that length, not a full chunk.
+            let last_set = chunk_count > 0 && bm.is_set(chunk_count - 1);
+            let last_len = size - (chunk_count.saturating_sub(1)).saturating_mul(chunk_size);
+            let bytes = held.saturating_sub(u64::from(last_set)) * chunk_size
+                + if last_set { last_len } else { 0 };
+            Some(bytes.min(size))
         })
         .sum()
 }
@@ -809,7 +817,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::EngineEvent;
+    use crate::engine::{EngineEvent, ProgressGate, PROGRESS_INTERVAL};
     use crate::framing::RecordType;
     use crate::manifest::{DeviceRef, Item, ItemType, PayloadKind};
     use crate::net::secure::{MemConn, SecureConnection};
@@ -858,6 +866,23 @@ mod tests {
         assert_eq!(bytes_held(&m, &[Some(full)]), 200);
         // A non-binary item has no bitmap and contributes nothing.
         assert_eq!(bytes_held(&Manifest::text("hi"), &[None]), 0);
+    }
+
+    // A3: only the LAST, partial chunk is held. Its real length is
+    // size - (chunk_count - 1) * chunk_size, not a full chunk.
+    #[test]
+    fn bytes_held_counts_only_the_real_last_chunk() {
+        // size 200, chunk 64: chunks 0..2 are 64 bytes, chunk 3 is 8 bytes.
+        let m = binary_manifest(200, 64, 4);
+        let mut last = ChunkBitmap::new(4);
+        last.set(3);
+        assert_eq!(bytes_held(&m, &[Some(last)]), 8);
+        // The full chunks plus the partial last chunk sum to the item size.
+        let mut all = ChunkBitmap::new(4);
+        for i in 0..4 {
+            all.set(i);
+        }
+        assert_eq!(bytes_held(&m, &[Some(all)]), 200);
     }
 
     async fn receive_manifest_only(manifest: Manifest, out: &std::path::Path) -> Result<Manifest> {
@@ -1587,23 +1612,24 @@ mod tests {
         );
         assert_eq!(calls[0].0, chunk * 2, "the seed is the two held chunks");
 
-        // Rebuild the engine bar exactly as the engine closure does: seed on the
-        // first credited chunk, then add each credited chunk, capped at the total.
-        let mut bar = 0u64;
-        let mut seeded = false;
+        // Drive the REAL engine bar, ProgressGate, exactly as the engine closure
+        // does: seed it on the first credited chunk with the held bytes, then add
+        // each credited chunk. The interval is long, so the gate reports only on
+        // the last byte.
+        let now = std::time::Instant::now();
+        let mut gate: Option<ProgressGate> = None;
         let mut reached_at: Option<usize> = None;
         for (i, (initial, written, ok)) in calls.iter().enumerate() {
             if !ok {
                 continue;
             }
-            if !seeded {
-                bar = (*initial).min(total);
-                seeded = true;
-            }
-            bar = (bar + written).min(total);
-            if bar == total {
-                reached_at = Some(i);
-                break;
+            let g = gate
+                .get_or_insert_with(|| ProgressGate::new(*initial, total, PROGRESS_INTERVAL, now));
+            if let Some((done, _)) = g.add(*written, now) {
+                if done == total {
+                    reached_at = Some(i);
+                    break;
+                }
             }
         }
         assert_eq!(

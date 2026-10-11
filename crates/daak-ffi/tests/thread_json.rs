@@ -19,6 +19,8 @@ fn item(text: Option<&str>, outbound: bool) -> ThreadItem {
         at: 123,
         transfer_state: "done".into(),
         error: None,
+        truncated: false,
+        text_truncated: false,
     }
 }
 
