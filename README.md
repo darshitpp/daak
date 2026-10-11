@@ -84,8 +84,22 @@ system.
    | `daak-0.1.0-armeabi-v7a.apk` | An older 32-bit phone |
    | `daak-0.1.0-universal.apk` | You do not know the phone type |
 
-2. Open the file.
-3. Allow the install from this source when Android asks.
+2. Open the file from the notification or from the **Downloads** app.
+3. Android asks you to allow installs from this source. This setting is
+   called **Install unknown apps**. Tap **Settings**, then turn on **Allow
+   from this source** for the app that opened the file (for example Chrome or
+   Files). Then go back and tap **Install**.
+4. Google Play Protect can show "App blocked" or "Unknown developer". Tap
+   **More details**, then **Install anyway**. Play Protect shows this because
+   Daak is not in the Play Store. It does not mean that the file is bad.
+5. After the install, turn **Allow from this source** off again for that app.
+
+Daak asks for **Camera** (to scan a QR code) and **Notifications** (to show a
+received item) when it needs them.
+
+To update, install the new APK over the old one. Your pairings stay. You must
+use a file signed with the same key (see the check below). Android refuses an
+update that another key signed.
 
 To verify the signer before you install, run `apksigner verify --print-certs <apk>`.
 The printed `SHA-256 digest` must be:
@@ -100,27 +114,76 @@ A different digest means a different key signed the file. Do not install it.
 
 1. Open `Daak-0.1.0.dmg`.
 2. Move `Daak.app` to the Applications folder.
-3. Right-click `Daak.app` and choose **Open**.
+3. Open `Daak.app` for the first time with one of the methods below.
 
-Apple has not notarized the app, so macOS blocks the first open. This is
-expected. You can also remove the quarantine flag:
+Apple has not notarized the app, so Gatekeeper blocks the first open. This is
+expected. Use the method for your macOS version.
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Daak.app
-```
+- **macOS 14 (Sonoma):** right-click `Daak.app`, choose **Open**, then choose
+  **Open** in the dialog.
+- **macOS 15 (Sequoia) and later:** the right-click method no longer works.
+  Open the app once and close the warning. Then open **System Settings >
+  Privacy & Security**, scroll to **Security**, and click **Open Anyway** next
+  to the Daak message. Enter your password, then choose **Open**.
+- **Any version:** remove the quarantine flag in Terminal, then open the app:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Daak.app
+  ```
+
+Do this one time. Later opens work as normal. A new download of the app is
+quarantined again, so repeat the step after each update.
+
+macOS asks for **Local Network** access the first time Daak looks for devices,
+and for **Camera** access when you scan a QR code. Choose **Allow** for both.
+If you chose **Don't Allow** by mistake, turn Daak on in **System Settings >
+Privacy & Security > Local Network**.
+
+Daak receives files only while the app is running. A transfer stops when you
+quit the app.
+
+To check the download, run `shasum -a 256 Daak-0.1.0.dmg`. The value must equal
+the one in [`release/checklist.md`](release/checklist.md).
 
 ### iOS
 
-`Daak-0.1.0.ipa` has no signature. Sign it with a free Apple ID through
-AltStore or SideStore.
+`Daak-0.1.0.ipa` has no signature, and Apple does not allow it in the App
+Store. You install it by sideloading. A sideloading tool signs the file with
+your own free Apple ID, then installs it on your iPhone. Use one of these
+tools:
 
-1. Install AltStore or SideStore on your iPhone.
-2. Download `Daak-0.1.0.ipa`.
-3. Sign and install the file with your Apple ID.
-4. Open Daak and finish the setup.
+| Tool | What it needs |
+| --- | --- |
+| [SideStore](https://sidestore.io) | A computer for the first setup only. Then the iPhone refreshes the app on its own. |
+| [AltStore](https://altstore.io) | AltServer running on a Mac or a Windows PC on the same Wi-Fi as the iPhone. |
+| [Sideloadly](https://sideloadly.io) | A Mac or a Windows PC and a USB cable, for each install and each refresh. |
 
-A free Apple ID profile lasts 7 days. After 7 days, the app stops opening. Sign
-it again. Your pairings and data stay on the device.
+Each tool has its own setup guide. Follow the guide of the tool that you pick.
+The steps for Daak are the same for all three tools.
+
+1. On your iPhone, turn on **Developer Mode**: **Settings > Privacy & Security >
+   Developer Mode**. The iPhone restarts. Confirm after the restart. This
+   option appears only after a sideloading tool has connected to the iPhone.
+2. Install the tool that you picked and sign in with your Apple ID.
+3. Download `Daak-0.1.0.ipa` to the iPhone or to the computer.
+4. Give the `.ipa` to the tool and install it.
+5. If iOS says "Untrusted Developer", open **Settings > General > VPN & Device
+   Management**, tap your Apple ID, and tap **Trust**.
+6. Open Daak. When iOS asks for **Local Network** access, choose **Allow**.
+   Without it, Daak cannot find other devices. Also allow **Camera** to scan a
+   QR code and **Notifications** to see received items.
+
+A free Apple ID profile lasts 7 days. After 7 days, the app stops opening.
+Refresh it in the same tool before that time. SideStore and AltStore can
+refresh in the background. Your pairings and data stay on the device when you
+refresh. A free Apple ID can keep 3 sideloaded apps at one time.
+
+The tool changes the bundle id of the app to make it unique for your Apple ID.
+This is normal. If you delete the app, its pairings and data go with it.
+
+An iPhone cannot send the presence signal that tells other devices it is
+online, so the iPhone can show as offline on your other devices. Sends to it
+still queue and arrive when Daak is open on the iPhone.
 
 The iOS share sheet cannot send a file to Daak. Open Daak and add the item there.
 
@@ -161,7 +224,8 @@ with a growing delay until the device returns.
 | The send stays in the queue | The other device is asleep, closed, or away | Open Daak on the other device. The queue sends on its own. |
 | An item is in quarantine | The received data did not match its checksum | Send the item again from the sending device. The receiver cannot ask for it again. |
 | The iOS app does not open | The 7-day profile expired | Sign the `.ipa` again. |
-| macOS says the app is damaged | The app is not notarized | Use the `xattr` command in [Install](#macos). |
+| macOS says the app is damaged, or cannot be opened | The app is not notarized | Use **Open Anyway** or the `xattr` command in [Install](#macos). |
+| Android says "App blocked" | Google Play Protect does not know the developer | Tap **More details**, then **Install anyway**. |
 | A device you removed still shows as paired | The other device was offline when you unpaired | It learns about the unpair when it returns. Until then, remove the pairing on that device by hand. |
 
 ## What Daak does not do
