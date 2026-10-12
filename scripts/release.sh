@@ -268,10 +268,15 @@ if run 12; then
 
   glab repo fork fdroid/fdroiddata --clone=false >/dev/null 2>&1 || true
   fork="$SCRATCH/fdroiddata"
-  [ -d "$fork/.git" ] || git clone --depth 1 "https://gitlab.com/$me/fdroiddata.git" "$fork"
+  # A partial clone, not --depth 1: GitLab rejects a push from a shallow clone.
+  # The partial clone keeps the full history and fetches file contents on demand.
+  if [ -d "$fork/.git" ] && [ "$(git -C "$fork" rev-parse --is-shallow-repository)" = true ]; then
+    rm -rf "$fork"
+  fi
+  [ -d "$fork/.git" ] || git clone --filter=blob:none "https://gitlab.com/$me/fdroiddata.git" "$fork"
   git -C "$fork" remote get-url upstream >/dev/null 2>&1 \
     || git -C "$fork" remote add upstream https://gitlab.com/fdroid/fdroiddata.git
-  git -C "$fork" fetch --depth 1 upstream master
+  git -C "$fork" fetch --filter=blob:none upstream master
   git -C "$fork" checkout -B "$APP_ID" upstream/master
   if [ -f "$fork/metadata/$APP_ID.yml" ]; then
     echo "metadata/$APP_ID.yml exists upstream."
@@ -293,7 +298,8 @@ if run 12; then
   body="$SCRATCH/mr-body.md"
   template="$fork/.gitlab/merge_request_templates/App inclusion.md"
   [ -f "$template" ] || template="$(ls "$fork"/.gitlab/merge_request_templates/*.md | head -1)"
-  cp "$template" "$body"
+  # Keep text from an earlier run, so a rerun does not lose the user's edits.
+  [ -s "$body" ] || cp "$template" "$body"
   "${EDITOR:-vi}" "$body"
 
   git -C "$fork" diff --stat
