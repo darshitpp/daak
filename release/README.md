@@ -109,3 +109,58 @@ then Open, or to run `xattr -dr com.apple.quarantine`.
 
 The iOS `.ipa` is unsigned. The user signs it with a free Apple ID, and that
 profile lasts 7 days.
+
+## Release with one command
+
+`scripts/release.sh <version>` runs the whole release. The version must equal
+`release/version.json`.
+
+First, bump `release/version.json`. Then run `node scripts/stamp-version.mjs`.
+Then commit and run:
+
+    ./scripts/release.sh 0.1.1
+
+Stages 1 to 8 change only local files. They check the tools, the tree, and the
+version stamp. They run the build gates and build and sign the APKs, the
+`.dmg`, and the `.ipa`. They write the SHA-256 values to
+`release/sha256-<version>.txt`.
+
+Stages 9 to 12 publish. Each one asks `y/N` first. The script has no
+`--yes` flag.
+
+| Stage | What it does |
+| --- | --- |
+| 9 | Commits the hash file. Pushes `main` and the tag `v<version>`. |
+| 10 | Uploads the 5 files to the GitHub Release. Publishes it. |
+| 11 | Updates the cask in `darshitpp/homebrew-tap`. Runs `brew audit`. Pushes. |
+| 12 | Fills the F-Droid recipe. Runs `fdroid lint` and `fdroid build`. Opens the merge request. |
+
+Run `--from 9` to restart at the publish stages. Every stage reads the remote
+state first, so a second run does not make a second tag, Release, or merge
+request.
+
+One-time setup:
+
+- Log in: `gh auth login` and `glab auth login`.
+- Install: `brew install gh glab` and `pipx install fdroidserver`.
+- Create the empty repository `darshitpp/homebrew-tap` on GitHub.
+- Keep the upload key and the Keychain item (see Signing above).
+
+The templates `fdroid/dev.darshit.daak.yml` and `release/homebrew/daak.rb` keep
+the literal text `0.1.1`, `versionCode: 22`, and `versionCode: 21`. The script
+replaces those strings. Do not rename them.
+
+What stays manual:
+
+- Answer F-Droid reviewer comments in the merge request.
+- After the first F-Droid release, an update is not automatic
+  (`AutoUpdateMode: None`). Stage 12 stops and prints the filled recipe. Add the
+  two new `Builds` entries to `metadata/dev.darshit.daak.yml` by hand.
+- Run `fdroid checkupdates` to see that a new tag exists.
+- Decide whether a Release is a pre-release.
+
+F-Droid signs its own APK with its own key. A user of the GitHub APK cannot
+update in place to the F-Droid app. The README says this.
+
+The Linux build of the Rust library has a CI check (job `android-ffi` in
+`.github/workflows/ci.yml`). Run it from the Actions tab before a release.

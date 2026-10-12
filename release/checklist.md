@@ -44,3 +44,16 @@ The controller runs a check and writes the real value in the Result column.
 
 The iOS onboarding row is the last unproven link. The app holds no App Group
 on the device file by design.
+
+## Store channels (added 2026-10-12)
+
+| Channel | Check | Result |
+| --- | --- | --- |
+| F-Droid | `fdroid lint dev.darshit.daak` exits zero. | PENDING |
+| F-Droid | `fdroid build` makes the APK for each entry. | PENDING |
+| F-Droid | The merge request is open. | PENDING |
+| F-Droid | CI on the merge request passes. | PENDING |
+| F-Droid | A maintainer merged the merge request. | PENDING |
+| F-Droid | The app shows in the F-Droid client. | PENDING |
+| Homebrew | `brew audit --cask --strict --online darshitpp/tap/daak` exits zero. | PENDING |
+| Homebrew | `brew install --cask darshitpp/tap/daak` installs `Daak.app`. | PENDING |

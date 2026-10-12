@@ -112,6 +112,17 @@ The printed `SHA-256 digest` must be:
 
 A different digest means a different key signed the file. Do not install it.
 
+<!-- Enable this block after F-Droid publishes Daak (the merge request is merged
+and the app shows in the F-Droid client). Until then, do not say Daak is on F-Droid.
+
+#### F-Droid
+
+Install [F-Droid](https://f-droid.org), search for **Daak**, and install it.
+F-Droid signs the app with its own key. Android refuses an update across two
+keys. So if you installed an APK from GitHub, uninstall it first. You lose your
+pairings. Then install from F-Droid.
+-->
+
 ### macOS
 
 1. Open `Daak-0.1.0.dmg`.
@@ -146,6 +157,22 @@ quit the app.
 
 To check the download, run `shasum -a 256 Daak-0.1.0.dmg`. The value must equal
 the one in [`release/checklist.md`](release/checklist.md).
+
+<!-- Enable this block after the cask is in darshitpp/homebrew-tap.
+
+#### Homebrew
+
+```bash
+brew install --cask darshitpp/tap/daak
+```
+
+Homebrew prints the same Gatekeeper note. Apple has not notarized the app, so
+remove the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Daak.app
+```
+-->
 
 ### iOS
 
