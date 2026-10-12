@@ -124,7 +124,7 @@ export async function loadOnboardingGate(
   }
   if (!stored.complete) return { kind: 'onboard' };
   // NO NAME IS CARRIED FORWARD. This is the second copy of the display name,
-  // and the keystore is not the source of truth -- SQLite is (see AGENTS.md).
+  // and the keystore is not the source of truth -- SQLite is.
   // The engine reads its own name back at start, so replaying the onboarding
   // copy here would overwrite whatever the user last typed in Settings, on
   // every relaunch. That is the defect this returns nothing for.

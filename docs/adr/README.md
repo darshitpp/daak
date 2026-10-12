@@ -10,7 +10,7 @@ the code.
 
 Write an ADR when a decision is expensive to reverse: a wire format, a
 cryptographic primitive, a storage engine, a cross-platform strategy, or a
-dependency with a large blast radius. The locked decisions in `AGENTS.md` all
+dependency with a large blast radius. The locked decisions in the project instructions all
 belong here.
 
 ## Naming

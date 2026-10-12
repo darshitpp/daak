@@ -110,7 +110,7 @@ fi
 if run 5; then
   say 5 "build and sign the artifacts"
   free_gib="$(( $(df -Pk "$SCRATCH" | awk 'NR==2 {print $4}') / 1048576 ))"
-  [ "$free_gib" -ge 10 ] || die "only ${free_gib}GiB free. A native build needs 10 GiB. See AGENTS.md, environment defect 4."
+  [ "$free_gib" -ge 10 ] || die "only ${free_gib}GiB free. A native build needs 10 GiB."
   ./scripts/sign-android.sh
   bash apps/desktop/macos/scripts/package-dmg.sh
   bash apps/mobile/scripts/package-ipa.sh

@@ -33,7 +33,7 @@
 	     signature grants what this plist REQUESTS and invents nothing, so an
 	     earlier version of this file that omitted the key would have made the
 	     engine unstartable on a properly signed build too. Requested with an
-	     explicit group. AGENTS.md writes the registration-free form
+	     explicit group. The project uses the registration-free form
 	     J6NNRLDUG4.group.dev.darshit.daak. The four Xcode profiles grant NO
 	     App Group, so the plain group.dev.darshit.daak form cannot be used on
 	     macOS. -->

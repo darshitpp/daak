@@ -136,7 +136,7 @@ describe('the build configuration asks Xcode to keep the entitlements', () => {
   // The things that are known NOT to work, pinned so they are not reached for
   // again: none of them stops Xcode writing an empty Daak.app.xcent, and all of
   // them were tried against a real Debug-iphonesimulator build first. A team id
-  // is additionally forbidden by AGENTS.md.
+  // is additionally forbidden by the project rules.
   it('does not reach for a team id or a signing-style override', () => {
     expect(pbxproj).not.toMatch(/DEVELOPMENT_TEAM/);
     expect(pbxproj).not.toMatch(/CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION/);

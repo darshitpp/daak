@@ -15,7 +15,7 @@ export function installerKind(platform: string): InstallerKind {
   return 'unsupported';
 }
 
-/** Matches AGENTS.md: launchd label is `dev.darshit.daak.daakd`. */
+/** Launchd label is `dev.darshit.daak.daakd`. */
 export const LAUNCHD_LABEL = 'dev.darshit.daak.daakd';
 
 /**

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the per-user daakd LaunchAgent (AGENTS.md: launchd label is
+# Installs the per-user daakd LaunchAgent (the launchd label is
 # dev.darshit.daak.daakd). No sudo: this is a per-user agent.
 set -euo pipefail
 

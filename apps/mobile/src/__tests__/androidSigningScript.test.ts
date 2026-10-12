@@ -36,10 +36,12 @@ describe('Android signing helper script', () => {
   it('names the Keychain service in the password lookup', () => {
     const code = stripComments(readFileSync(scriptPath, 'utf8'));
     expect(code).toMatch(/security find-generic-password/);
-    expect(code).toMatch(/-a daak/);
+    expect(code).toMatch(/-a "\$KEYCHAIN_ACCOUNT"/);
+    expect(code).toMatch(/KEYCHAIN_ACCOUNT="\$\{ANDROID_KEYCHAIN_ACCOUNT:-daak\}"/);
     // The service name is the whole point: a wrong or missing -s reads a
     // different item, or prompts, and the build fails far from the cause.
-    expect(code).toMatch(/-s daak-android-upload/);
+    expect(code).toMatch(/-s "\$KEYCHAIN_SERVICE"/);
+    expect(code).toMatch(/:-daak-android-upload\}/);
     expect(code).toMatch(/-w/);
   });
 

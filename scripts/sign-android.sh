@@ -12,23 +12,28 @@
 # never written to a file. `security find-generic-password -w` writes only the
 # value to standard output, with no trailing newline.
 #
-# The key password equals the store password. The user pressed Enter at
-# creation. So both Gradle variables hold the same value.
+# The key password equals the store password. So both Gradle variables hold the
+# same value.
 set -euo pipefail
 
-export JAVA_HOME="/path/to/jdk-17"
-export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+# The caller sets these. Set JAVA_HOME to a JDK 17, ANDROID_HOME to the Android
+# SDK, and ANDROID_KEYSTORE_PATH to the upload keystore.
+: "${JAVA_HOME:?sign-android: set JAVA_HOME to a JDK 17}"
+: "${ANDROID_HOME:?sign-android: set ANDROID_HOME to the Android SDK}"
+: "${ANDROID_KEYSTORE_PATH:?sign-android: set ANDROID_KEYSTORE_PATH to the upload keystore}"
+export JAVA_HOME ANDROID_HOME ANDROID_KEYSTORE_PATH
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export ANDROID_KEYSTORE_PATH="/path/to/daak-upload.jks"
-export ANDROID_KEY_ALIAS=daak
+export ANDROID_KEY_ALIAS="${ANDROID_KEY_ALIAS:-daak}"
+KEYCHAIN_SERVICE="${ANDROID_KEYCHAIN_SERVICE:-daak-android-upload}"
+KEYCHAIN_ACCOUNT="${ANDROID_KEYCHAIN_ACCOUNT:-daak}"
 
 # Read the store password. The assignment is the command substitution, so a
 # missing Keychain item takes the failure branch instead of leaving an empty
 # value to Gradle. The -a and -s values must match the item that
 # `security add-generic-password` created. See release/README.md.
-if ! ANDROID_KEYSTORE_PASSWORD="$(security find-generic-password -a daak -s daak-android-upload -w)"; then
+if ! ANDROID_KEYSTORE_PASSWORD="$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" -w)"; then
   echo "sign-android: cannot read the store password from the login Keychain." >&2
-  echo "sign-android: expected service 'daak-android-upload', account 'daak'." >&2
+  echo "sign-android: expected service '$KEYCHAIN_SERVICE', account '$KEYCHAIN_ACCOUNT'." >&2
   echo "sign-android: add the item with the command in release/README.md." >&2
   exit 1
 fi

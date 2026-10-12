@@ -22,7 +22,7 @@ is immutable; a changed decision gets a new ADR that supersedes it.
 
 ## Consequences
 
-- The rationale for every locked decision in `AGENTS.md` becomes reviewable in
+- The rationale for every locked decision in the project instructions becomes reviewable in
   version control and survives the local-only spec.
 - Every non-trivial decision adds a short writing task; trivial changes are
   exempt.

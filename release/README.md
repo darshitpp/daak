@@ -43,7 +43,7 @@ value.
 
 Build the APK:
 
-    export JAVA_HOME="/path/to/jdk-17"
+    export JAVA_HOME=<path to a JDK 17>
     export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
     export ANDROID_SDK_ROOT=$ANDROID_HOME
     cd apps/mobile/android && ./gradlew :app:assembleRelease --offline
@@ -92,13 +92,8 @@ it.
 
 ## Key copies
 
-Three copies of the Android key exist. No copy holds a password.
-
-| Copy | Where |
-| --- | --- |
-| Working file | `/path/to/daak-upload.jks`, mode 600 |
-| Replica | An offline secure note: the base64 of the `.jks` plus its SHA-256 |
-| Passwords | an offline password store |
+Keep an offline backup of the Android keystore and its passwords. The private
+backup notes are in `release/LOCAL.md`. That file is not in Git.
 
 A lost Android keystore blocks every later update of the same package.
 
