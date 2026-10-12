@@ -140,6 +140,15 @@ One-time setup:
 - Install: `brew install gh glab fdroidserver`.
 - Create the empty repository `darshitpp/homebrew-tap` on GitHub.
 - Keep the upload key and the Keychain item (see Signing above).
+- Write the machine paths to `~/.config/daak/release.env`. The file is outside
+  the repository and holds no password:
+
+      export JAVA_HOME=<path to a JDK 17>
+      export ANDROID_HOME=<path to the Android SDK>
+      export ANDROID_KEYSTORE_PATH=<path to the upload keystore>
+
+  `release.sh` loads this file for every stage. Set `DAAK_RELEASE_ENV` to use
+  another path. A value already in the shell wins over the file.
 
 The templates `fdroid/dev.darshit.daak.yml` and `release/homebrew/daak.rb` keep
 the literal text `0.1.1`, `versionCode: 22`, and `versionCode: 21`. The script

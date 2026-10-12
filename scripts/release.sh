@@ -39,8 +39,14 @@ REPO=darshitpp/daak
 TAP=darshitpp/tap
 TAP_REPO=darshitpp/homebrew-tap
 APP_ID=dev.darshit.daak
+[ -n "${TMPDIR:-}" ] || { echo "release: TMPDIR is not set" >&2; exit 1; }
 SCRATCH="${TMPDIR%/}/daak"
 mkdir -p "$SCRATCH"
+
+# Load the machine paths for every stage, not only stage 1.
+env_file="${DAAK_RELEASE_ENV:-$HOME/.config/daak/release.env}"
+# shellcheck disable=SC1090
+[ -f "$env_file" ] && . "$env_file"
 
 APK_DIR="$ROOT/apps/mobile/android/app/build/outputs/apk/release"
 APK_ARM64="$APK_DIR/daak-$VERSION-arm64-v8a.apk"
@@ -69,6 +75,14 @@ sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 # ---------------------------------------------------------------- 1: tools ---
 if run 1; then
   say 1 "check the tools"
+  # The paths come from the shell or from the env file loaded above.
+  for v in JAVA_HOME ANDROID_HOME ANDROID_KEYSTORE_PATH; do
+    [ -n "${!v:-}" ] || die "$v is not set. Export it, or put it in $env_file."
+  done
+  [ -d "$JAVA_HOME" ] || die "JAVA_HOME is not a directory: $JAVA_HOME"
+  [ -d "$ANDROID_HOME" ] || die "ANDROID_HOME is not a directory: $ANDROID_HOME"
+  [ -f "$ANDROID_KEYSTORE_PATH" ] || die "no keystore at $ANDROID_KEYSTORE_PATH"
+  export JAVA_HOME ANDROID_HOME ANDROID_KEYSTORE_PATH
   need git "Install Git."
   need node "Install Node."
   need pnpm "Install pnpm 9.12.0."
