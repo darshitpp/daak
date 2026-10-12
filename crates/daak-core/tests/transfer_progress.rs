@@ -104,6 +104,34 @@ async fn collect_progress(
     })
     .await
     .expect("the send never reached done");
+    // The loop reads one event from each side per turn and stops when the row is
+    // done. Events can still wait in either channel then. The receiver emits its
+    // last progress event before the sender sees the ACK, so the channel holds
+    // it already. Read what is left.
+    while let Ok(event) = sender_events.try_recv() {
+        if let EngineEvent::TransferProgress {
+            transfer_id,
+            bytes_done,
+            bytes_total,
+        } = event
+        {
+            if transfer_id == id {
+                sender_seen.push((bytes_done, bytes_total));
+            }
+        }
+    }
+    while let Ok(event) = receiver_events.try_recv() {
+        if let EngineEvent::TransferProgress {
+            transfer_id,
+            bytes_done,
+            bytes_total,
+        } = event
+        {
+            if transfer_id == id {
+                receiver_seen.push((bytes_done, bytes_total));
+            }
+        }
+    }
     (sender_seen, receiver_seen)
 }
 
