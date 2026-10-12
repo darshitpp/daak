@@ -38,12 +38,13 @@ Builds:
       - ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
         apps/mobile/node_modules/hermes-compiler
       - cargo fetch --locked
-      - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
     scanignore:
       - node_modules/.pnpm/hermes-compiler@*/node_modules/hermes-compiler/hermesc/linux64-bin/hermesc
     scandelete:
       - node_modules
-      - target
+    build:
+      - cd ../../..
+      - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
     ndk: 27.1.12297006
 
   - versionName: 0.1.1
@@ -72,12 +73,13 @@ Builds:
       - ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
         apps/mobile/node_modules/hermes-compiler
       - cargo fetch --locked
-      - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
     scanignore:
       - node_modules/.pnpm/hermes-compiler@*/node_modules/hermes-compiler/hermesc/linux64-bin/hermesc
     scandelete:
       - node_modules
-      - target
+    build:
+      - cd ../../..
+      - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
     ndk: 27.1.12297006
 
 AutoUpdateMode: None
