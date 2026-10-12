@@ -1,0 +1,1 @@
+Fix: the onboarding screens now have a margin on both sides. New screenshots.
