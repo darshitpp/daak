@@ -284,6 +284,8 @@ if run 12; then
     exit 1
   fi
   cp "$filled" "$fork/metadata/$APP_ID.yml"
+  # F-Droid CI fails a recipe that rewritemeta would change. Format it first.
+  ( cd "$fork" && fdroid rewritemeta "$APP_ID" )
   ( cd "$fork" && fdroid lint "$APP_ID" )
   # `fdroid build` runs the recipe's apt-get steps, so it needs a Debian host.
   # On macOS the F-Droid CI on the merge request builds the app instead.
