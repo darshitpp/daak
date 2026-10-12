@@ -18,7 +18,8 @@ Builds:
     timeout: 7200
     subdir: apps/mobile/android
     sudo:
-      - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
+      - echo "deb https://deb.debian.org/debian bookworm main" >
+        /etc/apt/sources.list.d/bookworm.list
       - apt-get update
       - apt-get install -y -t bookworm openjdk-17-jdk-headless
       - update-java-alternatives -s java-1.17.0-openjdk-amd64
@@ -37,6 +38,8 @@ Builds:
       - pnpm install --frozen-lockfile
       - cargo fetch --locked
       - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
+    scanignore:
+      - node_modules/.pnpm/hermes-compiler@*/node_modules/hermes-compiler/hermesc/linux64-bin/hermesc
     scandelete:
       - node_modules
       - target
@@ -48,7 +51,8 @@ Builds:
     timeout: 7200
     subdir: apps/mobile/android
     sudo:
-      - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
+      - echo "deb https://deb.debian.org/debian bookworm main" >
+        /etc/apt/sources.list.d/bookworm.list
       - apt-get update
       - apt-get install -y -t bookworm openjdk-17-jdk-headless
       - update-java-alternatives -s java-1.17.0-openjdk-amd64
@@ -67,6 +71,8 @@ Builds:
       - pnpm install --frozen-lockfile
       - cargo fetch --locked
       - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
+    scanignore:
+      - node_modules/.pnpm/hermes-compiler@*/node_modules/hermes-compiler/hermesc/linux64-bin/hermesc
     scandelete:
       - node_modules
       - target
