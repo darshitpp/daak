@@ -92,9 +92,9 @@ system.
 
    | File | Use |
    | --- | --- |
-   | `daak-0.1.1-arm64-v8a.apk` | A modern 64-bit phone |
-   | `daak-0.1.1-armeabi-v7a.apk` | An older 32-bit phone |
-   | `daak-0.1.1-universal.apk` | You do not know the phone type |
+   | `daak-0.1.2-arm64-v8a.apk` | A modern 64-bit phone |
+   | `daak-0.1.2-armeabi-v7a.apk` | An older 32-bit phone |
+   | `daak-0.1.2-universal.apk` | You do not know the phone type |
 
 2. Open the file from the notification or from the **Downloads** app.
 3. Android asks you to allow installs from this source. This setting is
@@ -135,7 +135,7 @@ pairings. Then install from F-Droid.
 
 ### macOS
 
-1. Open `Daak-0.1.1.dmg`.
+1. Open `Daak-0.1.2.dmg`.
 2. Move `Daak.app` to the Applications folder.
 3. Open `Daak.app` for the first time with one of the methods below.
 
@@ -165,8 +165,8 @@ Privacy & Security > Local Network**.
 Daak receives files only while the app is running. A transfer stops when you
 quit the app.
 
-To check the download, run `shasum -a 256 Daak-0.1.1.dmg`. The value must equal
-the one in [`release/sha256-0.1.1.txt`](release/sha256-0.1.1.txt).
+To check the download, run `shasum -a 256 Daak-0.1.2.dmg`. The value must equal
+the one in [`release/sha256-0.1.2.txt`](release/sha256-0.1.2.txt).
 
 #### Homebrew
 
@@ -190,7 +190,7 @@ again.
 
 ### iOS
 
-`Daak-0.1.1.ipa` has no signature, and Apple does not allow it in the App
+`Daak-0.1.2.ipa` has no signature, and Apple does not allow it in the App
 Store. You install it by sideloading. A sideloading tool signs the file with
 your own free Apple ID, then installs it on your iPhone. Use one of these
 tools:
@@ -208,7 +208,7 @@ The steps for Daak are the same for all three tools.
    Developer Mode**. The iPhone restarts. Confirm after the restart. This
    option appears only after a sideloading tool has connected to the iPhone.
 2. Install the tool that you picked and sign in with your Apple ID.
-3. Download `Daak-0.1.1.ipa` to the iPhone or to the computer.
+3. Download `Daak-0.1.2.ipa` to the iPhone or to the computer.
 4. Give the `.ipa` to the tool and install it.
 5. If iOS says "Untrusted Developer", open **Settings > General > VPN & Device
    Management**, tap your Apple ID, and tap **Trust**.
