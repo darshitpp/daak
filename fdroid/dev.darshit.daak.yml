@@ -18,8 +18,7 @@ Builds:
     timeout: 7200
     subdir: apps/mobile/android
     sudo:
-      - echo "deb https://deb.debian.org/debian bookworm main" >
-        /etc/apt/sources.list.d/bookworm.list
+      - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
       - apt-get update
       - apt-get install -y -t bookworm openjdk-17-jdk-headless
       - update-java-alternatives -s java-1.17.0-openjdk-amd64
@@ -36,6 +35,8 @@ Builds:
       - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=armeabi-v7a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
+      - ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
+        apps/mobile/node_modules/hermes-compiler
       - cargo fetch --locked
       - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
     scanignore:
@@ -51,8 +52,7 @@ Builds:
     timeout: 7200
     subdir: apps/mobile/android
     sudo:
-      - echo "deb https://deb.debian.org/debian bookworm main" >
-        /etc/apt/sources.list.d/bookworm.list
+      - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
       - apt-get update
       - apt-get install -y -t bookworm openjdk-17-jdk-headless
       - update-java-alternatives -s java-1.17.0-openjdk-amd64
@@ -69,6 +69,8 @@ Builds:
       - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
+      - ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
+        apps/mobile/node_modules/hermes-compiler
       - cargo fetch --locked
       - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
     scanignore:
