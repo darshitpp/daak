@@ -20,7 +20,14 @@ root="$PWD"
 
 out="apps/mobile/android/app/build/generated/daak-ffi"
 
-export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
+[ -d /opt/homebrew/bin ] && export PATH="/opt/homebrew/bin:$PATH"
+
+# Cargo runs offline on the dev host (no network). F-Droid fetches the crates
+# first in a step that has network, then builds offline too. Set
+# DAAK_CARGO_OFFLINE=0 to let cargo use the network.
+cargo_offline=--offline
+[ "${DAAK_CARGO_OFFLINE:-1}" = 0 ] && cargo_offline=
 
 rm -rf "$out"
 mkdir -p "$out/uniffi"
@@ -90,7 +97,7 @@ mkdir -p "$bindgen_src/src"
 
 echo 'fn main() { uniffi::uniffi_bindgen_main(); }' > "$bindgen_src/src/main.rs"
 
-cargo build --release --offline --manifest-path "$bindgen_src/Cargo.toml"
+cargo build --release $cargo_offline --manifest-path "$bindgen_src/Cargo.toml"
 bindgen="$bindgen_src/target/release/daak-uniffi-bindgen"
 
 # --out-dir is $out, NOT $out/uniffi: uniffi_bindgen already nests the output
@@ -118,10 +125,16 @@ fi
 ndk="$sdk/ndk/$ndk_version"
 # Host-triple directory is not darwin-x86_64 on every machine (and is not even
 # right on Apple Silicon under Rosetta), so glob the one that is actually
-# there rather than naming it.
-toolchain="$(echo "$ndk"/toolchains/llvm/prebuilt/darwin-*/bin)"
+# there rather than naming it. F-Droid builds on Linux, so the prefix follows
+# the host OS.
+case "$(uname -s)" in
+  Darwin) host_os=darwin ;;
+  Linux)  host_os=linux ;;
+  *) echo "unsupported host OS: $(uname -s)" >&2; exit 1 ;;
+esac
+toolchain="$(echo "$ndk"/toolchains/llvm/prebuilt/"$host_os"-*/bin)"
 [ -d "$toolchain" ] || {
-  echo "no llvm toolchain under $ndk (expected toolchains/llvm/prebuilt/darwin-*/bin)" >&2
+  echo "no llvm toolchain under $ndk (expected toolchains/llvm/prebuilt/$host_os-*/bin)" >&2
   exit 1
 }
 
@@ -187,9 +200,10 @@ for abi in $order; do
   fi
   # If the previous clean was not enough, the machine is genuinely out of room.
   # Say so and stop rather than filling the volume and corrupting the build.
-  free_gib="$(df -g /System/Volumes/Data | awk 'NR==2 {print $4}')"
+  # df -Pk is POSIX, so it works on macOS and Linux. Column 4 is 1 KiB blocks.
+  free_gib="$(( $(df -Pk "$root" | awk 'NR==2 {print $4}') / 1048576 ))"
   if [ "${free_gib:-99}" -lt 2 ]; then
-    echo "only ${free_gib}GiB free on /System/Volumes/Data; not starting $target" >&2
+    echo "only ${free_gib}GiB free; not starting $target" >&2
     echo "free some space (target/<other-triple>, IDE caches) and re-run" >&2
     exit 1
   fi
@@ -207,7 +221,7 @@ for abi in $order; do
     "CC_$low=$toolchain/$clang" \
     "AR_$low=$toolchain/llvm-ar" \
     "CARGO_TARGET_${up}_LINKER=$toolchain/$clang" \
-    cargo build --release -p daak-ffi --target "$target"
+    cargo build --release --locked -p daak-ffi --target "$target"
 
   mkdir -p "$out/jniLibs/$abi"
   cp "target/$target/release/libdaak_ffi.so" "$out/jniLibs/$abi/libdaak_ffi.so"
