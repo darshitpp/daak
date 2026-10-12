@@ -5,6 +5,9 @@ module.exports = {
   // enough for a tree this size, and without this a sandboxed run dies before a
   // single test file is read.
   watchman: false,
+  // The screens render slowly on a two-core CI runner with a cold transform
+  // cache: one test file takes 28 s there. The jest default of 5 s fails.
+  testTimeout: 30000,
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   // ponytail: the `(.pnpm/)?` prefix plus the `[/+@]` suffix handle pnpm's
   // store layout, where every package lives at
