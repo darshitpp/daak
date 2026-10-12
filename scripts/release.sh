@@ -224,7 +224,9 @@ if run 11; then
       -e "s/@SHA256@/$remote_sum/" \
       -e "s/^  sha256 \"[0-9a-f]\{64\}\"/  sha256 \"$remote_sum\"/" \
       release/homebrew/daak.rb > "$tap_dir/Casks/daak.rb"
-  brew audit --cask --strict --online "$TAP/daak"
+  # No --online: that check rejects a cask that points at a GitHub pre-release.
+  # The hash check above already proves the published file is the local file.
+  brew audit --cask --strict "$TAP/daak"
   git -C "$tap_dir" diff
   if [ -z "$(git -C "$tap_dir" status --porcelain Casks/daak.rb)" ]; then
     echo "the cask is up to date. Skipping."

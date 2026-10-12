@@ -55,5 +55,5 @@ on the device file by design.
 | F-Droid | CI on the merge request passes. | PENDING |
 | F-Droid | A maintainer merged the merge request. | PENDING |
 | F-Droid | The app shows in the F-Droid client. | PENDING |
-| Homebrew | `brew audit --cask --strict --online darshitpp/tap/daak` exits zero. | PENDING |
+| Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. | PENDING |
 | Homebrew | `brew install --cask darshitpp/tap/daak` installs `Daak.app`. | PENDING |
