@@ -16,6 +16,7 @@ Builds:
     versionCode: 21
     commit: COMMIT_HASH
     timeout: 7200
+    subdir: apps/mobile/android
     sudo:
       - apt-get update
       - apt-get install -y rustup nodejs npm build-essential
@@ -23,11 +24,12 @@ Builds:
     init:
       - rustup default 1.98.1
       - rustup target add aarch64-linux-android armv7-linux-androideabi
-    output: 
-      apps/mobile/android/app/build/outputs/apk/release/daak-0.1.1-armeabi-v7a.apk
+    gradle:
+      - yes
+    output: app/build/outputs/apk/release/daak-0.1.1-armeabi-v7a.apk
     prebuild:
-      - sed -i -e 
-        's/^reactNativeArchitectures=.*/reactNativeArchitectures=armeabi-v7a/' 
+      - cd ../../..
+      - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=armeabi-v7a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
       - cargo fetch --locked
@@ -35,15 +37,13 @@ Builds:
     scandelete:
       - node_modules
       - target
-    build:
-      - cd apps/mobile/android
-      - ./gradlew :app:assembleRelease --offline
     ndk: 27.1.12297006
 
   - versionName: 0.1.1
     versionCode: 22
     commit: COMMIT_HASH
     timeout: 7200
+    subdir: apps/mobile/android
     sudo:
       - apt-get update
       - apt-get install -y rustup nodejs npm build-essential
@@ -51,11 +51,12 @@ Builds:
     init:
       - rustup default 1.98.1
       - rustup target add aarch64-linux-android armv7-linux-androideabi
-    output: 
-      apps/mobile/android/app/build/outputs/apk/release/daak-0.1.1-arm64-v8a.apk
+    gradle:
+      - yes
+    output: app/build/outputs/apk/release/daak-0.1.1-arm64-v8a.apk
     prebuild:
-      - sed -i -e 
-        's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/' 
+      - cd ../../..
+      - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
       - cargo fetch --locked
@@ -63,9 +64,6 @@ Builds:
     scandelete:
       - node_modules
       - target
-    build:
-      - cd apps/mobile/android
-      - ./gradlew :app:assembleRelease --offline
     ndk: 27.1.12297006
 
 AutoUpdateMode: None
