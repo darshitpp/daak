@@ -301,8 +301,9 @@ if run 12; then
   git -C "$fork" add "metadata/$APP_ID.yml"
   git -C "$fork" commit -m "New app: Daak ($APP_ID)"
   git -C "$fork" push --force-with-lease origin "$APP_ID"
-  glab mr create --repo fdroid/fdroiddata --source-branch "$APP_ID" --target-branch master \
-    --title "New app: Daak ($APP_ID)" --description "$(cat "$body")" --yes
+  glab mr create --repo fdroid/fdroiddata --head "$me/fdroiddata" \
+    --source-branch "$APP_ID" --target-branch master \
+    --title "New app: Daak ($APP_ID)" --description-file "$body" --yes
   echo "Done. F-Droid CI and a maintainer review the merge request. Publication is a later stage."
 fi
 
