@@ -51,9 +51,9 @@ on the device file by design.
 | --- | --- | --- |
 | F-Droid | `fdroid lint dev.darshit.daak` exits zero. | PENDING |
 | F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PENDING |
-| F-Droid | The merge request is open. | PENDING |
+| F-Droid | The merge request is open. | PASS. https://gitlab.com/fdroid/fdroiddata/-/merge_requests/52240 |
 | F-Droid | CI on the merge request passes. | PENDING |
 | F-Droid | A maintainer merged the merge request. | PENDING |
 | F-Droid | The app shows in the F-Droid client. | PENDING |
-| Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. | PENDING |
-| Homebrew | `brew install --cask darshitpp/tap/daak` installs `Daak.app`. | PENDING |
+| Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. The script pushes the cask only after this audit passes. | PASS |
+| Homebrew | `brew install --cask darshitpp/tap/daak` installs `Daak.app` 0.1.1. | PASS. `brew list --cask --versions daak` prints `daak 0.1.1`. The user ran the install on 2026-10-12 |
