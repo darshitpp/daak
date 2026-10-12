@@ -108,9 +108,11 @@ const functionBody = (name: string): string => {
   return fn.slice(0, blockEndAt(fn, 0) + 1);
 };
 
-// The compile needs xcrun and the CocoaPods headers, so it runs on macOS only.
-// The text checks below read the repo and run everywhere.
-const CAN_COMPILE = process.platform === 'darwin';
+// The compile needs xcrun and the CocoaPods output (`pod install` writes
+// macos/Pods, and Git does not hold it). Without both, the checks that read
+// Pods skip. The text checks that read only the repo run everywhere.
+const HAS_PODS = existsSync(join(MACOS, 'Pods'));
+const CAN_COMPILE = process.platform === 'darwin' && HAS_PODS;
 const SDK = CAN_COMPILE
   ? execFileSync('/usr/bin/xcrun', ['--show-sdk-path'], { encoding: 'utf8' }).trim()
   : '';
@@ -288,7 +290,7 @@ describe('the multiline text input takes focus without aborting', () => {
   // Without this the app compiles, links, launches, and aborts on the first
   // click with exactly the original exception: the fix present in the tree,
   // absent from the binary.
-  it('is a Sources-phase entry of the Daak-macOS target', () => {
+  it.skipIf(!HAS_PODS)('is a Sources-phase entry of the Daak-macOS target', () => {
     expect(pbxproj, 'project.pbxproj missing').not.toBe('');
     const phaseAt = pbxproj.indexOf(
       '514201452437B4B30078DB4F /* Sources */ = {\n\t\t\tisa = PBXSourcesBuildPhase;',

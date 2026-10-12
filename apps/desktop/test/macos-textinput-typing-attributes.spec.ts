@@ -75,9 +75,11 @@ const methodBody = (selector: string): string => {
 //
 // -fsyntax-only is the point: the same type-checking xcodebuild performs, with
 // no object file and no link step, so this stays a ~1.3s test.
-// The compile needs xcrun and the CocoaPods headers, so it runs on macOS only.
-// The text checks below read the repo and run everywhere.
-const CAN_COMPILE = process.platform === 'darwin';
+// The compile needs xcrun and the CocoaPods output (`pod install` writes
+// macos/Pods, and Git does not hold it). Without both, the checks that read
+// Pods skip. The text checks that read only the repo run everywhere.
+const HAS_PODS = existsSync(join(MACOS, 'Pods'));
+const CAN_COMPILE = process.platform === 'darwin' && HAS_PODS;
 const SDK = CAN_COMPILE
   ? execFileSync('/usr/bin/xcrun', ['--show-sdk-path'], { encoding: 'utf8' }).trim()
   : '';
@@ -186,7 +188,7 @@ describe('the macOS typingAttributes category exists and is compiled', () => {
   // keystroke with exactly the same exception as before -- the fix present in
   // the tree and absent from the binary. The surviving mutation that turns
   // this whole file green if it is dropped.
-  it('is a Sources-phase entry of the Daak-macOS target', () => {
+  it.skipIf(!HAS_PODS)('is a Sources-phase entry of the Daak-macOS target', () => {
     // Anchor on the phase's DEFINITION, not on a reference to it: the same id
     // appears first inside PBXNativeTarget's buildPhases list, and slicing from
     // there to the next runOnlyForDeploymentPostprocessing spans half the file
