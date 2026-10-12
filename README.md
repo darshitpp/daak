@@ -164,12 +164,19 @@ the one in [`release/sha256-0.1.1.txt`](release/sha256-0.1.1.txt).
 brew install --cask darshitpp/tap/daak
 ```
 
-Homebrew prints the same Gatekeeper note. Apple has not notarized the app, so
-remove the quarantine flag once:
+Apple has not notarized the app, so Gatekeeper blocks the first open. Remove
+the quarantine flag once:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Daak.app
 ```
+
+If you already copied `Daak.app` to the Applications folder from the `.dmg`,
+Homebrew stops with "It seems there is already an App". Quit Daak and delete
+`/Applications/Daak.app` first. Then run the install command again.
+
+To update, run `brew upgrade --cask daak`. Then remove the quarantine flag
+again.
 
 ### iOS
 
