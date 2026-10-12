@@ -54,10 +54,10 @@ on the device file by design.
 
 | Channel | Check | Result |
 | --- | --- | --- |
-| F-Droid | `fdroid lint dev.darshit.daak` exits zero. | PENDING |
-| F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PENDING |
+| F-Droid | `fdroid lint dev.darshit.daak` exits zero. | PASS. Local run, and the `fdroid lint` job of pipeline 2938070669 |
+| F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PASS. Pipeline 2938070669 printed `Successfully built dev.darshit.daak:21` and `:22` from commit 130550a |
 | F-Droid | The merge request is open. | PASS. https://gitlab.com/fdroid/fdroiddata/-/merge_requests/52240 |
-| F-Droid | CI on the merge request passes. | PENDING |
+| F-Droid | CI on the merge request passes. | PASS. All 9 jobs of pipeline 2938070669 succeeded |
 | F-Droid | A maintainer merged the merge request. | PENDING |
 | F-Droid | The app shows in the F-Droid client. | PENDING |
 | Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. The script pushes the cask only after this audit passes. | PASS |
