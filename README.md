@@ -30,6 +30,15 @@ pair the two devices once. After that, you pick the item and send it.
 2. **Pair** them once. Scan a QR code and check that both screens show the same number.
 3. **Send.** Pick a photo, file, or text. It arrives on the other device.
 
+## Screenshots
+
+These are from the Android app.
+
+| | | |
+| :---: | :---: | :---: |
+| <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.jpg" alt="Welcome screen: send anything to a phone next door" width="220"><br>Welcome | <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2.jpg" alt="Pair your first device: show your code or scan a code" width="220"><br>Pair a device | <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3.jpg" alt="Devices list with this device and a nearby device" width="220"><br>Devices |
+| <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4.jpg" alt="A conversation with a text sent and a reply received" width="220"><br>Send and receive | <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/5.jpg" alt="Where to save files: the Downloads folder" width="220"><br>Where files go | <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/6.jpg" alt="Settings: connection status and about" width="220"><br>Settings |
+
 ## Why Daak
 
 | You want | Daak gives you |
@@ -45,6 +54,7 @@ pair the two devices once. After that, you pick the item and send it.
 ## Contents
 
 - [Try it in 3 steps](#try-it-in-3-steps)
+- [Screenshots](#screenshots)
 - [Why Daak](#why-daak)
 - [Supported systems](#supported-systems)
 - [Install](#install)
