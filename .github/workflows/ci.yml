@@ -76,3 +76,26 @@ jobs:
       - run: bash proto/codegen.sh
       - run: git diff --exit-code -- proto/gen
       - run: cargo build --manifest-path proto/gen/rust/ipc/Cargo.toml
+
+  android-ffi:
+    name: Android FFI (Linux build, guards the F-Droid build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.1.12297006"
+      # One ABI keeps the job short. The script reads the list from
+      # gradle.properties.
+      - name: Build libdaak_ffi.so for arm64-v8a
+        env:
+          DAAK_CARGO_OFFLINE: "0"
+        run: |
+          sed -i 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/' apps/mobile/android/gradle.properties
+          bash apps/mobile/scripts/gen-android-ffi.sh
+          test -s apps/mobile/android/app/build/generated/daak-ffi/jniLibs/arm64-v8a/libdaak_ffi.so
