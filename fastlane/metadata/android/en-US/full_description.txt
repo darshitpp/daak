@@ -1,0 +1,21 @@
+Daak (डाक, "post") moves photos, files, and text between your own devices over your local network. Nothing goes through the internet. Nothing goes through a server. You do not create an account.
+
+Pair two devices once. Scan a QR code and check that both screens show the same number. After that, pick an item and send it.
+
+<b>Features</b>
+<ul>
+<li>End-to-end encryption between paired devices.</li>
+<li>Local network only. No account and no internet relay.</li>
+<li>Files of any size. Daak sends 1 MiB chunks, so memory use stays low.</li>
+<li>Send text and photos as well as files.</li>
+<li>Works with Daak on macOS and iOS.</li>
+</ul>
+
+<b>Permissions</b>
+<ul>
+<li>Camera: scan the QR code when you pair a device.</li>
+<li>Local network and Wi-Fi multicast: find your paired devices.</li>
+<li>Notifications: show the result of a transfer.</li>
+</ul>
+
+Daak receives files only while the app is running.
