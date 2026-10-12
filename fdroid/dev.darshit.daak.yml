@@ -35,7 +35,7 @@ Builds:
       - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=armeabi-v7a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
-      - ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
+      - test -e apps/mobile/node_modules/hermes-compiler || ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
         apps/mobile/node_modules/hermes-compiler
       - cargo fetch --locked
     scanignore:
@@ -70,7 +70,7 @@ Builds:
       - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
-      - ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
+      - test -e apps/mobile/node_modules/hermes-compiler || ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
         apps/mobile/node_modules/hermes-compiler
       - cargo fetch --locked
     scanignore:
