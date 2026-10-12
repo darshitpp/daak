@@ -226,7 +226,7 @@ fi
 if run 12; then
   say 12 "OUT: open the fdroiddata merge request"
   need glab "Run: brew install glab, then glab auth login"
-  need fdroid "Install fdroidserver: pipx install fdroidserver"
+  need fdroid "Run: brew install fdroidserver"
   commit="$(git rev-parse "$TAG^{commit}")"
   git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1 \
     || die "tag $TAG is not on origin. Run stage 9 first."
@@ -263,7 +263,13 @@ if run 12; then
   fi
   cp "$filled" "$fork/metadata/$APP_ID.yml"
   ( cd "$fork" && fdroid lint "$APP_ID" )
-  ( cd "$fork" && fdroid build -v -l "$APP_ID" )
+  # `fdroid build` runs the recipe's apt-get steps, so it needs a Debian host.
+  # On macOS the F-Droid CI on the merge request builds the app instead.
+  if [ "$(uname -s)" = Linux ]; then
+    ( cd "$fork" && fdroid build -v -l "$APP_ID" )
+  else
+    echo "skipping fdroid build: this host is not Linux. F-Droid CI builds the merge request."
+  fi
 
   # The merge request text holds the user's own statements. Open it in the
   # editor so the user reads each item and ticks it. The script never ticks.

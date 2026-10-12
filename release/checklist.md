@@ -50,7 +50,7 @@ on the device file by design.
 | Channel | Check | Result |
 | --- | --- | --- |
 | F-Droid | `fdroid lint dev.darshit.daak` exits zero. | PENDING |
-| F-Droid | `fdroid build` makes the APK for each entry. | PENDING |
+| F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PENDING |
 | F-Droid | The merge request is open. | PENDING |
 | F-Droid | CI on the merge request passes. | PENDING |
 | F-Droid | A maintainer merged the merge request. | PENDING |

@@ -142,7 +142,7 @@ request.
 One-time setup:
 
 - Log in: `gh auth login` and `glab auth login`.
-- Install: `brew install gh glab` and `pipx install fdroidserver`.
+- Install: `brew install gh glab fdroidserver`.
 - Create the empty repository `darshitpp/homebrew-tap` on GitHub.
 - Keep the upload key and the Keychain item (see Signing above).
 
