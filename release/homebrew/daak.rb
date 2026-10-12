@@ -9,7 +9,7 @@ cask "daak" do
   desc "Send files and text between your own devices over the local network"
   homepage "https://github.com/darshitpp/daak"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "Daak.app"
 
