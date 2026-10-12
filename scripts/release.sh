@@ -258,7 +258,8 @@ if run 12; then
       fdroid/$APP_ID.yml > "$filled"
 
   me="$(glab api user | jq -r .username)"
-  existing="$(glab mr list --repo fdroid/fdroiddata --author "$me" --search "$APP_ID" 2>/dev/null || true)"
+  # JSON output: the text output prints a sentence when nothing matches.
+  existing="$(glab mr list --repo fdroid/fdroiddata --author "$me" --search "$APP_ID" -F json | jq -r '.[].web_url')"
   if [ -n "$existing" ]; then
     echo "an open merge request already exists:"
     echo "$existing"
