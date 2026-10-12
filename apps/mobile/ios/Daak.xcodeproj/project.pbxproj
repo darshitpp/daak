@@ -629,7 +629,7 @@
 				CODE_SIGN_ENTITLEMENTS = Daak/Daak.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Daak/Daak.simulator.entitlements;
 				"CODE_SIGN_INJECT_BASE_ENTITLEMENTS[sdk=iphonesimulator*]" = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				ENABLE_BITCODE = NO;
 				"ENTITLEMENTS_DESTINATION[sdk=iphonesimulator*]" = Signature;
 				INFOPLIST_FILE = Daak/Info.plist;
@@ -643,7 +643,7 @@
 					"$(SRCROOT)/build/generated/ffi/lib",
 					"$(inherited)",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -669,7 +669,7 @@
 				CODE_SIGN_ENTITLEMENTS = Daak/Daak.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Daak/Daak.simulator.entitlements;
 				"CODE_SIGN_INJECT_BASE_ENTITLEMENTS[sdk=iphonesimulator*]" = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				"ENTITLEMENTS_DESTINATION[sdk=iphonesimulator*]" = Signature;
 				INFOPLIST_FILE = Daak/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
@@ -682,7 +682,7 @@
 					"$(SRCROOT)/build/generated/ffi/lib",
 					"$(inherited)",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -859,7 +859,7 @@
 				CODE_SIGN_ENTITLEMENTS = DaakShareExtension/DaakShareExtension.entitlements;
 				"CODE_SIGN_INJECT_BASE_ENTITLEMENTS[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				"ENTITLEMENTS_DESTINATION[sdk=iphonesimulator*]" = Signature;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DaakShareExtension/Info.plist;
@@ -869,7 +869,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -884,7 +884,7 @@
 				CODE_SIGN_ENTITLEMENTS = DaakShareExtension/DaakShareExtension.entitlements;
 				"CODE_SIGN_INJECT_BASE_ENTITLEMENTS[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				"ENTITLEMENTS_DESTINATION[sdk=iphonesimulator*]" = Signature;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DaakShareExtension/Info.plist;
@@ -894,7 +894,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.darshit.daak.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

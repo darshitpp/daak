@@ -132,8 +132,8 @@ android {
         applicationId "dev.darshit.daak"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 2
+        versionName "0.1.1"
     }
     splits {
         abi {
@@ -157,6 +157,13 @@ android {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
                 def newName = abi ? "daak-" + version + "-" + abi + ".apk" : "daak-" + version + "-universal.apk"
                 outputFileName = newName
+                // One versionCode for each ABI, so F-Droid can list one build
+                // entry for each APK. The scheme is base * 10 + offset, with
+                // offset 0 universal, 1 armeabi-v7a, 2 arm64-v8a.
+                // release/version.json sets the base (the literal above).
+                // The recipe in fdroid/dev.darshit.daak.yml repeats the result.
+                def abiOffset = [(null): 0, "armeabi-v7a": 1, "arm64-v8a": 2][abi]
+                output.versionCodeOverride = variant.versionCode * 10 + abiOffset
             }
         }
     }
