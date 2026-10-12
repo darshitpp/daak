@@ -1,5 +1,10 @@
 import React from 'react';
+import { ScrollView, StyleSheet } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { WelcomeScreen } from './WelcomeScreen';
+import { SaveLocationScreen } from './SaveLocationScreen';
+import { PairFirstDeviceScreen } from './PairFirstDeviceScreen';
+import { spacing } from '../theme';
 import { NameDeviceScreen } from './NameDeviceScreen';
 import { PermissionsScreen } from './PermissionsScreen';
 import { CantReachScreen } from './CantReachScreen';
@@ -300,5 +305,40 @@ describe('Update available', () => {
     fireEvent.press(screen.getByTestId('update-open'));
     expect(await screen.findByText('Daak could not open the page')).toBeTruthy();
     expect(screen.getByText(/github\.com\/darshitpp\/daak\/releases/)).toBeTruthy();
+  });
+});
+
+// The text and the cards of an onboarding screen touched the left and right
+// edges of a phone, because the scroll content had no horizontal padding.
+describe('Onboarding column side margin', () => {
+  const noop = () => {};
+  const sideMargin = () => {
+    const style = StyleSheet.flatten(screen.UNSAFE_getByType(ScrollView).props.contentContainerStyle);
+    return style.paddingHorizontal;
+  };
+
+  it('pads the Welcome content on both sides', () => {
+    render(<WelcomeScreen onGetStarted={noop} onSkip={noop} />);
+    expect(sideMargin()).toBe(spacing.lg);
+  });
+
+  it('pads the Name content on both sides', () => {
+    render(<NameDeviceScreen name="" onNameChange={noop} onContinue={noop} />);
+    expect(sideMargin()).toBe(spacing.lg);
+  });
+
+  it('pads the Permissions content on both sides', () => {
+    render(<PermissionsScreen rows={[]} onContinue={noop} />);
+    expect(sideMargin()).toBe(spacing.lg);
+  });
+
+  it('pads the Save location content on both sides', () => {
+    render(<SaveLocationScreen folder={{ load: async () => null }} onContinue={noop} />);
+    expect(sideMargin()).toBe(spacing.lg);
+  });
+
+  it('pads the Pair first device content on both sides', () => {
+    render(<PairFirstDeviceScreen>{null}</PairFirstDeviceScreen>);
+    expect(sideMargin()).toBe(spacing.lg);
   });
 });

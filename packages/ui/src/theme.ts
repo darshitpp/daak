@@ -243,7 +243,9 @@ export const ui = StyleSheet.create({
   // The prototype's `onb` column: one centred stack, hero at the top, actions
   // pinned at the bottom. Every onboarding screen shares it, so it is one
   // style rather than five near-identical layouts.
-  onb: { flexGrow: 1, gap: spacing.xl, justifyContent: 'center', paddingVertical: spacing.xxl },
+  // paddingHorizontal matches ui.pad and the pinned action bar. Without it the
+  // text and the cards touch the screen edges.
+  onb: { flexGrow: 1, gap: spacing.xl, justifyContent: 'center', paddingVertical: spacing.xxl, paddingHorizontal: spacing.lg },
   heroMark: { gap: spacing.lg, alignItems: 'flex-start' },
   /** The big circular icon well above the onboarding headline. */
   heroBadge: {
