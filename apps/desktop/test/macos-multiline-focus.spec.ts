@@ -108,7 +108,12 @@ const functionBody = (name: string): string => {
   return fn.slice(0, blockEndAt(fn, 0) + 1);
 };
 
-const SDK = execFileSync('/usr/bin/xcrun', ['--show-sdk-path'], { encoding: 'utf8' }).trim();
+// The compile needs xcrun and the CocoaPods headers, so it runs on macOS only.
+// The text checks below read the repo and run everywhere.
+const CAN_COMPILE = process.platform === 'darwin';
+const SDK = CAN_COMPILE
+  ? execFileSync('/usr/bin/xcrun', ['--show-sdk-path'], { encoding: 'utf8' }).trim()
+  : '';
 const PODS_PUBLIC_REACT_CORE = join(MACOS, 'Pods', 'Headers', 'Public', 'React-Core');
 // R61: on 0.83, React/RCTUIKit.h re-exports RCTUIKit/RCTUIKit.h, which the
 // React-RCTUIKit pod publishes. Without this include the syntax check dies in
@@ -149,7 +154,7 @@ describe('the multiline text input takes focus without aborting', () => {
   // The headline. A previous revision of this work asserted on source TEXT
   // only and shipped files that did not compile. A text assertion cannot tell
   // a resolved message send from an unresolved one.
-  it('COMPILES against the real React-Core headers with no errors', () => {
+  it.skipIf(!CAN_COMPILE)('COMPILES against the real React-Core headers with no errors', () => {
     expect(existsSync(PODS_PUBLIC_REACT_CORE), PODS_PUBLIC_REACT_CORE + ' missing: run pod install').toBe(true);
     expect(existsSync(IMPL_PATH), IMPL_PATH + ' missing').toBe(true);
     const { errors, output } = compileIt();

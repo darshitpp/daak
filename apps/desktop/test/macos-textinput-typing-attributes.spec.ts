@@ -75,7 +75,12 @@ const methodBody = (selector: string): string => {
 //
 // -fsyntax-only is the point: the same type-checking xcodebuild performs, with
 // no object file and no link step, so this stays a ~1.3s test.
-const SDK = execFileSync('/usr/bin/xcrun', ['--show-sdk-path'], { encoding: 'utf8' }).trim();
+// The compile needs xcrun and the CocoaPods headers, so it runs on macOS only.
+// The text checks below read the repo and run everywhere.
+const CAN_COMPILE = process.platform === 'darwin';
+const SDK = CAN_COMPILE
+  ? execFileSync('/usr/bin/xcrun', ['--show-sdk-path'], { encoding: 'utf8' }).trim()
+  : '';
 const PODS_PUBLIC_REACT_CORE = join(MACOS, 'Pods', 'Headers', 'Public', 'React-Core');
 // R61: on 0.83, React/RCTUIKit.h re-exports RCTUIKit/RCTUIKit.h, which the
 // React-RCTUIKit pod publishes. Without this include the syntax check dies in
@@ -121,7 +126,7 @@ describe('the macOS typingAttributes category exists and is compiled', () => {
   // errors, because the category was on NSTextField while attributedText,
   // selectedTextRange and defaultTextAttributes are declared on React's own
   // RCTUITextField subclass. A text assertion cannot see that; a compiler can.
-  it('COMPILES against the real React-Core headers with no errors', () => {
+  it.skipIf(!CAN_COMPILE)('COMPILES against the real React-Core headers with no errors', () => {
     expect(existsSync(PODS_PUBLIC_REACT_CORE), `${PODS_PUBLIC_REACT_CORE} missing: run pod install`).toBe(true);
     const { errors, output } = compileTheImplementation();
     expect(errors, `clang -fsyntax-only failed:\n${output}`).toEqual([]);
