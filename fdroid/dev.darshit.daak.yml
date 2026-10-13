@@ -35,8 +35,7 @@ Builds:
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
       - cd apps/mobile/node_modules/@react-native/gradle-plugin
-      - sed -i '/jvmToolchain\|JavaVersion/s/17/21/' */build.gradle.kts
-      - sed -i '/JavaVersion/s/17/21/' $(find . -name JdkConfiguratorUtils.kt)
+      - find . -name '*.kt*' -exec sed -i 's/(17)/(21)/;s/_17/_21/' {} +
       - cd -
       - cargo fetch --locked
     scanignore:
@@ -71,8 +70,7 @@ Builds:
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
       - cd apps/mobile/node_modules/@react-native/gradle-plugin
-      - sed -i '/jvmToolchain\|JavaVersion/s/17/21/' */build.gradle.kts
-      - sed -i '/JavaVersion/s/17/21/' $(find . -name JdkConfiguratorUtils.kt)
+      - find . -name '*.kt*' -exec sed -i 's/(17)/(21)/;s/_17/_21/' {} +
       - cd -
       - cargo fetch --locked
     scanignore:
