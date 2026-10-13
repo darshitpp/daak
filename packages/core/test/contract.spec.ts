@@ -14,6 +14,9 @@ const METHODS: (keyof DaakEngine)[] = [
    'listTransfers', 'listThread', 'getItemText', 'listInbox', 'setDisplayName', 'setPresence', 'on',
   'offerPairing', 'selfProfile',
   'armHostPairing',
+  // Code pairing: the host arm, the host poll, and the disarm. The
+  // `codePairingSupported` flag below is a PROPERTY, so it is not here.
+  'armCodePairing', 'codePairingStatus', 'cancelCodePairing',
   // The per-item re-arm. PARKED and on no screen: `retry` alone cannot reach a
   // held-back item (it re-arms the outbound outbox row, and an inbound
   // transfer has none), and `retryItem` is equally unusable by a user, because
@@ -62,6 +65,10 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   pairingBundle: true,
   offerPairing: true,
   armHostPairing: true,
+  armCodePairing: true,
+  pairWithCode: true,
+  codePairingStatus: true,
+  cancelCodePairing: true,
   pairWith: true,
   acceptPairing: true,
   sendText: true,
@@ -111,6 +118,8 @@ describe('contract types', () => {
       listTransfers: true, listThread: true, getItemText: true, listInbox: true, selfProfile: true, setDisplayName: true,
       setPresence: true, on: true, offerPairing: true, armHostPairing: true,
       retryItem: true, backgroundWake: true,
+      armCodePairing: true, codePairingStatus: true, cancelCodePairing: true,
+      codePairingSupported: true,
     };
     // 13 = the union's 13 members. peer.incompatible and outbox.queued are
     // pinned by tsc alone, via this Record's exhaustiveness, and NOT by the
@@ -129,7 +138,10 @@ describe('contract types', () => {
     // already flags the hand-listing (a new FfiEvent variant is not caught
     // there), so the tenth is a KNOWN, recorded gap -- not a dead event path.
     expect(Object.keys(EVENT_TYPES).length).toBe(13);
-    expect(Object.keys(exhaustive).length).toBe(METHODS.length);
+    // METHODS lists the methods. The Record also holds every member of the
+    // interface, and `codePairingSupported` is a readonly boolean property,
+    // not a function, so the Record is longer by one.
+    expect(Object.keys(exhaustive).length).toBe(METHODS.length + 1);
   });
 
   it('pins the TurboModule spec the native modules implement', () => {
@@ -156,7 +168,10 @@ describe('contract types', () => {
     // override on all three native modules.
     // list_thread (this plan) is the 29th: a UDL method and a TurboModule override on all three native modules.
     // item_text (P7) is the 30th, on all three native modules too.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(30);
+    // The four code pairing methods are the 31st to 34th: arm_code_pairing,
+    // pair_with_code, code_pairing_status, and cancel_code_pairing, each a UDL
+    // method and a TurboModule override on all three native modules.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(34);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -353,10 +368,39 @@ describe('InProcessEngine', () => {
     await expect(engine.pair('nope', 'qr', 'a1b2')).rejects.toThrow(/nope/);
   });
 
-  it('refuses manual-code pairing: no UDL method exists for it (I3)', async () => {
-    const native = fakeNative({ listDevices: async () => '[]' });
+  // Manual-code pairing: the code goes to the native pair_with_code, and the
+  // address comes from discovery, because pair_with_code takes an ip:port (R13)
+  // and the caller names only a device id. A missing code never reaches the
+  // bridge.
+  it('pairs with a six digit code by resolving the address from discovery', async () => {
+    const calls: [string, string][] = [];
+    const native = fakeNative({
+      listDevices: async () => '[{"deviceId":"d1","name":"peer","addr":"10.0.0.2:9000"}]',
+      pairWithCode: async (addr: string, code: string) => {
+        calls.push([addr, code]);
+        return JSON.stringify({ sas: '1-2-3', peer_device_id: 'd1' });
+      },
+    });
     const engine = new InProcessEngine(native, () => () => {});
-    await expect(engine.pair('d1', 'code', '123456')).rejects.toThrow(/manual-code/);
+    expect(engine.codePairingSupported).toBe(true);
+    expect(await engine.pair('d1', 'code', '123456')).toEqual({ sas: '1-2-3' });
+    expect(calls).toEqual([['10.0.0.2:9000', '123456']]);
+    await expect(engine.pair('d1', 'code')).rejects.toThrow(/code/);
+  });
+
+  // The status reader maps the snake_case FFI JSON to the camelCase shape the
+  // host panel polls. A dropped mapping would hand the UI `remaining_ms` and
+  // the panel would show no countdown.
+  it('maps the code pairing status from the FFI snake_case JSON', async () => {
+    const engine = new InProcessEngine(fakeNative({
+      codePairingStatus: async () =>
+        JSON.stringify({ state: 'armed', remaining_ms: 120000, tries_left: 2 }),
+    }), () => () => {});
+    expect(await engine.codePairingStatus()).toEqual({
+      state: 'armed',
+      remainingMs: 120000,
+      triesLeft: 2,
+    });
   });
 
   it('refuses a qr pair with no bundle (m3)', async () => {

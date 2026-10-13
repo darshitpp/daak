@@ -219,7 +219,10 @@ describe('DaemonClientEngine', () => {
 
   it('refuses a manual code and an unknown device instead of sending a doomed request', async () => {
     const h = makeEngine();
-    await expect(h.engine.pair('d1', 'code', '123456')).rejects.toThrow(/manual-code/);
+    expect(h.engine.codePairingSupported).toBe(false);
+    await expect(h.engine.pair('d1', 'code', '123456')).rejects.toThrow(
+      'code pairing is not on the IPC surface',
+    );
     const q = h.engine.pair('nope', 'qr', 'a1b2');
     h.reply({ Json: { value: '[]' } });
     await expect(q).rejects.toThrow(/nope/);

@@ -1,5 +1,6 @@
 import type { Spec as NativeDaak } from '../NativeDaak';
 import type {
+  CodePairingStatus,
   DaakEngine,
   DaakEvent,
   DeviceInfo,
@@ -49,20 +50,42 @@ export class InProcessEngine implements DaakEngine {
   }
 
   async pair(deviceId: string, mode: 'qr' | 'code', secret?: string, addr?: string): Promise<{ sas: string }> {
-    // The frozen FFI surface has only pair_with(addr, bundle_cbor bytes), which
-    // runs PairingBundle::from_cbor. A manual code is not a CBOR bundle, so a
-    // hex decode of it would be nonsense; say so instead of failing obscurely.
-    if (mode === 'code') throw new Error('manual-code pairing is not on the FFI surface yet');
-    if (!secret) throw new Error('qr pairing needs the bundle hex');
-    // pair_with takes an ip:port, not a device id (R13), so an address has to
-    // come from somewhere. A pairing link can NAME one; without it the address
-    // is resolved from discovery, which fails on any network mDNS does not
-    // cross (measured: a NAT-ed Android emulator saw zero peers while the host
-    // CLI saw it advertising). The `secret` is the bundle CBOR as hex.
+    // pair_with and pair_with_code each take an ip:port, not a device id (R13),
+    // so an address has to come from somewhere. A pairing link can NAME one;
+    // without it the address is resolved from discovery, which fails on any
+    // network mDNS does not cross (measured: a NAT-ed Android emulator saw zero
+    // peers while the host CLI saw it advertising).
     const target = addr ?? (await this.devices()).find((d) => d.deviceId === deviceId)?.addr;
     if (!target) throw new Error(`unknown device ${deviceId}`);
+    if (mode === 'code') {
+      // The secret is the six digit code here, not the QR bundle CBOR.
+      if (!secret) throw new Error('code pairing needs the six digit code');
+      const { sas } = JSON.parse(await this.native.pairWithCode(target, secret));
+      return { sas };
+    }
+    if (!secret) throw new Error('qr pairing needs the bundle hex');
     const { sas } = JSON.parse(await this.native.pairWith(target, hexToBytes(secret)));
     return { sas };
+  }
+
+  readonly codePairingSupported = true;
+
+  armCodePairing(): Promise<string> {
+    return this.native.armCodePairing();
+  }
+
+  async cancelCodePairing(): Promise<void> {
+    await this.native.cancelCodePairing();
+  }
+
+  async codePairingStatus(): Promise<CodePairingStatus> {
+    // The FFI speaks snake_case; the UI reads camelCase.
+    const raw = JSON.parse(await this.native.codePairingStatus()) as {
+      state: CodePairingStatus['state'];
+      remaining_ms: number;
+      tries_left: number;
+    };
+    return { state: raw.state, remainingMs: raw.remaining_ms, triesLeft: raw.tries_left };
   }
 
   // C2: the HOST half. The host scanned the joiner's bundle, so it already

@@ -1,4 +1,5 @@
 import type {
+  CodePairingStatus,
   DaakEngine,
   DaakEvent,
   DeviceInfo,
@@ -92,10 +93,9 @@ export class DaemonClientEngine implements DaakEngine {
   }
 
   async pair(deviceId: string, mode: 'qr' | 'code', secret?: string, addr?: string): Promise<{ sas: string }> {
-    // IpcRequest::Pair carries an addr plus a CBOR bstr, and there is no
-    // manual-code request on the wire (the FFI has no such method either, and
-    // InProcess throws for it), so code mode is refused rather than sent.
-    if (mode === 'code') throw new Error('manual-code pairing is not on the FFI surface yet');
+    // IpcRequest::Pair carries an addr plus a CBOR bstr, and no IpcRequest
+    // carries a six digit code, so code mode is refused rather than sent.
+    if (mode === 'code') throw new Error('code pairing is not on the IPC surface');
     if (!secret) throw new Error('qr pairing needs the bundle hex');
     // The request takes an ip:port, not a device id (R13), so an address has
     // to come from somewhere. A pairing link can NAME one; without it the
@@ -161,6 +161,25 @@ export class DaemonClientEngine implements DaakEngine {
   // show a QR that accepts nothing.
   async armHostPairing(): Promise<void> {
     throw new Error('host QR arming is mobile-only: no IpcRequest arms a pairing');
+  }
+
+  // Same ruling as the QR host arm above: code pairing is in-process engine
+  // state, no IpcRequest carries it, and the C2 brief forbids adding one (a new
+  // request owes an IPC_MINOR bump). Loud, not silent -- a desktop host that
+  // no-oped here would show a code that accepts nothing. The message matches
+  // the code branch of pair, which daemon-client.spec.ts asserts.
+  readonly codePairingSupported = false;
+
+  async armCodePairing(): Promise<string> {
+    throw new Error('code pairing is not on the IPC surface');
+  }
+
+  async codePairingStatus(): Promise<CodePairingStatus> {
+    throw new Error('code pairing is not on the IPC surface');
+  }
+
+  async cancelCodePairing(): Promise<void> {
+    throw new Error('code pairing is not on the IPC surface');
   }
 
   async send(req: SendRequest): Promise<{ transferId: string; queued: boolean }> {
