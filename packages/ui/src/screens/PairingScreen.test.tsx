@@ -347,6 +347,35 @@ describe('PairingScreen code pairing', () => {
     expect(onCodePick).toHaveBeenCalledWith(ID);
   });
 
+  // A LAN can hold two devices with one name. The short id tells them apart,
+  // so the user does not pick the wrong one. A unique name needs no id.
+  it('join: a repeated device name adds a short id, and a unique name adds none', () => {
+    const twinA = 'aa'.repeat(16);
+    const twinB = 'bb'.repeat(16);
+    const { rerender } = render(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={[
+          { deviceId: twinA, name: 'Kitchen Tablet' },
+          { deviceId: twinB, name: 'Kitchen Tablet' },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId('pair-code-id-' + twinA)).toHaveTextContent(/aaaaaaaa/);
+    expect(screen.getByTestId('pair-code-id-' + twinB)).toHaveTextContent(/bbbbbbbb/);
+    rerender(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={[{ deviceId: twinA, name: 'Kitchen Tablet' }]}
+      />,
+    );
+    expect(screen.queryByTestId('pair-code-id-' + twinA)).toBeNull();
+  });
+
   // The joiner learns one thing from a failure and nothing more. A wrong code,
   // a dead code, and a network fault look the same from there.
   it('join: a failure shows the neutral note, and not the QR note', () => {

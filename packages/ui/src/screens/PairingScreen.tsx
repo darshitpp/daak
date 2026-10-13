@@ -170,6 +170,10 @@ export function PairingScreen({
   // R3: the code dies on the deadline or on the last try. Either one is a dead
   // code, and the panel then shows the poll's reason.
   const dead = codeStatus?.state === 'expired' || codeStatus?.state === 'exhausted';
+  // Two peers can advertise one name. The picker then adds a short id, so the
+  // user picks the right device and does not burn a try on the wrong one.
+  const nameCounts = new Map<string, number>();
+  for (const d of codeDevices) nameCounts.set(d.name, (nameCounts.get(d.name) ?? 0) + 1);
   const codePanel = showCode ? (
     <View style={ui.stack} testID="pair-code-panel">
       {/* The flow owns the mode, so the screen shows it and does not switch it. */}
@@ -235,14 +239,20 @@ export function PairingScreen({
             </Text>
           ) : (
             codeDevices.map((d) => (
-              <Btn
-                key={d.deviceId}
-                variant={codePick === d.deviceId ? 'primary' : 'quiet'}
-                block
-                testID={'pair-code-pick-' + d.deviceId}
-                label={d.name}
-                onPress={() => onCodePick?.(d.deviceId)}
-              />
+              <View key={d.deviceId} style={ui.stackSm}>
+                <Btn
+                  variant={codePick === d.deviceId ? 'primary' : 'quiet'}
+                  block
+                  testID={'pair-code-pick-' + d.deviceId}
+                  label={d.name}
+                  onPress={() => onCodePick?.(d.deviceId)}
+                />
+                {(nameCounts.get(d.name) ?? 0) > 1 ? (
+                  <Text style={ui.hint} testID={'pair-code-id-' + d.deviceId}>
+                    {d.deviceId.slice(0, 8)}
+                  </Text>
+                ) : null}
+              </View>
             ))
           )}
           <Text style={ui.hint}>Pairing code</Text>
