@@ -157,9 +157,11 @@ replaces those strings. Do not rename them.
 What stays manual:
 
 - Answer F-Droid reviewer comments in the merge request.
-- After the first F-Droid release, an update is not automatic
-  (`AutoUpdateMode: None`). Stage 12 stops and prints the filled recipe. Add the
-  two new `Builds` entries to `metadata/dev.darshit.daak.yml` by hand.
+- After the first F-Droid release, the F-Droid bot adds the new `Builds` entries
+  (`AutoUpdateMode: Version`). It copies the last two entries and changes only
+  `versionName`, `versionCode`, and `commit`. Do not put a version in any other
+  field of the recipe. Stage 12 stops when `metadata/dev.darshit.daak.yml`
+  exists upstream.
 - Run `fdroid checkupdates` to see that a new tag exists.
 - Decide whether a Release is a pre-release.
 

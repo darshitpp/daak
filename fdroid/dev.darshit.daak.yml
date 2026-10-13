@@ -18,10 +18,9 @@ Builds:
     timeout: 7200
     subdir: apps/mobile/android
     sudo:
-      - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
       - apt-get update
-      - apt-get install -y -t bookworm openjdk-17-jdk-headless
-      - update-java-alternatives -s java-1.17.0-openjdk-amd64
+      - apt-get install -y openjdk-21-jdk-headless
+      - update-java-alternatives -s java-1.21.0-openjdk-amd64
       - apt-get install -y rustup nodejs npm build-essential
       - npm install -g pnpm@9.12.0
     init:
@@ -29,14 +28,16 @@ Builds:
       - rustup target add aarch64-linux-android armv7-linux-androideabi
     gradle:
       - yes
-    output: app/build/outputs/apk/release/daak-0.1.1-armeabi-v7a.apk
+    output: app/build/outputs/apk/release/daak-*-armeabi-v7a.apk
     prebuild:
       - cd ../../..
       - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=armeabi-v7a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
-      - test -e apps/mobile/node_modules/hermes-compiler || ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
-        apps/mobile/node_modules/hermes-compiler
+      - cd apps/mobile/node_modules/@react-native/gradle-plugin
+      - sed -i '/jvmToolchain\|JavaVersion/s/17/21/' */build.gradle.kts
+      - sed -i '/JavaVersion/s/17/21/' $(find . -name JdkConfiguratorUtils.kt)
+      - cd -
       - cargo fetch --locked
     scanignore:
       - node_modules/.pnpm/hermes-compiler@*/node_modules/hermes-compiler/hermesc/linux64-bin/hermesc
@@ -53,10 +54,9 @@ Builds:
     timeout: 7200
     subdir: apps/mobile/android
     sudo:
-      - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
       - apt-get update
-      - apt-get install -y -t bookworm openjdk-17-jdk-headless
-      - update-java-alternatives -s java-1.17.0-openjdk-amd64
+      - apt-get install -y openjdk-21-jdk-headless
+      - update-java-alternatives -s java-1.21.0-openjdk-amd64
       - apt-get install -y rustup nodejs npm build-essential
       - npm install -g pnpm@9.12.0
     init:
@@ -64,14 +64,16 @@ Builds:
       - rustup target add aarch64-linux-android armv7-linux-androideabi
     gradle:
       - yes
-    output: app/build/outputs/apk/release/daak-0.1.1-arm64-v8a.apk
+    output: app/build/outputs/apk/release/daak-*-arm64-v8a.apk
     prebuild:
       - cd ../../..
       - sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/'
         apps/mobile/android/gradle.properties
       - pnpm install --frozen-lockfile
-      - test -e apps/mobile/node_modules/hermes-compiler || ln -s ../../../node_modules/.pnpm/hermes-compiler@0.14.1/node_modules/hermes-compiler
-        apps/mobile/node_modules/hermes-compiler
+      - cd apps/mobile/node_modules/@react-native/gradle-plugin
+      - sed -i '/jvmToolchain\|JavaVersion/s/17/21/' */build.gradle.kts
+      - sed -i '/JavaVersion/s/17/21/' $(find . -name JdkConfiguratorUtils.kt)
+      - cd -
       - cargo fetch --locked
     scanignore:
       - node_modules/.pnpm/hermes-compiler@*/node_modules/hermes-compiler/hermesc/linux64-bin/hermesc
@@ -82,7 +84,7 @@ Builds:
       - DAAK_CARGO_OFFLINE=0 bash apps/mobile/scripts/gen-android-ffi.sh
     ndk: 27.1.12297006
 
-AutoUpdateMode: None
+AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9.]+$
 VercodeOperation:
   - '%c * 10 + 1'
