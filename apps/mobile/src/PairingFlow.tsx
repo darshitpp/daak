@@ -163,18 +163,33 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
   );
 
   // Resolution 2: one poll each second while the code-host panel is open. The
-  // first reading is immediate, so the countdown shows with the code.
+  // poll starts only AFTER the arm resolves with a code. An immediate poll can
+  // read the PREVIOUS arm's state, and "Make a new pairing code" would then
+  // flash the dead panel again for about a second.
   useEffect(() => {
     if (phase.kind !== 'code-host') return;
     const gen = ++codeGen.current;
     const stale = () => gen !== codeGen.current;
     setCode('');
     setCodeStatus(undefined);
+    const poll = () => {
+      void engineRef.current.codePairingStatus().then(
+        (status) => {
+          if (!stale()) setCodeStatus(status);
+        },
+        () => {},
+      );
+    };
     void hostShowCode(engineRef.current).then(
       (made) => {
-        if (!stale()) setCode(made);
+        if (stale()) return;
+        setCode(made);
+        // The arm is in. Only now is the slot the panel shows the live one.
+        poll();
+        pollRef.current = setInterval(poll, 1000);
       },
       (e: unknown) => {
+        // A failed arm draws no code panel. The error note is the whole panel.
         if (!stale()) setError(e instanceof Error ? e.message : 'hosting failed');
       },
     );
@@ -186,27 +201,26 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
       },
       () => {},
     );
-    const poll = () => {
-      void engineRef.current.codePairingStatus().then(
-        (status) => {
-          if (!stale()) setCodeStatus(status);
-        },
-        () => {},
-      );
-    };
-    poll();
-    pollRef.current = setInterval(poll, 1000);
-    // Resolution 3: leaving the phase and the unmount both land here. A code
-    // that is no longer on screen must not start a handshake.
     return () => {
       codeGen.current += 1;
       if (pollRef.current !== null) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
-      void engineRef.current.cancelCodePairing().catch(() => {});
     };
   }, [phase.kind, codeRound]);
+
+  // Resolution 3: leaving the code-host panel disarms the code. This effect is
+  // keyed on the phase kind ALONE, so a codeRound change does not cancel.
+  // Arming a new code replaces the slot, so a cancel that landed after the new
+  // arm would disarm the code on screen. Only leaving code-host, or an unmount,
+  // fires the cleanup.
+  useEffect(() => {
+    if (phase.kind !== 'code-host') return;
+    return () => {
+      void engineRef.current.cancelCodePairing().catch(() => {});
+    };
+  }, [phase.kind]);
 
   // Ruling 3: the picker takes no `paired` field. The flow removes the peers
   // this device already trusts, and passes the rest ready to draw.
@@ -524,7 +538,15 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
         onNewCode={hosting && sas ? (phase.kind === 'code-host' ? newCodeHost : startHost) : undefined}
         // Code pairing. The flow owns each value; the screen only draws them.
         codeSupported={engine.codePairingSupported}
-        codeMode={phase.kind === 'code-host' ? 'show' : phase.kind === 'code-join' ? 'enter' : undefined}
+        // No code panel until the arm answers with a code. A failed arm draws
+        // only the error note.
+        codeMode={
+          phase.kind === 'code-host' && code !== ''
+            ? 'show'
+            : phase.kind === 'code-join'
+              ? 'enter'
+              : undefined
+        }
         code={phase.kind === 'code-host' ? code : undefined}
         codeStatus={phase.kind === 'code-host' ? codeStatus : undefined}
         codeBusy={phase.kind === 'code-join' ? codeBusy : undefined}

@@ -74,6 +74,25 @@ async fn the_code_survives_two_wrong_tries_and_pairs_on_the_third() {
     accept.await.unwrap().unwrap();
 }
 
+// F7: a leading-zero code stays a string end to end. `007341` must not read as
+// `7341`, so the same string still pairs through SPAKE2. `format_code` proves
+// the formatting; this walks the string through the real handshake.
+#[tokio::test]
+async fn a_leading_zero_code_pairs_end_to_end() {
+    let host = engine("host").await;
+    host.offer_code_pairing("007341".into()).await.unwrap();
+    let accept = tokio::spawn({
+        let h = host.clone();
+        async move { h.accept_pairing_once().await }
+    });
+    let joiner = engine("joiner").await;
+    joiner
+        .pair_with_code(host.local_addr(), "007341")
+        .await
+        .unwrap();
+    accept.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn the_code_is_gone_after_three_wrong_tries() {
     let host = engine("host").await;

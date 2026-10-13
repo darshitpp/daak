@@ -5,9 +5,9 @@
 // Binds sockets, so it needs an unsandboxed run.
 
 use daak_core::control::Hello;
-use daak_core::crypto::identity::import_from_store;
+use daak_core::crypto::identity::{import_from_store, Identity};
 use daak_core::crypto::secret_store::MemorySecretStore;
-use daak_core::engine::{Engine, EngineConfig};
+use daak_core::engine::{CodePairingState, Engine, EngineConfig};
 use daak_core::framing::RecordType;
 use daak_core::net::{tcp, CONTROL_STREAM};
 use daak_core::store::Db;
@@ -70,4 +70,53 @@ async fn a_stray_connection_does_not_burn_the_pairing_code() {
     .expect("the joiner must not hang");
     joined.expect("the real joiner must still pair with the code");
     accept.await.unwrap().unwrap();
+}
+
+// A connection whose in-band identity does not verify its static binding must
+// fail BEFORE the reserve, so it charges no try.
+#[tokio::test]
+async fn a_mismatched_identity_binding_does_not_charge_a_try() {
+    let (d1, d2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let _joiner = engine("joiner", d1.path().to_path_buf()).await;
+    let host = engine("host", d2.path().to_path_buf()).await;
+
+    host.offer_code_pairing("123456".into()).await.unwrap();
+
+    // A Hello and an identity whose device id MATCHES the Hello, but whose
+    // static signature is broken. The binding check fails, not the mismatch
+    // check.
+    {
+        let fake = Identity::generate().unwrap();
+        let mut public = fake.public();
+        public.static_sig[0] ^= 0xFF;
+        let mut stray = tcp::dial(host.local_addr()).await.unwrap();
+        stray
+            .send(
+                CONTROL_STREAM,
+                RecordType::Control,
+                Hello::transfer(public.device_id).to_cbor().unwrap().into(),
+            )
+            .await
+            .unwrap();
+        stray
+            .send(
+                CONTROL_STREAM,
+                RecordType::Control,
+                public.to_cbor().unwrap().into(),
+            )
+            .await
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let status = host.code_pairing_status().await;
+    assert_eq!(
+        status.state,
+        CodePairingState::Armed,
+        "the code must stay armed"
+    );
+    assert_eq!(
+        status.tries_left, 3,
+        "a failed binding must not charge a try"
+    );
 }

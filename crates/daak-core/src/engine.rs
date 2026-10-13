@@ -2107,7 +2107,9 @@ impl Engine {
     }
 
     /// Disarm the code. The host screen calls this when it leaves the panel, so
-    /// a code that is no longer on screen cannot be used.
+    /// a later connection cannot START a code handshake. A handshake that took a
+    /// try before the cancel can still finish. The confirmation gate limits the
+    /// harm.
     pub async fn cancel_code_pairing(&self) {
         let mut slot = self.code_slot.lock().await;
         if slot.armed.take().is_some() {
@@ -2616,10 +2618,18 @@ impl Engine {
         // arrives in-band and is authenticated by the SPAKE2-mixed prologue.
         //
         // The slot is INSPECTED here, and an attempt is charged only after the
-        // peer proved its identity binding, like the QR arm below. A stray
-        // connection must not burn a try.
+        // peer proved its identity binding, like the QR arm below.
+        //
+        // A code must NOT hijack a transfer from a peer this device already
+        // trusts. An ordinary transfer looks like a pairing dial up to the
+        // first frame after the Hello, so the code branch would read that frame
+        // as an identity, fail, and kill the transfer. The QR OPEN arm makes
+        // the same distinction for the same reason: a trusted row means "this
+        // is a transfer" when the Hello does not ask to pair. Only a device
+        // that SAYS it is pairing (`Hello::pairing`) still reaches the code, so
+        // a device that lost its side can pair again.
         let armed = code_slot.lock().await.armed.is_some();
-        if armed {
+        if armed && !(db.is_trusted(&hello.device_id) && !hello.pair) {
             let peer_public = read_identity_public(conn).await?;
             if hello.device_id != peer_public.device_id {
                 return Err(CoreError::Protocol(
@@ -2636,8 +2646,10 @@ impl Engine {
                 ));
             }
             // RESERVE, in one critical section. This rechecks the TTL and
-            // charges the attempt. A stray connection fails above, so it never
-            // charges one.
+            // charges the attempt. A peer that fails above charges nothing, but
+            // that check only proves the peer's own keys agree. Any LAN host
+            // can mint a fresh valid identity for each try and spend all three
+            // (R3 accepts this denial of service).
             let (code, generation) = {
                 let mut slot = code_slot.lock().await;
                 match reserve(&mut slot, std::time::Instant::now()) {
@@ -2653,58 +2665,68 @@ impl Engine {
                     }
                 }
             };
-            conn.send(
-                0,
-                RecordType::Control,
-                Bytes::from(identity.public().to_cbor()?),
-            )
-            .await?;
-            let name = hex::encode(peer_public.device_id);
-            let expected = PairingBundle::new(peer_public, name);
-            let (mut pairing, sas) = match crate::pairing::pair(
-                conn,
-                identity,
-                &local,
-                &expected,
-                false,
-                PairMode::Code,
-                Some(&code),
-            )
-            .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    let mut slot = code_slot.lock().await;
-                    settle_after_try(&mut slot, generation);
-                    return Err(e);
+            // Everything past the reservation runs in one block, so a failure
+            // on ANY path can settle the charged try. Only a pair() failure used
+            // to settle, so a commit failure on the last try left the slot
+            // Armed with no tries left and never reported Exhausted.
+            let outcome = async {
+                conn.send(
+                    0,
+                    RecordType::Control,
+                    Bytes::from(identity.public().to_cbor()?),
+                )
+                .await?;
+                let name = hex::encode(peer_public.device_id);
+                let expected = PairingBundle::new(peer_public, name);
+                let (mut pairing, sas) = crate::pairing::pair(
+                    conn,
+                    identity,
+                    &local,
+                    &expected,
+                    false,
+                    PairMode::Code,
+                    Some(&code),
+                )
+                .await?;
+                // R42e: the address to store is the one the joiner ADVERTISED,
+                // not `peer_addr`. `peer_addr` is the source port of a socket the
+                // joiner closes as soon as pairing ends, so storing it produced a
+                // peer that refused every connection. `None` when the joiner did
+                // not send one: discovery then owns the address, as before.
+                let announced = Self::read_listen_addr(conn).await;
+                let advertised = announced.as_ref().map(|l| l.addr);
+                if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
+                    pairing.label = Some(name);
                 }
-            };
-            // R42e: the address to store is the one the joiner ADVERTISED,
-            // not `peer_addr`. `peer_addr` is the source port of a socket the
-            // joiner closes as soon as pairing ends, so storing it produced a
-            // peer that refused every connection. `None` when the joiner did
-            // not send one: discovery then owns the address, as before.
-            let announced = Self::read_listen_addr(conn).await;
-            let advertised = announced.as_ref().map(|l| l.addr);
-            if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
-                pairing.label = Some(name);
+                Self::commit_pairing(
+                    db,
+                    &pairing,
+                    tx,
+                    advertised.map(|a| (devices, a)),
+                    confirm_required,
+                )
+                .await?;
+                // End the reservation in its own block, so the guard drops
+                // before the send below. The channel holds 8 items, so a full
+                // channel would block the send with the lock held, and every
+                // later status read, cancel, or inbound connection would stall.
+                {
+                    let mut slot = code_slot.lock().await;
+                    if slot.armed.as_ref().map(|a| a.generation) == Some(generation) {
+                        slot.armed = None;
+                        // A success is not a dead code, so no end reason.
+                        slot.end = None;
+                    }
+                }
+                let _ = pairing_tx.send((sas, pairing.peer_device_id)).await;
+                Ok(())
             }
-            Self::commit_pairing(
-                db,
-                &pairing,
-                tx,
-                advertised.map(|a| (devices, a)),
-                confirm_required,
-            )
-            .await?;
-            let mut slot = code_slot.lock().await;
-            if slot.armed.as_ref().map(|a| a.generation) == Some(generation) {
-                slot.armed = None;
-                // A success is not a dead code, so no end reason.
-                slot.end = None;
+            .await;
+            if outcome.is_err() {
+                let mut slot = code_slot.lock().await;
+                settle_after_try(&mut slot, generation);
             }
-            let _ = pairing_tx.send((sas, pairing.peer_device_id)).await;
-            return Ok(());
+            return outcome;
         }
         // The arm is a SINGLE slot, so it must not be consumed by a connection
         // that turns out not to be a pairing dial. Every inbound connection

@@ -647,8 +647,9 @@ impl DaakEngine {
         serde_json::to_string(&json).map_err(protocol_err)
     }
 
-    /// The host disarms the code when it leaves the panel, so a code that is no
-    /// longer on screen cannot start a handshake.
+    /// The host disarms the code when it leaves the panel, so a later connection
+    /// cannot START a handshake. A handshake that took a try before the cancel
+    /// can still finish.
     pub fn cancel_code_pairing(&self) -> Result<(), FfiError> {
         self.rt.block_on(self.engine()?.cancel_code_pairing());
         Ok(())

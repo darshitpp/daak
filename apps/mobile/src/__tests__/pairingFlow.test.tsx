@@ -844,6 +844,51 @@ describe('the app flow drives code pairing', () => {
     expect(screen.getByTestId('pair-code-dead-new')).toBeTruthy();
   });
 
+  // F5(a): the poll must start only AFTER the arm resolves. An immediate poll
+  // reads the PREVIOUS arm's state, so "Make a new pairing code" flashed the
+  // dead panel again for about a second.
+  it('host: does not poll or draw the panel before the arm resolves', async () => {
+    const codePairingStatus = jest.spyOn(engine, 'codePairingStatus');
+    let releaseArm!: (code: string) => void;
+    jest.spyOn(engine, 'armCodePairing').mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseArm = resolve;
+      }),
+    );
+    renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    // The arm is in flight: no code panel, and no poll of the old slot.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('pair-code-value')).toBeNull();
+    expect(codePairingStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseArm('654321');
+      await Promise.resolve();
+    });
+    expect(await screen.findByTestId('pair-code-value')).toHaveTextContent('654 321');
+    expect(codePairingStatus).toHaveBeenCalled();
+  });
+
+  // F5(b): a codeRound change only arms a fresh code over the old one, so it
+  // must NOT cancel. A cancel that landed after the new arm would disarm the
+  // code on screen. Only leaving the panel cancels.
+  it('host: a new code round does not cancel, but leaving does', async () => {
+    const cancelCodePairing = jest.spyOn(engine, 'cancelCodePairing');
+    renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    await waitFor(() => expect(screen.getByTestId('pair-code-value')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('pair-code-new'));
+    await waitFor(() => expect(screen.getByTestId('pair-code-value')).toBeTruthy());
+    expect(cancelCodePairing).not.toHaveBeenCalled();
+
+    fireEvent.press(screen.getByTestId('pair-code-back'));
+    await waitFor(() => expect(cancelCodePairing).toHaveBeenCalledTimes(1));
+  });
+
   it('host: leaving the code step disarms the code', async () => {
     const cancelCodePairing = jest.spyOn(engine, 'cancelCodePairing');
     renderFlow();
