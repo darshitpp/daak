@@ -869,6 +869,10 @@ describe('the app flow drives code pairing', () => {
     const codePairingStatus = jest
       .spyOn(engine, 'codePairingStatus')
       .mockResolvedValue({ state: 'armed', remainingMs: 60_000, triesLeft: 3 });
+    // The ONE engine.on lives in startEngine. Without it the handler set is
+    // empty and the SAS never arrives, so this case would lean on an earlier
+    // describe for its engine state.
+    await startEngine();
     renderFlow();
     fireEvent.press(screen.getByTestId('code'));
     await waitFor(() => expect(screen.getByTestId('pair-code-value')).toHaveTextContent('123 456'));
