@@ -758,3 +758,197 @@ describe('the FFI fixture drives the host half', () => {
   });
 });
 
+// Design `pair-code-panel`, driven from the flow. The flow owns the entry
+// button, the mode, the poll, the busy flag, and the cancel on exit. The screen
+// draws the panel and reads its values from props (Task 5).
+describe('the app flow drives code pairing', () => {
+  const PEER = 'aa'.repeat(16);
+  const renderFlow = () =>
+    render(
+      <EngineProvider engine={engine}>
+        <ToastProvider>
+          <PairingFlow />
+        </ToastProvider>
+      </EngineProvider>,
+    );
+  const handlers = () =>
+    (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+  // The panel opens on the host side. This switch is the only control that
+  // reaches the joiner side, because the panel's segmented control is an
+  // indicator (Task 5 decision 3).
+  const openJoiner = async () => {
+    fireEvent.press(screen.getByTestId('code'));
+    fireEvent.press(await screen.findByTestId('code-switch'));
+  };
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    // The gating test turns support off. A failed assertion must not leave it
+    // off for the tests that follow.
+    Object.defineProperty(engine, 'codePairingSupported', { value: true, configurable: true });
+  });
+
+  it('renders the third choice only when the engine runs code pairing', () => {
+    const view = renderFlow();
+    expect(screen.getByTestId('code')).toBeTruthy();
+    expect(screen.getByText('Use a pairing code')).toBeTruthy();
+    view.unmount();
+
+    // A daemon-backed build cannot run code pairing (spec Limits).
+    Object.defineProperty(engine, 'codePairingSupported', { value: false, configurable: true });
+    const second = renderFlow();
+    expect(screen.queryByTestId('code')).toBeNull();
+    second.unmount();
+  });
+
+  it('host: arms once and shows the code the engine made', async () => {
+    const armCodePairing = jest.spyOn(engine, 'armCodePairing');
+    renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    await waitFor(() => expect(armCodePairing).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId('pair-code-value')).toHaveTextContent('123 456');
+    // The code panel belongs to this path. No QR of this device is on screen.
+    expect(screen.queryByLabelText('pairing-qr')).toBeNull();
+    // The arm is one-shot: a re-render must not arm a second slot.
+    expect(armCodePairing).toHaveBeenCalledTimes(1);
+  });
+
+  it('host: polls the status and the countdown follows remainingMs', async () => {
+    let reads = 0;
+    const codePairingStatus = jest.spyOn(engine, 'codePairingStatus').mockImplementation(async () => {
+      reads += 1;
+      // The engine is the only clock. The panel reads each poll.
+      return reads === 1
+        ? { state: 'armed' as const, remainingMs: 120_000, triesLeft: 3 }
+        : { state: 'armed' as const, remainingMs: 8_000, triesLeft: 3 };
+    });
+    renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    expect(await screen.findByTestId('pair-code-countdown')).toHaveTextContent(/2:00/);
+    // The next tick lands one second later.
+    await waitFor(() => expect(codePairingStatus.mock.calls.length).toBeGreaterThan(1), {
+      timeout: 3000,
+    });
+    await waitFor(() => expect(screen.getByTestId('pair-code-countdown')).toHaveTextContent(/0:08/), {
+      timeout: 3000,
+    });
+  });
+
+  it('host: an exhausted poll shows the too-many-tries note', async () => {
+    jest
+      .spyOn(engine, 'codePairingStatus')
+      .mockResolvedValue({ state: 'exhausted', remainingMs: 0, triesLeft: 0 });
+    renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    expect(await screen.findByText('Too many tries.')).toBeTruthy();
+    expect(screen.getByTestId('pair-code-dead-new')).toBeTruthy();
+  });
+
+  it('host: leaving the code step disarms the code', async () => {
+    const cancelCodePairing = jest.spyOn(engine, 'cancelCodePairing');
+    renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    await waitFor(() => expect(screen.getByTestId('pair-code-value')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('pair-code-back'));
+    await waitFor(() => expect(cancelCodePairing).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Show my code')).toBeTruthy();
+  });
+
+  it('host: unmount disarms the code', async () => {
+    const cancelCodePairing = jest.spyOn(engine, 'cancelCodePairing');
+    const view = renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    await waitFor(() => expect(screen.getByTestId('pair-code-value')).toBeTruthy());
+    view.unmount();
+    expect(cancelCodePairing).toHaveBeenCalledTimes(1);
+  });
+
+  // Resolution 1: the SAS arrives through the one engine.on in bootstrap.ts.
+  // The host stops the poll and takes the code off the screen.
+  it('host: the SAS stops the poll and takes the code off the screen', async () => {
+    const codePairingStatus = jest
+      .spyOn(engine, 'codePairingStatus')
+      .mockResolvedValue({ state: 'armed', remainingMs: 60_000, triesLeft: 3 });
+    renderFlow();
+    fireEvent.press(screen.getByTestId('code'));
+    await waitFor(() => expect(screen.getByTestId('pair-code-value')).toHaveTextContent('123 456'));
+    const readsBefore = codePairingStatus.mock.calls.length;
+
+    act(() => {
+      for (const h of handlers()) {
+        h({ type: 'pairing.sas', peerDeviceId: 'bb'.repeat(16), sas: '004217' });
+      }
+    });
+    expect(await screen.findByText('004 217')).toBeTruthy();
+    expect(screen.queryByText('123 456')).toBeNull();
+    expect(screen.queryByTestId('pair-code-countdown')).toBeNull();
+    // The check number is answered with They match or Does not match. The way
+    // back hides, so no exit leaves the pending pairing unanswered.
+    expect(screen.queryByTestId('pair-code-back')).toBeNull();
+    expect(screen.getByTestId('confirm')).toBeTruthy();
+    expect(screen.getByTestId('reject')).toBeTruthy();
+    // The poll is stopped: no new reading arrives after a second.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+    expect(codePairingStatus.mock.calls.length).toBe(readsBefore);
+  });
+
+  it('join: picks a device, types six digits, and calls pair with the code mode', async () => {
+    const pair = jest.spyOn(engine, 'pair');
+    renderFlow();
+    await openJoiner();
+    fireEvent.press(await screen.findByTestId('pair-code-pick-' + PEER));
+    fireEvent.changeText(screen.getByTestId('pair-code-input'), '482917');
+    fireEvent.press(screen.getByTestId('pair-code-submit'));
+    await waitFor(() => expect(pair).toHaveBeenCalledWith(PEER, 'code', '482917'));
+    // The engine answers the check number, and the peer name is the picked one.
+    expect(await screen.findByTestId('pairing-sas')).toBeTruthy();
+    expect(screen.getByText('Pairing with Pixel 9')).toBeTruthy();
+  });
+
+  it('join: the picker lists the unpaired peers only', async () => {
+    jest.spyOn(engine, 'devices').mockResolvedValueOnce([
+      { deviceId: PEER, name: 'Pixel 9', addr: '192.168.1.9:40001' },
+      { deviceId: 'bb'.repeat(16), name: 'Old Tablet', addr: '192.168.1.10:40001', paired: true },
+    ]);
+    renderFlow();
+    await openJoiner();
+    expect(await screen.findByTestId('pair-code-pick-' + PEER)).toBeTruthy();
+    expect(screen.queryByTestId('pair-code-pick-' + 'bb'.repeat(16))).toBeNull();
+  });
+
+  it('join: a double tap on Continue runs pair once', async () => {
+    let release!: (v: { sas: string }) => void;
+    const pair = jest.spyOn(engine, 'pair').mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    renderFlow();
+    await openJoiner();
+    fireEvent.press(await screen.findByTestId('pair-code-pick-' + PEER));
+    fireEvent.changeText(screen.getByTestId('pair-code-input'), '482917');
+    fireEvent.press(screen.getByTestId('pair-code-submit'));
+    fireEvent.press(screen.getByTestId('pair-code-submit'));
+    expect(pair).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      release({ sas: '123456' });
+    });
+  });
+
+  it('join: a failed pair shows the neutral message and releases Continue', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(engine, 'pair').mockRejectedValueOnce(new Error('wrong code'));
+    renderFlow();
+    await openJoiner();
+    fireEvent.press(await screen.findByTestId('pair-code-pick-' + PEER));
+    fireEvent.changeText(screen.getByTestId('pair-code-input'), '482917');
+    fireEvent.press(screen.getByTestId('pair-code-submit'));
+    expect(await screen.findByText('That did not work.')).toBeTruthy();
+    expect(screen.getByTestId('pair-code-submit')).not.toBeDisabled();
+    expect(warn.mock.calls.flat().join(' ')).toContain('wrong code');
+    warn.mockRestore();
+  });
+});
+

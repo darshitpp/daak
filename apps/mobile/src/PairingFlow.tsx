@@ -1,10 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Btn, Note, PairingScreen, Section, ToastProvider, ui, useEngine, useToast } from '@daak/ui';
-import { armHostPairing, hostPairingQr, joinWithScan, parsePairingPayload } from './pairing';
+import type { CodePairingStatus } from '@daak/core';
+import {
+  armHostPairing,
+  hostPairingQr,
+  hostShowCode,
+  joinWithCode,
+  joinWithScan,
+  parsePairingPayload,
+} from './pairing';
 import { onPairingSas } from './bootstrap';
 
-type Phase = { kind: 'choose' } | { kind: 'host'; qrUri: string } | { kind: 'join' };
+type Phase =
+  | { kind: 'choose' }
+  | { kind: 'host'; qrUri: string }
+  | { kind: 'join' }
+  | { kind: 'code-host' }
+  | { kind: 'code-join' };
 type Busy = 'making' | 'reading' | null;
 
 // The shared scroll-content padding. `packages/ui` keeps `ui.pad` internal to its
@@ -15,6 +28,11 @@ const pad = { padding: 16, gap: 24 } as const;
  * The stateful half of QR pairing (R100). It lives in the app, feeds the
  * presentational `PairingScreen`, and reaches the native scanner through the
  * `@daak/platform` facades.
+ *
+ * Code pairing is the second option. The host arms a six digit code and polls
+ * the engine for its state, because the engine is the only clock. The joiner
+ * picks an unpaired peer and types the code. The flow owns the mode, the poll,
+ * the busy flag, and the cancel on exit.
  *
  * R98: lazy. Nothing here fetches a pairing bundle or draws a QR until the user
  * enters the host flow.
@@ -56,6 +74,24 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
   // A failed confirm has its own message and title. `error` belongs to the
   // host and join steps, whose title says "make" or "read" a code.
   const [confirmError, setConfirmError] = useState('');
+  // Code pairing. The flow owns the mode, the poll, and the busy flag. The
+  // screen draws the panel and reads these values from props.
+  const [code, setCode] = useState('');
+  const [codeStatus, setCodeStatus] = useState<CodePairingStatus | undefined>(undefined);
+  const [codeDevices, setCodeDevices] = useState<{ deviceId: string; name: string }[]>([]);
+  const [codePick, setCodePick] = useState('');
+  const [codeBusy, setCodeBusy] = useState(false);
+  // This device's own name, for the host panel.
+  const [selfName, setSelfName] = useState('');
+  // A fresh code needs a fresh arm, and the phase kind does not change for it.
+  const [codeRound, setCodeRound] = useState(0);
+  // Resolution 2: the generation ref drops a slow poll that resolves after the
+  // generation ended, and the interval ref lets the SAS handler stop the poll.
+  const codeGen = useRef(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // A double tap must call pair once. The screen disables Continue from this
+  // flag, and the ref stops the tap that lands before the re-render.
+  const codeBusyRef = useRef(false);
   // The peer id of a number that is on screen and not yet answered. A ref, so
   // the unmount cleanup reads the latest value without a stale closure.
   const pendingRef = useRef('');
@@ -112,9 +148,84 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
         setPeerId(peer);
         pendingRef.current = peer;
         setBusy(null);
+        // Resolution 1: the code handshake finished. Stop the host poll and
+        // take the code off the screen, so the SAS step below is the number to
+        // compare. The QR flows share this handler and set no code.
+        if (pollRef.current !== null) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        codeGen.current += 1;
+        setCode('');
+        setCodeStatus(undefined);
       }),
     [],
   );
+
+  // Resolution 2: one poll each second while the code-host panel is open. The
+  // first reading is immediate, so the countdown shows with the code.
+  useEffect(() => {
+    if (phase.kind !== 'code-host') return;
+    const gen = ++codeGen.current;
+    const stale = () => gen !== codeGen.current;
+    setCode('');
+    setCodeStatus(undefined);
+    void hostShowCode(engineRef.current).then(
+      (made) => {
+        if (!stale()) setCode(made);
+      },
+      (e: unknown) => {
+        if (!stale()) setError(e instanceof Error ? e.message : 'hosting failed');
+      },
+    );
+    // The host panel names this device. The name comes from the engine, the
+    // same source DashboardScreen reads.
+    void engineRef.current.selfProfile().then(
+      (profile) => {
+        if (!stale()) setSelfName(profile.name);
+      },
+      () => {},
+    );
+    const poll = () => {
+      void engineRef.current.codePairingStatus().then(
+        (status) => {
+          if (!stale()) setCodeStatus(status);
+        },
+        () => {},
+      );
+    };
+    poll();
+    pollRef.current = setInterval(poll, 1000);
+    // Resolution 3: leaving the phase and the unmount both land here. A code
+    // that is no longer on screen must not start a handshake.
+    return () => {
+      codeGen.current += 1;
+      if (pollRef.current !== null) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      void engineRef.current.cancelCodePairing().catch(() => {});
+    };
+  }, [phase.kind, codeRound]);
+
+  // Ruling 3: the picker takes no `paired` field. The flow removes the peers
+  // this device already trusts, and passes the rest ready to draw.
+  useEffect(() => {
+    if (phase.kind !== 'code-join') return;
+    let alive = true;
+    void engineRef.current.devices().then(
+      (list) => {
+        if (!alive) return;
+        setCodeDevices(
+          list.filter((d) => d.paired !== true).map((d) => ({ deviceId: d.deviceId, name: d.name })),
+        );
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [phase.kind]);
 
   // A link bundle is a join with no camera. But a link is a request from
   // another app or a web page, so it never joins by itself: the user sees who
@@ -231,6 +342,91 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
     );
   };
 
+  // The third choice: the code panel. The flow opens it on the host side,
+  // because the host is the device that shows a code.
+  const startCode = () => {
+    setSas('');
+    setPeerId('');
+    pendingRef.current = '';
+    setError('');
+    setConfirmError('');
+    setCode('');
+    setCodeStatus(undefined);
+    setCodePick('');
+    setPhase({ kind: 'code-host' });
+  };
+
+  // The segmented control inside the panel reads the mode and does not change
+  // it (Task 5). This switch is the one control that changes it, so both halves
+  // of code pairing are reachable: one device shows the code, the other types
+  // it.
+  const switchCodeMode = () => {
+    setSas('');
+    setPeerId('');
+    pendingRef.current = '';
+    setError('');
+    setCodePick('');
+    setPhase({ kind: phase.kind === 'code-join' ? 'code-host' : 'code-join' });
+  };
+
+  // The code is dead, or the user asked for a new one. The round bump arms a
+  // fresh code: the phase kind does not change.
+  const newCodeHost = () => {
+    setSas('');
+    setPeerId('');
+    pendingRef.current = '';
+    setError('');
+    setCode('');
+    setCodeStatus(undefined);
+    setCodeRound((n) => n + 1);
+    setPhase({ kind: 'code-host' });
+  };
+
+  // Back to the choices. The code-host effect cleanup disarms the code.
+  const leaveCode = () => {
+    setSas('');
+    setPeerId('');
+    pendingRef.current = '';
+    setError('');
+    setConfirmError('');
+    setCode('');
+    setCodeStatus(undefined);
+    setCodePick('');
+    setCodeDevices([]);
+    setPhase({ kind: 'choose' });
+  };
+
+  // The joiner typed six digits and pressed Continue. The screen disables
+  // Continue while `codeBusy` is true, so a double tap calls the engine once.
+  const submitCode = (digits: string) => {
+    const deviceId = codePick;
+    if (codeBusyRef.current) return;
+    if (!deviceId) {
+      setError('daak: pick the device that shows the code first');
+      return;
+    }
+    codeBusyRef.current = true;
+    setCodeBusy(true);
+    setError('');
+    void pairOrRevoke(deviceId, () => joinWithCode(engine, deviceId, digits)).then(
+      ({ sas: received }) => {
+        codeBusyRef.current = false;
+        setCodeBusy(false);
+        // Unmounted mid-pair: `pairOrRevoke` already revoked. Do not resurrect
+        // the SAS on a dead route.
+        if (unmounted.current) return;
+        setSas(received);
+        setPeerId(deviceId);
+        pendingRef.current = deviceId;
+      },
+      (e: unknown) => {
+        codeBusyRef.current = false;
+        setCodeBusy(false);
+        setError(e instanceof Error ? e.message : 'that pairing did not work');
+      },
+    );
+  };
+
   // The engine keeps a new pairing pending: it grants nothing until the user
   // says the two numbers matched. Reject removes the pending pairing.
   const reject = () => {
@@ -272,6 +468,10 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
     );
   };
 
+  // The screen takes one role and one code mode. The flow decides both.
+  const hosting = phase.kind === 'host' || phase.kind === 'code-host';
+  const codePhase = phase.kind === 'code-host' || phase.kind === 'code-join';
+
   if (link) {
     return (
       <View style={embedded ? ui.stack : undefined}>
@@ -293,6 +493,11 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
           <Text style={ui.lead}>Open Daak on the other device, then pick how you want to join up.</Text>
           <Btn variant="primary" block testID="host" label="Show my code" onPress={startHost} />
           <Btn variant="quiet" block testID="join" label="Scan a code" onPress={startJoin} />
+          {/* The third choice. It hides on a build that cannot run code
+              pairing (spec Limits), so a daemon client shows two choices. */}
+          {engine.codePairingSupported ? (
+            <Btn variant="quiet" block testID="code" label="Use a pairing code" onPress={startCode} />
+          ) : null}
           {/* `reject` returns to this pane and then removes the pairing. A failed
               removal sets `error`. Without this note the failure would be silent. */}
           {error ? <Note tone="err" title="We couldn't remove that pairing." body={error} testID="pairing-error" /> : null}
@@ -304,7 +509,7 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
     // flex: 1 is needed. The root of `PairingScreen` is `ui.screen` (flex: 1).
     <View style={embedded ? undefined : ui.screen} testID="pair-frame">
       <PairingScreen
-        role={phase.kind}
+        role={hosting ? 'host' : 'join'}
         qrUri={phase.kind === 'host' ? phase.qrUri : ''}
         onScan={startJoin}
         sas={sas}
@@ -313,10 +518,31 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
         embedded={embedded}
         busy={busy ?? undefined}
         error={error || undefined}
-        onRetry={phase.kind === 'host' ? startHost : startJoin}
+        onRetry={phase.kind === 'host' ? startHost : phase.kind === 'join' ? startJoin : undefined}
         // The design puts "Show a new code" under the number. The screen draws
         // it once a SAS is on it.
-        onNewCode={phase.kind === 'host' && sas ? startHost : undefined}
+        onNewCode={hosting && sas ? (phase.kind === 'code-host' ? newCodeHost : startHost) : undefined}
+        // Code pairing. The flow owns each value; the screen only draws them.
+        codeSupported={engine.codePairingSupported}
+        codeMode={phase.kind === 'code-host' ? 'show' : phase.kind === 'code-join' ? 'enter' : undefined}
+        code={phase.kind === 'code-host' ? code : undefined}
+        codeStatus={phase.kind === 'code-host' ? codeStatus : undefined}
+        codeBusy={phase.kind === 'code-join' ? codeBusy : undefined}
+        codeDevices={phase.kind === 'code-join' ? codeDevices : []}
+        codePick={phase.kind === 'code-join' && codePick ? codePick : undefined}
+        selfName={phase.kind === 'code-host' ? selfName : undefined}
+        onCodeSubmit={phase.kind === 'code-join' ? submitCode : undefined}
+        onCodeNew={phase.kind === 'code-host' && (code !== '' || codeStatus !== undefined) ? newCodeHost : undefined}
+        onCodePick={phase.kind === 'code-join' ? setCodePick : undefined}
+        // The check number is answered with They match or Does not match, so the
+        // way back hides there. A back press would leave a pending pairing that
+        // nobody answered.
+        onCodeBack={codePhase && !sas ? leaveCode : undefined}
+        // The joiner picked this device, so it knows the name at the check
+        // number. The host learns the name only from the finished handshake.
+        peerName={
+          phase.kind === 'code-join' ? codeDevices.find((d) => d.deviceId === codePick)?.name : undefined
+        }
       />
       {/* The arm is one-shot. `startHost` arms again. Before a SAS arrives the
           screen shows no button of its own, so this one is the only recovery
@@ -324,6 +550,27 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
       {phase.kind === 'host' && !sas ? (
         <View style={pad}>
           <Btn variant="quiet" block testID="host-retry" label="Show a new code" onPress={startHost} />
+        </View>
+      ) : null}
+      {/* The screen's panel shows the mode and cannot change it, so the flow
+          carries the switch. Without it the joiner panel has no way in. */}
+      {codePhase && !sas ? (
+        <View style={pad}>
+          <Btn
+            variant="quiet"
+            block
+            testID="code-switch"
+            label={phase.kind === 'code-host' ? 'Enter a code instead' : 'Show a code instead'}
+            onPress={switchCodeMode}
+          />
+        </View>
+      ) : null}
+      {/* The panel draws a failure of the joiner call. The host arm has no note
+          of its own, so the flow shows it here. A silent panel tells the user
+          nothing. */}
+      {phase.kind === 'code-host' && error ? (
+        <View style={pad}>
+          <Note tone="err" title="We couldn't make your code." body={error} testID="pair-code-host-error" />
         </View>
       ) : null}
       {confirmError ? (
