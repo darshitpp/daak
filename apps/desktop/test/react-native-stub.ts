@@ -95,6 +95,7 @@ export const StyleSheet = {
 };
 
 export const View = 'View';
+export const ActivityIndicator = 'ActivityIndicator';
 export const Text = 'Text';
 export const Image = 'Image';
 export const ScrollView = 'ScrollView';
