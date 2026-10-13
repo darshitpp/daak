@@ -19,8 +19,6 @@ Builds:
     subdir: apps/mobile/android
     sudo:
       - apt-get update
-      - apt-get install -y openjdk-21-jdk-headless
-      - update-java-alternatives -s java-1.21.0-openjdk-amd64
       - apt-get install -y rustup nodejs npm build-essential
       - npm install -g pnpm@9.12.0
     init:
@@ -54,8 +52,6 @@ Builds:
     subdir: apps/mobile/android
     sudo:
       - apt-get update
-      - apt-get install -y openjdk-21-jdk-headless
-      - update-java-alternatives -s java-1.21.0-openjdk-amd64
       - apt-get install -y rustup nodejs npm build-essential
       - npm install -g pnpm@9.12.0
     init:
