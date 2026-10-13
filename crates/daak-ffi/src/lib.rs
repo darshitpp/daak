@@ -605,6 +605,55 @@ impl DaakEngine {
         serde_json::to_string(&json).map_err(protocol_err)
     }
 
+    /// The HOST half of code pairing. The code comes from daak-core (R4), so
+    /// the UI cannot pick a weak one. This replaces any earlier code and
+    /// cancels an open QR arm (R5).
+    pub fn arm_code_pairing(&self) -> Result<String, FfiError> {
+        let code = daak_core::engine::new_pairing_code();
+        self.rt
+            .block_on(self.engine()?.offer_code_pairing(code.clone()))
+            .map_err(engine_err)?;
+        Ok(code)
+    }
+
+    /// The JOINER half. The address comes from the device list (R2).
+    pub fn pair_with_code(&self, addr: String, code: String) -> Result<String, FfiError> {
+        let addr: std::net::SocketAddr = addr.parse().map_err(protocol_err)?;
+        let (sas, peer) = self
+            .rt
+            .block_on(self.engine()?.pair_with_code(addr, &code))
+            .map_err(engine_err)?;
+        let json = serde_json::json!({ "sas": sas, "peer_device_id": to_hex(&peer) });
+        serde_json::to_string(&json).map_err(protocol_err)
+    }
+
+    /// The host polls this once per second. The keys are snake_case, like every
+    /// other FFI JSON; packages/core maps them.
+    pub fn code_pairing_status(&self) -> Result<String, FfiError> {
+        use daak_core::engine::CodePairingState as S;
+        let s = self.rt.block_on(self.engine()?.code_pairing_status());
+        let state = match s.state {
+            S::Idle => "idle",
+            S::Armed => "armed",
+            S::Expired => "expired",
+            S::Exhausted => "exhausted",
+            S::Cancelled => "cancelled",
+        };
+        let json = serde_json::json!({
+            "state": state,
+            "remaining_ms": s.remaining_ms,
+            "tries_left": s.tries_left,
+        });
+        serde_json::to_string(&json).map_err(protocol_err)
+    }
+
+    /// The host disarms the code when it leaves the panel, so a code that is no
+    /// longer on screen cannot start a handshake.
+    pub fn cancel_code_pairing(&self) -> Result<(), FfiError> {
+        self.rt.block_on(self.engine()?.cancel_code_pairing());
+        Ok(())
+    }
+
     /// Block until the next inbound pairing completes and return its SAS.
     /// The event is pushed too, so an app that prefers the callback can ignore
     /// this method; a caller that awaits it just gets the same SAS early.
