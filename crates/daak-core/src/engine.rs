@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
+use rand::Rng;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::control::{Hello, ListenAddr};
@@ -354,6 +355,103 @@ pub(crate) struct PendingPairing {
     code: Option<String>,
 }
 
+/// How long a pairing code stays armed (R3).
+pub const CODE_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+/// How many handshakes a pairing code may start (R3).
+pub const CODE_MAX_TRIES: u32 = 3;
+
+/// A fresh six-digit pairing code. R4: the entropy lives here, in Rust.
+pub fn new_pairing_code() -> String {
+    format_code(rand::thread_rng().gen_range(0..1_000_000u32))
+}
+
+/// Six ASCII digits, leading zeros kept, so `007341` stays a string.
+fn format_code(n: u32) -> String {
+    format!("{:06}", n)
+}
+
+#[derive(Clone)]
+struct ArmedCode {
+    code: String,
+    attempts: u32,
+    expires_at: std::time::Instant,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CodeEnd {
+    Expired,
+    Exhausted,
+    Cancelled,
+}
+
+/// One lock for the slot AND its end reason. A reader never sees the code gone
+/// with no reason yet, and a late write cannot land after a re-arm.
+#[derive(Default)]
+pub(crate) struct CodeSlot {
+    armed: Option<ArmedCode>,
+    end: Option<CodeEnd>,
+}
+
+enum Reserve {
+    Code { code: String, generation: u64 },
+    Empty,
+    Expired,
+    Exhausted,
+}
+
+/// The ONE place an attempt is charged. It rechecks the TTL, because a peer can
+/// stall in the identity read past the deadline.
+fn reserve(slot: &mut CodeSlot, now: std::time::Instant) -> Reserve {
+    let Some(a) = slot.armed.as_mut() else {
+        return Reserve::Empty;
+    };
+    if now >= a.expires_at {
+        slot.armed = None;
+        slot.end = Some(CodeEnd::Expired);
+        return Reserve::Expired;
+    }
+    if a.attempts >= CODE_MAX_TRIES {
+        slot.armed = None;
+        slot.end = Some(CodeEnd::Exhausted);
+        return Reserve::Exhausted;
+    }
+    a.attempts += 1;
+    Reserve::Code {
+        code: a.code.clone(),
+        generation: a.generation,
+    }
+}
+
+/// After a FAILED handshake: clear the slot when this reservation used the last
+/// try. It does nothing when the generation is stale.
+fn settle_after_try(slot: &mut CodeSlot, generation: u64) {
+    let current = slot.armed.as_ref().map(|a| a.generation) == Some(generation);
+    if !current {
+        return;
+    }
+    if slot.armed.as_ref().map(|a| a.attempts >= CODE_MAX_TRIES) == Some(true) {
+        slot.armed = None;
+        slot.end = Some(CodeEnd::Exhausted);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodePairingState {
+    Idle,
+    Armed,
+    Expired,
+    Exhausted,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodePairingStatus {
+    pub state: CodePairingState,
+    pub remaining_ms: u64,
+    pub tries_left: u32,
+}
+
 /// Drop the live row of a device that left the network.
 /// Only the live row goes. The stored pairing, the outbox, and the session stay.
 async fn handle_lost(
@@ -487,7 +585,12 @@ pub struct Engine {
     /// &self, and the per-row outbox drain drives sends through the same Arc.
     sessions: SharedSessions,
     pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
-    pending_code: Arc<Mutex<Option<String>>>,
+    /// R5: the one armed code, its attempts and its deadline, plus the reason
+    /// the last arm ended. One lock covers both.
+    code_slot: Arc<Mutex<CodeSlot>>,
+    /// Bumped on every arm, so a late settle from an old reservation does
+    /// nothing.
+    code_generation: Arc<std::sync::atomic::AtomicU64>,
     /// The inbound pairing channel. It carries (sas, peer_device_id): the host
     /// needs the peer id to offer its own SAS confirmation, and the id is
     /// known here and nowhere later on this surface.
@@ -812,7 +915,8 @@ impl Engine {
 
         let (pairing_tx, pairing_rx) = mpsc::channel(8);
         let pending_pairing = Arc::new(Mutex::new(None));
-        let pending_code = Arc::new(Mutex::new(None));
+        let code_slot = Arc::new(Mutex::new(CodeSlot::default()));
+        let code_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         let staging = {
             let dir = out_dir.join("staging");
@@ -943,7 +1047,7 @@ impl Engine {
             let accept_confirm = confirm_required.clone();
             let out_dir = out_dir.clone();
             let pending_pairing = pending_pairing.clone();
-            let pending_code = pending_code.clone();
+            let code_slot = code_slot.clone();
             let pairing_tx = pairing_tx.clone();
             let tx = tx.clone();
             tokio::spawn(async move {
@@ -967,7 +1071,7 @@ impl Engine {
                     let db = db.clone();
                     let out_dir = out_dir.clone();
                     let pending_pairing = pending_pairing.clone();
-                    let pending_code = pending_code.clone();
+                    let code_slot = code_slot.clone();
                     let pairing_tx = pairing_tx.clone();
                     let tx = tx.clone();
                     let profile = profile.clone();
@@ -981,7 +1085,7 @@ impl Engine {
                             &out_dir,
                             &profile,
                             &pending_pairing,
-                            &pending_code,
+                            &code_slot,
                             &pairing_tx,
                             &tx,
                             &devices,
@@ -1271,7 +1375,8 @@ impl Engine {
             confirm_required,
             sessions,
             pending_pairing,
-            pending_code,
+            code_slot,
+            code_generation,
             pairing_rx: Mutex::new(pairing_rx),
         })
     }
@@ -1941,6 +2046,11 @@ impl Engine {
             mode,
             code,
         });
+        // R5: only one mode is armed, so a QR arm clears any live code.
+        let mut slot = self.code_slot.lock().await;
+        if slot.armed.take().is_some() {
+            slot.end = Some(CodeEnd::Cancelled);
+        }
         Ok(())
     }
 
@@ -1958,15 +2068,84 @@ impl Engine {
             mode,
             code: None,
         });
+        // R5: only one mode is armed, so an open QR arm clears any live code.
+        let mut slot = self.code_slot.lock().await;
+        if slot.armed.take().is_some() {
+            slot.end = Some(CodeEnd::Cancelled);
+        }
         Ok(())
     }
 
-    /// Offer a manual code for an inbound code-mode pairing. The peer's identity
-    /// is learned in-band (authenticated by the SPAKE2-derived Noise prologue),
-    /// so no QR bundle is required.
+    /// Offer a manual code for an inbound code-mode pairing. Replaces any
+    /// earlier code and clears an open QR arm, so only one mode is armed (R5).
     pub async fn offer_code_pairing(&self, code: String) -> Result<()> {
-        *self.pending_code.lock().await = Some(code);
+        self.offer_code_pairing_with_ttl(code, CODE_TTL).await
+    }
+
+    /// As `offer_code_pairing`, with an explicit lifetime. Tests use a short one.
+    pub async fn offer_code_pairing_with_ttl(
+        &self,
+        code: String,
+        ttl: std::time::Duration,
+    ) -> Result<()> {
+        let generation = self
+            .code_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        {
+            let mut slot = self.code_slot.lock().await;
+            slot.armed = Some(ArmedCode {
+                code,
+                attempts: 0,
+                expires_at: std::time::Instant::now() + ttl,
+                generation,
+            });
+            slot.end = None;
+        }
+        *self.pending_pairing.lock().await = None;
         Ok(())
+    }
+
+    /// Disarm the code. The host screen calls this when it leaves the panel, so
+    /// a code that is no longer on screen cannot be used.
+    pub async fn cancel_code_pairing(&self) {
+        let mut slot = self.code_slot.lock().await;
+        if slot.armed.take().is_some() {
+            slot.end = Some(CodeEnd::Cancelled);
+        }
+    }
+
+    /// The host's view of the code slot. The screen polls this once per second,
+    /// so the engine is the only clock. It NEVER mutates.
+    pub async fn code_pairing_status(&self) -> CodePairingStatus {
+        let slot = self.code_slot.lock().await;
+        if let Some(a) = slot.armed.as_ref() {
+            let now = std::time::Instant::now();
+            if a.expires_at > now {
+                return CodePairingStatus {
+                    state: CodePairingState::Armed,
+                    remaining_ms: (a.expires_at - now).as_millis() as u64,
+                    tries_left: CODE_MAX_TRIES.saturating_sub(a.attempts),
+                };
+            }
+            // Read the deadline, not the slot: the host must see the expiry with
+            // no connection, because the joiner has not typed the code yet.
+            return CodePairingStatus {
+                state: CodePairingState::Expired,
+                remaining_ms: 0,
+                tries_left: 0,
+            };
+        }
+        CodePairingStatus {
+            state: match slot.end {
+                Some(CodeEnd::Expired) => CodePairingState::Expired,
+                Some(CodeEnd::Exhausted) => CodePairingState::Exhausted,
+                Some(CodeEnd::Cancelled) => CodePairingState::Cancelled,
+                None => CodePairingState::Idle,
+            },
+            remaining_ms: 0,
+            tries_left: 0,
+        }
     }
 
     pub async fn accept_pairing_once(&self) -> Result<String> {
@@ -2407,14 +2586,14 @@ impl Engine {
     }
 
     /// Called by the accept loop for every inbound connection.
-    #[allow(clippy::too_many_arguments)] // pending_pairing + pending_code are the two pairing slots
+    #[allow(clippy::too_many_arguments)] // pending_pairing + code_slot are the two pairing slots
     pub(crate) async fn handle_inbound(
         identity: &Identity,
         db: &Db,
         out_dir: &Path,
         profile: &Mutex<Profile>,
         pending_pairing: &Mutex<Option<PendingPairing>>,
-        pending_code: &Mutex<Option<String>>,
+        code_slot: &Mutex<CodeSlot>,
         pairing_tx: &mpsc::Sender<(String, [u8; 16])>,
         tx: &broadcast::Sender<EngineEvent>,
         devices: &SharedDevices,
@@ -2436,11 +2615,11 @@ impl Engine {
         // Manual-code pairing: no QR bundle was offered, so the peer's identity
         // arrives in-band and is authenticated by the SPAKE2-mixed prologue.
         //
-        // The code is INSPECTED here and taken only after the peer proved its
-        // identity binding, like the QR arm below. A stray connection must not
-        // burn the one-shot code.
-        let armed_code = pending_code.lock().await.clone();
-        if armed_code.is_some() {
+        // The slot is INSPECTED here, and an attempt is charged only after the
+        // peer proved its identity binding, like the QR arm below. A stray
+        // connection must not burn a try.
+        let armed = code_slot.lock().await.armed.is_some();
+        if armed {
             let peer_public = read_identity_public(conn).await?;
             if hello.device_id != peer_public.device_id {
                 return Err(CoreError::Protocol(
@@ -2456,8 +2635,23 @@ impl Engine {
                     "code pairing peer identity binding failed".into(),
                 ));
             }
-            let Some(code) = pending_code.lock().await.take() else {
-                return Err(CoreError::Protocol("pairing code already used".into()));
+            // RESERVE, in one critical section. This rechecks the TTL and
+            // charges the attempt. A stray connection fails above, so it never
+            // charges one.
+            let (code, generation) = {
+                let mut slot = code_slot.lock().await;
+                match reserve(&mut slot, std::time::Instant::now()) {
+                    Reserve::Code { code, generation } => (code, generation),
+                    Reserve::Empty => {
+                        return Err(CoreError::Protocol("pairing code already used".into()))
+                    }
+                    Reserve::Expired => {
+                        return Err(CoreError::Protocol("pairing code expired".into()))
+                    }
+                    Reserve::Exhausted => {
+                        return Err(CoreError::Protocol("pairing code used up".into()))
+                    }
+                }
             };
             conn.send(
                 0,
@@ -2467,7 +2661,7 @@ impl Engine {
             .await?;
             let name = hex::encode(peer_public.device_id);
             let expected = PairingBundle::new(peer_public, name);
-            let (mut pairing, sas) = crate::pairing::pair(
+            let (mut pairing, sas) = match crate::pairing::pair(
                 conn,
                 identity,
                 &local,
@@ -2476,7 +2670,15 @@ impl Engine {
                 PairMode::Code,
                 Some(&code),
             )
-            .await?;
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut slot = code_slot.lock().await;
+                    settle_after_try(&mut slot, generation);
+                    return Err(e);
+                }
+            };
             // R42e: the address to store is the one the joiner ADVERTISED,
             // not `peer_addr`. `peer_addr` is the source port of a socket the
             // joiner closes as soon as pairing ends, so storing it produced a
@@ -2495,6 +2697,12 @@ impl Engine {
                 confirm_required,
             )
             .await?;
+            let mut slot = code_slot.lock().await;
+            if slot.armed.as_ref().map(|a| a.generation) == Some(generation) {
+                slot.armed = None;
+                // A success is not a dead code, so no end reason.
+                slot.end = None;
+            }
             let _ = pairing_tx.send((sas, pairing.peer_device_id)).await;
             return Ok(());
         }
@@ -3457,6 +3665,79 @@ mod tests {
             name: "peer".into(),
             addr: "127.0.0.1:9".parse().unwrap(),
             paired: false,
+        }
+    }
+
+    #[test]
+    fn reserve_charges_three_attempts_then_closes() {
+        let now = std::time::Instant::now();
+        let mut slot = CodeSlot {
+            armed: Some(ArmedCode {
+                code: "123456".into(),
+                attempts: 0,
+                expires_at: now + CODE_TTL,
+                generation: 1,
+            }),
+            end: None,
+        };
+        for _ in 0..CODE_MAX_TRIES {
+            assert!(matches!(reserve(&mut slot, now), Reserve::Code { .. }));
+        }
+        assert!(matches!(reserve(&mut slot, now), Reserve::Exhausted));
+        assert!(slot.armed.is_none());
+        assert_eq!(slot.end, Some(CodeEnd::Exhausted));
+    }
+
+    #[test]
+    fn reserve_reports_expired_past_the_deadline() {
+        let now = std::time::Instant::now();
+        let mut slot = CodeSlot {
+            armed: Some(ArmedCode {
+                code: "123456".into(),
+                attempts: 0,
+                expires_at: now,
+                generation: 1,
+            }),
+            end: None,
+        };
+        assert!(matches!(reserve(&mut slot, now), Reserve::Expired));
+        assert_eq!(slot.end, Some(CodeEnd::Expired));
+    }
+
+    #[test]
+    fn settle_clears_only_on_the_last_try_and_only_for_the_current_generation() {
+        let mut slot = CodeSlot {
+            armed: Some(ArmedCode {
+                code: "123456".into(),
+                attempts: CODE_MAX_TRIES,
+                expires_at: std::time::Instant::now() + CODE_TTL,
+                generation: 4,
+            }),
+            end: None,
+        };
+        settle_after_try(&mut slot, 3); // stale generation: a re-arm happened
+        assert!(
+            slot.armed.is_some(),
+            "a stale settle must not clear the new arm"
+        );
+        settle_after_try(&mut slot, 4);
+        assert!(slot.armed.is_none());
+        assert_eq!(slot.end, Some(CodeEnd::Exhausted));
+    }
+
+    #[test]
+    fn format_code_keeps_leading_zeros() {
+        assert_eq!(format_code(7341), "007341");
+        assert_eq!(format_code(0), "000000");
+        assert_eq!(format_code(999_999), "999999");
+    }
+
+    #[test]
+    fn a_new_pairing_code_is_always_six_digits() {
+        for _ in 0..200 {
+            let c = new_pairing_code();
+            assert_eq!(c.len(), 6);
+            assert!(c.chars().all(|ch| ch.is_ascii_digit()));
         }
     }
 
