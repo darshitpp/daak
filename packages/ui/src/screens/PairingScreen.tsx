@@ -165,8 +165,11 @@ export function PairingScreen({
   // flow reads them once, on Continue.
   const [digits, setDigits] = useState('');
   // The code panel is the third option. It needs a mode from the flow, and a
-  // build that runs no code pairing leaves it hidden (spec Limits).
-  const showCode = codeMode !== undefined && codeSupported !== false;
+  // build that runs no code pairing leaves it hidden (spec Limits). The check
+  // number replaces the code, so the panel goes with it: a code that is no
+  // longer on screen must not be typed again, and the joiner's Continue goes
+  // too, so a second tap cannot start a second pairing.
+  const showCode = codeMode !== undefined && codeSupported !== false && !sas;
   // R3: the code dies on the deadline or on the last try. Either one is a dead
   // code, and the panel then shows the poll's reason.
   const dead = codeStatus?.state === 'expired' || codeStatus?.state === 'exhausted';
@@ -238,22 +241,34 @@ export function PairingScreen({
               No devices found. Check both devices are on the same Wi-Fi.
             </Text>
           ) : (
-            codeDevices.map((d) => (
-              <View key={d.deviceId} style={ui.stackSm}>
-                <Btn
-                  variant={codePick === d.deviceId ? 'primary' : 'quiet'}
-                  block
-                  testID={'pair-code-pick-' + d.deviceId}
-                  label={d.name}
-                  onPress={() => onCodePick?.(d.deviceId)}
-                />
-                {(nameCounts.get(d.name) ?? 0) > 1 ? (
-                  <Text style={ui.hint} testID={'pair-code-id-' + d.deviceId}>
-                    {d.deviceId.slice(0, 8)}
-                  </Text>
-                ) : null}
-              </View>
-            ))
+            codeDevices.map((d) => {
+              const shortId = d.deviceId.slice(0, 8);
+              const repeated = (nameCounts.get(d.name) ?? 0) > 1;
+              return (
+                <View key={d.deviceId} style={ui.stackSm}>
+                  <Btn
+                    variant={codePick === d.deviceId ? 'primary' : 'quiet'}
+                    block
+                    testID={'pair-code-pick-' + d.deviceId}
+                    label={d.name}
+                    // The short id is a second Text node on screen. A reader
+                    // gets ONE element, so the button carries both strings.
+                    accessibilityLabel={repeated ? `${d.name} ${shortId}` : undefined}
+                    onPress={() => onCodePick?.(d.deviceId)}
+                  />
+                  {repeated ? (
+                    <Text
+                      style={ui.hint}
+                      testID={'pair-code-id-' + d.deviceId}
+                      accessibilityElementsHidden
+                      importantForAccessibility="no-hide-descendants"
+                    >
+                      {shortId}
+                    </Text>
+                  ) : null}
+                </View>
+              );
+            })
           )}
           <Text style={ui.hint}>Pairing code</Text>
           <View style={s.field}>
@@ -315,14 +330,19 @@ export function PairingScreen({
       ) : (
         <>
           {role === 'host' ? (
-            <View style={ui.stack}>
-              <Text style={ui.h3}>Show this to the other device</Text>
-              {busy === 'making' ? (
-                <Busy label="Making your code…" />
-              ) : error ? null : (
-                <QrView uri={qrUri} label="Point their camera at this square." />
-              )}
-            </View>
+            // A code-only host holds no QR. Draw nothing when there is no
+            // square to show, so the check number is not followed by an empty
+            // frame under the heading.
+            qrUri !== '' || busy === 'making' || error !== undefined ? (
+              <View style={ui.stack}>
+                <Text style={ui.h3}>Show this to the other device</Text>
+                {busy === 'making' ? (
+                  <Busy label="Making your code…" />
+                ) : error ? null : (
+                  <QrView uri={qrUri} label="Point their camera at this square." />
+                )}
+              </View>
+            ) : null
           ) : (
             <View style={ui.stack}>
               <Text style={ui.h3}>Point the camera at their square</Text>

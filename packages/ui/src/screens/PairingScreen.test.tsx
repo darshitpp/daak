@@ -221,6 +221,41 @@ describe('PairingScreen code pairing', () => {
     expect(screen.queryByTestId('pair-code-panel')).toBeNull();
   });
 
+  // The check number replaces the code. The panel goes, so the host no longer
+  // shows a blank code under a stale heading.
+  it('host: a check number takes the code panel off the screen', () => {
+    render(<PairingScreen {...HOST} codeSupported codeMode="show" code="482917" sas="112233" />);
+    expect(screen.queryByTestId('pair-code-panel')).toBeNull();
+    expect(screen.getByTestId('pairing-sas')).toBeTruthy();
+  });
+
+  // The joiner's Continue goes with the panel, so a second tap cannot start a
+  // second pair call that then fails under the check number.
+  it('join: a check number takes the panel and the Continue button off the screen', () => {
+    const onCodeSubmit = jest.fn();
+    render(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={DEVICES}
+        onCodeSubmit={onCodeSubmit}
+        sas="112233"
+      />,
+    );
+    expect(screen.queryByTestId('pair-code-panel')).toBeNull();
+    expect(screen.queryByTestId('pair-code-submit')).toBeNull();
+    expect(screen.getByTestId('pairing-sas')).toBeTruthy();
+  });
+
+  // A code-only host holds no QR. The heading and the frame go together, so the
+  // check number is not followed by an empty square.
+  it('host: no QR and no heading when this host holds no square', () => {
+    render(<PairingScreen role="host" qrUri="" onScan={noop} sas="112233" />);
+    expect(screen.queryByLabelText('pairing-qr')).toBeNull();
+    expect(screen.queryByText('Show this to the other device')).toBeNull();
+  });
+
   it('host: shows the code, the own name, the two minute hint, and the countdown', () => {
     const onCodeNew = jest.fn();
     render(
@@ -363,8 +398,20 @@ describe('PairingScreen code pairing', () => {
         ]}
       />,
     );
-    expect(screen.getByTestId('pair-code-id-' + twinA)).toHaveTextContent(/aaaaaaaa/);
-    expect(screen.getByTestId('pair-code-id-' + twinB)).toHaveTextContent(/bbbbbbbb/);
+    // The visible short id stays. It is hidden from a reader, because the
+    // button carries the name and the short id together, as ONE element.
+    expect(screen.getByTestId('pair-code-id-' + twinA, { includeHiddenElements: true })).toHaveTextContent(
+      /aaaaaaaa/,
+    );
+    expect(screen.getByTestId('pair-code-id-' + twinB, { includeHiddenElements: true })).toHaveTextContent(
+      /bbbbbbbb/,
+    );
+    expect(screen.getByTestId('pair-code-pick-' + twinA).props.accessibilityLabel).toBe(
+      'Kitchen Tablet aaaaaaaa',
+    );
+    expect(screen.getByTestId('pair-code-pick-' + twinB).props.accessibilityLabel).toBe(
+      'Kitchen Tablet bbbbbbbb',
+    );
     rerender(
       <PairingScreen
         {...JOIN}
@@ -373,7 +420,9 @@ describe('PairingScreen code pairing', () => {
         codeDevices={[{ deviceId: twinA, name: 'Kitchen Tablet' }]}
       />,
     );
-    expect(screen.queryByTestId('pair-code-id-' + twinA)).toBeNull();
+    expect(screen.queryByTestId('pair-code-id-' + twinA, { includeHiddenElements: true })).toBeNull();
+    // A unique name needs no short id, so the button carries the name alone.
+    expect(screen.getByTestId('pair-code-pick-' + twinA).props.accessibilityLabel).toBe('Kitchen Tablet');
   });
 
   // The joiner learns one thing from a failure and nothing more. A wrong code,

@@ -29,6 +29,23 @@ async fn engine(name: &str) -> Arc<Engine> {
     )
 }
 
+/// Wait until the host slot reports `want`, or the deadline passes.
+///
+/// The failed handshake clears the slot on the HOST task, and the joiner
+/// returns before that write lands. A fixed sleep is a timing bet: a loaded
+/// machine can take longer than any constant. The poll returns the last state,
+/// so the assertion still names the real value.
+async fn wait_for_state(host: &Engine, want: CodePairingState) -> CodePairingState {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let state = host.code_pairing_status().await.state;
+        if state == want || tokio::time::Instant::now() >= deadline {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn the_code_survives_two_wrong_tries_and_pairs_on_the_third() {
     let host = engine("host").await;
@@ -67,9 +84,8 @@ async fn the_code_is_gone_after_three_wrong_tries() {
     }
     // The failed third handshake clears the slot on the HOST task, and the
     // joiner returns before that write lands. Wait for the host to settle.
-    tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
-        host.code_pairing_status().await.state,
+        wait_for_state(&host, CodePairingState::Exhausted).await,
         CodePairingState::Exhausted
     );
 }
@@ -110,8 +126,9 @@ async fn ten_concurrent_guesses_do_not_pair_and_the_slot_is_closed() {
     for j in joins {
         assert!(!j.await.unwrap(), "no wrong code may pair");
     }
+    // The ten joins race the host's own clear, so wait for it to land.
     assert_eq!(
-        host.code_pairing_status().await.state,
+        wait_for_state(&host, CodePairingState::Exhausted).await,
         CodePairingState::Exhausted
     );
 }
