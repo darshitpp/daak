@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Pressable,
   ScrollView,
   Text,
   TextInput,
   View,
+  useWindowDimensions,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
@@ -40,6 +42,11 @@ const REFETCH_ON: ReadonlySet<DaakEvent['type']> = new Set<DaakEvent['type']>([
 ]);
 
 const base = (p: string): string => p.split(/[\\/]/).pop() ?? p;
+/** Splits a file name into the stem and the extension. A leading dot is not an extension. */
+export const splitExt = (name: string): [string, string] => {
+  const i = name.lastIndexOf('.');
+  return i <= 0 ? [name, ''] : [name.slice(0, i), name.slice(i)];
+};
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 const errText = (e: unknown, fallback: string): string => (e instanceof Error ? e.message : fallback);
 
@@ -87,6 +94,7 @@ export function ThreadScreen({
 }) {
   const engine = useEngine();
   const toast = useToast();
+  const { height: windowHeight } = useWindowDimensions();
   const [device, setDevice] = useState<DeviceInfo | null | undefined>(undefined);
   const [thread, setThread] = useState<ThreadView>(EMPTY_THREAD);
   const [summaries, setSummaries] = useState<TransferSummary[]>([]);
@@ -261,6 +269,7 @@ export function ThreadScreen({
       if (files.length > 0) {
         await engine.send({ peerDeviceId, files });
         setFiles([]);
+        setSizes({});
       }
       if (note !== '') {
         await engine.send({ peerDeviceId, text: note });
@@ -497,7 +506,7 @@ export function ThreadScreen({
             <View style={[ui.row, { flexWrap: 'wrap' }]}>
               {files.length > MAX_CHIPS ? (
                 <Pressable
-                  onPress={() => setReviewing(true)}
+                  onPress={() => { Keyboard.dismiss(); setReviewing(true); }}
                   accessibilityRole="button"
                   accessibilityLabel={`Review ${plural(files.length, 'file', 'files')}`}
                   testID="files-review"
@@ -533,12 +542,14 @@ export function ThreadScreen({
         onClose={() => setReviewing(false)}
         actions={<Btn label="Done" variant="quiet" block onPress={() => setReviewing(false)} testID="files-review-done" />}
       >
-        <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+        <ScrollView style={{ maxHeight: Math.min(320, windowHeight * 0.4) }} keyboardShouldPersistTaps="handled">
           <View style={ui.list}>
             {files.map((p) => (
               <View key={p} style={ui.listRow}>
                 <View style={ui.fill}>
-                  <Text style={ui.rowTitle} numberOfLines={1} ellipsizeMode="middle">{base(p)}</Text>
+                  <Text style={ui.rowTitle} numberOfLines={1} ellipsizeMode="middle">{splitExt(base(p))[0]}
+                    <Text style={{ color: colors.meta }}>{splitExt(base(p))[1]}</Text>
+                  </Text>
                   {typeof sizes[p] === 'number' && humanBytes(sizes[p] as number) !== '' ? (
                     <Text style={ui.rowSub}>{humanBytes(sizes[p] as number)}</Text>
                   ) : null}

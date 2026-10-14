@@ -1,5 +1,5 @@
 import React from 'react';
-import { KeyboardAvoidingView, ScrollView } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, ScrollView } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
@@ -7,7 +7,7 @@ import { fakeEngine } from '../testing/fakeEngine';
 import { threadItem, threadPage } from '../testing/threadFixtures';
 import { ToastProvider } from '../components/Toast';
 import { Note } from '../components/ds';
-import { ThreadScreen } from './ThreadScreen';
+import { ThreadScreen, splitExt } from './ThreadScreen';
 
 const peer: DeviceInfo = {
   deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true,
@@ -241,6 +241,37 @@ describe('ThreadScreen', () => {
     fireEvent.press(screen.getByTestId('pick-files'));
     expect(await screen.findByTestId('files-review')).toBeTruthy();
     expect(screen.queryByTestId('files-review-done')).toBeNull();
+  });
+
+  it('dismisses the keyboard when the summary chip opens the sheet', async () => {
+    const dismiss = jest.spyOn(Keyboard, 'dismiss').mockImplementation(() => {});
+    mount(fakeEngine([peer]), { initialFiles: many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    dismiss.mockRestore();
+  });
+
+  it('splits a file name at the last dot', () => {
+    expect(splitExt('a.pdf')).toEqual(['a', '.pdf']);
+    expect(splitExt('noext')).toEqual(['noext', '']);
+    expect(splitExt('.hidden')).toEqual(['.hidden', '']);
+    expect(splitExt('a.tar.gz')).toEqual(['a.tar', '.gz']);
+  });
+
+  it('asks for sizes again when a sent path is staged again', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: true });
+    const fileSizes = jest.fn(async (p: string[]) => p.map(() => 1024));
+    mount(engine, { initialFiles: many(4), actions: { fileSizes }, onPickFiles: async () => many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await screen.findByText('4 files · 4.0 KB');
+    fireEvent.press(screen.getByTestId('files-review-done'));
+    fireEvent.press(screen.getByTestId('send'));
+    await screen.findByText('Sent to Pixel 9');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await waitFor(() => expect(fileSizes).toHaveBeenCalledTimes(2));
+    expect(fileSizes).toHaveBeenLastCalledWith(many(4));
   });
 
   it('toasts "1 file ready" for a single picked file', async () => {
