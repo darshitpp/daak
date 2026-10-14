@@ -99,6 +99,7 @@ export function ThreadScreen({
   const [result, setResult] = useState<Result>(null);
   const [stopFor, setStopFor] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const [sizes, setSizes] = useState<Record<string, number | null>>({});
 
   const alive = useRef(true);
   const seq = useRef(0);
@@ -200,6 +201,34 @@ export function ThreadScreen({
 
   const name = device ? deviceLabel(device) : 'this device';
   const canSend = device != null && (files.length > 0 || text.trim() !== '') && !sending;
+
+  // The review state ends when no file is left. Staging files again then shows the chip.
+  useEffect(() => {
+    if (files.length === 0) setReviewing(false);
+  }, [files.length]);
+
+  const fileSizes = actions?.fileSizes;
+  // Sizes load while the review sheet is open, once for each path that has no size yet.
+  // A rejected call records `null` for the paths, so the effect does not ask again.
+  useEffect(() => {
+    if (!reviewing || !fileSizes) return undefined;
+    const missing = files.filter((p) => !(p in sizes));
+    if (missing.length === 0) return undefined;
+    let live = true;
+    const record = (got: (number | null)[] | null) => {
+      if (!live) return;
+      setSizes((s) => {
+        const next = { ...s };
+        missing.forEach((p, i) => { next[p] = got?.[i] ?? null; });
+        return next;
+      });
+    };
+    fileSizes(missing).then(record, () => record(null));
+    return () => { live = false; };
+  }, [reviewing, files, fileSizes, sizes]);
+
+  const allKnown = files.length > 0 && files.every((p) => typeof sizes[p] === 'number');
+  const total = allKnown ? humanBytes(files.reduce((a, p) => a + (sizes[p] as number), 0)) : '';
 
   const pick = () => {
     if (!onPickFiles) return;
@@ -500,7 +529,7 @@ export function ThreadScreen({
 
       <Sheet
         open={reviewing && files.length > 0}
-        title={plural(files.length, 'file', 'files')}
+        title={plural(files.length, 'file', 'files') + (total !== '' ? ` · ${total}` : '')}
         onClose={() => setReviewing(false)}
         actions={<Btn label="Done" variant="quiet" block onPress={() => setReviewing(false)} testID="files-review-done" />}
       >
@@ -508,7 +537,12 @@ export function ThreadScreen({
           <View style={ui.list}>
             {files.map((p) => (
               <View key={p} style={ui.listRow}>
-                <Text style={[ui.rowTitle, ui.fill]} numberOfLines={1} ellipsizeMode="middle">{base(p)}</Text>
+                <View style={ui.fill}>
+                  <Text style={ui.rowTitle} numberOfLines={1} ellipsizeMode="middle">{base(p)}</Text>
+                  {typeof sizes[p] === 'number' && humanBytes(sizes[p] as number) !== '' ? (
+                    <Text style={ui.rowSub}>{humanBytes(sizes[p] as number)}</Text>
+                  ) : null}
+                </View>
                 <Btn
                   label="Remove"
                   accessibilityLabel={`Remove ${base(p)}`}
