@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { AppState, Text, View } from 'react-native';
 import { Btn, Note, Section } from './ds';
 import { ui } from '../theme';
 
@@ -21,6 +21,15 @@ export interface PhotosHost {
 export function PhotosAccessRow({ photos }: { photos: PhotosHost }) {
   const [state, setState] = useState<Awaited<ReturnType<PhotosHost['status']>>>('unavailable');
 
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void photos.status().then(
@@ -31,8 +40,20 @@ export function PhotosAccessRow({ photos }: { photos: PhotosHost }) {
         if (!cancelled) setState('unavailable');
       },
     );
+    // The user may change the permission in the system settings and come back.
+    // A failed read keeps the old state.
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      void photos.status().then(
+        (s) => {
+          if (!cancelled) setState(s);
+        },
+        () => {},
+      );
+    });
     return () => {
       cancelled = true;
+      sub?.remove(); // The Jest preset mock returns no subscription.
     };
   }, [photos]);
 
@@ -60,7 +81,10 @@ export function PhotosAccessRow({ photos }: { photos: PhotosHost }) {
               label="Allow"
               testID="photos-access-allow"
               onPress={() => {
-                void photos.request().then(() => photos.status()).then(setState, () => {});
+                void photos
+                  .request()
+                  .then(() => (mounted.current ? photos.status() : undefined))
+                  .then((s) => { if (s && mounted.current) setState(s); }, () => {});
               }}
             />
           </>

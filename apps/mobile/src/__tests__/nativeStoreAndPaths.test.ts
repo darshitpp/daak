@@ -784,8 +784,13 @@ describe('markers do not reach file system calls', () => {
     const fn = ios.slice(ios.indexOf('func openFile('));
     expect(fn).toContain('path.hasPrefix("photos:")');
     expect(fn).toContain('UIAlertController');
-    expect(fn).toContain('Saved to the Photos app')
+    expect(fn).toContain('Saved to the Photos app');
     expect(fn).toContain('Open the Photos app to see it.');
+    // D1: a second alert must not stack on the first.
+    expect(fn).toMatch(/top is UIAlertController[\s\S]*resolve\(true\)[\s\S]*return/);
+    // D2: UIKit refuses a present while the top controller moves.
+    expect(fn).toMatch(/top\.isBeingPresented \|\| top\.isBeingDismissed[\s\S]*resolve\(false\)[\s\S]*return/);
+    expect(fn).toContain('top.present(alert, animated: true) { resolve(true) }');
     // Apple documents no link to one asset, so no undocumented scheme is used.
     expect(ios).not.toContain('photos-redirect');
   });
@@ -813,9 +818,22 @@ describe('iOS saves to the Photos library with add-only access', () => {
   });
 
   it('deletes the source only after the add succeeded', () => {
-    const fn = ios.slice(ios.indexOf('func addToLibrary('));
-    expect(fn.indexOf('performChangesAndWait')).toBeGreaterThan(-1);
-    expect(fn.indexOf('removeItem')).toBeGreaterThan(fn.indexOf('performChangesAndWait'));
+    const start = ios.indexOf('func addToLibrary(');
+    const fn = ios.slice(start, ios.indexOf('\n  }\n', start));
+    const add = fn.indexOf('performChangesAndWait');
+    const guardAt = fn.indexOf('guard let identifier');
+    const remove = fn.indexOf('removeItem');
+    expect(add).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(add);
+    expect(remove).toBeGreaterThan(guardAt);
+  });
+
+  it('logs a source that could not be removed after the add', () => {
+    const start = ios.indexOf('func addToLibrary(');
+    const fn = ios.slice(start, ios.indexOf('\n  }\n', start));
+    expect(fn).not.toContain('try? FileManager.default.removeItem');
+    expect(fn).toMatch(/do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{\s*NSLog\("Daak: the saved photo's source file was not removed: \\\(error\)"\)/);
+    expect(fn).toContain('return "photos:" + identifier');
   });
 
   it('declares the add-only usage description', () => {
@@ -842,6 +860,14 @@ describe('Android saves to MediaStore without a permission', () => {
     expect(pending).toBeGreaterThan(-1);
     expect(clear).toBeGreaterThan(pending);
     expect(del).toBeGreaterThan(clear);
+  });
+
+  it('logs a source that could not be deleted and still returns the URI', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    const del = fn.indexOf('if (!src.delete())');
+    expect(del).toBeGreaterThan(fn.indexOf('IS_PENDING, 0'));
+    expect(fn).toContain('android.util.Log.w("DaakFsPaths", "saved item but could not delete source: ${src.name}")');
+    expect(fn.indexOf('uri.toString()')).toBeGreaterThan(del);
   });
 
   it('removes the half-made row when the copy fails', () => {
@@ -871,5 +897,7 @@ describe('Android saves to MediaStore without a permission', () => {
   it('adds no storage permission', () => {
     expect(manifest).not.toContain('WRITE_EXTERNAL_STORAGE');
     expect(manifest).not.toContain('READ_MEDIA_IMAGES');
+    expect(manifest).not.toContain('READ_MEDIA_VIDEO');
+    expect(manifest).not.toContain('READ_MEDIA_AUDIO');
   });
 });

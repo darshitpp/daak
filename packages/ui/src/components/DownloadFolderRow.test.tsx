@@ -74,6 +74,7 @@ it('keeps a long folder name inside the card', async () => {
   const name = await screen.findByTestId('download-folder-name');
   expect(name.props.numberOfLines).toBe(1);
   expect(name.props.ellipsizeMode).toBe('middle');
+  expect(StyleSheet.flatten(name.props.style).flexShrink).toBe(1);
 });
 
 // Fallback for a host with no picker. The iPhone prototype words (design v2).

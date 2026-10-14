@@ -337,7 +337,9 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         put(MediaStore.MediaColumns.IS_PENDING, 0)
       }, null, null)
       if (updated != 1) throw IllegalStateException("pending not cleared")
-      src.delete()
+      if (!src.delete()) {
+        android.util.Log.w("DaakFsPaths", "saved item but could not delete source: ${src.name}")
+      }
       uri.toString()
     } catch (t: Throwable) {
       try { resolver.delete(uri, null, null) } catch (_: Throwable) {}

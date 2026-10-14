@@ -82,46 +82,68 @@ export async function downloadFolderName(): Promise<string | null> {
 const MAX_FOLDER_NAME = 40;
 
 function capMiddle(s: string): string {
-  if (s.length <= MAX_FOLDER_NAME) return s;
+  const chars = Array.from(s);
+  if (chars.length <= MAX_FOLDER_NAME) return s;
   const keep = MAX_FOLDER_NAME - 1;
   const head = Math.ceil(keep / 2);
-  return `${s.slice(0, head)}\u2026${s.slice(s.length - (keep - head))}`;
+  return `${chars.slice(0, head).join('')}\u2026${chars.slice(chars.length - (keep - head)).join('')}`;
 }
 
-function safeDecode(s: string): string {
+// Returns null when the text has a malformed percent sequence.
+function strictDecode(s: string): string | null {
   try {
     return decodeURIComponent(s);
   } catch {
-    return s;
+    return null;
   }
+}
+
+// The last non-empty segment of a URI path. A malformed segment stays as it is.
+function lastSegment(path: string): string | undefined {
+  const last = path.split('/').filter(Boolean).pop();
+  return last === undefined ? undefined : (strictDecode(last) ?? last);
+}
+
+function authorityName(authority: string): string {
+  return authority.split('.').slice(-2).join('.');
+}
+
+const SD_VOLUME = /^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}$/;
+
+function volumeName(volume: string, rest: string): string {
+  const rel = rest.replace(/^\/+|\/+$/g, '');
+  if (volume === 'primary') return rel || 'Internal storage';
+  if (volume === 'raw') return rest.replace(/\/+$/, '');
+  const label = volume === 'home' ? 'Documents' : SD_VOLUME.test(volume) ? 'SD card' : volume;
+  return rel ? `${label} / ${rel}` : label;
 }
 
 /**
  * Turns the raw folder value from the native module into a short name for the
- * screen. Android gives a SAF tree URI. iOS and macOS give a full path. A value
+ * screen. Android gives a content URI. iOS and macOS give a full path. A value
  * that has no usable segment comes back unchanged, so the function never erases
- * a value it cannot parse. A result has at most 40 characters.
+ * a value it cannot parse. A result has at most 40 code points. A content URI
+ * never comes back raw.
  */
 export function friendlyFolderName(raw: string): string {
-  const saf = /^content:\/\/([^/]+)\/tree\/([^/]*)/.exec(raw);
-  if (saf) {
-    const authority = saf[1];
-    const id = safeDecode(saf[2]);
-    if (authority === 'com.android.externalstorage.documents') {
+  const uri = /^content:\/\/([^/]+)(\/.*)?$/.exec(raw);
+  if (uri) {
+    const authority = uri[1];
+    const path = uri[2] ?? '';
+    const tree = /^\/tree\/([^/]*)/.exec(path);
+    const id = tree ? strictDecode(tree[1]) : null;
+    if (tree && id !== null) {
       const colon = id.indexOf(':');
-      if (colon >= 0) {
-        const volume = id.slice(0, colon);
-        const rel = id.slice(colon + 1).replace(/^\/+|\/+$/g, '');
-        if (volume === 'primary') return capMiddle(rel || 'Internal storage');
-        return capMiddle(rel ? `SD card / ${rel}` : 'SD card');
+      if (authority === 'com.android.externalstorage.documents' && colon >= 0) {
+        return capMiddle(volumeName(id.slice(0, colon), id.slice(colon + 1)));
       }
+      const last = id.split('/').filter(Boolean).pop();
+      return capMiddle(last ?? authorityName(authority));
     }
-    const last = id.split('/').filter(Boolean).pop();
-    return capMiddle(last ?? authority.split('.').slice(-2).join('.'));
+    return capMiddle(lastSegment(path) ?? authorityName(authority));
   }
-  if (raw.startsWith('content://')) return raw;
 
-  const parts = raw.split('/').filter(Boolean);
+  const parts = raw.split(/[\\/]/).filter(Boolean);
   const cloud = parts.indexOf('com~apple~CloudDocs');
   if (cloud >= 0) {
     return capMiddle(['iCloud Drive', ...parts.slice(cloud + 1)].join(' / '));

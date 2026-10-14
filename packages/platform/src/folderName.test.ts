@@ -56,6 +56,51 @@ describe('friendlyFolderName', () => {
     expect(out).toHaveLength(40);
     expect(out).toContain('…');
   });
+  it('shows the last segment as is when a percent sequence is malformed', () => {
+    expect(f('content://com.example.provider/tree/%E0%A4%A')).toBe('%E0%A4%A');
+    expect(f(`${SAF}%E0%A4%A`)).toBe('%E0%A4%A');
+  });
+  it('keeps the middle ellipsis at the exact position of the cap', () => {
+    // 20 head characters, the ellipsis, then 19 tail characters.
+    const name = 'a'.repeat(20) + 'b'.repeat(30) + 'c'.repeat(19);
+    expect(f('/x/' + name)).toBe('x / ' + name.slice(0, 16) + '\u2026' + name.slice(-19));
+    expect(f(`${SAF}primary%3A` + encodeURIComponent('a'.repeat(30) + 'z'.repeat(30)))).toBe(
+      'a'.repeat(20) + '\u2026' + 'z'.repeat(19),
+    );
+  });
+  it('counts code points and never splits a surrogate pair', () => {
+    const name = 'a'.repeat(19) + '\u{1F600}' + 'b'.repeat(40);
+    const out = f(`${SAF}primary%3A` + encodeURIComponent(name));
+    expect(out).toBe('a'.repeat(19) + '\u{1F600}' + '\u2026' + 'b'.repeat(19));
+    expect(Array.from(out)).toHaveLength(40);
+    // A lone surrogate would not survive a round trip through UTF-8.
+    expect(out).toBe(Buffer.from(out, 'utf8').toString('utf8'));
+  });
+  it('does not return a raw content URI that is not a tree URI', () => {
+    expect(f('content://com.google.android.apps.docs.storage/document/abc')).toBe('abc');
+    expect(f('content://com.google.android.apps.docs.storage/document/a%20b/')).toBe('a b');
+    expect(f('content://com.example.provider')).toBe('example.provider');
+    expect(f('content://com.example.provider/')).toBe('example.provider');
+    expect(f('content://com.example.provider/document/%E0%A4%A')).toBe('%E0%A4%A');
+  });
+  it('shows Documents for the home volume', () => {
+    expect(f(`${SAF}home%3ADocs`)).toBe('Documents / Docs');
+    expect(f(`${SAF}home%3A`)).toBe('Documents');
+  });
+  it('shows the path after raw:', () => {
+    expect(f(`${SAF}raw%3A%2Fstorage%2Femulated%2F0%2FDownload`)).toBe('/storage/emulated/0/Download');
+  });
+  it('shows SD card only for a volume id of the form XXXX-XXXX', () => {
+    expect(f(`${SAF}1a2b-3C4D%3A`)).toBe('SD card');
+    expect(f(`${SAF}1A2B-3C4D%3AMusic%2FDaak`)).toBe('SD card / Music/Daak');
+  });
+  it('shows another volume id as is', () => {
+    expect(f(`${SAF}usbstick%3AFiles`)).toBe('usbstick / Files');
+    expect(f(`${SAF}usbstick%3A`)).toBe('usbstick');
+  });
+  it('splits a Windows path on backslashes', () => {
+    expect(f('C:\\Users\\me\\Daak')).toBe('me / Daak');
+  });
 });
 
 describe('folder name facade', () => {

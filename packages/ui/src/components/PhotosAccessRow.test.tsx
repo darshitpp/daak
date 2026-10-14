@@ -1,5 +1,6 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { AppState } from 'react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { PhotosAccessRow, type PhotosHost } from './PhotosAccessRow';
 
 function host(overrides: Partial<PhotosHost> = {}): PhotosHost {
@@ -48,4 +49,51 @@ it('reads the status again after Allow and hides when it is granted', async () =
   fireEvent.press(await screen.findByTestId('photos-access-allow'));
   await waitFor(() => expect(screen.queryByTestId('photos-access-row')).toBeNull());
   expect(status).toHaveBeenCalledTimes(2);
+});
+
+it('reads the status again when the app becomes active', async () => {
+  let onChange: (s: string) => void = () => {};
+  const remove = jest.fn();
+  const spy = jest.spyOn(AppState, 'addEventListener').mockImplementation(((_: string, cb: (s: string) => void) => {
+    onChange = cb;
+    return { remove };
+  }) as never);
+  const status = jest.fn<ReturnType<PhotosHost['status']>, []>()
+    .mockResolvedValueOnce('denied')
+    .mockResolvedValue('granted');
+  const { unmount } = render(<PhotosAccessRow photos={host({ status })} />);
+  expect(await screen.findByTestId('photos-access-row')).toBeTruthy();
+  act(() => onChange('active'));
+  await waitFor(() => expect(screen.queryByTestId('photos-access-row')).toBeNull());
+  unmount();
+  expect(remove).toHaveBeenCalledTimes(1);
+  spy.mockRestore();
+});
+
+it('keeps the old state when the status read fails on activation', async () => {
+  let onChange: (s: string) => void = () => {};
+  const spy = jest.spyOn(AppState, 'addEventListener').mockImplementation(((_: string, cb: (s: string) => void) => {
+    onChange = cb;
+    return { remove: () => {} };
+  }) as never);
+  const status = jest.fn<ReturnType<PhotosHost['status']>, []>()
+    .mockResolvedValueOnce('denied')
+    .mockRejectedValue(new Error('boom'));
+  render(<PhotosAccessRow photos={host({ status })} />);
+  expect(await screen.findByTestId('photos-access-row')).toBeTruthy();
+  act(() => onChange('active'));
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId('photos-access-row')).toBeTruthy();
+  spy.mockRestore();
+});
+
+it('does not read the status again after unmount when Allow finishes late', async () => {
+  let release: () => void = () => {};
+  const request = jest.fn(() => new Promise<boolean>((r) => { release = () => r(true); }));
+  const status = jest.fn(async () => 'undetermined' as const);
+  const { unmount } = render(<PhotosAccessRow photos={host({ request, status })} />);
+  fireEvent.press(await screen.findByTestId('photos-access-allow'));
+  unmount();
+  await act(async () => { release(); });
+  expect(status).toHaveBeenCalledTimes(1);
 });

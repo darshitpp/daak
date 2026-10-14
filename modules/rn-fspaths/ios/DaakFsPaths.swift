@@ -93,6 +93,10 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         else { resolve(false); return }
         var top = root
         while let next = top.presentedViewController { top = next }
+        // An alert is already on the screen. Do not stack a second one.
+        if top is UIAlertController { resolve(true); return }
+        // UIKit refuses a present while the top controller moves.
+        if top.isBeingPresented || top.isBeingDismissed { resolve(false); return }
         let alert = UIAlertController(
           title: "Saved to the Photos app",
           message: "Open the Photos app to see it.",
@@ -386,7 +390,9 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       return path
     }
     guard let identifier else { return path }
-    try? FileManager.default.removeItem(at: url)
+    do { try FileManager.default.removeItem(at: url) } catch {
+      NSLog("Daak: the saved photo's source file was not removed: \(error)")
+    }
     return "photos:" + identifier
   }
 
