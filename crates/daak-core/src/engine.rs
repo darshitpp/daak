@@ -2995,10 +2995,17 @@ impl Engine {
             },
             |ev| {
                 if let EngineEvent::TransferItem {
-                    dest_path: Some(p), ..
+                    dest_path: Some(p),
+                    state,
+                    ..
                 } = &ev
                 {
-                    saved_paths.push(p.clone());
+                    // A quarantined item has a dest_path too (the HELD path).
+                    // The platform moves and saves what this list names, and
+                    // a corrupt file must reach neither.
+                    if state == "done" {
+                        saved_paths.push(p.clone());
+                    }
                 }
                 let _ = tx.send(ev);
             },

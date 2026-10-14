@@ -318,3 +318,39 @@ async fn held_items_are_discoverable_without_a_known_id() {
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
+
+/// A held-back item must not be named by the inbox row. The row feeds the
+/// platform's move and the Photos save, and a corrupt file must reach neither.
+#[tokio::test]
+async fn a_quarantined_item_is_not_in_the_inbox_saved_paths() {
+    let (a, b, b_db, a_dir, _b_dir) = paired().await;
+    let src = a_dir.path().join("bad.bin");
+    std::fs::write(&src, vec![5u8; 4096]).unwrap();
+    let payload_id = send_mismatched(&a, &b, &src, &b_db).await;
+
+    // The inbox row may be written a moment after the item rows. Poll for up
+    // to 3 s. A payload with no row at all is also a pass: nothing names the
+    // held path. The poll must not end early on a row that is still missing.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut seen = None;
+    while tokio::time::Instant::now() < deadline {
+        seen = b
+            .list_inbox()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == payload_id);
+        if seen.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    if let Some(row) = seen {
+        assert_eq!(
+            row.saved_paths, "[]",
+            "a quarantined item must not appear in saved_paths"
+        );
+    }
+
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}
