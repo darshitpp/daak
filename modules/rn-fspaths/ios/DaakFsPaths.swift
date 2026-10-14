@@ -80,6 +80,26 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   @objc func openFile(_ path: String,
                       resolve: @escaping RCTPromiseResolveBlock,
                       reject: @escaping RCTPromiseRejectBlock) {
+    // A Photos marker has no file, and Apple has no documented link to one
+    // asset. So say where the photo is. This uses UIKit only. Resolving true
+    // keeps the thread from showing its "cannot open files" toast.
+    if path.hasPrefix("photos:") {
+      DispatchQueue.main.async {
+        guard let root = UIApplication.shared.connectedScenes
+          .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
+          .first?.rootViewController
+        else { resolve(false); return }
+        var top = root
+        while let next = top.presentedViewController { top = next }
+        let alert = UIAlertController(
+          title: "Saved to Photos",
+          message: "Find it in the Photos app.",
+          preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        top.present(alert, animated: true) { resolve(true) }
+      }
+      return
+    }
     let scope = Self.chosenFolderScope()
     guard FileManager.default.isReadableFile(atPath: path) else {
       scope?.stopAccessingSecurityScopedResource()
@@ -134,6 +154,8 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   @objc func exists(_ path: String,
                     resolve: @escaping RCTPromiseResolveBlock,
                     reject: @escaping RCTPromiseRejectBlock) {
+    // A Photos marker is not a path. fileExists would say no for a live asset.
+    if path.hasPrefix("photos:") { resolve(true); return }
     resolve(FileManager.default.fileExists(atPath: path))
   }
 

@@ -773,3 +773,24 @@ describe('fspaths exposes the library methods on the Spec and on every native', 
     expect(platform).toMatch(/export async function photosAccessStatus\(/);
   });
 });
+
+describe('markers do not reach file system calls', () => {
+  const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const kt = read(
+    repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPaths' + 'Module.kt',
+  );
+
+  it('shows a Saved to Photos alert for a photos: marker on iOS', () => {
+    const fn = ios.slice(ios.indexOf('func openFile('));
+    expect(fn).toContain('path.hasPrefix("photos:")');
+    expect(fn).toContain('UIAlertController');
+    expect(fn).toContain('Saved to Photos');
+    // Apple documents no link to one asset, so no undocumented scheme is used.
+    expect(ios).not.toContain('photos-redirect');
+  });
+
+  it('answers exists for markers without a file check', () => {
+    expect(ios).toContain('if path.hasPrefix("photos:") { resolve(true); return }');
+    expect(kt).toContain('path.startsWith("content://") || File(path).exists()');
+  });
+});

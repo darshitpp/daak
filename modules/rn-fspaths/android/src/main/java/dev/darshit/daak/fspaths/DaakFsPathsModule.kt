@@ -130,10 +130,13 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    * The same `File(path).exists()` reveal already inlined above, exposed --
    * so a caller can ask without launching an intent. Resolves false for a path
    * that is not there: "no such file" is an ANSWER, not a failure, and a
-   * reveal action must not die on an unhandled rejection.
+   * reveal action must not die on an unhandled rejection. A content:// URI is a
+   * MediaStore or SAF document. File() cannot test it, and no caller needs the
+   * answer yet.
    */
   @ReactMethod
-  override fun exists(path: String, promise: Promise) = resolve(promise) { File(path).exists() }
+  override fun exists(path: String, promise: Promise) =
+      resolve(promise) { path.startsWith("content://") || File(path).exists() }
 
   /**
    * The size of each staged file. A path that is missing, unreadable, or not a

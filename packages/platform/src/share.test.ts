@@ -40,4 +40,30 @@ describe('share facade', () => {
     expect(native.consumePendingInbox).toHaveBeenCalledTimes(1);
     expect(JSON.parse(raw)).toEqual([]);
   });
+
+  // A Photos marker is not a file. The share sheet needs a real file.
+  it('drops Photos markers and keeps real paths and content URIs', async () => {
+    native.present.mockClear();
+    await presentShare({
+      urls: ['photos:ABC', '/app/a.pdf', 'content://media/external/images/media/9'],
+    });
+    expect(native.present).toHaveBeenCalledWith(
+      '',
+      ['/app/a.pdf', 'content://media/external/images/media/9'],
+      '',
+    );
+  });
+
+  // A share with only markers has nothing to hand to the sheet.
+  it('does not open the sheet when only markers remain and there is no text', async () => {
+    native.present.mockClear();
+    await presentShare({ urls: ['photos:ABC'] });
+    expect(native.present).not.toHaveBeenCalled();
+  });
+
+  it('still shares text when every url was a marker', async () => {
+    native.present.mockClear();
+    await presentShare({ text: 'hello', urls: ['photos:ABC'] });
+    expect(native.present).toHaveBeenCalledWith('hello', [], '');
+  });
 });
