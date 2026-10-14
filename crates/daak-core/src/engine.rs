@@ -768,13 +768,10 @@ impl Engine {
         bound: SocketAddr,
         name: &str,
     ) {
-        let Some(dialable) = crate::discovery::host_lan_addr(bound.port()) else {
-            return;
-        };
-        let announce = ListenAddr {
-            addr: dialable,
-            name: Some(name.to_owned()),
-        };
+        // The address is optional. A device with no LAN interface still sends
+        // its display name, because the peer needs the name to label it. The
+        // peer keeps discovery as the address source when the address is absent.
+        let announce = listen_addr_frame(crate::discovery::host_lan_addr(bound.port()), name);
         if let Ok(body) = announce.to_cbor() {
             let _ = conn.send(0, RecordType::Control, Bytes::from(body)).await;
         }
@@ -2713,7 +2710,7 @@ impl Engine {
                 // peer that refused every connection. `None` when the joiner did
                 // not send one: discovery then owns the address, as before.
                 let announced = Self::read_listen_addr(conn).await;
-                let advertised = announced.as_ref().map(|l| l.addr);
+                let advertised = announced.as_ref().and_then(|l| l.addr);
                 // The code joiner holds our identity and no name, so send our
                 // display name. This frame is code-only: the QR arm sends no
                 // identity and never reaches here. Order, so neither side
@@ -2868,7 +2865,7 @@ impl Engine {
             .await?;
             // R42e, same argument as the code branch above.
             let announced = Self::read_listen_addr(conn).await;
-            let advertised = announced.as_ref().map(|l| l.addr);
+            let advertised = announced.as_ref().and_then(|l| l.addr);
             if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
                 pairing.label = Some(name);
             }
@@ -3032,6 +3029,17 @@ fn clean_peer_name(raw: String) -> Option<String> {
 fn apply_announced_name(pairing: &mut Pairing, announced: Option<ListenAddr>) {
     if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
         pairing.label = Some(name);
+    }
+}
+
+/// Build the post-pairing frame. The address is optional: a sender with no LAN
+/// interface sends no address, but it still sends its display name. The
+/// receiver uses the address when it is present, and keeps discovery when it is
+/// absent. The name never depends on the address.
+fn listen_addr_frame(addr: Option<SocketAddr>, name: &str) -> ListenAddr {
+    ListenAddr {
+        addr,
+        name: Some(name.to_owned()),
     }
 }
 
@@ -4152,7 +4160,7 @@ mod tests {
         apply_announced_name(
             &mut pairing,
             Some(ListenAddr {
-                addr,
+                addr: Some(addr),
                 name: Some("   ".into()),
             }),
         );
@@ -4160,11 +4168,39 @@ mod tests {
         apply_announced_name(
             &mut pairing,
             Some(ListenAddr {
-                addr,
+                addr: Some(addr),
                 name: Some(" Host Mac ".into()),
             }),
         );
         assert_eq!(pairing.label.as_deref(), Some("Host Mac"));
+    }
+
+    // A host with no LAN interface cannot resolve a dialable address. The name
+    // frame must still carry the display name, or the joiner keeps the hex id
+    // and this task's defect comes back. host_lan_addr reads the real interface
+    // list and cannot be forced to fail here, so this pins the frame builder and
+    // its CBOR round trip instead.
+    #[test]
+    fn the_name_frame_carries_the_name_without_an_address() {
+        let frame = listen_addr_frame(None, "Host Mac");
+        assert!(
+            frame.addr.is_none(),
+            "an absent address must not drop the frame"
+        );
+        let bytes = frame.to_cbor().unwrap();
+        let back = ListenAddr::from_cbor(&bytes).unwrap();
+        assert_eq!(back.name.as_deref(), Some("Host Mac"));
+        assert!(back.addr.is_none());
+
+        // The address still wins when it is present, so the QR path is unchanged.
+        let addr: SocketAddr = "192.168.1.5:4000".parse().unwrap();
+        let frame = listen_addr_frame(Some(addr), "Host Mac");
+        assert_eq!(
+            ListenAddr::from_cbor(&frame.to_cbor().unwrap())
+                .unwrap()
+                .addr,
+            Some(addr)
+        );
     }
 
     // An undelivered unpair notice is stale once the user pairs the device again.

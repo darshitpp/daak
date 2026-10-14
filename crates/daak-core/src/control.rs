@@ -61,7 +61,12 @@ impl Hello {
 /// older joiner leaves the host with no address, which is the old behaviour.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListenAddr {
-    pub addr: SocketAddr,
+    /// The address this device can be dialed at. None when the device has no
+    /// LAN interface: the receiver then keeps discovery as the address source.
+    /// The name does not depend on this field, so a device with no address
+    /// still sends its display name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<SocketAddr>,
     /// The joiner's display name. The QR host never scans the joiner, so this
     /// frame is the only way it learns the name. Additive: an older host skips
     /// the field, and an older joiner omits it (the host keeps the hex id).
