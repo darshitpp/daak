@@ -69,6 +69,14 @@ it('shows no toast when the picker is cancelled', async () => {
   expect(screen.queryByTestId('toast')).toBeNull();
 });
 
+it('keeps a long folder name inside the card', async () => {
+  render(<DownloadFolderRow load={async () => 'a / b'} choose={async () => null} />);
+  const name = await screen.findByTestId('download-folder-name');
+  expect(name.props.numberOfLines).toBe(1);
+  expect(name.props.ellipsizeMode).toBe('middle');
+  expect(StyleSheet.flatten(name.props.style).flexShrink).toBe(1);
+});
+
 // Fallback for a host with no picker. The iPhone prototype words (design v2).
 it('shows the no-picker words and no button when the host gives no choose', async () => {
   render(<DownloadFolderRow load={async () => null} title="Save files to" />);

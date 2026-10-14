@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useEngine } from '../EngineContext';
 import { Btn, Note, Section } from '../components/ds';
 import { DownloadFolderRow } from '../components/DownloadFolderRow';
+import { PhotosAccessRow, type PhotosHost } from '../components/PhotosAccessRow';
 import { PairedSection } from './settings/PairedSection';
 import { ArrivalSection } from './settings/ArrivalSection';
 import { ConnectionSection } from './settings/ConnectionSection';
@@ -38,7 +39,9 @@ const NAME_READ_RETRY_MS = 1000;
  * time -- importing it here would invert the dependency direction and break
  * every ui test that renders this screen.
  */
-export function SettingsScreen({ background, onCheckConnection, downloadFolder, onUnpair, settingsHost, deviceNoun }: {
+export function SettingsScreen({ background, onCheckConnection, downloadFolder, onUnpair, settingsHost, deviceNoun, photos }: {
+  /** The Photos verbs. Absent on a host with no photo library. */
+  photos?: PhotosHost;
   background?: React.ReactNode;
   /**
    * R42p: where received files go. Injected for the same reason `background`
@@ -245,6 +248,10 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
             hideNote
           />
         ) : null}
+        {downloadFolder && photos ? (
+          <Text style={ui.hint}>{`Photos and videos go to the ${photos.destination}. Other files go to this folder.`}</Text>
+        ) : null}
+        {photos ? <PhotosAccessRow photos={photos} /> : null}
 
         <ArrivalSection host={settingsHost} deviceNoun={deviceNoun} />
 

@@ -70,11 +70,86 @@ export async function chooseDownloadFolder(): Promise<string | null> {
   // the picker reverted a folder that had just been chosen. The platform layer
   // is where a bridge quirk is absorbed, so it is fixed here and not in each
   // caller.
-  return (await NativeDaakFsPaths.chooseDownloadFolder()) ?? null;
+  const raw = (await NativeDaakFsPaths.chooseDownloadFolder()) ?? null;
+  return raw === null ? null : friendlyFolderName(raw);
 }
 
 export async function downloadFolderName(): Promise<string | null> {
-  return NativeDaakFsPaths.downloadFolderName();
+  const raw = (await NativeDaakFsPaths.downloadFolderName()) ?? null;
+  return raw === null ? null : friendlyFolderName(raw);
+}
+
+const MAX_FOLDER_NAME = 40;
+
+function capMiddle(s: string): string {
+  const chars = Array.from(s);
+  if (chars.length <= MAX_FOLDER_NAME) return s;
+  const keep = MAX_FOLDER_NAME - 1;
+  const head = Math.ceil(keep / 2);
+  return `${chars.slice(0, head).join('')}\u2026${chars.slice(chars.length - (keep - head)).join('')}`;
+}
+
+// Returns null when the text has a malformed percent sequence.
+function strictDecode(s: string): string | null {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+}
+
+// The last non-empty segment of a URI path. A malformed segment stays as it is.
+function lastSegment(path: string): string | undefined {
+  const last = path.split('/').filter(Boolean).pop();
+  return last === undefined ? undefined : (strictDecode(last) ?? last);
+}
+
+function authorityName(authority: string): string {
+  return authority.split('.').slice(-2).join('.');
+}
+
+const SD_VOLUME = /^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}$/;
+
+function volumeName(volume: string, rest: string): string {
+  const rel = rest.replace(/^\/+|\/+$/g, '');
+  if (volume === 'primary') return rel || 'Internal storage';
+  if (volume === 'raw') return rest.replace(/\/+$/, '');
+  const label = volume === 'home' ? 'Documents' : SD_VOLUME.test(volume) ? 'SD card' : volume;
+  return rel ? `${label} / ${rel}` : label;
+}
+
+/**
+ * Turns the raw folder value from the native module into a short name for the
+ * screen. Android gives a content URI. iOS and macOS give a full path. A value
+ * that has no usable segment comes back unchanged, so the function never erases
+ * a value it cannot parse. A result has at most 40 code points. A content URI
+ * never comes back raw.
+ */
+export function friendlyFolderName(raw: string): string {
+  const uri = /^content:\/\/([^/]+)(\/.*)?$/.exec(raw);
+  if (uri) {
+    const authority = uri[1];
+    const path = uri[2] ?? '';
+    const tree = /^\/tree\/([^/]*)/.exec(path);
+    const id = tree ? strictDecode(tree[1]) : null;
+    if (tree && id !== null) {
+      const colon = id.indexOf(':');
+      if (authority === 'com.android.externalstorage.documents' && colon >= 0) {
+        return capMiddle(volumeName(id.slice(0, colon), id.slice(colon + 1)));
+      }
+      const last = id.split('/').filter(Boolean).pop();
+      return capMiddle(last ?? authorityName(authority));
+    }
+    return capMiddle(lastSegment(path) ?? authorityName(authority));
+  }
+
+  const parts = raw.split(/[\\/]/).filter(Boolean);
+  const cloud = parts.indexOf('com~apple~CloudDocs');
+  if (cloud >= 0) {
+    return capMiddle(['iCloud Drive', ...parts.slice(cloud + 1)].join(' / '));
+  }
+  if (parts.length === 0) return raw;
+  return capMiddle(parts.slice(-2).join(' / '));
 }
 
 export async function clearDownloadFolder(): Promise<void> {
@@ -83,6 +158,42 @@ export async function clearDownloadFolder(): Promise<void> {
 
 export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
   return NativeDaakFsPaths.moveReceivedFiles(paths);
+}
+
+export type PhotosAccess = 'granted' | 'denied' | 'undetermined' | 'unavailable';
+
+export async function saveToLibrary(paths: string[]): Promise<string[]> {
+  return NativeDaakFsPaths.saveToLibrary(paths);
+}
+
+export async function requestPhotosAccess(): Promise<boolean> {
+  try {
+    return (await NativeDaakFsPaths.requestPhotosAccess()) === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function photosAccessStatus(): Promise<PhotosAccess> {
+  try {
+    const status = await NativeDaakFsPaths.photosAccessStatus();
+    return status === 'granted' || status === 'denied' || status === 'undetermined'
+      ? status
+      : 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+// The JavaScript side picks candidates by extension, because an InboxEntry has
+// no per-file type. The native side may still refuse a file it cannot add.
+const MEDIA_EXT = new Set([
+  'jpg', 'jpeg', 'png', 'heic', 'gif', 'webp', 'mp4', 'mov', 'm4v', '3gp', 'mkv',
+]);
+
+function isMedia(path: string): boolean {
+  const dot = path.lastIndexOf('.');
+  return dot >= 0 && MEDIA_EXT.has(path.slice(dot + 1).toLowerCase());
 }
 
 /**
@@ -99,6 +210,9 @@ export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
  * or one whose files all stayed put, needs no write, and a write per receive
  * for nothing is a row rewritten on every arrival.
  *
+ * Media files go to the OS media library first (`saveToLibrary`). Each file
+ * that the library did not take then goes to the chosen folder.
+ *
  * RETURNS the locations the move produced, or null when nothing moved. The
  * caller needs them because a notification is a SNAPSHOT: its payload JSON is
  * baked into the notification's extras at post time, so a banner posted before
@@ -110,13 +224,38 @@ export async function relocateReceivedFiles(
 ): Promise<string[] | null> {
   const before = payload.savedPaths;
   if (!before || before.length === 0) return null;
-  let after: string[];
-  try {
-    after = await moveReceivedFiles(before);
-  } catch {
-    return null;
+  const after = [...before];
+
+  // Step 1: the media library. A failure leaves the paths as they are.
+  const mediaAt = before.flatMap((p, i) => (isMedia(p) ? [i] : []));
+  if (mediaAt.length > 0) {
+    try {
+      const saved = await saveToLibrary(mediaAt.map((i) => before[i]));
+      if (saved.length === mediaAt.length) {
+        mediaAt.forEach((at, k) => {
+          after[at] = saved[k];
+        });
+      }
+    } catch {
+      // Nothing was saved. The folder move below still runs.
+    }
   }
-  if (after.length !== before.length) return null;
+
+  // Step 2: the chosen folder, for every path that is still the original.
+  const stillAt = before.flatMap((p, i) => (after[i] === p ? [i] : []));
+  if (stillAt.length > 0) {
+    try {
+      const moved = await moveReceivedFiles(stillAt.map((i) => after[i]));
+      if (moved.length === stillAt.length) {
+        stillAt.forEach((at, k) => {
+          after[at] = moved[k];
+        });
+      }
+    } catch {
+      // The files stay where they are.
+    }
+  }
+
   if (after.every((p, i) => p === before[i])) return null;
   try {
     await engine.replaceInboxPaths(payload.payloadId, after);

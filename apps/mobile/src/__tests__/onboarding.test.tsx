@@ -45,6 +45,9 @@ jest.mock('@daak/platform', () => ({
   downloadFolderName: jest.fn(async () => null),
   clearDownloadFolder: jest.fn(async () => undefined),
   moveReceivedFiles: jest.fn(async (paths: string[]) => paths),
+  saveToLibrary: jest.fn(async (paths: string[]) => paths),
+  requestPhotosAccess: jest.fn(async () => false),
+  photosAccessStatus: jest.fn(async () => 'unavailable'),
   relocateReceivedFiles: jest.fn(async () => undefined),
   // The re-ask wrapper returns the SAME rows with a real handler bound to the
   // alerts one. Two earlier versions of this mock broke the flow in ways that
@@ -298,6 +301,15 @@ describe('the Save-location step', () => {
     fireEvent.press(await screen.findByTestId('download-folder-choose'));
     expect(await screen.findByText('Documents / Daak')).toBeTruthy();
     expect(chooseDownloadFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for Photos access once on Continue, and a no still moves on', async () => {
+    const { requestPhotosAccess } = jest.requireMock('@daak/platform');
+    requestPhotosAccess.mockClear();
+    requestPhotosAccess.mockResolvedValueOnce(false);
+    await reachPairStep();
+    expect(requestPhotosAccess).toHaveBeenCalledTimes(1);
+    expect(startEngineOnce).toHaveBeenCalled();
   });
 
   it('goes back to Permissions without starting the engine', async () => {

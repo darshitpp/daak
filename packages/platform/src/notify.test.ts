@@ -201,6 +201,15 @@ describe('handleNotificationAction', () => {
     expect(h.present).not.toHaveBeenCalled();
   });
 
+  it('hands a marker list to present unchanged, because presentShare filters', () => {
+    const h = handlers();
+    handleNotificationAction(
+      { action: 'daak.share', payload: JSON.stringify({ ...entry, savedPaths: ['photos:ABC'] }) },
+      h,
+    );
+    expect(h.present).toHaveBeenCalledWith({ urls: ['photos:ABC'] });
+  });
+
   it('reveals the first saved path for daak.folder and nothing else', () => {
     const h = handlers();
     handleNotificationAction({ action: 'daak.folder', payload: JSON.stringify(entry) }, h);

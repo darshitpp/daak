@@ -6,6 +6,7 @@ import type { InboxActions } from './inbox-actions';
 import { ToastProvider } from './components/Toast';
 import { SheetProvider } from './components/Sheet';
 import type { DeviceNoun } from './components/ds';
+import type { PhotosHost } from './components/PhotosAccessRow';
 import type { SettingsHost } from './screens/settings/host';
 import { Popover } from './modes/Popover';
 import { Dashboard } from './modes/Dashboard';
@@ -27,7 +28,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -60,6 +61,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
   };
+  photos?: PhotosHost;
   /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
   deviceNoun?: DeviceNoun;
   /** The Mac window chrome. The sidebar footer reads `version`. */
@@ -110,6 +112,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             onCheckConnection={onCheckConnection}
             onUnpair={onUnpair}
             downloadFolder={downloadFolder}
+            photos={photos}
             deviceNoun={deviceNoun}
             windowChrome={windowChrome}
             keyboardAvoiding={keyboardAvoiding}

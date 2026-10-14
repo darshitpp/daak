@@ -253,8 +253,10 @@ A new pairing stays pending until you confirm it.
 2. Add text, a file, a photo, or a video.
 3. Send.
 
-The other device shows a notification. Received files go to the save folder
-that you choose in **Settings**.
+The other device shows a notification. On iPhone and Android, received photos
+and videos go to Photos or the Gallery. Other received files go to the save
+folder that you choose in **Settings**. On iPhone, Daak asks once for
+permission to add photos.
 
 If the other device is not reachable, Daak queues the item. It retries
 with a growing delay until the device returns.

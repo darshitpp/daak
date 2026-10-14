@@ -24,6 +24,7 @@ import {
 } from '@daak/platform';
 import { notificationGrant, recordNotificationGrant } from './bootstrap';
 import { PairingFlow } from './PairingFlow';
+import { photosHost } from './photosHost';
 
 type Step = 'loading' | 'welcome' | 'name' | 'permissions' | 'save' | 'starting' | 'pair' | 'done' | 'fault';
 
@@ -294,6 +295,7 @@ export function OnboardingFlow({ onComplete, onReady }: {
           choose: chooseDownloadFolder,
           reset: clearDownloadFolder,
         }}
+        photos={photosHost}
         onBack={() => setStep('permissions')}
         onContinue={() => {
           // THE ENGINE MAY NOW START, and the next step waits for it. The name is

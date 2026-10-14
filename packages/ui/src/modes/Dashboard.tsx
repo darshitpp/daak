@@ -5,6 +5,7 @@ import type { UiState } from '../state/store';
 import type { InboxActions } from '../inbox-actions';
 import { AppShell } from '../components/AppShell';
 import type { DeviceNoun } from '../components/ds';
+import type { PhotosHost } from '../components/PhotosAccessRow';
 import type { SettingsHost } from '../screens/settings/host';
 import { EngineProvider } from '../EngineContext';
 import { ui } from '../theme';
@@ -22,7 +23,7 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, deviceNoun, windowChrome, keyboardAvoiding, settingsHost }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
@@ -41,6 +42,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
   };
+  photos?: PhotosHost;
   /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
   deviceNoun?: DeviceNoun;
   /** The Mac window chrome. The sidebar footer reads `version`. */
@@ -66,6 +68,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           onCheckConnection={onCheckConnection}
           onUnpair={onUnpair}
           downloadFolder={downloadFolder}
+          photos={photos}
           deviceNoun={deviceNoun}
           windowChrome={windowChrome}
           keyboardAvoiding={keyboardAvoiding}

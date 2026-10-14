@@ -13,6 +13,12 @@ export interface InboxActions {
   open?: (path: string) => Promise<boolean>;
   share?: (paths: string[]) => void;
   /**
+   * Whether the share sheet can take this path. A host answers `false` for a
+   * path that names no file, for example a Photos marker. The thread screen then
+   * draws no Share button for that row. Absent means every path can be shared.
+   */
+  canShare?: (path: string) => boolean;
+  /**
    * R42i: put a received TEXT back on the clipboard. Injected for the same
    * reason as `share` -- packages/ui imports no clipboard TurboModule. A row
    * renders the button only for a text entry AND only when the host supplied

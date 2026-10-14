@@ -204,4 +204,40 @@ describe('App', () => {
     devices.mockRestore();
   });
 
+  // Task 10: the onboarding flag lives in the Keychain and survives a reinstall,
+  // but the Photos permission does not. A returning user is asked from App when
+  // the OS status is undetermined. A first-launch user is asked by onboarding.
+  it('asks for Photos access once for a returning user when the OS has not been asked', async () => {
+    const platform = jest.requireMock('@daak/platform');
+    // Every read says undetermined, so a second ask would be counted.
+    platform.photosAccessStatus.mockResolvedValue('undetermined');
+    platform.requestPhotosAccess.mockClear();
+    try {
+      render(<App />);
+      await waitFor(() => expect(platform.requestPhotosAccess).toHaveBeenCalledTimes(1));
+      await act(async () => {});
+      expect(platform.requestPhotosAccess).toHaveBeenCalledTimes(1);
+    } finally {
+      platform.photosAccessStatus.mockResolvedValue('unavailable');
+    }
+  });
+
+  it('does not ask for Photos access from App on a first launch', async () => {
+    const platform = jest.requireMock('@daak/platform');
+    const returning = { complete: true, name: 'Seawood Otter', discovery: true, alerts: true };
+    platform.photosAccessStatus.mockResolvedValue('undetermined');
+    platform.readOnboarding.mockResolvedValue({ complete: false, discovery: false, alerts: false });
+    platform.requestPhotosAccess.mockClear();
+    // The restore runs even when an assertion fails, so later tests keep the defaults.
+    try {
+      render(<App />);
+      await act(async () => {});
+      await act(async () => {});
+      expect(platform.requestPhotosAccess).not.toHaveBeenCalled();
+    } finally {
+      platform.readOnboarding.mockResolvedValue(returning);
+      platform.photosAccessStatus.mockResolvedValue('unavailable');
+    }
+  });
+
 });

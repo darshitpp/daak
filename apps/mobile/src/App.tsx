@@ -11,6 +11,7 @@ import {
   type SettingsHost,
   useBlockers,
 } from '@daak/ui';
+import { askForPhotosIfUndetermined, photosHost } from './photosHost';
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
@@ -246,7 +247,10 @@ export default function App() {
         // durably written. Permitting a start here instead would publish an
         // engine-generated device name to every peer before the user chose one,
         // which is the entire thing these screens exist to prevent.
-        if (stored.complete) void boot();
+        if (stored.complete) {
+          void boot();
+          void askForPhotosIfUndetermined();
+        }
       },
       () => {
         // A keystore that cannot be read is OnboardingFlow's problem to
@@ -417,6 +421,7 @@ export default function App() {
           // the phone and the desktop cannot disagree about when it opens (R43b).
           onCheckConnection={blockers.onCheckConnection}
           downloadFolder={downloadFolder}
+          photos={photosHost}
           initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
           // ?? '' and not `link.text`: a send link with NO text is an
           // instruction to send nothing, and undefined here would leave the

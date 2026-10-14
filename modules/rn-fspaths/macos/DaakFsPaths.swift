@@ -226,4 +226,21 @@ class DaakFsPaths: NSObject {
     }
     resolve(out)
   }
+
+  // macOS has no Photos support yet (R8). The shared relocate code calls these.
+  @objc func saveToLibrary(_ paths: [String],
+                           resolve: @escaping RCTPromiseResolveBlock,
+                           reject: @escaping RCTPromiseRejectBlock) {
+    resolve(paths)
+  }
+
+  @objc func requestPhotosAccess(_ resolve: @escaping RCTPromiseResolveBlock,
+                                 reject: @escaping RCTPromiseRejectBlock) {
+    resolve(false)
+  }
+
+  @objc func photosAccessStatus(_ resolve: @escaping RCTPromiseResolveBlock,
+                                reject: @escaping RCTPromiseRejectBlock) {
+    resolve("unavailable")
+  }
 }

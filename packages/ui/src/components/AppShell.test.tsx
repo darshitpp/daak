@@ -213,6 +213,16 @@ describe('AppShell tokens', () => {
     expect(screen.queryByTestId('tab-devices')).toBeNull();
   });
 
+  it('threads photos from the shell to the Settings Photos row', async () => {
+    shell(fakeEngine([]), {
+      downloadFolder: { load: async () => null, choose: async () => null },
+      photos: { destination: 'Photos app', status: async () => 'undetermined', request: async () => true, openSettings: () => {} },
+    });
+    fireEvent.press(screen.getByTestId('tab-settings'));
+    expect(await screen.findByTestId('photos-access-row')).toBeTruthy();
+    expect(screen.getByText('Photos and videos go to the Photos app. Other files go to this folder.')).toBeTruthy();
+  });
+
   // The host hook must be threaded through the shell to Settings.
   it('threads onUnpair from the shell to the Settings remove sheet', async () => {
     const engine = fakeEngine([peer]);

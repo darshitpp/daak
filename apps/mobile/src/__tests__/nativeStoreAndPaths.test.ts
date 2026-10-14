@@ -737,3 +737,167 @@ describe('openFile opens a viewer on every platform', () => {
   });
 });
 
+
+describe('fspaths exposes the library methods on the Spec and on every native', () => {
+  const spec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const kt = read(
+    repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const platform = read(repo + 'packages/platform/src/fspaths.ts');
+
+  it('declares the three methods on the Spec', () => {
+    expect(spec).toMatch(/saveToLibrary\(paths: string\[\]\): Promise<string\[\]>;/);
+    expect(spec).toMatch(/requestPhotosAccess\(\): Promise<boolean>;/);
+    expect(spec).toMatch(/photosAccessStatus\(\): Promise</);
+  });
+
+  it('implements them in Swift on iOS and macOS and in Kotlin', () => {
+    for (const p of ['ios', 'macos']) {
+      const swift = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.swift');
+      expect(swift).toMatch(/@objc func saveToLibrary\(_ paths: \[String\]/);
+      expect(swift).toMatch(/@objc func requestPhotosAccess\(/);
+      expect(swift).toMatch(/@objc func photosAccessStatus\(/);
+      const mm = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.mm');
+      expect(mm).toMatch(/RCT_EXTERN_METHOD\(saveToLibrary:/);
+      expect(mm).toMatch(/RCT_EXTERN_METHOD\(requestPhotosAccess:/);
+      expect(mm).toMatch(/RCT_EXTERN_METHOD\(photosAccessStatus:/);
+    }
+    expect(kt).toMatch(/override fun saveToLibrary\(paths: ReadableArray, promise: Promise\)/);
+    expect(kt).toMatch(/override fun requestPhotosAccess\(promise: Promise\)/);
+    expect(kt).toMatch(/override fun photosAccessStatus\(promise: Promise\)/);
+  });
+
+  it('is re-exported by the platform wrapper', () => {
+    expect(platform).toMatch(/export async function saveToLibrary\(/);
+    expect(platform).toMatch(/export async function requestPhotosAccess\(/);
+    expect(platform).toMatch(/export async function photosAccessStatus\(/);
+  });
+});
+
+describe('markers do not reach file system calls', () => {
+  const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const kt = read(
+    repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPaths' + 'Module.kt',
+  );
+
+  it('shows a Saved to Photos alert for a photos: marker on iOS', () => {
+    const fn = ios.slice(ios.indexOf('func openFile('));
+    expect(fn).toContain('path.hasPrefix("photos:")');
+    expect(fn).toContain('UIAlertController');
+    expect(fn).toContain('Saved to the Photos app');
+    expect(fn).toContain('Open the Photos app to see it.');
+    // D1: a second alert must not stack on the first.
+    expect(fn).toMatch(/top is UIAlertController[\s\S]*resolve\(true\)[\s\S]*return/);
+    // D2: UIKit refuses a present while the top controller moves.
+    expect(fn).toMatch(/top\.isBeingPresented \|\| top\.isBeingDismissed[\s\S]*resolve\(false\)[\s\S]*return/);
+    expect(fn).toContain('top.present(alert, animated: true) { resolve(true) }');
+    // Apple documents no link to one asset, so no undocumented scheme is used.
+    expect(ios).not.toContain('photos-redirect');
+  });
+
+  it('answers exists for markers without a file check', () => {
+    expect(ios).toContain('if path.hasPrefix("photos:") { resolve(true); return }');
+    expect(kt).toContain('path.startsWith("content://") || File(path).exists()');
+  });
+});
+
+describe('iOS saves to the Photos library with add-only access', () => {
+  const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const plist = read(repo + 'apps/mobile/ios/Daak/Info.plist');
+
+  it('imports PhotoKit and asks for add-only access', () => {
+    expect(ios).toContain('import Photos');
+    expect(ios).toContain('PHPhotoLibrary.requestAuthorization(for: .addOnly)');
+    expect(ios).not.toContain('.readWrite');
+  });
+
+  it('never prompts from saveToLibrary', () => {
+    const fn = ios.slice(ios.indexOf('func saveToLibrary('), ios.indexOf('func requestPhotosAccess('));
+    expect(fn).not.toContain('requestAuthorization');
+    expect(fn).toContain('authorizationStatus(for: .addOnly)');
+  });
+
+  it('deletes the source only after the add succeeded', () => {
+    const start = ios.indexOf('func addToLibrary(');
+    const fn = ios.slice(start, ios.indexOf('\n  }\n', start));
+    const add = fn.indexOf('performChangesAndWait');
+    const guardAt = fn.indexOf('guard let identifier');
+    const remove = fn.indexOf('removeItem');
+    expect(add).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(add);
+    expect(remove).toBeGreaterThan(guardAt);
+  });
+
+  it('logs a source that could not be removed after the add', () => {
+    const start = ios.indexOf('func addToLibrary(');
+    const fn = ios.slice(start, ios.indexOf('\n  }\n', start));
+    expect(fn).not.toContain('try? FileManager.default.removeItem');
+    expect(fn).toMatch(/do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{\s*NSLog\("Daak: the saved photo's source file was not removed: \\\(error\)"\)/);
+    expect(fn).toContain('return "photos:" + identifier');
+  });
+
+  it('declares the add-only usage description', () => {
+    expect(plist).toContain('<key>NSPhotoLibraryAddUsageDescription</key>');
+    expect(plist).not.toContain('NSPhotoLibraryUsageDescription');
+  });
+});
+
+describe('Android saves to MediaStore without a permission', () => {
+  const kt = read(
+    repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const manifest = read(repo + 'apps/mobile/android/app/src/main/AndroidManifest.xml');
+
+  it('skips API levels below 29', () => {
+    expect(kt).toContain('Build.VERSION.SDK_INT < Build.VERSION_CODES.Q');
+  });
+
+  it('writes pending, then clears the pending flag, then deletes the source', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    const pending = fn.indexOf('IS_PENDING, 1');
+    const clear = fn.indexOf('IS_PENDING, 0');
+    const del = fn.indexOf('src.delete()');
+    expect(pending).toBeGreaterThan(-1);
+    expect(clear).toBeGreaterThan(pending);
+    expect(del).toBeGreaterThan(clear);
+  });
+
+  it('logs a source that could not be deleted and still returns the URI', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    const del = fn.indexOf('if (!src.delete())');
+    expect(del).toBeGreaterThan(fn.indexOf('IS_PENDING, 0'));
+    expect(fn).toContain('android.util.Log.w("DaakFsPaths", "saved item but could not delete source: ${src.name}")');
+    expect(fn.indexOf('uri.toString()')).toBeGreaterThan(del);
+  });
+
+  it('removes the half-made row when the copy fails', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    const catchAt = fn.indexOf('catch');
+    expect(catchAt).toBeGreaterThan(-1);
+    expect(fn.indexOf('resolver.delete(uri, null, null)')).toBeGreaterThan(catchAt);
+  });
+
+  it('checks the row count of the pending-clear update before it deletes the source', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    const clear = fn.indexOf('IS_PENDING, 0');
+    const check = fn.indexOf('!= 1', clear);
+    const thrown = fn.indexOf('IllegalStateException("pending not cleared")', clear);
+    const del = fn.indexOf('src.delete()');
+    expect(check).toBeGreaterThan(clear);
+    expect(thrown).toBeGreaterThan(check);
+    expect(del).toBeGreaterThan(thrown);
+  });
+
+  it('answers once for each input, also for a null entry', () => {
+    const fn = kt.slice(kt.indexOf('override fun saveToLibrary('), kt.indexOf('override fun requestPhotosAccess('));
+    expect(fn).not.toContain('mapNotNull');
+    expect(fn).toContain('paths.getString(it) ?: ""');
+  });
+
+  it('adds no storage permission', () => {
+    expect(manifest).not.toContain('WRITE_EXTERNAL_STORAGE');
+    expect(manifest).not.toContain('READ_MEDIA_IMAGES');
+    expect(manifest).not.toContain('READ_MEDIA_VIDEO');
+    expect(manifest).not.toContain('READ_MEDIA_AUDIO');
+  });
+});

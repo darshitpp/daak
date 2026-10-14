@@ -27,9 +27,9 @@ describe('fspaths facade', () => {
     await expect(chooseDownloadFolder()).resolves.toBeNull();
   });
 
-  it('passes a chosen folder through unchanged', async () => {
+  it('returns a chosen folder as a friendly name', async () => {
     native.chooseDownloadFolder.mockResolvedValueOnce('/a/folder');
-    await expect(chooseDownloadFolder()).resolves.toBe('/a/folder');
+    await expect(chooseDownloadFolder()).resolves.toBe('a / folder');
   });
 
   it('openFile forwards the path and returns the native answer', async () => {

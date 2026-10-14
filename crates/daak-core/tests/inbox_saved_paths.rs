@@ -189,3 +189,43 @@ async fn the_transfer_item_event_and_the_inbox_row_name_the_same_file() {
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
+
+/// A platform that moves a file reports the new path. A mounted Thread screen
+/// refetches on transfer.item, so the engine must announce the rewrite.
+#[tokio::test]
+async fn replacing_inbox_paths_announces_the_new_item_path() {
+    let (a, b, a_dir, _b_dir) = paired().await;
+    let src = a_dir.path().join("moved.bin");
+    std::fs::write(&src, vec![9u8; 2000]).unwrap();
+    let item = Item::from_file(0, &src, CHUNK_SIZE_DEFAULT).unwrap();
+    let manifest = Manifest::new(
+        PayloadKind::Media,
+        DeviceRef {
+            device_id: a.identity().device_id(),
+            name: "a".into(),
+        },
+        vec![item],
+    );
+    let payload_id = manifest.payload_id;
+    a.send_secure(b.identity().device_id(), manifest, vec![Some(src)])
+        .await
+        .unwrap();
+    let _ = inbox_row(&b, payload_id).await;
+
+    let mut events = b.events();
+    b.replace_inbox_paths(payload_id, vec!["photos:ABC".to_string()])
+        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Ok(EngineEvent::TransferItem {
+                dest_path: Some(p), ..
+            })) if p == "photos:ABC" => break,
+            Ok(Ok(_)) => continue,
+            other => panic!("no TransferItem for the new path: {other:?}"),
+        }
+    }
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}

@@ -57,6 +57,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Daak finds and reaches other Daak devices on your local network.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Daak saves the photos and videos you receive to your Photos library.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIBackgroundModes</key>

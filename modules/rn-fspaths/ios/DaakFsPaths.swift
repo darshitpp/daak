@@ -2,6 +2,8 @@ import Foundation
 import React
 import UIKit
 import QuickLook
+import Photos
+import UniformTypeIdentifiers
 
 /// Every path this module hands out is an APP-SANDBOX path. The engine's data
 /// dir and every saved file live here, so a caller can never steer the engine
@@ -80,6 +82,30 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   @objc func openFile(_ path: String,
                       resolve: @escaping RCTPromiseResolveBlock,
                       reject: @escaping RCTPromiseRejectBlock) {
+    // A Photos marker has no file, and Apple has no documented link to one
+    // asset. So say where the photo is. This uses UIKit only. Resolving true
+    // keeps the thread from showing its "cannot open files" toast.
+    if path.hasPrefix("photos:") {
+      DispatchQueue.main.async {
+        guard let root = UIApplication.shared.connectedScenes
+          .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
+          .first?.rootViewController
+        else { resolve(false); return }
+        var top = root
+        while let next = top.presentedViewController { top = next }
+        // An alert is already on the screen. Do not stack a second one.
+        if top is UIAlertController { resolve(true); return }
+        // UIKit refuses a present while the top controller moves.
+        if top.isBeingPresented || top.isBeingDismissed { resolve(false); return }
+        let alert = UIAlertController(
+          title: "Saved to the Photos app",
+          message: "Open the Photos app to see it.",
+          preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        top.present(alert, animated: true) { resolve(true) }
+      }
+      return
+    }
     let scope = Self.chosenFolderScope()
     guard FileManager.default.isReadableFile(atPath: path) else {
       scope?.stopAccessingSecurityScopedResource()
@@ -134,6 +160,8 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   @objc func exists(_ path: String,
                     resolve: @escaping RCTPromiseResolveBlock,
                     reject: @escaping RCTPromiseRejectBlock) {
+    // A Photos marker is not a path. fileExists would say no for a live asset.
+    if path.hasPrefix("photos:") { resolve(true); return }
     resolve(FileManager.default.fileExists(atPath: path))
   }
 
@@ -302,6 +330,70 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       }
     }
     resolve(out)
+  }
+
+  /// Add each image or video to the Photos library. One answer per input.
+  ///
+  /// This method must not prompt. Only onboarding and Settings ask. So a receive
+  /// never shows a system prompt over an app that the user does not look at.
+  /// With no access, every input comes back unchanged and the folder move runs.
+  @objc func saveToLibrary(_ paths: [String],
+                           resolve: @escaping RCTPromiseResolveBlock,
+                           reject: @escaping RCTPromiseRejectBlock) {
+    let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+    guard status == .authorized || status == .limited else {
+      resolve(paths)
+      return
+    }
+    // performChangesAndWait blocks, so it must not run on the main queue.
+    DispatchQueue.global(qos: .userInitiated).async {
+      resolve(paths.map { Self.addToLibrary($0) })
+    }
+  }
+
+  @objc func requestPhotosAccess(_ resolve: @escaping RCTPromiseResolveBlock,
+                                 reject: @escaping RCTPromiseRejectBlock) {
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+      resolve(status == .authorized || status == .limited)
+    }
+  }
+
+  @objc func photosAccessStatus(_ resolve: @escaping RCTPromiseResolveBlock,
+                                reject: @escaping RCTPromiseRejectBlock) {
+    switch PHPhotoLibrary.authorizationStatus(for: .addOnly) {
+    case .authorized, .limited: resolve("granted")
+    case .notDetermined: resolve("undetermined")
+    default: resolve("denied")
+    }
+  }
+
+  /// One file. Returns `photos:<localIdentifier>` after a successful add. Returns
+  /// the original path for any failure. The source is deleted only AFTER the
+  /// add. A crash between the two steps leaves a duplicate and never loses the file.
+  private static func addToLibrary(_ path: String) -> String {
+    let url = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: path),
+          let type = UTType(filenameExtension: url.pathExtension.lowercased())
+    else { return path }
+    let isVideo = type.conforms(to: .movie)
+    guard isVideo || type.conforms(to: .image) else { return path }
+    var identifier: String?
+    do {
+      try PHPhotoLibrary.shared().performChangesAndWait {
+        let request = isVideo
+          ? PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+          : PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
+        identifier = request?.placeholderForCreatedAsset?.localIdentifier
+      }
+    } catch {
+      NSLog("Daak: could not add \(url.lastPathComponent) to Photos: \(error)")
+      return path
+    }
+    guard let identifier else { return path }
+    do { try FileManager.default.removeItem(at: url) } catch {
+      NSLog("Daak: the saved photo's source file was not removed: \(error)")
+    }
+    return "photos:" + identifier
   }
 
   /// Put one file at `dest`. A plain move is the first try. A folder served by

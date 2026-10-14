@@ -711,6 +711,39 @@ describe('ThreadScreen', () => {
     expect(actions.share).toHaveBeenCalledWith(['/d/r.pdf']);
   });
 
+  it('hides Share for a row whose path the host refuses', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ transferId: 'cc'.repeat(16), type: 'file', text: null, name: 'r.pdf', destPath: 'photos:ABC' }),
+    ]));
+    const actions = { open: jest.fn(async () => true), share: jest.fn(), canShare: (p: string) => !p.startsWith('photos:') };
+    mount(engine, { actions });
+    await screen.findByLabelText('Preview r.pdf');
+    expect(screen.queryByLabelText('Share r.pdf')).toBeNull();
+  });
+
+  it('keeps Share for a row the host accepts', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ transferId: 'cc'.repeat(16), type: 'file', text: null, name: 'r.pdf', destPath: '/app/a.pdf' }),
+    ]));
+    const actions = { open: jest.fn(async () => true), share: jest.fn(), canShare: (p: string) => !p.startsWith('photos:') };
+    mount(engine, { actions });
+    await screen.findByLabelText('Preview r.pdf');
+    expect(screen.getByLabelText('Share r.pdf')).toBeTruthy();
+  });
+
+  it('keeps Share when the host gives no canShare', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      threadItem({ transferId: 'cc'.repeat(16), type: 'file', text: null, name: 'r.pdf', destPath: 'photos:ABC' }),
+    ]));
+    const actions = { open: jest.fn(async () => true), share: jest.fn() };
+    mount(engine, { actions });
+    await screen.findByLabelText('Preview r.pdf');
+    expect(screen.getByLabelText('Share r.pdf')).toBeTruthy();
+  });
+
   it('draws no verb the host does not supply', async () => {
     const engine = fakeEngine([peer]);
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([

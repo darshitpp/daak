@@ -4,6 +4,9 @@ import { Btn, Note, Section } from './ds';
 import { useToast } from './Toast';
 import { ui } from '../theme';
 
+// The value text must shrink inside the row. Other screens use ui.kvV as is.
+const shrink = { flexShrink: 1 } as const;
+
 /**
  * R42p: where received files go.
  *
@@ -55,7 +58,7 @@ export function DownloadFolderRow({ load, choose, reset, title, chooseLabel, hid
         <View style={ui.card}>
           <View style={[ui.kv, ui.kvFirst]}>
             <Text style={ui.kvK}>Saved to</Text>
-            <Text style={ui.kvV} testID="download-folder-name" numberOfLines={2}>
+            <Text style={[ui.kvV, shrink]} testID="download-folder-name" numberOfLines={1} ellipsizeMode="middle">
               {name ?? 'Daak · On My iPhone'}
             </Text>
           </View>
@@ -72,7 +75,7 @@ export function DownloadFolderRow({ load, choose, reset, title, chooseLabel, hid
       <View style={ui.card}>
         <View style={[ui.kv, ui.kvFirst]}>
           <Text style={ui.kvK}>Folder</Text>
-          <Text style={ui.kvV} testID="download-folder-name" numberOfLines={2}>
+          <Text style={[ui.kvV, shrink]} testID="download-folder-name" numberOfLines={1} ellipsizeMode="middle">
             {name ?? 'This app\u2019s own storage'}
           </Text>
         </View>

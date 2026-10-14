@@ -94,3 +94,10 @@ it('hands the native fileSizes to the thread screen as an action', async () => {
   await expect(mobileInboxActions.fileSizes?.(['/a', '/b'])).resolves.toEqual([1024, null]);
   expect(fileSizes).toHaveBeenCalledWith(['/a', '/b']);
 });
+
+it('refuses to share a Photos marker and accepts real paths and content URIs', () => {
+  const { mobileInboxActions } = jest.requireActual('../inbox-actions');
+  expect(mobileInboxActions.canShare?.('photos:ABC')).toBe(false);
+  expect(mobileInboxActions.canShare?.('/app/a.pdf')).toBe(true);
+  expect(mobileInboxActions.canShare?.('content://media/external/images/media/9')).toBe(true);
+});

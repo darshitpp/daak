@@ -61,6 +61,9 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     downloadFolderName: jest.fn(async () => null),
     clearDownloadFolder: jest.fn(async () => undefined),
     moveReceivedFiles: jest.fn(async (paths: string[]) => paths),
+    saveToLibrary: jest.fn(async (paths: string[]) => paths),
+    requestPhotosAccess: jest.fn(async () => false),
+    photosAccessStatus: jest.fn(async () => 'unavailable'),
     relocateReceivedFiles: jest.fn(async () => undefined),
     // Task 2 of the design-conformance P2 plan: the notification preference.
     // It defaults ON, which is the real default.

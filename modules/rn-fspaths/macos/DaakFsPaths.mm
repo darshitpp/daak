@@ -24,4 +24,12 @@ RCT_EXTERN_METHOD(clearDownloadFolder:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(moveReceivedFiles:(NSArray<NSString *> *)paths
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(saveToLibrary:(NSArray<NSString *> *)paths
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(requestPhotosAccess:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(photosAccessStatus:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 @end
