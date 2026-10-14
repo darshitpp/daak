@@ -822,3 +822,34 @@ describe('iOS saves to the Photos library with add-only access', () => {
     expect(plist).not.toContain('NSPhotoLibraryUsageDescription');
   });
 });
+
+describe('Android saves to MediaStore without a permission', () => {
+  const kt = read(
+    repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const manifest = read(repo + 'apps/mobile/android/app/src/main/AndroidManifest.xml');
+
+  it('skips API levels below 29', () => {
+    expect(kt).toContain('Build.VERSION.SDK_INT < Build.VERSION_CODES.Q');
+  });
+
+  it('writes pending, then clears the pending flag, then deletes the source', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    const pending = fn.indexOf('IS_PENDING, 1');
+    const clear = fn.indexOf('IS_PENDING, 0');
+    const del = fn.indexOf('src.delete()');
+    expect(pending).toBeGreaterThan(-1);
+    expect(clear).toBeGreaterThan(pending);
+    expect(del).toBeGreaterThan(clear);
+  });
+
+  it('removes the half-made row when the copy fails', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    expect(fn).toContain('resolver.delete(uri, null, null)');
+  });
+
+  it('adds no storage permission', () => {
+    expect(manifest).not.toContain('WRITE_EXTERNAL_STORAGE');
+    expect(manifest).not.toContain('READ_MEDIA_IMAGES');
+  });
+});

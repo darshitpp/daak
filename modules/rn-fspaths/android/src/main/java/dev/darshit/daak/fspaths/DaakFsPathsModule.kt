@@ -1,9 +1,13 @@
 package dev.darshit.daak.fspaths
 
+import android.content.ContentValues
 import android.content.Intent
 import android.app.Activity
 import android.content.SharedPreferences
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import com.facebook.react.bridge.Promise
@@ -273,17 +277,67 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         })
   }
 
-  // Task 7 replaces these bodies.
+  /**
+   * Add each image or video to MediaStore. One answer per input.
+   *
+   * Android 10 (API 29) and later let any app add media with no permission.
+   * Below 29 the input comes back unchanged and the folder move runs.
+   */
   @ReactMethod
   override fun saveToLibrary(paths: ReadableArray, promise: Promise) = resolve(promise) {
-    writable((0 until paths.size()).mapNotNull { paths.getString(it) })
+    val input = (0 until paths.size()).mapNotNull { paths.getString(it) }
+    writable(input.map { path -> try { saveOne(path) } catch (t: Throwable) { path } })
+  }
+
+  /** No permission exists to ask for on Android 10 and later. */
+  @ReactMethod
+  override fun requestPhotosAccess(promise: Promise) = resolve(promise) {
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
   }
 
   @ReactMethod
-  override fun requestPhotosAccess(promise: Promise) = resolve(promise) { true }
+  override fun photosAccessStatus(promise: Promise) = resolve(promise) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) "granted" else "unavailable"
+  }
 
-  @ReactMethod
-  override fun photosAccessStatus(promise: Promise) = resolve(promise) { "unavailable" }
+  /**
+   * One file. Writes the row as pending, copies the bytes, then clears the
+   * pending flag, so no other app sees a half-written file. The source is
+   * deleted only after that. A failure removes the row and keeps the source.
+   */
+  private fun saveOne(path: String): String {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return path
+    val src = File(path)
+    if (!src.exists()) return path
+    val mime = guessMime(src.name)
+    val (collection, folder) = when {
+      mime.startsWith("image/") ->
+          MediaStore.Images.Media.EXTERNAL_CONTENT_URI to Environment.DIRECTORY_PICTURES
+      mime.startsWith("video/") ->
+          MediaStore.Video.Media.EXTERNAL_CONTENT_URI to Environment.DIRECTORY_MOVIES
+      else -> return path
+    }
+    val resolver = reactApplicationContext.contentResolver
+    val values = ContentValues().apply {
+      put(MediaStore.MediaColumns.DISPLAY_NAME, src.name)
+      put(MediaStore.MediaColumns.MIME_TYPE, mime)
+      put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/Daak")
+      put(MediaStore.MediaColumns.IS_PENDING, 1)
+    }
+    val uri = resolver.insert(collection, values) ?: return path
+    return try {
+      val out = resolver.openOutputStream(uri) ?: throw IllegalStateException("no output stream")
+      out.use { o -> src.inputStream().use { it.copyTo(o) } }
+      resolver.update(uri, ContentValues().apply {
+        put(MediaStore.MediaColumns.IS_PENDING, 0)
+      }, null, null)
+      src.delete()
+      uri.toString()
+    } catch (t: Throwable) {
+      try { resolver.delete(uri, null, null) } catch (_: Throwable) {}
+      path
+    }
+  }
 
   private fun writable(values: List<String>): WritableNativeArray =
       WritableNativeArray().apply { values.forEach { pushString(it) } }
@@ -295,8 +349,12 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         "png" -> "image/png"
         "gif" -> "image/gif"
         "webp" -> "image/webp"
+        "heic" -> "image/heic"
         "mp4" -> "video/mp4"
         "mov" -> "video/quicktime"
+        "m4v" -> "video/x-m4v"
+        "3gp" -> "video/3gpp"
+        "mkv" -> "video/x-matroska"
         "mp3" -> "audio/mpeg"
         "pdf" -> "application/pdf"
         "zip" -> "application/zip"
