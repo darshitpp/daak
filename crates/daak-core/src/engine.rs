@@ -436,6 +436,25 @@ fn settle_after_try(slot: &mut CodeSlot, generation: u64) {
     }
 }
 
+/// R5: arm one code. The arm clears any earlier end reason.
+fn arm_code_slot(slot: &mut CodeSlot, code: String, ttl: std::time::Duration, generation: u64) {
+    slot.armed = Some(ArmedCode {
+        code,
+        attempts: 0,
+        expires_at: std::time::Instant::now() + ttl,
+        generation,
+    });
+    slot.end = None;
+}
+
+/// R5: arming the QR mode or cancelling clears the live code. The slot records
+/// the cancel, so the host screen shows why the code is gone.
+fn clear_code_slot(slot: &mut CodeSlot) {
+    if slot.armed.take().is_some() {
+        slot.end = Some(CodeEnd::Cancelled);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodePairingState {
     Idle,
@@ -2048,9 +2067,7 @@ impl Engine {
         });
         // R5: only one mode is armed, so a QR arm clears any live code.
         let mut slot = self.code_slot.lock().await;
-        if slot.armed.take().is_some() {
-            slot.end = Some(CodeEnd::Cancelled);
-        }
+        clear_code_slot(&mut slot);
         Ok(())
     }
 
@@ -2070,9 +2087,7 @@ impl Engine {
         });
         // R5: only one mode is armed, so an open QR arm clears any live code.
         let mut slot = self.code_slot.lock().await;
-        if slot.armed.take().is_some() {
-            slot.end = Some(CodeEnd::Cancelled);
-        }
+        clear_code_slot(&mut slot);
         Ok(())
     }
 
@@ -2094,13 +2109,7 @@ impl Engine {
             + 1;
         {
             let mut slot = self.code_slot.lock().await;
-            slot.armed = Some(ArmedCode {
-                code,
-                attempts: 0,
-                expires_at: std::time::Instant::now() + ttl,
-                generation,
-            });
-            slot.end = None;
+            arm_code_slot(&mut slot, code, ttl, generation);
         }
         *self.pending_pairing.lock().await = None;
         Ok(())
@@ -2112,9 +2121,7 @@ impl Engine {
     /// harm.
     pub async fn cancel_code_pairing(&self) {
         let mut slot = self.code_slot.lock().await;
-        if slot.armed.take().is_some() {
-            slot.end = Some(CodeEnd::Cancelled);
-        }
+        clear_code_slot(&mut slot);
     }
 
     /// The host's view of the code slot. The screen polls this once per second,
@@ -3745,6 +3752,32 @@ mod tests {
         settle_after_try(&mut slot, 4);
         assert!(slot.armed.is_none());
         assert_eq!(slot.end, Some(CodeEnd::Exhausted));
+    }
+
+    // R5: arming one pairing mode clears the other. A code arm holds the code
+    // slot. A QR arm or a cancel clears the code and records why.
+    #[test]
+    fn arming_one_pairing_mode_clears_the_other() {
+        let mut slot = CodeSlot::default();
+
+        // The code arm fills the slot and clears any earlier end reason.
+        arm_code_slot(&mut slot, "123456".into(), CODE_TTL, 1);
+        assert!(slot.armed.is_some(), "the code arm reads Armed");
+        assert_eq!(slot.end, None, "the code arm clears the earlier end reason");
+
+        // A QR arm clears the live code and records the cancel.
+        clear_code_slot(&mut slot);
+        assert!(slot.armed.is_none(), "the QR arm clears the code");
+        assert_eq!(
+            slot.end,
+            Some(CodeEnd::Cancelled),
+            "the QR arm records the cancel"
+        );
+
+        // The reverse: a code arm replaces a live QR arm and reads Armed again.
+        arm_code_slot(&mut slot, "123456".into(), CODE_TTL, 2);
+        assert!(slot.armed.is_some(), "the code arm replaces the QR arm");
+        assert_eq!(slot.end, None, "the code arm clears the previous cancel");
     }
 
     #[test]

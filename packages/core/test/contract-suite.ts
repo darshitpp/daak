@@ -33,7 +33,8 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
       'start', 'stop', 'devices', 'pair', 'send', 'cancel',
       'retry', 'quarantineReport', 'deleteQuarantined', 'listQuarantineReports',
       'listTransfers', 'listThread', 'getItemText', 'listInbox', 'setDisplayName', 'setPresence', 'on',
-      'armHostPairing', 'selfProfile',
+      'armHostPairing', 'armCodePairing', 'codePairingStatus', 'cancelCodePairing',
+      'selfProfile',
     ];
     for (const m of methods) expect(typeof e[m], `${name}.${m}`).toBe('function');
     await e.stop();
