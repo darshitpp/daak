@@ -1110,6 +1110,7 @@ impl Engine {
                             &devices,
                             confirm_required,
                             &mut conn,
+                            local_addr,
                             peer,
                         )
                         .await
@@ -2248,10 +2249,12 @@ impl Engine {
         )
         .await?;
         let peer_public = read_identity_public(&mut conn).await?;
+        // The host identity carries no name, so use the hex id until the host
+        // sends its display name below.
         let name = hex::encode(peer_public.device_id);
         let peer = PairingBundle::new(peer_public, name);
         let local = self.pairing_bundle().await;
-        let (pairing, sas) = crate::pairing::pair(
+        let (mut pairing, sas) = crate::pairing::pair(
             &mut conn,
             self.identity.as_ref(),
             &local,
@@ -2263,6 +2266,11 @@ impl Engine {
         .await?;
         // R42e, same frame as the QR path above.
         Self::send_listen_addr(&mut conn, self.local_addr(), &local.name).await;
+        // Order, so neither side blocks: the joiner sends its frame first and
+        // then reads, and the host reads the joiner frame first and then sends
+        // its own. The host frame carries the host display name. Replace the
+        // hex fallback with that name.
+        apply_announced_name(&mut pairing, Self::read_listen_addr(&mut conn).await);
         // R42d, same argument as `pair_with` above.
         Self::commit_pairing(
             &self.db,
@@ -2608,6 +2616,10 @@ impl Engine {
         devices: &SharedDevices,
         confirm_required: bool,
         conn: &mut Connection<tokio::net::TcpStream>,
+        // The host's bound address. The code branch reuses `send_listen_addr`
+        // to send its display name, and that frame needs a dialable address
+        // from this port.
+        bound: SocketAddr,
         // R42e: kept in the signature for the accept loop, but no longer
         // stored. See `read_listen_addr`: the source port of a pairing socket
         // is closed when the handshake ends and is not a dialable address.
@@ -2702,9 +2714,13 @@ impl Engine {
                 // not send one: discovery then owns the address, as before.
                 let announced = Self::read_listen_addr(conn).await;
                 let advertised = announced.as_ref().map(|l| l.addr);
-                if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
-                    pairing.label = Some(name);
-                }
+                // The code joiner holds our identity and no name, so send our
+                // display name. This frame is code-only: the QR arm sends no
+                // identity and never reaches here. Order, so neither side
+                // blocks: the host reads the joiner frame first and then sends
+                // this one, and the joiner sends its frame first and then reads.
+                Self::send_listen_addr(conn, bound, &local.name).await;
+                apply_announced_name(&mut pairing, announced);
                 Self::commit_pairing(
                     db,
                     &pairing,
@@ -3008,6 +3024,15 @@ fn clean_peer_name(raw: String) -> Option<String> {
     let name: String = raw.chars().filter(|c| !c.is_control()).collect();
     let name: String = name.trim().chars().take(64).collect();
     (!name.is_empty()).then_some(name)
+}
+
+/// The joiner and the host learn the peer display name from the same
+/// post-pairing frame. A clean name becomes the pairing label. An absent or
+/// empty name keeps the label that `pair` chose, which is the hex device id.
+fn apply_announced_name(pairing: &mut Pairing, announced: Option<ListenAddr>) {
+    if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
+        pairing.label = Some(name);
+    }
 }
 
 /// The Expected-arm guard: the Hello the peer opened with must name the very
@@ -4107,6 +4132,39 @@ mod tests {
             clean_peer_name("x".repeat(200)).unwrap().chars().count(),
             64
         );
+    }
+
+    // The code-path label: a real announced name replaces the hex fallback,
+    // and an absent or empty name keeps whatever label was there.
+    #[test]
+    fn announced_name_replaces_the_fallback_only_when_it_is_usable() {
+        let addr = "127.0.0.1:9".parse().unwrap();
+        let mut pairing = Pairing {
+            peer_device_id: [3u8; 16],
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [1u8; 32],
+            static_dh_pub: [2u8; 32],
+            label: Some("a1b2c3d4e5f6a7b8".into()),
+        };
+        apply_announced_name(&mut pairing, None);
+        assert_eq!(pairing.label.as_deref(), Some("a1b2c3d4e5f6a7b8"));
+        apply_announced_name(
+            &mut pairing,
+            Some(ListenAddr {
+                addr,
+                name: Some("   ".into()),
+            }),
+        );
+        assert_eq!(pairing.label.as_deref(), Some("a1b2c3d4e5f6a7b8"));
+        apply_announced_name(
+            &mut pairing,
+            Some(ListenAddr {
+                addr,
+                name: Some(" Host Mac ".into()),
+            }),
+        );
+        assert_eq!(pairing.label.as_deref(), Some("Host Mac"));
     }
 
     // An undelivered unpair notice is stale once the user pairs the device again.
