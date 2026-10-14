@@ -27,7 +27,7 @@ The results for earlier versions are in the Git history of this file.
 | Android | R8 release build, `arm64-v8a`: the engine starts on an emulator, and a file transfer works between real devices. | PASS, on 2026-10-14. The build came from the R8 change of #7 and used a test key. The 0.1.3 APK itself was not installed. Not run: code pairing, Direct Share, `armeabi-v7a`, and the universal APK with R8 |
 | Android and iOS | Save a received photo or video to the Gallery or Photos (#9). | PASS on a real iPhone and an Android phone. The maintainer ran it on the build of the pull request, on 2026-10-14 |
 | Android and macOS | Pair with a six digit code (#5). | PASS between a Mac host and an Android joiner, on the build of the pull request |
-| macOS | Mount the `Daak-0.1.3.dmg`. Launch the app past Gatekeeper. | NOT RUN |
+| macOS | Install `Daak-0.1.3` and launch the app. | PASS for the launch, on 2026-10-14. `brew upgrade --cask` installed it from the GitHub Release (Homebrew checks the SHA-256). The app has version 0.1.3 and `x86_64` and `arm64` code. `codesign --verify --deep --strict` passes. `spctl` rejects the app as expected, because it is not notarized. The app was still running 10 s after the start and left no new crash report. NOT covered: the Gatekeeper prompt, onboarding, pairing, and the window (the accessibility query returned no window) |
 | iOS | Sideload the `Daak-0.1.3.ipa` with a free Apple ID. Finish onboarding. | NOT RUN |
 
 ## Store channels
@@ -40,4 +40,4 @@ The results for earlier versions are in the Git history of this file.
 | F-Droid | A maintainer merged the merge request. | PENDING. The maintainer asked for R8. 0.1.3 enables it |
 | F-Droid | The app shows in the F-Droid client. | PENDING |
 | Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. | PASS. The script pushes the cask only after the audit |
-| Homebrew | `brew upgrade --cask darshitpp/tap/daak` installs the new version. | PASS for 0.1.1 to 0.1.2: the app reported 0.1.2, `codesign --verify` passed, and it launched. For 0.1.3 the cask is pushed (`95a5361`) and the upgrade has not run |
+| Homebrew | `brew upgrade --cask darshitpp/tap/daak` installs the new version. | PASS for 0.1.1 to 0.1.2 and for 0.1.2 to 0.1.3. `brew list --cask --versions daak` printed `daak 0.1.3`. The cask commit is `95a5361` |
