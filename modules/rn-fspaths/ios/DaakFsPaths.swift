@@ -304,6 +304,23 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     resolve(out)
   }
 
+  // Task 6 replaces these bodies. The stubs keep the Spec and the .mm table in step.
+  @objc func saveToLibrary(_ paths: [String],
+                           resolve: @escaping RCTPromiseResolveBlock,
+                           reject: @escaping RCTPromiseRejectBlock) {
+    resolve(paths)
+  }
+
+  @objc func requestPhotosAccess(_ resolve: @escaping RCTPromiseResolveBlock,
+                                 reject: @escaping RCTPromiseRejectBlock) {
+    resolve(false)
+  }
+
+  @objc func photosAccessStatus(_ resolve: @escaping RCTPromiseResolveBlock,
+                                reject: @escaping RCTPromiseRejectBlock) {
+    resolve("unavailable")
+  }
+
   /// Put one file at `dest`. A plain move is the first try. A folder served by
   /// a File Provider (iCloud Drive, another app's folder) can refuse it, so the
   /// second try is a COORDINATED copy, and the source is removed only after the

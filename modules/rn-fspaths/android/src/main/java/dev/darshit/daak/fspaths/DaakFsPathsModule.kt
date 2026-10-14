@@ -270,6 +270,18 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         })
   }
 
+  // Task 7 replaces these bodies.
+  @ReactMethod
+  override fun saveToLibrary(paths: ReadableArray, promise: Promise) = resolve(promise) {
+    writable((0 until paths.size()).mapNotNull { paths.getString(it) })
+  }
+
+  @ReactMethod
+  override fun requestPhotosAccess(promise: Promise) = resolve(promise) { true }
+
+  @ReactMethod
+  override fun photosAccessStatus(promise: Promise) = resolve(promise) { "unavailable" }
+
   private fun writable(values: List<String>): WritableNativeArray =
       WritableNativeArray().apply { values.forEach { pushString(it) } }
 

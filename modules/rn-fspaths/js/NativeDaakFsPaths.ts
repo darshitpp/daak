@@ -50,6 +50,26 @@ export interface Spec extends TurboModule {
    * failure must not lose the location of the others.
    */
   moveReceivedFiles(paths: string[]): Promise<string[]>;
+  /**
+   * Add each image or video to the OS media library, answering one string per
+   * input, in order. A saved file answers a MARKER (`photos:<id>` on iOS, a
+   * `content://` URI on Android) and the engine copy is deleted. A file that
+   * was not saved answers its ORIGINAL path: no permission, an unsupported
+   * type, an API level below 29, or any failure. It never rejects.
+   */
+  saveToLibrary(paths: string[]): Promise<string[]>;
+  /**
+   * Ask for add-only access to the photo library. `true` when access is
+   * granted. Android needs no permission and answers `true`. macOS has no
+   * library support yet and answers `false`.
+   */
+  requestPhotosAccess(): Promise<boolean>;
+  /**
+   * The current add-only access, without a prompt. One of `granted`, `denied`,
+   * `undetermined`, or `unavailable`. The type is `string` because the codegen
+   * contract has no literal unions elsewhere. The facade narrows it.
+   */
+  photosAccessStatus(): Promise<string>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('DaakFsPaths');

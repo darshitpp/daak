@@ -85,6 +85,42 @@ export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
   return NativeDaakFsPaths.moveReceivedFiles(paths);
 }
 
+export type PhotosAccess = 'granted' | 'denied' | 'undetermined' | 'unavailable';
+
+export async function saveToLibrary(paths: string[]): Promise<string[]> {
+  return NativeDaakFsPaths.saveToLibrary(paths);
+}
+
+export async function requestPhotosAccess(): Promise<boolean> {
+  try {
+    return (await NativeDaakFsPaths.requestPhotosAccess()) === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function photosAccessStatus(): Promise<PhotosAccess> {
+  try {
+    const status = await NativeDaakFsPaths.photosAccessStatus();
+    return status === 'granted' || status === 'denied' || status === 'undetermined'
+      ? status
+      : 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+// The JavaScript side picks candidates by extension, because an InboxEntry has
+// no per-file type. The native side may still refuse a file it cannot add.
+const MEDIA_EXT = new Set([
+  'jpg', 'jpeg', 'png', 'heic', 'gif', 'webp', 'mp4', 'mov', 'm4v', '3gp', 'mkv',
+]);
+
+function isMedia(path: string): boolean {
+  const dot = path.lastIndexOf('.');
+  return dot >= 0 && MEDIA_EXT.has(path.slice(dot + 1).toLowerCase());
+}
+
 /**
  * R42p: put a received payload's files where the user asked for them, and tell
  * the engine where they went.
@@ -99,6 +135,9 @@ export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
  * or one whose files all stayed put, needs no write, and a write per receive
  * for nothing is a row rewritten on every arrival.
  *
+ * Media files go to the OS media library first (`saveToLibrary`). Each file
+ * that the library did not take then goes to the chosen folder.
+ *
  * RETURNS the locations the move produced, or null when nothing moved. The
  * caller needs them because a notification is a SNAPSHOT: its payload JSON is
  * baked into the notification's extras at post time, so a banner posted before
@@ -110,13 +149,38 @@ export async function relocateReceivedFiles(
 ): Promise<string[] | null> {
   const before = payload.savedPaths;
   if (!before || before.length === 0) return null;
-  let after: string[];
-  try {
-    after = await moveReceivedFiles(before);
-  } catch {
-    return null;
+  const after = [...before];
+
+  // Step 1: the media library. A failure leaves the paths as they are.
+  const mediaAt = before.flatMap((p, i) => (isMedia(p) ? [i] : []));
+  if (mediaAt.length > 0) {
+    try {
+      const saved = await saveToLibrary(mediaAt.map((i) => before[i]));
+      if (saved.length === mediaAt.length) {
+        mediaAt.forEach((at, k) => {
+          after[at] = saved[k];
+        });
+      }
+    } catch {
+      // Nothing was saved. The folder move below still runs.
+    }
   }
-  if (after.length !== before.length) return null;
+
+  // Step 2: the chosen folder, for every path that is still the original.
+  const stillAt = before.flatMap((p, i) => (after[i] === p ? [i] : []));
+  if (stillAt.length > 0) {
+    try {
+      const moved = await moveReceivedFiles(stillAt.map((i) => after[i]));
+      if (moved.length === stillAt.length) {
+        stillAt.forEach((at, k) => {
+          after[at] = moved[k];
+        });
+      }
+    } catch {
+      // The files stay where they are.
+    }
+  }
+
   if (after.every((p, i) => p === before[i])) return null;
   try {
     await engine.replaceInboxPaths(payload.payloadId, after);

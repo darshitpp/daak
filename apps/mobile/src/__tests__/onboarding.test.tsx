@@ -45,6 +45,9 @@ jest.mock('@daak/platform', () => ({
   downloadFolderName: jest.fn(async () => null),
   clearDownloadFolder: jest.fn(async () => undefined),
   moveReceivedFiles: jest.fn(async (paths: string[]) => paths),
+  saveToLibrary: jest.fn(async (paths: string[]) => paths),
+  requestPhotosAccess: jest.fn(async () => false),
+  photosAccessStatus: jest.fn(async () => 'unavailable'),
   relocateReceivedFiles: jest.fn(async () => undefined),
   // The re-ask wrapper returns the SAME rows with a real handler bound to the
   // alerts one. Two earlier versions of this mock broke the flow in ways that

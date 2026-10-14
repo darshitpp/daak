@@ -737,3 +737,39 @@ describe('openFile opens a viewer on every platform', () => {
   });
 });
 
+
+describe('fspaths exposes the library methods on the Spec and on every native', () => {
+  const spec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const kt = read(
+    repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const platform = read(repo + 'packages/platform/src/fspaths.ts');
+
+  it('declares the three methods on the Spec', () => {
+    expect(spec).toMatch(/saveToLibrary\(paths: string\[\]\): Promise<string\[\]>;/);
+    expect(spec).toMatch(/requestPhotosAccess\(\): Promise<boolean>;/);
+    expect(spec).toMatch(/photosAccessStatus\(\): Promise</);
+  });
+
+  it('implements them in Swift on iOS and macOS and in Kotlin', () => {
+    for (const p of ['ios', 'macos']) {
+      const swift = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.swift');
+      expect(swift).toMatch(/@objc func saveToLibrary\(_ paths: \[String\]/);
+      expect(swift).toMatch(/@objc func requestPhotosAccess\(/);
+      expect(swift).toMatch(/@objc func photosAccessStatus\(/);
+      const mm = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.mm');
+      expect(mm).toMatch(/RCT_EXTERN_METHOD\(saveToLibrary:/);
+      expect(mm).toMatch(/RCT_EXTERN_METHOD\(requestPhotosAccess:/);
+      expect(mm).toMatch(/RCT_EXTERN_METHOD\(photosAccessStatus:/);
+    }
+    expect(kt).toMatch(/override fun saveToLibrary\(paths: ReadableArray, promise: Promise\)/);
+    expect(kt).toMatch(/override fun requestPhotosAccess\(promise: Promise\)/);
+    expect(kt).toMatch(/override fun photosAccessStatus\(promise: Promise\)/);
+  });
+
+  it('is re-exported by the platform wrapper', () => {
+    expect(platform).toMatch(/export async function saveToLibrary\(/);
+    expect(platform).toMatch(/export async function requestPhotosAccess\(/);
+    expect(platform).toMatch(/export async function photosAccessStatus\(/);
+  });
+});
