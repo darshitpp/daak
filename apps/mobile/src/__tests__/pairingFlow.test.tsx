@@ -778,7 +778,7 @@ describe('the app flow drives code pairing', () => {
   // indicator (Task 5 decision 3).
   const openJoiner = async () => {
     fireEvent.press(screen.getByTestId('code'));
-    fireEvent.press(await screen.findByTestId('code-switch'));
+    fireEvent.press(await screen.findByTestId('pair-code-tab-enter'));
   };
 
   afterEach(() => {

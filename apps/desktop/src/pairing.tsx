@@ -287,13 +287,13 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
     setPhase({ kind: 'code-join' });
   };
 
-  // The one control that changes the code mode, so both halves are reachable.
-  const switchCodeMode = () => {
+  // The tabs of the code panel change the code mode, so both halves are reachable.
+  const switchCodeMode = (mode: 'show' | 'enter') => {
     setSas('');
     setPeerId('');
     setError('');
     setCodePick('');
-    setPhase({ kind: phase.kind === 'code-join' ? 'code-host' : 'code-join' });
+    setPhase({ kind: mode === 'enter' ? 'code-join' : 'code-host' });
   };
 
   // The code is dead, or the user asked for a new one. The round bump arms a
@@ -401,6 +401,7 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
               ? 'enter'
               : undefined
         }
+        onCodeMode={switchCodeMode}
         code={phase.kind === 'code-host' ? code : undefined}
         codeStatus={phase.kind === 'code-host' ? codeStatus : undefined}
         codeBusy={phase.kind === 'code-join' ? codeBusy : undefined}
@@ -424,17 +425,6 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
       <View style={{ padding: 16, gap: 24 }}>
         {phase.kind === 'host' && !sas ? (
           <Btn variant="quiet" block testID="host-retry" label="Show a new code" onPress={showQr} />
-        ) : null}
-        {/* The screen shows the mode and cannot change it, so this switch is the
-            one way to the other half of code pairing. */}
-        {codePhase && !sas ? (
-          <Btn
-            variant="quiet"
-            block
-            testID="code-switch"
-            label={phase.kind === 'code-host' ? 'Enter a code instead' : 'Show a code instead'}
-            onPress={switchCodeMode}
-          />
         ) : null}
         {/* The host arm has no note of its own, so the flow shows it here. */}
         {phase.kind === 'code-host' && error ? (

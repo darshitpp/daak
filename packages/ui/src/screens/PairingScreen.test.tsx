@@ -256,6 +256,42 @@ describe('PairingScreen code pairing', () => {
     expect(screen.queryByText('Show this to the other device')).toBeNull();
   });
 
+  it('join: the code field and Continue stay shut until a device is picked', () => {
+    const devices = [{ deviceId: 'aa11bb22cc33dd44', name: 'Studio Mac' }];
+    const { rerender } = render(
+      <PairingScreen {...HOST} codeSupported codeMode="enter" codeDevices={devices} onCodeSubmit={jest.fn()} />,
+    );
+    expect(screen.getByText('Pick a device first, then type its code.')).toBeTruthy();
+    expect(screen.getByTestId('pair-code-input').props.editable).toBe(false);
+    fireEvent.changeText(screen.getByTestId('pair-code-input'), '123456');
+    expect(screen.getByTestId('pair-code-submit')).toBeDisabled();
+    rerender(
+      <PairingScreen
+        {...HOST}
+        codeSupported
+        codeMode="enter"
+        codeDevices={devices}
+        codePick="aa11bb22cc33dd44"
+        onCodeSubmit={jest.fn()}
+      />,
+    );
+    expect(screen.getByText('Pairing code')).toBeTruthy();
+    expect(screen.getByTestId('pair-code-input').props.editable).toBe(true);
+  });
+
+  it('the two tabs are the switch: a tap on the other tab asks for its mode', () => {
+    const onCodeMode = jest.fn();
+    render(<PairingScreen {...HOST} codeSupported codeMode="show" code="482917" onCodeMode={onCodeMode} />);
+    expect(screen.getByTestId('pair-code-seg').props.accessibilityRole).toBe('tablist');
+    expect(screen.getByTestId('pair-code-tab-show').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByTestId('pair-code-tab-enter').props.accessibilityState.selected).toBe(false);
+    // The selected tab does nothing. The other tab asks for its mode.
+    fireEvent.press(screen.getByTestId('pair-code-tab-show'));
+    expect(onCodeMode).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByTestId('pair-code-tab-enter'));
+    expect(onCodeMode).toHaveBeenCalledWith('enter');
+  });
+
   it('host: shows the code, the own name, the two minute hint, and the countdown', () => {
     const onCodeNew = jest.fn();
     render(
@@ -327,6 +363,7 @@ describe('PairingScreen code pairing', () => {
         codeSupported
         codeMode="enter"
         codeDevices={DEVICES}
+        codePick={DEVICES[0].deviceId}
         onCodeSubmit={onCodeSubmit}
       />,
     );
@@ -349,7 +386,7 @@ describe('PairingScreen code pairing', () => {
   // A double tap must not burn two attempts (design review).
   it('join: Continue is disabled while the flow is busy', () => {
     const onCodeSubmit = jest.fn();
-    const props = { ...JOIN, codeSupported: true, codeMode: 'enter', codeDevices: DEVICES, onCodeSubmit } as const;
+    const props = { ...JOIN, codeSupported: true, codeMode: 'enter', codeDevices: DEVICES, codePick: DEVICES[0].deviceId, onCodeSubmit } as const;
     const { rerender } = render(<PairingScreen {...props} codeBusy />);
     fireEvent.changeText(screen.getByTestId('pair-code-input'), '482917');
     expect(screen.getByTestId('pair-code-submit')).toBeDisabled();

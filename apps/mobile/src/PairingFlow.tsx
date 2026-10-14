@@ -370,17 +370,15 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
     setPhase({ kind: 'code-host' });
   };
 
-  // The segmented control inside the panel reads the mode and does not change
-  // it (Task 5). This switch is the one control that changes it, so both halves
-  // of code pairing are reachable: one device shows the code, the other types
-  // it.
-  const switchCodeMode = () => {
+  // The tabs of the code panel change the mode, so both halves of code pairing
+  // are reachable: one device shows the code, the other types it.
+  const switchCodeMode = (mode: 'show' | 'enter') => {
     setSas('');
     setPeerId('');
     pendingRef.current = '';
     setError('');
     setCodePick('');
-    setPhase({ kind: phase.kind === 'code-join' ? 'code-host' : 'code-join' });
+    setPhase({ kind: mode === 'enter' ? 'code-join' : 'code-host' });
   };
 
   // The code is dead, or the user asked for a new one. The round bump arms a
@@ -547,6 +545,7 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
               ? 'enter'
               : undefined
         }
+        onCodeMode={switchCodeMode}
         code={phase.kind === 'code-host' ? code : undefined}
         codeStatus={phase.kind === 'code-host' ? codeStatus : undefined}
         codeBusy={phase.kind === 'code-join' ? codeBusy : undefined}
@@ -572,19 +571,6 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
       {phase.kind === 'host' && !sas ? (
         <View style={pad}>
           <Btn variant="quiet" block testID="host-retry" label="Show a new code" onPress={startHost} />
-        </View>
-      ) : null}
-      {/* The screen's panel shows the mode and cannot change it, so the flow
-          carries the switch. Without it the joiner panel has no way in. */}
-      {codePhase && !sas ? (
-        <View style={pad}>
-          <Btn
-            variant="quiet"
-            block
-            testID="code-switch"
-            label={phase.kind === 'code-host' ? 'Enter a code instead' : 'Show a code instead'}
-            onPress={switchCodeMode}
-          />
         </View>
       ) : null}
       {/* The panel draws a failure of the joiner call. The host arm has no note

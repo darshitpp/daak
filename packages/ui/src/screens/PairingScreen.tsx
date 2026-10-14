@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, type PressableStateCallbackType, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { CodePairingStatus } from '@daak/core';
 import { QrView } from '../components/QrView';
 import { Accordion } from '../components/Onboarding';
 import { Btn, Note } from '../components/ds';
-import { colors, radius, spacing, ui } from '../theme';
+import { colors, control, radius, spacing, type, ui } from '../theme';
 import { formatSas } from './sas';
 
 function Busy({ label }: { label: string }) {
@@ -30,9 +30,31 @@ const CODE_CELLS = [0, 1, 2, 3, 4, 5];
 
 /** The shapes the code panel adds. The rest comes from the theme. */
 const s = StyleSheet.create({
-  segItem: { flex: 1, justifyContent: 'center' },
+  seg: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    padding: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+  },
+  segItem: {
+    flex: 1,
+    minHeight: control.minHeight - 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill,
+  },
+  segOn: { backgroundColor: colors.fg },
+  segLabelOn: { fontSize: type.sm, fontWeight: '600', color: colors.paper },
+  segHover: { backgroundColor: colors.hover },
+  segPressed: { opacity: 0.8 },
+  segFocus: { borderWidth: 2, borderColor: colors.accent },
   code: { color: colors.accent },
   field: { position: 'relative' },
+  fieldOff: { opacity: 0.45 },
   cells: { flexDirection: 'row', gap: spacing.sm, justifyContent: 'center' },
   cell: {
     width: 44,
@@ -56,6 +78,9 @@ const s = StyleSheet.create({
     padding: 0,
     backgroundColor: 'transparent',
     color: 'transparent',
+    // The macOS caret ignores caretHidden and the colour props. Zero opacity
+    // hides the caret with the view. The view still takes taps and typing.
+    opacity: 0,
   },
 });
 
@@ -84,6 +109,7 @@ export function PairingScreen({
   onNewCode,
   codeSupported,
   codeMode,
+  onCodeMode,
   code,
   codeStatus,
   codeBusy,
@@ -129,6 +155,8 @@ export function PairingScreen({
   codeSupported?: boolean;
   /** `show` draws the host panel and `enter` the joiner panel. Absent = the QR panels. */
   codeMode?: 'show' | 'enter';
+  /** A tab was tapped. The flow switches the mode. */
+  onCodeMode?: (mode: 'show' | 'enter') => void;
   /** The host code, six digits. `482917` reads as `482 917`. */
   code?: string;
   /** The host poll. The panel reads the countdown from `remainingMs`. */
@@ -175,19 +203,39 @@ export function PairingScreen({
   const dead = codeStatus?.state === 'expired' || codeStatus?.state === 'exhausted';
   // Two peers can advertise one name. The picker then adds a short id, so the
   // user picks the right device and does not burn a try on the wrong one.
+  const picked = codePick !== undefined && codePick !== '';
   const nameCounts = new Map<string, number>();
   for (const d of codeDevices) nameCounts.set(d.name, (nameCounts.get(d.name) ?? 0) + 1);
   const codePanel = showCode ? (
     <View style={ui.stack} testID="pair-code-panel">
-      {/* The flow owns the mode, so the screen shows it and does not switch it. */}
-      <View style={ui.row} testID="pair-code-seg">
-        {(['show', 'enter'] as const).map((m) => (
-          <View key={m} style={[ui.chip, s.segItem, codeMode === m ? ui.chipOn : null]}>
-            <Text style={codeMode === m ? ui.chipLabelOn : ui.chipLabel}>
-              {m === 'show' ? 'Show the code' : 'Enter a code'}
-            </Text>
-          </View>
-        ))}
+      {/* The two tabs are the only switch. The flow owns the mode and the tabs
+          ask it to change. A tab is a full width tap target, so the whole chip
+          answers a tap, a hover, and the focus ring of the platform. */}
+      <View style={s.seg} testID="pair-code-seg" accessibilityRole="tablist">
+        {(['show', 'enter'] as const).map((m) => {
+          const label = m === 'show' ? 'Show the code' : 'Enter a code';
+          const on = codeMode === m;
+          return (
+            <Pressable
+              key={m}
+              accessibilityRole="tab"
+              accessibilityLabel={label}
+              accessibilityState={{ selected: on }}
+              testID={'pair-code-tab-' + m}
+              onPress={() => {
+                if (!on) onCodeMode?.(m);
+              }}
+              style={({ pressed, hovered, focused }: PressableStateCallbackType & { hovered?: boolean; focused?: boolean }) => [
+                s.segItem,
+                on ? s.segOn : hovered ? s.segHover : null,
+                pressed ? s.segPressed : null,
+                focused ? s.segFocus : null,
+              ]}
+            >
+              <Text style={on ? s.segLabelOn : ui.chipLabel}>{label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
       {codeMode === 'show' ? (
         dead ? (
@@ -270,8 +318,12 @@ export function PairingScreen({
               );
             })
           )}
-          <Text style={ui.hint}>Pairing code</Text>
-          <View style={s.field}>
+          {/* The device comes first. The code is for the device the user picked,
+              so the field stays shut until a pick exists. */}
+          <Text style={ui.hint} testID="pair-code-label">
+            {picked ? 'Pairing code' : 'Pick a device first, then type its code.'}
+          </Text>
+          <View style={[s.field, picked ? null : s.fieldOff]}>
             {/* The cells show the digits and the input holds the value, so one
                 tap on the row opens the keyboard. */}
             <View
@@ -291,7 +343,13 @@ export function PairingScreen({
               onChangeText={(text) => setDigits(text.replace(/\D/g, '').slice(0, 6))}
               keyboardType="number-pad"
               maxLength={6}
+              editable={picked}
               caretHidden
+              cursorColor="transparent"
+              selectionColor="transparent"
+              // macOS only. The cells show the focus, so the system ring and
+              // the caret would draw a second box over them.
+              {...({ enableFocusRing: false } as object)}
               accessibilityLabel="Enter the six digit pairing code"
               testID="pair-code-input"
               style={s.overlay}
@@ -302,7 +360,7 @@ export function PairingScreen({
             block
             testID="pair-code-submit"
             label="Continue"
-            disabled={digits.length < 6 || codeBusy === true}
+            disabled={!picked || digits.length < 6 || codeBusy === true}
             onPress={() => onCodeSubmit?.(digits)}
           />
           {codeBusy ? <Busy label="Checking the code…" /> : null}

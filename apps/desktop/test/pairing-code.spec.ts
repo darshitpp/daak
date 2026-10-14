@@ -95,7 +95,7 @@ describe('the desktop code host', () => {
     const engine = fakeEngine();
     const tree = mount(engine);
     await press(tree, 'code-host');
-    await press(tree, 'code-switch');
+    await press(tree, 'pair-code-tab-enter');
     expect(engine.cancelCodePairing).toHaveBeenCalledTimes(1);
   });
 
