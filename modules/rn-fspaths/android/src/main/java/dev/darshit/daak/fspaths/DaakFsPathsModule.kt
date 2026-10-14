@@ -285,7 +285,9 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    */
   @ReactMethod
   override fun saveToLibrary(paths: ReadableArray, promise: Promise) = resolve(promise) {
-    val input = (0 until paths.size()).mapNotNull { paths.getString(it) }
+    // A null entry becomes "". saveOne returns it unchanged, so the answer count
+    // always equals the input count.
+    val input = (0 until paths.size()).map { paths.getString(it) ?: "" }
     writable(input.map { path -> try { saveOne(path) } catch (t: Throwable) { path } })
   }
 
@@ -328,9 +330,13 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     return try {
       val out = resolver.openOutputStream(uri) ?: throw IllegalStateException("no output stream")
       out.use { o -> src.inputStream().use { it.copyTo(o) } }
-      resolver.update(uri, ContentValues().apply {
+      // The update must change 1 row. A row that stays pending expires after
+      // about 7 days and MediaStore then removes it. The source must still exist
+      // in that case, so the throw below keeps the source and removes the row.
+      val updated = resolver.update(uri, ContentValues().apply {
         put(MediaStore.MediaColumns.IS_PENDING, 0)
       }, null, null)
+      if (updated != 1) throw IllegalStateException("pending not cleared")
       src.delete()
       uri.toString()
     } catch (t: Throwable) {

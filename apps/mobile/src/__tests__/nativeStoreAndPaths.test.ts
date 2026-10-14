@@ -845,7 +845,26 @@ describe('Android saves to MediaStore without a permission', () => {
 
   it('removes the half-made row when the copy fails', () => {
     const fn = kt.slice(kt.indexOf('private fun saveOne('));
-    expect(fn).toContain('resolver.delete(uri, null, null)');
+    const catchAt = fn.indexOf('catch');
+    expect(catchAt).toBeGreaterThan(-1);
+    expect(fn.indexOf('resolver.delete(uri, null, null)')).toBeGreaterThan(catchAt);
+  });
+
+  it('checks the row count of the pending-clear update before it deletes the source', () => {
+    const fn = kt.slice(kt.indexOf('private fun saveOne('));
+    const clear = fn.indexOf('IS_PENDING, 0');
+    const check = fn.indexOf('!= 1', clear);
+    const thrown = fn.indexOf('IllegalStateException("pending not cleared")', clear);
+    const del = fn.indexOf('src.delete()');
+    expect(check).toBeGreaterThan(clear);
+    expect(thrown).toBeGreaterThan(check);
+    expect(del).toBeGreaterThan(thrown);
+  });
+
+  it('answers once for each input, also for a null entry', () => {
+    const fn = kt.slice(kt.indexOf('override fun saveToLibrary('), kt.indexOf('override fun requestPhotosAccess('));
+    expect(fn).not.toContain('mapNotNull');
+    expect(fn).toContain('paths.getString(it) ?: ""');
   });
 
   it('adds no storage permission', () => {
