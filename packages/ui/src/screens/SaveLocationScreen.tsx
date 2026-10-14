@@ -74,7 +74,7 @@ export function SaveLocationScreen({ folder, photos, onContinue, onBack, footer 
           />
           <Text style={ui.hint}>Files from other devices land here.</Text>
           {photos ? (
-            <Text style={ui.hint}>{`Photos and videos go to ${photos.destination}. Other files go to this folder.`}</Text>
+            <Text style={ui.hint}>{`Photos and videos go to the ${photos.destination}. Other files go to this folder.`}</Text>
           ) : null}
           <Note title="Only on this device" body="Files are saved here, not in the cloud. Nothing is uploaded." />
         </>

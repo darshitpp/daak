@@ -49,7 +49,7 @@ describe('SaveLocationScreen', () => {
 
   describe('with a photos host', () => {
     const photos = (request: () => Promise<boolean>) => ({
-      destination: 'Photos',
+      destination: 'Photos app',
       status: async () => 'undetermined' as const,
       request,
       openSettings: () => {},
@@ -60,7 +60,7 @@ describe('SaveLocationScreen', () => {
       const next = jest.fn();
       const request = jest.fn(async () => true);
       render(<SaveLocationScreen folder={folder} photos={photos(request)} onContinue={next} />);
-      expect(screen.getByText('Photos and videos go to Photos. Other files go to this folder.')).toBeTruthy();
+      expect(screen.getByText('Photos and videos go to the Photos app. Other files go to this folder.')).toBeTruthy();
       fireEvent.press(screen.getByTestId('save-location-continue'));
       await waitFor(() => expect(next).toHaveBeenCalledTimes(1));
       expect(request).toHaveBeenCalledTimes(1);

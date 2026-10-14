@@ -784,7 +784,8 @@ describe('markers do not reach file system calls', () => {
     const fn = ios.slice(ios.indexOf('func openFile('));
     expect(fn).toContain('path.hasPrefix("photos:")');
     expect(fn).toContain('UIAlertController');
-    expect(fn).toContain('Saved to Photos');
+    expect(fn).toContain('Saved to the Photos app')
+    expect(fn).toContain('Open the Photos app to see it.');
     // Apple documents no link to one asset, so no undocumented scheme is used.
     expect(ios).not.toContain('photos-redirect');
   });

@@ -70,11 +70,64 @@ export async function chooseDownloadFolder(): Promise<string | null> {
   // the picker reverted a folder that had just been chosen. The platform layer
   // is where a bridge quirk is absorbed, so it is fixed here and not in each
   // caller.
-  return (await NativeDaakFsPaths.chooseDownloadFolder()) ?? null;
+  const raw = (await NativeDaakFsPaths.chooseDownloadFolder()) ?? null;
+  return raw === null ? null : friendlyFolderName(raw);
 }
 
 export async function downloadFolderName(): Promise<string | null> {
-  return NativeDaakFsPaths.downloadFolderName();
+  const raw = (await NativeDaakFsPaths.downloadFolderName()) ?? null;
+  return raw === null ? null : friendlyFolderName(raw);
+}
+
+const MAX_FOLDER_NAME = 40;
+
+function capMiddle(s: string): string {
+  if (s.length <= MAX_FOLDER_NAME) return s;
+  const keep = MAX_FOLDER_NAME - 1;
+  const head = Math.ceil(keep / 2);
+  return `${s.slice(0, head)}\u2026${s.slice(s.length - (keep - head))}`;
+}
+
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * Turns the raw folder value from the native module into a short name for the
+ * screen. Android gives a SAF tree URI. iOS and macOS give a full path. A value
+ * that has no usable segment comes back unchanged, so the function never erases
+ * a value it cannot parse. A result has at most 40 characters.
+ */
+export function friendlyFolderName(raw: string): string {
+  const saf = /^content:\/\/([^/]+)\/tree\/([^/]*)/.exec(raw);
+  if (saf) {
+    const authority = saf[1];
+    const id = safeDecode(saf[2]);
+    if (authority === 'com.android.externalstorage.documents') {
+      const colon = id.indexOf(':');
+      if (colon >= 0) {
+        const volume = id.slice(0, colon);
+        const rel = id.slice(colon + 1).replace(/^\/+|\/+$/g, '');
+        if (volume === 'primary') return capMiddle(rel || 'Internal storage');
+        return capMiddle(rel ? `SD card / ${rel}` : 'SD card');
+      }
+    }
+    const last = id.split('/').filter(Boolean).pop();
+    return capMiddle(last ?? authority.split('.').slice(-2).join('.'));
+  }
+  if (raw.startsWith('content://')) return raw;
+
+  const parts = raw.split('/').filter(Boolean);
+  const cloud = parts.indexOf('com~apple~CloudDocs');
+  if (cloud >= 0) {
+    return capMiddle(['iCloud Drive', ...parts.slice(cloud + 1)].join(' / '));
+  }
+  if (parts.length === 0) return raw;
+  return capMiddle(parts.slice(-2).join(' / '));
 }
 
 export async function clearDownloadFolder(): Promise<void> {

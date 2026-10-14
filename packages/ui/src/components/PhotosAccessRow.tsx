@@ -38,7 +38,7 @@ export function PhotosAccessRow({ photos }: { photos: PhotosHost }) {
 
   if (state === 'granted' || state === 'unavailable') return null;
   return (
-    <Section title={`Save to ${photos.destination}`}>
+    <Section title={`Save to the ${photos.destination}`}>
       <View testID="photos-access-row">
         {state === 'denied' ? (
           <>
@@ -52,7 +52,7 @@ export function PhotosAccessRow({ photos }: { photos: PhotosHost }) {
         ) : (
           <>
             <View style={ui.card}>
-              <Text style={ui.kvK}>{`Allow Daak to add photos and videos to ${photos.destination}.`}</Text>
+              <Text style={ui.kvK}>{`Allow Daak to add photos and videos to the ${photos.destination}.`}</Text>
             </View>
             <Btn
               variant="quiet"

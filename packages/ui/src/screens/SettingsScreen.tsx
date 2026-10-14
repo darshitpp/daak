@@ -249,7 +249,7 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
           />
         ) : null}
         {downloadFolder && photos ? (
-          <Text style={ui.hint}>{`Photos and videos go to ${photos.destination}. Other files go to this folder.`}</Text>
+          <Text style={ui.hint}>{`Photos and videos go to the ${photos.destination}. Other files go to this folder.`}</Text>
         ) : null}
         {photos ? <PhotosAccessRow photos={photos} /> : null}
 

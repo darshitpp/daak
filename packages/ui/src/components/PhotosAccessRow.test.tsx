@@ -4,7 +4,7 @@ import { PhotosAccessRow, type PhotosHost } from './PhotosAccessRow';
 
 function host(overrides: Partial<PhotosHost> = {}): PhotosHost {
   return {
-    destination: 'Photos',
+    destination: 'Photos app',
     status: async () => 'undetermined',
     request: async () => true,
     openSettings: () => {},
@@ -25,8 +25,8 @@ it('shows nothing when access is granted', async () => {
 it('asks when access is undetermined', async () => {
   const request = jest.fn(async () => true);
   render(<PhotosAccessRow photos={host({ status: async () => 'undetermined', request })} />);
-  expect(await screen.findByText('Save to Photos')).toBeTruthy();
-  expect(screen.getByText('Allow Daak to add photos and videos to Photos.')).toBeTruthy();
+  expect(await screen.findByText('Save to the Photos app')).toBeTruthy();
+  expect(screen.getByText('Allow Daak to add photos and videos to the Photos app.')).toBeTruthy();
   fireEvent.press(await screen.findByTestId('photos-access-allow'));
   await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
 });

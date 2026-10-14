@@ -94,8 +94,8 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         var top = root
         while let next = top.presentedViewController { top = next }
         let alert = UIAlertController(
-          title: "Saved to Photos",
-          message: "Find it in the Photos app.",
+          title: "Saved to the Photos app",
+          message: "Open the Photos app to see it.",
           preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         top.present(alert, animated: true) { resolve(true) }
