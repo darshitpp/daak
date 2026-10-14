@@ -2,6 +2,8 @@ import Foundation
 import React
 import UIKit
 import QuickLook
+import Photos
+import UniformTypeIdentifiers
 
 /// Every path this module hands out is an APP-SANDBOX path. The engine's data
 /// dir and every saved file live here, so a caller can never steer the engine
@@ -326,21 +328,66 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     resolve(out)
   }
 
-  // Task 6 replaces these bodies. The stubs keep the Spec and the .mm table in step.
+  /// Add each image or video to the Photos library. One answer per input.
+  ///
+  /// This method must not prompt. Only onboarding and Settings ask. So a receive
+  /// never shows a system prompt over an app that the user does not look at.
+  /// With no access, every input comes back unchanged and the folder move runs.
   @objc func saveToLibrary(_ paths: [String],
                            resolve: @escaping RCTPromiseResolveBlock,
                            reject: @escaping RCTPromiseRejectBlock) {
-    resolve(paths)
+    let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+    guard status == .authorized || status == .limited else {
+      resolve(paths)
+      return
+    }
+    // performChangesAndWait blocks, so it must not run on the main queue.
+    DispatchQueue.global(qos: .userInitiated).async {
+      resolve(paths.map { Self.addToLibrary($0) })
+    }
   }
 
   @objc func requestPhotosAccess(_ resolve: @escaping RCTPromiseResolveBlock,
                                  reject: @escaping RCTPromiseRejectBlock) {
-    resolve(false)
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+      resolve(status == .authorized || status == .limited)
+    }
   }
 
   @objc func photosAccessStatus(_ resolve: @escaping RCTPromiseResolveBlock,
                                 reject: @escaping RCTPromiseRejectBlock) {
-    resolve("unavailable")
+    switch PHPhotoLibrary.authorizationStatus(for: .addOnly) {
+    case .authorized, .limited: resolve("granted")
+    case .notDetermined: resolve("undetermined")
+    default: resolve("denied")
+    }
+  }
+
+  /// One file. Returns `photos:<localIdentifier>` after a successful add. Returns
+  /// the original path for any failure. The source is deleted only AFTER the
+  /// add. A crash between the two steps leaves a duplicate and never loses the file.
+  private static func addToLibrary(_ path: String) -> String {
+    let url = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: path),
+          let type = UTType(filenameExtension: url.pathExtension.lowercased())
+    else { return path }
+    let isVideo = type.conforms(to: .movie)
+    guard isVideo || type.conforms(to: .image) else { return path }
+    var identifier: String?
+    do {
+      try PHPhotoLibrary.shared().performChangesAndWait {
+        let request = isVideo
+          ? PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+          : PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
+        identifier = request?.placeholderForCreatedAsset?.localIdentifier
+      }
+    } catch {
+      NSLog("Daak: could not add \(url.lastPathComponent) to Photos: \(error)")
+      return path
+    }
+    guard let identifier else { return path }
+    try? FileManager.default.removeItem(at: url)
+    return "photos:" + identifier
   }
 
   /// Put one file at `dest`. A plain move is the first try. A folder served by

@@ -794,3 +794,31 @@ describe('markers do not reach file system calls', () => {
     expect(kt).toContain('path.startsWith("content://") || File(path).exists()');
   });
 });
+
+describe('iOS saves to the Photos library with add-only access', () => {
+  const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const plist = read(repo + 'apps/mobile/ios/Daak/Info.plist');
+
+  it('imports PhotoKit and asks for add-only access', () => {
+    expect(ios).toContain('import Photos');
+    expect(ios).toContain('PHPhotoLibrary.requestAuthorization(for: .addOnly)');
+    expect(ios).not.toContain('.readWrite');
+  });
+
+  it('never prompts from saveToLibrary', () => {
+    const fn = ios.slice(ios.indexOf('func saveToLibrary('), ios.indexOf('func requestPhotosAccess('));
+    expect(fn).not.toContain('requestAuthorization');
+    expect(fn).toContain('authorizationStatus(for: .addOnly)');
+  });
+
+  it('deletes the source only after the add succeeded', () => {
+    const fn = ios.slice(ios.indexOf('func addToLibrary('));
+    expect(fn.indexOf('performChangesAndWait')).toBeGreaterThan(-1);
+    expect(fn.indexOf('removeItem')).toBeGreaterThan(fn.indexOf('performChangesAndWait'));
+  });
+
+  it('declares the add-only usage description', () => {
+    expect(plist).toContain('<key>NSPhotoLibraryAddUsageDescription</key>');
+    expect(plist).not.toContain('NSPhotoLibraryUsageDescription');
+  });
+});
