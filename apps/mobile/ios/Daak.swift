@@ -110,6 +110,37 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().acceptPairing() }
   }
 
+  // Code pairing over SPAKE2. The host shows the six digit code that
+  // armCodePairing returns. The joiner types the code into pairWithCode.
+  @objc func armCodePairing(_ resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().armCodePairing() }
+  }
+
+  // The joiner sends the typed code to the host. The host returns the SAS and
+  // the peer device id as JSON.
+  @objc func pairWithCode(_ addr: String, code: String,
+                          resolve: @escaping RCTPromiseResolveBlock,
+                          reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().pairWithCode(addr: addr, code: code) }
+  }
+
+  // The code state, the remaining time, and the tries left, as JSON. The host
+  // panel polls this.
+  @objc func codePairingStatus(_ resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().codePairingStatus() }
+  }
+
+  // Disarm the code when the panel closes.
+  // The trailing `return nil` is load-bearing, exactly as on cancel and retry:
+  // the generated method returns Void and run<T> takes a `() throws -> T?`, so
+  // a single-expression closure leaves T ambiguous and does not type-check.
+  @objc func cancelCodePairing(_ resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().cancelCodePairing(); return nil as Void? }
+  }
+
   @objc func sendText(_ peerId: String, text: String,
                       resolve: @escaping RCTPromiseResolveBlock,
                       reject: @escaping RCTPromiseRejectBlock) {

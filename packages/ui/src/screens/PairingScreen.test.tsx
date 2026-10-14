@@ -196,3 +196,301 @@ describe('PairingScreen words of the design', () => {
   });
 });
 
+// Design `pair-code-panel`. The flow owns the phase, the poll, and the picker
+// filter. The screen draws one panel and reads its values from props.
+describe('PairingScreen code pairing', () => {
+  const noop = jest.fn();
+  const HOST = { role: 'host', qrUri: 'u', onScan: noop, sas: '' } as const;
+  const JOIN = { role: 'join', qrUri: '', onScan: noop, sas: '' } as const;
+  const ARMED = { state: 'armed', remainingMs: 120_000, triesLeft: 3 } as const;
+  const ID = 'aa'.repeat(16);
+  const DEVICES = [{ deviceId: ID, name: 'Kitchen Tablet' }];
+
+  // The code option is the third one. A daemon-backed build has no code
+  // pairing, so the screen draws no code panel there.
+  it('shows the code panel only when the flow gives a code mode and support', () => {
+    const { rerender } = render(
+      <PairingScreen {...HOST} codeSupported codeMode="show" code="482917" />,
+    );
+    expect(screen.getByTestId('pair-code-panel')).toBeTruthy();
+    rerender(<PairingScreen {...HOST} codeSupported={false} codeMode="show" code="482917" />);
+    expect(screen.queryByTestId('pair-code-panel')).toBeNull();
+    // No code mode: the QR panel is back, as before.
+    rerender(<PairingScreen {...HOST} qrUri="data:image/png;base64,QUJD" />);
+    expect(screen.getByLabelText('pairing-qr')).toBeTruthy();
+    expect(screen.queryByTestId('pair-code-panel')).toBeNull();
+  });
+
+  // The check number replaces the code. The panel goes, so the host no longer
+  // shows a blank code under a stale heading.
+  it('host: a check number takes the code panel off the screen', () => {
+    render(<PairingScreen {...HOST} codeSupported codeMode="show" code="482917" sas="112233" />);
+    expect(screen.queryByTestId('pair-code-panel')).toBeNull();
+    expect(screen.getByTestId('pairing-sas')).toBeTruthy();
+  });
+
+  // The joiner's Continue goes with the panel, so a second tap cannot start a
+  // second pair call that then fails under the check number.
+  it('join: a check number takes the panel and the Continue button off the screen', () => {
+    const onCodeSubmit = jest.fn();
+    render(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={DEVICES}
+        onCodeSubmit={onCodeSubmit}
+        sas="112233"
+      />,
+    );
+    expect(screen.queryByTestId('pair-code-panel')).toBeNull();
+    expect(screen.queryByTestId('pair-code-submit')).toBeNull();
+    expect(screen.getByTestId('pairing-sas')).toBeTruthy();
+  });
+
+  // A code-only host holds no QR. The heading and the frame go together, so the
+  // check number is not followed by an empty square.
+  it('host: no QR and no heading when this host holds no square', () => {
+    render(<PairingScreen role="host" qrUri="" onScan={noop} sas="112233" />);
+    expect(screen.queryByLabelText('pairing-qr')).toBeNull();
+    expect(screen.queryByText('Show this to the other device')).toBeNull();
+  });
+
+  it('join: the code field and Continue stay shut until a device is picked', () => {
+    const devices = [{ deviceId: 'aa11bb22cc33dd44', name: 'Studio Mac' }];
+    const { rerender } = render(
+      <PairingScreen {...HOST} codeSupported codeMode="enter" codeDevices={devices} onCodeSubmit={jest.fn()} />,
+    );
+    expect(screen.getByText('Pick a device first, then type its code.')).toBeTruthy();
+    expect(screen.getByTestId('pair-code-input').props.editable).toBe(false);
+    fireEvent.changeText(screen.getByTestId('pair-code-input'), '123456');
+    expect(screen.getByTestId('pair-code-submit')).toBeDisabled();
+    rerender(
+      <PairingScreen
+        {...HOST}
+        codeSupported
+        codeMode="enter"
+        codeDevices={devices}
+        codePick="aa11bb22cc33dd44"
+        onCodeSubmit={jest.fn()}
+      />,
+    );
+    expect(screen.getByText('Pairing code')).toBeTruthy();
+    expect(screen.getByTestId('pair-code-input').props.editable).toBe(true);
+  });
+
+  it('the two tabs are the switch: a tap on the other tab asks for its mode', () => {
+    const onCodeMode = jest.fn();
+    render(<PairingScreen {...HOST} codeSupported codeMode="show" code="482917" onCodeMode={onCodeMode} />);
+    expect(screen.getByTestId('pair-code-seg').props.accessibilityRole).toBe('tablist');
+    expect(screen.getByTestId('pair-code-tab-show').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByTestId('pair-code-tab-enter').props.accessibilityState.selected).toBe(false);
+    // The selected tab does nothing. The other tab asks for its mode.
+    fireEvent.press(screen.getByTestId('pair-code-tab-show'));
+    expect(onCodeMode).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByTestId('pair-code-tab-enter'));
+    expect(onCodeMode).toHaveBeenCalledWith('enter');
+  });
+
+  it('host: shows the code, the own name, the two minute hint, and the countdown', () => {
+    const onCodeNew = jest.fn();
+    render(
+      <PairingScreen
+        {...HOST}
+        codeSupported
+        codeMode="show"
+        code="482917"
+        selfName="Darshit's iPhone"
+        codeStatus={ARMED}
+        onCodeNew={onCodeNew}
+      />,
+    );
+    expect(screen.getByText('Show the code')).toBeTruthy();
+    expect(screen.getByText('Enter a code')).toBeTruthy();
+    expect(screen.getByText('Show this code to the other device')).toBeTruthy();
+    expect(screen.getByText("Darshit's iPhone")).toBeTruthy();
+    expect(screen.getByText('482 917')).toBeTruthy();
+    expect(screen.getByText('This code works for 2 minutes.')).toBeTruthy();
+    expect(screen.getByTestId('pair-code-countdown')).toHaveTextContent(/2:00/);
+    // The QR panel belongs to the other path.
+    expect(screen.queryByLabelText('pairing-qr')).toBeNull();
+    fireEvent.press(screen.getByTestId('pair-code-new'));
+    expect(onCodeNew).toHaveBeenCalledTimes(1);
+  });
+
+  // Review Focus 6: the engine is the only clock. The countdown is a reading
+  // of the poll and the screen remembers no time of its own.
+  it('host: the countdown text follows remainingMs', () => {
+    const { rerender } = render(
+      <PairingScreen {...HOST} codeSupported codeMode="show" code="482917" codeStatus={ARMED} />,
+    );
+    expect(screen.getByTestId('pair-code-countdown')).toHaveTextContent(/2:00/);
+    rerender(
+      <PairingScreen
+        {...HOST}
+        codeSupported
+        codeMode="show"
+        code="482917"
+        codeStatus={{ state: 'armed', remainingMs: 8000, triesLeft: 3 }}
+      />,
+    );
+    expect(screen.getByTestId('pair-code-countdown')).toHaveTextContent(/0:08/);
+  });
+
+  it('host: a dead code shows the note for its state and one new-code button', () => {
+    const onCodeNew = jest.fn();
+    const props = { ...HOST, codeSupported: true, codeMode: 'show', code: '482917', onCodeNew } as const;
+    const { rerender } = render(
+      <PairingScreen {...props} codeStatus={{ state: 'expired', remainingMs: 0, triesLeft: 0 }} />,
+    );
+    expect(screen.getByText('That code expired.')).toBeTruthy();
+    expect(screen.queryByText('Too many tries.')).toBeNull();
+    // The dead code goes, with its own copy and its own countdown.
+    expect(screen.queryByTestId('pair-code-value')).toBeNull();
+    expect(screen.queryByTestId('pair-code-countdown')).toBeNull();
+    rerender(<PairingScreen {...props} codeStatus={{ state: 'exhausted', remainingMs: 0, triesLeft: 0 }} />);
+    expect(screen.getByText('Too many tries.')).toBeTruthy();
+    expect(screen.queryByText('That code expired.')).toBeNull();
+    fireEvent.press(screen.getByTestId('pair-code-dead-new'));
+    expect(onCodeNew).toHaveBeenCalledTimes(1);
+  });
+
+  it('join: six cells, and Continue waits for six digits and calls onCodeSubmit', () => {
+    const onCodeSubmit = jest.fn();
+    render(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={DEVICES}
+        codePick={DEVICES[0].deviceId}
+        onCodeSubmit={onCodeSubmit}
+      />,
+    );
+    expect(screen.getByText('Enter the pairing code')).toBeTruthy();
+    expect(screen.getByText('Pick the device that shows the code.')).toBeTruthy();
+    // The cells are pictures of the digits. The input holds the value and is
+    // the control a reader uses, so the cells are hidden from a screen reader.
+    expect(screen.getAllByTestId('pair-code-cell', { includeHiddenElements: true })).toHaveLength(6);
+    const input = screen.getByTestId('pair-code-input');
+    fireEvent.changeText(input, '48291');
+    expect(screen.getByTestId('pair-code-submit')).toBeDisabled();
+    fireEvent.press(screen.getByTestId('pair-code-submit'));
+    expect(onCodeSubmit).not.toHaveBeenCalled();
+    fireEvent.changeText(input, '4829a7x1');
+    // The letters are dropped.
+    fireEvent.press(screen.getByTestId('pair-code-submit'));
+    expect(onCodeSubmit).toHaveBeenCalledWith('482971');
+  });
+
+  // A double tap must not burn two attempts (design review).
+  it('join: Continue is disabled while the flow is busy', () => {
+    const onCodeSubmit = jest.fn();
+    const props = { ...JOIN, codeSupported: true, codeMode: 'enter', codeDevices: DEVICES, codePick: DEVICES[0].deviceId, onCodeSubmit } as const;
+    const { rerender } = render(<PairingScreen {...props} codeBusy />);
+    fireEvent.changeText(screen.getByTestId('pair-code-input'), '482917');
+    expect(screen.getByTestId('pair-code-submit')).toBeDisabled();
+    fireEvent.press(screen.getByTestId('pair-code-submit'));
+    expect(onCodeSubmit).not.toHaveBeenCalled();
+    rerender(<PairingScreen {...props} />);
+    expect(screen.getByTestId('pair-code-submit')).not.toBeDisabled();
+    rerender(<PairingScreen {...props} codeBusy />);
+    expect(screen.getByTestId('pair-code-submit')).toBeDisabled();
+  });
+
+  it('join: an empty picker names no device and says what to check', () => {
+    render(<PairingScreen {...JOIN} codeSupported codeMode="enter" codeDevices={[]} />);
+    expect(screen.getByText('No devices found. Check both devices are on the same Wi-Fi.')).toBeTruthy();
+  });
+
+  it('join: picking a device calls onCodePick with its id', () => {
+    const onCodePick = jest.fn();
+    render(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={DEVICES}
+        codePick={ID}
+        onCodePick={onCodePick}
+      />,
+    );
+    fireEvent.press(screen.getByTestId('pair-code-pick-' + ID));
+    expect(onCodePick).toHaveBeenCalledWith(ID);
+  });
+
+  // A LAN can hold two devices with one name. The short id tells them apart,
+  // so the user does not pick the wrong one. A unique name needs no id.
+  it('join: a repeated device name adds a short id, and a unique name adds none', () => {
+    const twinA = 'aa'.repeat(16);
+    const twinB = 'bb'.repeat(16);
+    const { rerender } = render(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={[
+          { deviceId: twinA, name: 'Kitchen Tablet' },
+          { deviceId: twinB, name: 'Kitchen Tablet' },
+        ]}
+      />,
+    );
+    // The visible short id stays. It is hidden from a reader, because the
+    // button carries the name and the short id together, as ONE element.
+    expect(screen.getByTestId('pair-code-id-' + twinA, { includeHiddenElements: true })).toHaveTextContent(
+      /aaaaaaaa/,
+    );
+    expect(screen.getByTestId('pair-code-id-' + twinB, { includeHiddenElements: true })).toHaveTextContent(
+      /bbbbbbbb/,
+    );
+    expect(screen.getByTestId('pair-code-pick-' + twinA).props.accessibilityLabel).toBe(
+      'Kitchen Tablet aaaaaaaa',
+    );
+    expect(screen.getByTestId('pair-code-pick-' + twinB).props.accessibilityLabel).toBe(
+      'Kitchen Tablet bbbbbbbb',
+    );
+    rerender(
+      <PairingScreen
+        {...JOIN}
+        codeSupported
+        codeMode="enter"
+        codeDevices={[{ deviceId: twinA, name: 'Kitchen Tablet' }]}
+      />,
+    );
+    expect(screen.queryByTestId('pair-code-id-' + twinA, { includeHiddenElements: true })).toBeNull();
+    // A unique name needs no short id, so the button carries the name alone.
+    expect(screen.getByTestId('pair-code-pick-' + twinA).props.accessibilityLabel).toBe('Kitchen Tablet');
+  });
+
+  // The joiner learns one thing from a failure and nothing more. A wrong code,
+  // a dead code, and a network fault look the same from there.
+  it('join: a failure shows the neutral note, and not the QR note', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    render(
+      <PairingScreen {...JOIN} codeSupported codeMode="enter" codeDevices={DEVICES} error="wrong code" />,
+    );
+    expect(screen.getByText('That did not work.')).toBeTruthy();
+    expect(
+      screen.getByText('Check the six digits, and check the other device is still showing its code.'),
+    ).toBeTruthy();
+    expect(screen.queryByText("We couldn't read that code.")).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('the code panel offers a way back to the choices', () => {
+    const onCodeBack = jest.fn();
+    render(<PairingScreen {...HOST} codeSupported codeMode="show" code="482917" onCodeBack={onCodeBack} />);
+    expect(screen.getByText('Choose another way')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('pair-code-back'));
+    expect(onCodeBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the peer name at the check number, above the hint', () => {
+    const { rerender } = render(<PairingScreen {...JOIN} sas="482917" />);
+    expect(screen.queryByText('Pairing with Darshit MacBook')).toBeNull();
+    rerender(<PairingScreen {...JOIN} sas="482917" peerName="Darshit MacBook" />);
+    expect(screen.getByText('Pairing with Darshit MacBook')).toBeTruthy();
+    expect(screen.getByTestId('pairing-sas')).toBeTruthy();
+  });
+});
+

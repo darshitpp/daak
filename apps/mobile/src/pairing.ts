@@ -11,6 +11,29 @@ import { generateQr, PAIRING_QR_SIZE, pairingBundle, scanQr } from '@daak/platfo
  */
 
 /**
+ * Host half of code pairing: the engine makes a six digit code, arms the accept
+ * slot for one inbound pairing, and answers the code (R4). The code comes from
+ * Rust, so the UI cannot pick a weak one.
+ */
+export async function hostShowCode(engine: DaakEngine): Promise<string> {
+  return engine.armCodePairing();
+}
+
+/**
+ * Join half of code pairing. The joiner typed the code the host shows. The
+ * engine resolves the host address from the device list by device id (R2): a
+ * six digit code has no room for an address.
+ */
+export async function joinWithCode(
+  engine: DaakEngine,
+  deviceId: string,
+  code: string,
+): Promise<{ sas: string; peerDeviceId: string }> {
+  const { sas } = await engine.pair(deviceId, 'code', code);
+  return { sas, peerDeviceId: deviceId };
+}
+
+/**
  * Host half: fetch the FFI pairing bundle and render it as a scannable QR.
  * Returns both the data URI for the screen and the raw bundle, so the host
  * can show its own SAS when the joiner confirms.

@@ -19,6 +19,13 @@ export function fakeEngine(devices: DeviceInfo[] = [
     // engine state with no reply, so the fake can neither fail nor prove
     // anything. What matters to a caller is that it takes NO argument.
     armHostPairing: async () => {},
+    // Code pairing. The fake is in-process, so it supports code pairing. A
+    // no-op cancel and a fixed status are the honest answers: the fake has no
+    // engine to arm, and a screen that polls it sees idle.
+    codePairingSupported: true,
+    armCodePairing: async () => '123456',
+    codePairingStatus: async () => ({ state: 'idle' as const, remainingMs: 0, triesLeft: 0 }),
+    cancelCodePairing: async () => {},
     send: async () => ({ transferId: 'aa'.repeat(16), queued: true }),
     cancel: async () => {},
     retry: async () => {},

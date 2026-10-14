@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
+use rand::Rng;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::control::{Hello, ListenAddr};
@@ -354,6 +355,122 @@ pub(crate) struct PendingPairing {
     code: Option<String>,
 }
 
+/// How long a pairing code stays armed (R3).
+pub const CODE_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+/// How many handshakes a pairing code may start (R3).
+pub const CODE_MAX_TRIES: u32 = 3;
+
+/// A fresh six-digit pairing code. R4: the entropy lives here, in Rust.
+pub fn new_pairing_code() -> String {
+    format_code(rand::thread_rng().gen_range(0..1_000_000u32))
+}
+
+/// Six ASCII digits, leading zeros kept, so `007341` stays a string.
+fn format_code(n: u32) -> String {
+    format!("{:06}", n)
+}
+
+#[derive(Clone)]
+struct ArmedCode {
+    code: String,
+    attempts: u32,
+    expires_at: std::time::Instant,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CodeEnd {
+    Expired,
+    Exhausted,
+    Cancelled,
+}
+
+/// One lock for the slot AND its end reason. A reader never sees the code gone
+/// with no reason yet, and a late write cannot land after a re-arm.
+#[derive(Default)]
+pub(crate) struct CodeSlot {
+    armed: Option<ArmedCode>,
+    end: Option<CodeEnd>,
+}
+
+enum Reserve {
+    Code { code: String, generation: u64 },
+    Empty,
+    Expired,
+    Exhausted,
+}
+
+/// The ONE place an attempt is charged. It rechecks the TTL, because a peer can
+/// stall in the identity read past the deadline.
+fn reserve(slot: &mut CodeSlot, now: std::time::Instant) -> Reserve {
+    let Some(a) = slot.armed.as_mut() else {
+        return Reserve::Empty;
+    };
+    if now >= a.expires_at {
+        slot.armed = None;
+        slot.end = Some(CodeEnd::Expired);
+        return Reserve::Expired;
+    }
+    if a.attempts >= CODE_MAX_TRIES {
+        slot.armed = None;
+        slot.end = Some(CodeEnd::Exhausted);
+        return Reserve::Exhausted;
+    }
+    a.attempts += 1;
+    Reserve::Code {
+        code: a.code.clone(),
+        generation: a.generation,
+    }
+}
+
+/// After a FAILED handshake: clear the slot when this reservation used the last
+/// try. It does nothing when the generation is stale.
+fn settle_after_try(slot: &mut CodeSlot, generation: u64) {
+    let current = slot.armed.as_ref().map(|a| a.generation) == Some(generation);
+    if !current {
+        return;
+    }
+    if slot.armed.as_ref().map(|a| a.attempts >= CODE_MAX_TRIES) == Some(true) {
+        slot.armed = None;
+        slot.end = Some(CodeEnd::Exhausted);
+    }
+}
+
+/// R5: arm one code. The arm clears any earlier end reason.
+fn arm_code_slot(slot: &mut CodeSlot, code: String, ttl: std::time::Duration, generation: u64) {
+    slot.armed = Some(ArmedCode {
+        code,
+        attempts: 0,
+        expires_at: std::time::Instant::now() + ttl,
+        generation,
+    });
+    slot.end = None;
+}
+
+/// R5: arming the QR mode or cancelling clears the live code. The slot records
+/// the cancel, so the host screen shows why the code is gone.
+fn clear_code_slot(slot: &mut CodeSlot) {
+    if slot.armed.take().is_some() {
+        slot.end = Some(CodeEnd::Cancelled);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodePairingState {
+    Idle,
+    Armed,
+    Expired,
+    Exhausted,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodePairingStatus {
+    pub state: CodePairingState,
+    pub remaining_ms: u64,
+    pub tries_left: u32,
+}
+
 /// Drop the live row of a device that left the network.
 /// Only the live row goes. The stored pairing, the outbox, and the session stay.
 async fn handle_lost(
@@ -487,7 +604,12 @@ pub struct Engine {
     /// &self, and the per-row outbox drain drives sends through the same Arc.
     sessions: SharedSessions,
     pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
-    pending_code: Arc<Mutex<Option<String>>>,
+    /// R5: the one armed code, its attempts and its deadline, plus the reason
+    /// the last arm ended. One lock covers both.
+    code_slot: Arc<Mutex<CodeSlot>>,
+    /// Bumped on every arm, so a late settle from an old reservation does
+    /// nothing.
+    code_generation: Arc<std::sync::atomic::AtomicU64>,
     /// The inbound pairing channel. It carries (sas, peer_device_id): the host
     /// needs the peer id to offer its own SAS confirmation, and the id is
     /// known here and nowhere later on this surface.
@@ -646,13 +768,10 @@ impl Engine {
         bound: SocketAddr,
         name: &str,
     ) {
-        let Some(dialable) = crate::discovery::host_lan_addr(bound.port()) else {
-            return;
-        };
-        let announce = ListenAddr {
-            addr: dialable,
-            name: Some(name.to_owned()),
-        };
+        // The address is optional. A device with no LAN interface still sends
+        // its display name, because the peer needs the name to label it. The
+        // peer keeps discovery as the address source when the address is absent.
+        let announce = listen_addr_frame(crate::discovery::host_lan_addr(bound.port()), name);
         if let Ok(body) = announce.to_cbor() {
             let _ = conn.send(0, RecordType::Control, Bytes::from(body)).await;
         }
@@ -812,7 +931,8 @@ impl Engine {
 
         let (pairing_tx, pairing_rx) = mpsc::channel(8);
         let pending_pairing = Arc::new(Mutex::new(None));
-        let pending_code = Arc::new(Mutex::new(None));
+        let code_slot = Arc::new(Mutex::new(CodeSlot::default()));
+        let code_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         let staging = {
             let dir = out_dir.join("staging");
@@ -943,7 +1063,7 @@ impl Engine {
             let accept_confirm = confirm_required.clone();
             let out_dir = out_dir.clone();
             let pending_pairing = pending_pairing.clone();
-            let pending_code = pending_code.clone();
+            let code_slot = code_slot.clone();
             let pairing_tx = pairing_tx.clone();
             let tx = tx.clone();
             tokio::spawn(async move {
@@ -967,7 +1087,7 @@ impl Engine {
                     let db = db.clone();
                     let out_dir = out_dir.clone();
                     let pending_pairing = pending_pairing.clone();
-                    let pending_code = pending_code.clone();
+                    let code_slot = code_slot.clone();
                     let pairing_tx = pairing_tx.clone();
                     let tx = tx.clone();
                     let profile = profile.clone();
@@ -981,12 +1101,13 @@ impl Engine {
                             &out_dir,
                             &profile,
                             &pending_pairing,
-                            &pending_code,
+                            &code_slot,
                             &pairing_tx,
                             &tx,
                             &devices,
                             confirm_required,
                             &mut conn,
+                            local_addr,
                             peer,
                         )
                         .await
@@ -1271,7 +1392,8 @@ impl Engine {
             confirm_required,
             sessions,
             pending_pairing,
-            pending_code,
+            code_slot,
+            code_generation,
             pairing_rx: Mutex::new(pairing_rx),
         })
     }
@@ -1941,6 +2063,9 @@ impl Engine {
             mode,
             code,
         });
+        // R5: only one mode is armed, so a QR arm clears any live code.
+        let mut slot = self.code_slot.lock().await;
+        clear_code_slot(&mut slot);
         Ok(())
     }
 
@@ -1958,15 +2083,76 @@ impl Engine {
             mode,
             code: None,
         });
+        // R5: only one mode is armed, so an open QR arm clears any live code.
+        let mut slot = self.code_slot.lock().await;
+        clear_code_slot(&mut slot);
         Ok(())
     }
 
-    /// Offer a manual code for an inbound code-mode pairing. The peer's identity
-    /// is learned in-band (authenticated by the SPAKE2-derived Noise prologue),
-    /// so no QR bundle is required.
+    /// Offer a manual code for an inbound code-mode pairing. Replaces any
+    /// earlier code and clears an open QR arm, so only one mode is armed (R5).
     pub async fn offer_code_pairing(&self, code: String) -> Result<()> {
-        *self.pending_code.lock().await = Some(code);
+        self.offer_code_pairing_with_ttl(code, CODE_TTL).await
+    }
+
+    /// As `offer_code_pairing`, with an explicit lifetime. Tests use a short one.
+    pub async fn offer_code_pairing_with_ttl(
+        &self,
+        code: String,
+        ttl: std::time::Duration,
+    ) -> Result<()> {
+        let generation = self
+            .code_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        {
+            let mut slot = self.code_slot.lock().await;
+            arm_code_slot(&mut slot, code, ttl, generation);
+        }
+        *self.pending_pairing.lock().await = None;
         Ok(())
+    }
+
+    /// Disarm the code. The host screen calls this when it leaves the panel, so
+    /// a later connection cannot START a code handshake. A handshake that took a
+    /// try before the cancel can still finish. The confirmation gate limits the
+    /// harm.
+    pub async fn cancel_code_pairing(&self) {
+        let mut slot = self.code_slot.lock().await;
+        clear_code_slot(&mut slot);
+    }
+
+    /// The host's view of the code slot. The screen polls this once per second,
+    /// so the engine is the only clock. It NEVER mutates.
+    pub async fn code_pairing_status(&self) -> CodePairingStatus {
+        let slot = self.code_slot.lock().await;
+        if let Some(a) = slot.armed.as_ref() {
+            let now = std::time::Instant::now();
+            if a.expires_at > now {
+                return CodePairingStatus {
+                    state: CodePairingState::Armed,
+                    remaining_ms: (a.expires_at - now).as_millis() as u64,
+                    tries_left: CODE_MAX_TRIES.saturating_sub(a.attempts),
+                };
+            }
+            // Read the deadline, not the slot: the host must see the expiry with
+            // no connection, because the joiner has not typed the code yet.
+            return CodePairingStatus {
+                state: CodePairingState::Expired,
+                remaining_ms: 0,
+                tries_left: 0,
+            };
+        }
+        CodePairingStatus {
+            state: match slot.end {
+                Some(CodeEnd::Expired) => CodePairingState::Expired,
+                Some(CodeEnd::Exhausted) => CodePairingState::Exhausted,
+                Some(CodeEnd::Cancelled) => CodePairingState::Cancelled,
+                None => CodePairingState::Idle,
+            },
+            remaining_ms: 0,
+            tries_left: 0,
+        }
     }
 
     pub async fn accept_pairing_once(&self) -> Result<String> {
@@ -2060,10 +2246,12 @@ impl Engine {
         )
         .await?;
         let peer_public = read_identity_public(&mut conn).await?;
+        // The host identity carries no name, so use the hex id until the host
+        // sends its display name below.
         let name = hex::encode(peer_public.device_id);
         let peer = PairingBundle::new(peer_public, name);
         let local = self.pairing_bundle().await;
-        let (pairing, sas) = crate::pairing::pair(
+        let (mut pairing, sas) = crate::pairing::pair(
             &mut conn,
             self.identity.as_ref(),
             &local,
@@ -2075,6 +2263,11 @@ impl Engine {
         .await?;
         // R42e, same frame as the QR path above.
         Self::send_listen_addr(&mut conn, self.local_addr(), &local.name).await;
+        // Order, so neither side blocks: the joiner sends its frame first and
+        // then reads, and the host reads the joiner frame first and then sends
+        // its own. The host frame carries the host display name. Replace the
+        // hex fallback with that name.
+        apply_announced_name(&mut pairing, Self::read_listen_addr(&mut conn).await);
         // R42d, same argument as `pair_with` above.
         Self::commit_pairing(
             &self.db,
@@ -2407,19 +2600,23 @@ impl Engine {
     }
 
     /// Called by the accept loop for every inbound connection.
-    #[allow(clippy::too_many_arguments)] // pending_pairing + pending_code are the two pairing slots
+    #[allow(clippy::too_many_arguments)] // pending_pairing + code_slot are the two pairing slots
     pub(crate) async fn handle_inbound(
         identity: &Identity,
         db: &Db,
         out_dir: &Path,
         profile: &Mutex<Profile>,
         pending_pairing: &Mutex<Option<PendingPairing>>,
-        pending_code: &Mutex<Option<String>>,
+        code_slot: &Mutex<CodeSlot>,
         pairing_tx: &mpsc::Sender<(String, [u8; 16])>,
         tx: &broadcast::Sender<EngineEvent>,
         devices: &SharedDevices,
         confirm_required: bool,
         conn: &mut Connection<tokio::net::TcpStream>,
+        // The host's bound address. The code branch reuses `send_listen_addr`
+        // to send its display name, and that frame needs a dialable address
+        // from this port.
+        bound: SocketAddr,
         // R42e: kept in the signature for the accept loop, but no longer
         // stored. See `read_listen_addr`: the source port of a pairing socket
         // is closed when the handshake ends and is not a dialable address.
@@ -2436,11 +2633,19 @@ impl Engine {
         // Manual-code pairing: no QR bundle was offered, so the peer's identity
         // arrives in-band and is authenticated by the SPAKE2-mixed prologue.
         //
-        // The code is INSPECTED here and taken only after the peer proved its
-        // identity binding, like the QR arm below. A stray connection must not
-        // burn the one-shot code.
-        let armed_code = pending_code.lock().await.clone();
-        if armed_code.is_some() {
+        // The slot is INSPECTED here, and an attempt is charged only after the
+        // peer proved its identity binding, like the QR arm below.
+        //
+        // A code must NOT hijack a transfer from a peer this device already
+        // trusts. An ordinary transfer looks like a pairing dial up to the
+        // first frame after the Hello, so the code branch would read that frame
+        // as an identity, fail, and kill the transfer. The QR OPEN arm makes
+        // the same distinction for the same reason: a trusted row means "this
+        // is a transfer" when the Hello does not ask to pair. Only a device
+        // that SAYS it is pairing (`Hello::pairing`) still reaches the code, so
+        // a device that lost its side can pair again.
+        let armed = code_slot.lock().await.armed.is_some();
+        if armed && !(db.is_trusted(&hello.device_id) && !hello.pair) {
             let peer_public = read_identity_public(conn).await?;
             if hello.device_id != peer_public.device_id {
                 return Err(CoreError::Protocol(
@@ -2456,47 +2661,92 @@ impl Engine {
                     "code pairing peer identity binding failed".into(),
                 ));
             }
-            let Some(code) = pending_code.lock().await.take() else {
-                return Err(CoreError::Protocol("pairing code already used".into()));
+            // RESERVE, in one critical section. This rechecks the TTL and
+            // charges the attempt. A peer that fails above charges nothing, but
+            // that check only proves the peer's own keys agree. Any LAN host
+            // can mint a fresh valid identity for each try and spend all three
+            // (R3 accepts this denial of service).
+            let (code, generation) = {
+                let mut slot = code_slot.lock().await;
+                match reserve(&mut slot, std::time::Instant::now()) {
+                    Reserve::Code { code, generation } => (code, generation),
+                    Reserve::Empty => {
+                        return Err(CoreError::Protocol("pairing code already used".into()))
+                    }
+                    Reserve::Expired => {
+                        return Err(CoreError::Protocol("pairing code expired".into()))
+                    }
+                    Reserve::Exhausted => {
+                        return Err(CoreError::Protocol("pairing code used up".into()))
+                    }
+                }
             };
-            conn.send(
-                0,
-                RecordType::Control,
-                Bytes::from(identity.public().to_cbor()?),
-            )
-            .await?;
-            let name = hex::encode(peer_public.device_id);
-            let expected = PairingBundle::new(peer_public, name);
-            let (mut pairing, sas) = crate::pairing::pair(
-                conn,
-                identity,
-                &local,
-                &expected,
-                false,
-                PairMode::Code,
-                Some(&code),
-            )
-            .await?;
-            // R42e: the address to store is the one the joiner ADVERTISED,
-            // not `peer_addr`. `peer_addr` is the source port of a socket the
-            // joiner closes as soon as pairing ends, so storing it produced a
-            // peer that refused every connection. `None` when the joiner did
-            // not send one: discovery then owns the address, as before.
-            let announced = Self::read_listen_addr(conn).await;
-            let advertised = announced.as_ref().map(|l| l.addr);
-            if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
-                pairing.label = Some(name);
+            // Everything past the reservation runs in one block, so a failure
+            // on ANY path can settle the charged try. Only a pair() failure used
+            // to settle, so a commit failure on the last try left the slot
+            // Armed with no tries left and never reported Exhausted.
+            let outcome = async {
+                conn.send(
+                    0,
+                    RecordType::Control,
+                    Bytes::from(identity.public().to_cbor()?),
+                )
+                .await?;
+                let name = hex::encode(peer_public.device_id);
+                let expected = PairingBundle::new(peer_public, name);
+                let (mut pairing, sas) = crate::pairing::pair(
+                    conn,
+                    identity,
+                    &local,
+                    &expected,
+                    false,
+                    PairMode::Code,
+                    Some(&code),
+                )
+                .await?;
+                // R42e: the address to store is the one the joiner ADVERTISED,
+                // not `peer_addr`. `peer_addr` is the source port of a socket the
+                // joiner closes as soon as pairing ends, so storing it produced a
+                // peer that refused every connection. `None` when the joiner did
+                // not send one: discovery then owns the address, as before.
+                let announced = Self::read_listen_addr(conn).await;
+                let advertised = announced.as_ref().and_then(|l| l.addr);
+                // The code joiner holds our identity and no name, so send our
+                // display name. This frame is code-only: the QR arm sends no
+                // identity and never reaches here. Order, so neither side
+                // blocks: the host reads the joiner frame first and then sends
+                // this one, and the joiner sends its frame first and then reads.
+                Self::send_listen_addr(conn, bound, &local.name).await;
+                apply_announced_name(&mut pairing, announced);
+                Self::commit_pairing(
+                    db,
+                    &pairing,
+                    tx,
+                    advertised.map(|a| (devices, a)),
+                    confirm_required,
+                )
+                .await?;
+                // End the reservation in its own block, so the guard drops
+                // before the send below. The channel holds 8 items, so a full
+                // channel would block the send with the lock held, and every
+                // later status read, cancel, or inbound connection would stall.
+                {
+                    let mut slot = code_slot.lock().await;
+                    if slot.armed.as_ref().map(|a| a.generation) == Some(generation) {
+                        slot.armed = None;
+                        // A success is not a dead code, so no end reason.
+                        slot.end = None;
+                    }
+                }
+                let _ = pairing_tx.send((sas, pairing.peer_device_id)).await;
+                Ok(())
             }
-            Self::commit_pairing(
-                db,
-                &pairing,
-                tx,
-                advertised.map(|a| (devices, a)),
-                confirm_required,
-            )
-            .await?;
-            let _ = pairing_tx.send((sas, pairing.peer_device_id)).await;
-            return Ok(());
+            .await;
+            if outcome.is_err() {
+                let mut slot = code_slot.lock().await;
+                settle_after_try(&mut slot, generation);
+            }
+            return outcome;
         }
         // The arm is a SINGLE slot, so it must not be consumed by a connection
         // that turns out not to be a pairing dial. Every inbound connection
@@ -2615,7 +2865,7 @@ impl Engine {
             .await?;
             // R42e, same argument as the code branch above.
             let announced = Self::read_listen_addr(conn).await;
-            let advertised = announced.as_ref().map(|l| l.addr);
+            let advertised = announced.as_ref().and_then(|l| l.addr);
             if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
                 pairing.label = Some(name);
             }
@@ -2771,6 +3021,26 @@ fn clean_peer_name(raw: String) -> Option<String> {
     let name: String = raw.chars().filter(|c| !c.is_control()).collect();
     let name: String = name.trim().chars().take(64).collect();
     (!name.is_empty()).then_some(name)
+}
+
+/// The joiner and the host learn the peer display name from the same
+/// post-pairing frame. A clean name becomes the pairing label. An absent or
+/// empty name keeps the label that `pair` chose, which is the hex device id.
+fn apply_announced_name(pairing: &mut Pairing, announced: Option<ListenAddr>) {
+    if let Some(name) = announced.and_then(|l| l.name).and_then(clean_peer_name) {
+        pairing.label = Some(name);
+    }
+}
+
+/// Build the post-pairing frame. The address is optional: a sender with no LAN
+/// interface sends no address, but it still sends its display name. The
+/// receiver uses the address when it is present, and keeps discovery when it is
+/// absent. The name never depends on the address.
+fn listen_addr_frame(addr: Option<SocketAddr>, name: &str) -> ListenAddr {
+    ListenAddr {
+        addr,
+        name: Some(name.to_owned()),
+    }
 }
 
 /// The Expected-arm guard: the Hello the peer opened with must name the very
@@ -3460,6 +3730,105 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reserve_charges_three_attempts_then_closes() {
+        let now = std::time::Instant::now();
+        let mut slot = CodeSlot {
+            armed: Some(ArmedCode {
+                code: "123456".into(),
+                attempts: 0,
+                expires_at: now + CODE_TTL,
+                generation: 1,
+            }),
+            end: None,
+        };
+        for _ in 0..CODE_MAX_TRIES {
+            assert!(matches!(reserve(&mut slot, now), Reserve::Code { .. }));
+        }
+        assert!(matches!(reserve(&mut slot, now), Reserve::Exhausted));
+        assert!(slot.armed.is_none());
+        assert_eq!(slot.end, Some(CodeEnd::Exhausted));
+    }
+
+    #[test]
+    fn reserve_reports_expired_past_the_deadline() {
+        let now = std::time::Instant::now();
+        let mut slot = CodeSlot {
+            armed: Some(ArmedCode {
+                code: "123456".into(),
+                attempts: 0,
+                expires_at: now,
+                generation: 1,
+            }),
+            end: None,
+        };
+        assert!(matches!(reserve(&mut slot, now), Reserve::Expired));
+        assert_eq!(slot.end, Some(CodeEnd::Expired));
+    }
+
+    #[test]
+    fn settle_clears_only_on_the_last_try_and_only_for_the_current_generation() {
+        let mut slot = CodeSlot {
+            armed: Some(ArmedCode {
+                code: "123456".into(),
+                attempts: CODE_MAX_TRIES,
+                expires_at: std::time::Instant::now() + CODE_TTL,
+                generation: 4,
+            }),
+            end: None,
+        };
+        settle_after_try(&mut slot, 3); // stale generation: a re-arm happened
+        assert!(
+            slot.armed.is_some(),
+            "a stale settle must not clear the new arm"
+        );
+        settle_after_try(&mut slot, 4);
+        assert!(slot.armed.is_none());
+        assert_eq!(slot.end, Some(CodeEnd::Exhausted));
+    }
+
+    // R5: arming one pairing mode clears the other. A code arm holds the code
+    // slot. A QR arm or a cancel clears the code and records why.
+    #[test]
+    fn arming_one_pairing_mode_clears_the_other() {
+        let mut slot = CodeSlot::default();
+
+        // The code arm fills the slot and clears any earlier end reason.
+        arm_code_slot(&mut slot, "123456".into(), CODE_TTL, 1);
+        assert!(slot.armed.is_some(), "the code arm reads Armed");
+        assert_eq!(slot.end, None, "the code arm clears the earlier end reason");
+
+        // A QR arm clears the live code and records the cancel.
+        clear_code_slot(&mut slot);
+        assert!(slot.armed.is_none(), "the QR arm clears the code");
+        assert_eq!(
+            slot.end,
+            Some(CodeEnd::Cancelled),
+            "the QR arm records the cancel"
+        );
+
+        // The reverse: a code arm replaces a live QR arm and reads Armed again.
+        arm_code_slot(&mut slot, "123456".into(), CODE_TTL, 2);
+        assert!(slot.armed.is_some(), "the code arm replaces the QR arm");
+        assert_eq!(slot.end, None, "the code arm clears the previous cancel");
+    }
+
+    #[test]
+    fn format_code_keeps_leading_zeros() {
+        assert_eq!(format_code(7341), "007341");
+        assert_eq!(format_code(0), "000000");
+        assert_eq!(format_code(999_999), "999999");
+    }
+
+    #[test]
+    fn a_new_pairing_code_is_always_six_digits() {
+        for _ in 0..200 {
+            let c = new_pairing_code();
+            assert_eq!(c.len(), 6);
+            assert!(c.chars().all(|ch| ch.is_ascii_digit()));
+        }
+    }
+
     #[tokio::test]
     async fn lost_removes_the_row_and_sends_device_lost() {
         let id = [7u8; 16];
@@ -3770,6 +4139,67 @@ mod tests {
         assert_eq!(
             clean_peer_name("x".repeat(200)).unwrap().chars().count(),
             64
+        );
+    }
+
+    // The code-path label: a real announced name replaces the hex fallback,
+    // and an absent or empty name keeps whatever label was there.
+    #[test]
+    fn announced_name_replaces_the_fallback_only_when_it_is_usable() {
+        let addr = "127.0.0.1:9".parse().unwrap();
+        let mut pairing = Pairing {
+            peer_device_id: [3u8; 16],
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [1u8; 32],
+            static_dh_pub: [2u8; 32],
+            label: Some("a1b2c3d4e5f6a7b8".into()),
+        };
+        apply_announced_name(&mut pairing, None);
+        assert_eq!(pairing.label.as_deref(), Some("a1b2c3d4e5f6a7b8"));
+        apply_announced_name(
+            &mut pairing,
+            Some(ListenAddr {
+                addr: Some(addr),
+                name: Some("   ".into()),
+            }),
+        );
+        assert_eq!(pairing.label.as_deref(), Some("a1b2c3d4e5f6a7b8"));
+        apply_announced_name(
+            &mut pairing,
+            Some(ListenAddr {
+                addr: Some(addr),
+                name: Some(" Host Mac ".into()),
+            }),
+        );
+        assert_eq!(pairing.label.as_deref(), Some("Host Mac"));
+    }
+
+    // A host with no LAN interface cannot resolve a dialable address. The name
+    // frame must still carry the display name, or the joiner keeps the hex id
+    // and this task's defect comes back. host_lan_addr reads the real interface
+    // list and cannot be forced to fail here, so this pins the frame builder and
+    // its CBOR round trip instead.
+    #[test]
+    fn the_name_frame_carries_the_name_without_an_address() {
+        let frame = listen_addr_frame(None, "Host Mac");
+        assert!(
+            frame.addr.is_none(),
+            "an absent address must not drop the frame"
+        );
+        let bytes = frame.to_cbor().unwrap();
+        let back = ListenAddr::from_cbor(&bytes).unwrap();
+        assert_eq!(back.name.as_deref(), Some("Host Mac"));
+        assert!(back.addr.is_none());
+
+        // The address still wins when it is present, so the QR path is unchanged.
+        let addr: SocketAddr = "192.168.1.5:4000".parse().unwrap();
+        let frame = listen_addr_frame(Some(addr), "Host Mac");
+        assert_eq!(
+            ListenAddr::from_cbor(&frame.to_cbor().unwrap())
+                .unwrap()
+                .addr,
+            Some(addr)
         );
     }
 

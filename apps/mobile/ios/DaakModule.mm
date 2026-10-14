@@ -31,6 +31,20 @@ RCT_EXTERN_METHOD(armHostPairing:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(acceptPairing:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(armCodePairing:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(pairWithCode:(NSString *)addr
+                  code:(NSString *)code
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(codePairingStatus:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(cancelCodePairing:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(sendText:(NSString *)peerId
                   text:(NSString *)text
                   resolve:(RCTPromiseResolveBlock)resolve

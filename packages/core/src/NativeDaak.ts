@@ -15,6 +15,14 @@ export interface Spec extends TurboModule {
   offerPairing(bundleCbor: number[]): Promise<void>;
   /** UDL: arm_host_pairing() -- spec 3.3 Mode A host arm, takes no bundle */
   armHostPairing(): Promise<void>;
+  /** UDL: arm_code_pairing() -> the six digit code the host shows */
+  armCodePairing(): Promise<string>;
+  /** UDL: pair_with_code(string addr, string code) -> {sas, peer_device_id} JSON */
+  pairWithCode(addr: string, code: string): Promise<string>;
+  /** UDL: code_pairing_status() -> {state, remaining_ms, tries_left} JSON */
+  codePairingStatus(): Promise<string>;
+  /** UDL: cancel_code_pairing() -- disarm the code when the panel closes */
+  cancelCodePairing(): Promise<void>;
   /** UDL: pair_with(string addr, sequence<u8> bundle_cbor) -> {sas, peer_device_id} */
   pairWith(addr: string, bundleCbor: number[]): Promise<string>;
   /** UDL: accept_pairing() -> the inbound SAS string */

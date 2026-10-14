@@ -186,6 +186,9 @@ describe('a void UniFFI method must not resolve its promise with Unit', () => {
       // modules, so it belongs in the same pin as the other void engine verbs.
       'backgroundWake',
       'cancel',
+      // Code pairing (Task 2): void in the UDL, overridden on all three native
+      // modules, so it belongs in the same pin as the other void engine verbs.
+      'cancelCodePairing',
       // The SAS gate: void in the UDL, overridden on all three native modules.
       'confirmPairing',
       'deleteQuarantined',

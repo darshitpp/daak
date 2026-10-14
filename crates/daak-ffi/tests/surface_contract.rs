@@ -19,7 +19,9 @@ use daak_core::engine::{Engine, EngineConfig, EngineEvent};
 use daak_core::manifest::{from_picked_paths, DeviceRef, CHUNK_SIZE_DEFAULT};
 use daak_core::pairing::PairMode;
 use daak_core::store::Db;
-use daak_ffi::{ffi_event_json, to_ffi_event, to_pairing_sas_event};
+use daak_ffi::{
+    ffi_event_json, to_ffi_event, to_pairing_sas_event, EventSink, FfiEngine, FfiError, FfiEvent,
+};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -216,4 +218,58 @@ async fn an_unpair_reaches_js_as_pairing_revoked() {
         "the row that leaves must be the peer that was removed"
     );
     let _ = (joiner, host_id);
+}
+
+/// The code-pairing FFI surface. The engine owns the code (R4), so the host
+/// asks for one and the UI cannot pick a weak one. The screen polls the status
+/// once per second and can cancel.
+struct Silent;
+impl EventSink for Silent {
+    fn on_event(&self, _event: FfiEvent) {}
+}
+
+/// The four methods run against one started engine, so this is a real call, not
+/// a shape check. daak-core owns the code, so the FFI must not invent one.
+#[test]
+fn code_pairing_methods_arm_poll_and_cancel() {
+    // start() binds a wildcard port, so keep the announce off the LAN.
+    std::env::set_var("DAAK_MDNS_OFF_LAN", "1");
+    let dir = tempfile::tempdir().unwrap();
+    let engine = FfiEngine::new(Box::new(Silent));
+    engine
+        .start(dir.path().to_string_lossy().into(), "host".into(), 0)
+        .unwrap();
+
+    let code = engine.arm_code_pairing().unwrap();
+    assert_eq!(code.len(), 6, "a pairing code is six digits");
+    assert!(code.bytes().all(|b| b.is_ascii_digit()), "got {code}");
+    // Two arms must differ. A repeat would let an old screen code open a new arm.
+    assert_ne!(code, engine.arm_code_pairing().unwrap());
+
+    let status = json_of(&engine.code_pairing_status().unwrap());
+    let mut keys: Vec<String> = status.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["remaining_ms", "state", "tries_left"].map(String::from)
+    );
+    let states = ["idle", "armed", "expired", "exhausted", "cancelled"];
+    assert!(
+        states.contains(&status["state"].as_str().unwrap()),
+        "unknown state {}",
+        status["state"]
+    );
+    assert_eq!(status["state"], "armed", "a fresh arm is armed");
+
+    engine.cancel_code_pairing().unwrap();
+    assert_eq!(
+        json_of(&engine.code_pairing_status().unwrap())["state"],
+        "cancelled"
+    );
+
+    // A bad address is a caller bug at the trust boundary, like pair_with.
+    assert!(matches!(
+        engine.pair_with_code("not an addr".into(), "123456".into()),
+        Err(FfiError::Protocol(_))
+    ));
 }

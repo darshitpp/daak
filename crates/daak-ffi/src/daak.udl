@@ -118,6 +118,14 @@ interface DaakEngine {
   // human. See PendingArm::Open in crates/daak-core/src/engine.rs.
   [Throws=FfiError] void arm_host_pairing();
   [Throws=FfiError] string pair_with(string addr, sequence<u8> bundle_cbor);
+  // Code pairing (spec R2-R5). The host arms a code that daak-core makes, so
+  // the UI cannot pick a weak one. The joiner pairs with the typed code. Every
+  // method takes or returns text; the JSON keys stay snake_case, like the rest
+  // of this surface, and packages/core maps them.
+  [Throws=FfiError] string arm_code_pairing();
+  [Throws=FfiError] string pair_with_code(string addr, string code);
+  [Throws=FfiError] string code_pairing_status();
+  [Throws=FfiError] void cancel_code_pairing();
   [Throws=FfiError] string accept_pairing();
   [Throws=FfiError] string send_text(string peer_id, string text);
   [Throws=FfiError] string send_files(string peer_id, sequence<string> paths);

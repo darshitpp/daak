@@ -130,6 +130,18 @@ export interface TransferFilter {
   peerDeviceId?: string;
 }
 
+/**
+ * The host side of code pairing, as the host panel polls it.
+ *
+ * `remainingMs` counts down while the state is `armed`. `triesLeft` is how
+ * many wrong codes the engine still accepts before it answers `exhausted`.
+ */
+export interface CodePairingStatus {
+  state: 'idle' | 'armed' | 'expired' | 'exhausted' | 'cancelled';
+  remainingMs: number;
+  triesLeft: number;
+}
+
 export interface ThreadItem {
   transferId: string;
   itemIndex: number;
@@ -241,6 +253,27 @@ export interface DaakEngine {
    * no `IpcRequest` for it (see DaemonClientEngine).
    */
   armHostPairing(): Promise<void>;
+  /**
+   * HOST half of code pairing: the engine makes a six digit code and arms the
+   * accept slot for one inbound pairing. The code comes from the engine, so
+   * the UI cannot pick a weak one. Resolves with the code.
+   */
+  armCodePairing(): Promise<string>;
+  /**
+   * True when this engine can run code pairing. The in-process FFI engine can.
+   * The daemon client cannot, because no `IpcRequest` carries it.
+   */
+  readonly codePairingSupported: boolean;
+  /**
+   * The host polls this while the code shows. The state is `idle`, `armed`,
+   * `expired`, `exhausted`, or `cancelled`.
+   */
+  codePairingStatus(): Promise<CodePairingStatus>;
+  /**
+   * Disarm the code when the panel closes, so a code that is no longer on
+   * screen cannot start a handshake.
+   */
+  cancelCodePairing(): Promise<void>;
   send(req: SendRequest): Promise<{ transferId: string; queued: boolean }>;
   cancel(transferId: string): Promise<void>;
   retry(transferId: string): Promise<void>;

@@ -171,6 +171,28 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun acceptPairing(promise: Promise) = resolve(promise) { handle().acceptPairing() }
 
+    // Code pairing over SPAKE2. The host shows the six digit code that
+    // armCodePairing returns. The joiner types the code into pairWithCode.
+    @ReactMethod
+    override fun armCodePairing(promise: Promise) = resolve(promise) { handle().armCodePairing() }
+
+    // The joiner sends the typed code to the host. The host returns the SAS
+    // and the peer device id as JSON.
+    @ReactMethod
+    override fun pairWithCode(addr: String, code: String, promise: Promise) =
+        resolve(promise) { handle().pairWithCode(addr, code) }
+
+    // The code state, the remaining time, and the tries left, as JSON. The
+    // host panel polls this.
+    @ReactMethod
+    override fun codePairingStatus(promise: Promise) = resolve(promise) { handle().codePairingStatus() }
+
+    // Disarm the code when the panel closes. The trailing null is load-bearing:
+    // this generated method returns Unit.
+    @ReactMethod
+    override fun cancelCodePairing(promise: Promise) =
+        resolve(promise) { handle().cancelCodePairing(); null }
+
     @ReactMethod
     override fun sendText(peerId: String, text: String, promise: Promise) =
         resolve(promise) { handle().sendText(peerId, text) }
