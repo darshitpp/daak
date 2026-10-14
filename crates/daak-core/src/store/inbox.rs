@@ -64,14 +64,51 @@ impl Db {
     /// just performed the moves and knows the final locations, so a per-entry
     /// replace would only have to agree with it about ordering for no benefit.
     pub fn replace_inbox_paths(&self, id: &[u8; 16], paths: &[String]) -> Result<()> {
+        let conn = self.conn();
+        let tx = conn.unchecked_transaction()?;
+        let old_json: Option<String> = tx
+            .query_row(
+                "SELECT saved_paths FROM inbox_history WHERE id = ?1",
+                rusqlite::params![&id[..]],
+                |r| r.get(0),
+            )
+            .ok();
+        let old = old_json
+            .as_deref()
+            .map(crate::engine::parse_json_string_array)
+            .unwrap_or_default();
+        // A list of another length cannot be paired by index. An EMPTY list is
+        // a real answer ("no file is nameable") and is always written.
+        if !paths.is_empty() && paths.len() != old.len() {
+            tracing::warn!(
+                payload = %hex::encode(id),
+                old = old.len(),
+                new = paths.len(),
+                "replace_inbox_paths: list length differs; nothing written"
+            );
+            return Ok(());
+        }
         // The SAME encoder the receive path uses for this column. daak-core has
         // no serde_json, and a second hand-rolled encoder here is how the two
         // halves drift on an escape neither one tests.
         let json = crate::engine::json_string_array(paths);
-        self.conn().execute(
+        tx.execute(
             "UPDATE inbox_history SET saved_paths = ?2 WHERE id = ?1",
             rusqlite::params![&id[..], json],
         )?;
+        // transfer_id equals the inbox id (record_inbox). The Thread screen
+        // reads dest_path, so it must follow the move. An empty list pairs
+        // with nothing, so it leaves dest_path alone.
+        for (from, to) in old.iter().zip(paths.iter()) {
+            if from != to {
+                tx.execute(
+                    "UPDATE transfer_items SET dest_path = ?3
+                       WHERE transfer_id = ?1 AND dest_path = ?2",
+                    rusqlite::params![&id[..], from, to],
+                )?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -170,6 +207,121 @@ mod tests {
 
         db.replace_inbox_paths(&[2u8; 16], &Vec::new()).unwrap();
         assert_eq!(db.list_inbox().unwrap()[0].saved_paths, "[]");
+    }
+
+    use crate::store::transfers::{ItemRow, TransferRow};
+
+    fn transfer(id: u8) -> TransferRow {
+        TransferRow {
+            transfer_id: [id; 16],
+            payload_id: [id; 16],
+            peer_device_id: [id.wrapping_add(1); 16],
+            direction: "in".into(),
+            kind: "media".into(),
+            state: "done".into(),
+            bytes_total: 10,
+            bytes_done: 10,
+            item_count: 2,
+            created_at: 1,
+            updated_at: 1,
+            manifest: vec![1],
+            error: None,
+        }
+    }
+
+    fn item(id: u8, index: u32, dest: &str) -> ItemRow {
+        ItemRow {
+            transfer_id: [id; 16],
+            item_index: index,
+            item_type: "image".into(),
+            name: Some(format!("f{index}")),
+            mime: None,
+            size: Some(1),
+            hash: Some([0u8; 32]),
+            dest_path: Some(dest.into()),
+            state: "done".into(),
+        }
+    }
+
+    fn dest_of(db: &Db, id: u8, index: u32) -> Option<String> {
+        db.list_items(&[id; 16])
+            .unwrap()
+            .into_iter()
+            .find(|i| i.item_index == index)
+            .and_then(|i| i.dest_path)
+    }
+
+    // The Thread screen reads transfer_items.dest_path, not saved_paths. A
+    // platform that moves a file must move BOTH, or Preview opens a path that
+    // is gone.
+    #[test]
+    fn replace_inbox_paths_also_rewrites_the_item_dest_path() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.upsert_transfer(&transfer(1)).unwrap();
+        db.upsert_item(&item(1, 0, "/app/a.jpg")).unwrap();
+        db.upsert_item(&item(1, 1, "/app/b.pdf")).unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: r#"["/app/a.jpg","/app/b.pdf"]"#.into(),
+            ..row(1, 100)
+        })
+        .unwrap();
+
+        db.replace_inbox_paths(
+            &[1u8; 16],
+            &["photos:ABC".to_string(), "/app/b.pdf".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(dest_of(&db, 1, 0).as_deref(), Some("photos:ABC"));
+        // An unchanged path keeps its row.
+        assert_eq!(dest_of(&db, 1, 1).as_deref(), Some("/app/b.pdf"));
+    }
+
+    // Another transfer can hold the same path string. It must not change.
+    #[test]
+    fn replace_inbox_paths_leaves_other_transfers_alone() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.upsert_transfer(&transfer(1)).unwrap();
+        db.upsert_transfer(&transfer(2)).unwrap();
+        db.upsert_item(&item(1, 0, "/app/a.jpg")).unwrap();
+        db.upsert_item(&item(2, 0, "/app/a.jpg")).unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: r#"["/app/a.jpg"]"#.into(),
+            ..row(1, 100)
+        })
+        .unwrap();
+
+        db.replace_inbox_paths(&[1u8; 16], &["photos:ABC".to_string()])
+            .unwrap();
+
+        assert_eq!(dest_of(&db, 1, 0).as_deref(), Some("photos:ABC"));
+        assert_eq!(dest_of(&db, 2, 0).as_deref(), Some("/app/a.jpg"));
+    }
+
+    // A list of the wrong length cannot be paired with the old list by index.
+    // Writing it would store a list that names the wrong files.
+    #[test]
+    fn replace_inbox_paths_refuses_a_list_of_the_wrong_length() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.upsert_transfer(&transfer(1)).unwrap();
+        db.upsert_item(&item(1, 0, "/app/a.jpg")).unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: r#"["/app/a.jpg"]"#.into(),
+            ..row(1, 100)
+        })
+        .unwrap();
+
+        db.replace_inbox_paths(
+            &[1u8; 16],
+            &["/x/a.jpg".to_string(), "/x/b.jpg".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(dest_of(&db, 1, 0).as_deref(), Some("/app/a.jpg"));
+        assert_eq!(db.list_inbox().unwrap()[0].saved_paths, r#"["/app/a.jpg"]"#);
     }
 }
 

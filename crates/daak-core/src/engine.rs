@@ -171,6 +171,51 @@ pub(crate) fn json_string_array(items: &[String]) -> String {
     out
 }
 
+/// The reverse of `json_string_array`. It undoes exactly the escapes that the
+/// encoder writes. Every other character is copied through unchanged. Input
+/// that is not an array of strings gives an empty list.
+pub(crate) fn parse_json_string_array(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = s.trim().chars();
+    if chars.next() != Some('[') {
+        return Vec::new();
+    }
+    loop {
+        match chars.next() {
+            Some('"') => {}
+            Some(',') | Some(' ') => continue,
+            Some(']') => return out,
+            _ => return Vec::new(),
+        }
+        let mut cur = String::new();
+        loop {
+            match chars.next() {
+                Some('"') => break,
+                Some('\\') => match chars.next() {
+                    Some('"') => cur.push('"'),
+                    Some('\\') => cur.push('\\'),
+                    Some('b') => cur.push('\u{8}'),
+                    Some('f') => cur.push('\u{c}'),
+                    Some('n') => cur.push('\n'),
+                    Some('r') => cur.push('\r'),
+                    Some('t') => cur.push('\t'),
+                    Some('u') => {
+                        let hex: String = chars.by_ref().take(4).collect();
+                        match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                            Some(c) => cur.push(c),
+                            None => return Vec::new(),
+                        }
+                    }
+                    _ => return Vec::new(),
+                },
+                Some(c) => cur.push(c),
+                None => return Vec::new(),
+            }
+        }
+        out.push(cur);
+    }
+}
+
 pub struct EngineConfig {
     pub display_name: String,
     pub listen_addr: SocketAddr,
@@ -1940,7 +1985,23 @@ impl Engine {
     /// write to). So the platform reports the new locations back, and the row
     /// keeps pointing at the files the user actually has.
     pub fn replace_inbox_paths(&self, payload_id: [u8; 16], paths: Vec<String>) -> Result<()> {
-        self.db.replace_inbox_paths(&payload_id, &paths)
+        self.db.replace_inbox_paths(&payload_id, &paths)?;
+        // The Thread screen refetches on transfer.item. The rewrite changed
+        // transfer_items.dest_path, so announce each item that now names one of
+        // the new paths.
+        for item in self.db.list_items(&payload_id)? {
+            if let Some(p) = &item.dest_path {
+                if paths.contains(p) {
+                    let _ = self.tx.send(EngineEvent::TransferItem {
+                        transfer_id: payload_id,
+                        item_index: item.item_index,
+                        state: item.state.clone(),
+                        dest_path: Some(p.clone()),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Rename this device and re-advertise. The new base name goes through the
@@ -4054,6 +4115,19 @@ mod tests {
     /// signal) instead of a real list. daak-core cannot assert this with
     /// serde_json (it has no such dependency), so these are the exact strings
     /// serde_json's own escaping produces, pinned here and on the bridge side.
+    #[test]
+    fn parse_json_string_array_inverts_json_string_array() {
+        for case in [
+            vec![],
+            vec!["/tmp/a.bin".to_string()],
+            vec![r#"C:\tmp\q"#.to_string(), r#"/a"b"#.to_string()],
+            vec!["/tmp/\u{1}tab\t\nnl\r\u{8}\u{c}".to_string()],
+            vec!["/tmp/caf\u{e9}/\u{1f4f7}.jpg".to_string()],
+        ] {
+            assert_eq!(parse_json_string_array(&json_string_array(&case)), case);
+        }
+    }
+
     #[test]
     fn saved_paths_json_escapes_what_a_path_can_contain() {
         assert_eq!(json_string_array(&[]), "[]");
