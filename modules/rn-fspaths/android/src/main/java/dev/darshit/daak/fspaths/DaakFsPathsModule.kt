@@ -136,6 +136,20 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
   override fun exists(path: String, promise: Promise) = resolve(promise) { File(path).exists() }
 
   /**
+   * The size of each staged file. A path that is missing, unreadable, or not a
+   * regular file answers null, so one bad path does not lose the others.
+   */
+  @ReactMethod
+  override fun fileSizes(paths: ReadableArray, promise: Promise) = resolve(promise) {
+    val out = WritableNativeArray()
+    for (i in 0 until paths.size()) {
+      val file = File(paths.getString(i) ?: "")
+      if (file.isFile) out.pushDouble(file.length().toDouble()) else out.pushNull()
+    }
+    out
+  }
+
+  /**
    * The Preview verb. `reveal` already starts ACTION_VIEW through the file
    * provider and resolves false when no app can open the type, so `openFile`
    * reuses it. The two verbs differ only on iOS and macOS.

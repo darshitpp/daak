@@ -95,6 +95,22 @@ class DaakFsPaths: NSObject {
     resolve(FileManager.default.fileExists(atPath: path))
   }
 
+  /// The size of each path, in order. `NSNull` marks an unknown size: a missing
+  /// file, an unreadable file, or a directory. A Swift `nil` cannot go in the
+  /// array, so `NSNull` is the bridge value for null.
+  @objc func fileSizes(_ paths: [String],
+                       resolve: @escaping RCTPromiseResolveBlock,
+                       reject: @escaping RCTPromiseRejectBlock) {
+    let fm = FileManager.default
+    let sizes: [Any] = paths.map { (path: String) -> Any in
+      guard let attrs = try? fm.attributesOfItem(atPath: path),
+            attrs[.type] as? FileAttributeType == .typeRegular,
+            let size = attrs[.size] as? NSNumber else { return NSNull() }
+      return size
+    }
+    resolve(sizes)
+  }
+
   /// Ask for a folder and REMEMBER it.
   ///
   /// A sandboxed app cannot keep a path to a folder it does not own: the path

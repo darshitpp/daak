@@ -140,3 +140,16 @@ export async function relocateReceivedFiles(
 export async function exists(path: string): Promise<boolean> {
   return NativeDaakFsPaths.exists(path);
 }
+
+/**
+ * The size in bytes of each path, in the same order. `null` is an unknown size.
+ * Resolves `null` for every path when the native call rejects, so the review
+ * sheet shows names and no total instead of an error.
+ */
+export async function fileSizes(paths: string[]): Promise<(number | null)[]> {
+  try {
+    return await NativeDaakFsPaths.fileSizes(paths);
+  } catch {
+    return paths.map(() => null);
+  }
+}
