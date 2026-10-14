@@ -11,7 +11,7 @@ import {
   type SettingsHost,
   useBlockers,
 } from '@daak/ui';
-import { photosHost } from './photosHost';
+import { askForPhotosIfUndetermined, photosHost } from './photosHost';
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
@@ -247,7 +247,10 @@ export default function App() {
         // durably written. Permitting a start here instead would publish an
         // engine-generated device name to every peer before the user chose one,
         // which is the entire thing these screens exist to prevent.
-        if (stored.complete) void boot();
+        if (stored.complete) {
+          void boot();
+          void askForPhotosIfUndetermined();
+        }
       },
       () => {
         // A keystore that cannot be read is OnboardingFlow's problem to

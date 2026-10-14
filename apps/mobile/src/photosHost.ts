@@ -9,3 +9,16 @@ export const photosHost: PhotosHost = {
   request: requestPhotosAccess,
   openSettings: () => void Linking.openSettings(),
 };
+
+// A returning user skips onboarding, because its flag survives a reinstall. The OS
+// permission does not survive. This asks once when the OS has not been asked.
+// It runs at startup. It must not throw, so it swallows each error.
+export async function askForPhotosIfUndetermined(
+  host: Pick<PhotosHost, 'status' | 'request'> = photosHost,
+): Promise<void> {
+  try {
+    if ((await host.status()) === 'undetermined') await host.request();
+  } catch {
+    // The user can still choose the permission in Settings.
+  }
+}
