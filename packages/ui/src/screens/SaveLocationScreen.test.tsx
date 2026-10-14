@@ -66,6 +66,19 @@ describe('SaveLocationScreen', () => {
       expect(request).toHaveBeenCalledTimes(1);
     });
 
+    it('ignores a second press while the request is pending', async () => {
+      const next = jest.fn();
+      let resolve!: (v: boolean) => void;
+      const request = jest.fn(() => new Promise<boolean>((r) => { resolve = r; }));
+      render(<SaveLocationScreen folder={folder} photos={photos(request)} onContinue={next} />);
+      fireEvent.press(screen.getByTestId('save-location-continue'));
+      fireEvent.press(screen.getByTestId('save-location-continue'));
+      resolve(true);
+      await waitFor(() => expect(next).toHaveBeenCalledTimes(1));
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
     it('continues when the answer is no', async () => {
       const next = jest.fn();
       render(<SaveLocationScreen folder={folder} photos={photos(async () => false)} onContinue={next} />);

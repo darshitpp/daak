@@ -306,6 +306,7 @@ describe('the Save-location step', () => {
   it('asks for Photos access once on Continue, and a no still moves on', async () => {
     const { requestPhotosAccess } = jest.requireMock('@daak/platform');
     requestPhotosAccess.mockClear();
+    requestPhotosAccess.mockResolvedValueOnce(false);
     await reachPairStep();
     expect(requestPhotosAccess).toHaveBeenCalledTimes(1);
     expect(startEngineOnce).toHaveBeenCalled();

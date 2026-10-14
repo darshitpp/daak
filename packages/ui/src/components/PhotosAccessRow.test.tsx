@@ -39,3 +39,13 @@ it('opens system settings when access is denied', async () => {
   fireEvent.press(screen.getByTestId('photos-access-settings'));
   expect(openSettings).toHaveBeenCalledTimes(1);
 });
+
+it('reads the status again after Allow and hides when it is granted', async () => {
+  const status = jest.fn<ReturnType<PhotosHost['status']>, []>()
+    .mockResolvedValueOnce('undetermined')
+    .mockResolvedValue('granted');
+  render(<PhotosAccessRow photos={host({ status })} />);
+  fireEvent.press(await screen.findByTestId('photos-access-allow'));
+  await waitFor(() => expect(screen.queryByTestId('photos-access-row')).toBeNull());
+  expect(status).toHaveBeenCalledTimes(2);
+});

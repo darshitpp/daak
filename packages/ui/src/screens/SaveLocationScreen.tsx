@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { Text, View } from 'react-native';
 import { Btn, Note } from '../components/ds';
 import { DownloadFolderRow } from '../components/DownloadFolderRow';
@@ -36,6 +36,7 @@ export function SaveLocationScreen({ folder, photos, onContinue, onBack, footer 
   footer?: string | null;
 }) {
   const canChoose = folder.choose !== undefined;
+  const busy = useRef(false);
   return (
     <OnboardingScreen
       title="Where to save files"
@@ -45,6 +46,11 @@ export function SaveLocationScreen({ folder, photos, onContinue, onBack, footer 
         <>
           <Btn variant="primary" block label="Continue" testID="save-location-continue" onPress={() => {
               if (!photos) { onContinue(); return; }
+              // A second press must not ask again or continue again. The flag stays
+              // set after the request settles, because onContinue moves the flow
+              // to the next step and this screen goes away.
+              if (busy.current) return;
+              busy.current = true;
               // A denial or a failure does not block onboarding.
               void photos.request().then(() => onContinue(), () => onContinue());
             }}
