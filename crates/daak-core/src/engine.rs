@@ -4108,13 +4108,6 @@ mod tests {
         assert_eq!(p.sent_at_ms, 1234);
     }
 
-    /// B3: the saved_paths column is hand-built JSON that both bridges parse
-    /// with serde_json. A path that needs escaping must still parse, and a
-    /// control byte must not be passed through raw -- serde_json rejects a raw
-    /// control in a string, and the row would bridge as `null` (the corrupt-row
-    /// signal) instead of a real list. daak-core cannot assert this with
-    /// serde_json (it has no such dependency), so these are the exact strings
-    /// serde_json's own escaping produces, pinned here and on the bridge side.
     #[test]
     fn parse_json_string_array_inverts_json_string_array() {
         for case in [
@@ -4128,6 +4121,13 @@ mod tests {
         }
     }
 
+    /// B3: the saved_paths column is hand-built JSON that both bridges parse
+    /// with serde_json. A path that needs escaping must still parse, and a
+    /// control byte must not be passed through raw -- serde_json rejects a raw
+    /// control in a string, and the row would bridge as `null` (the corrupt-row
+    /// signal) instead of a real list. daak-core cannot assert this with
+    /// serde_json (it has no such dependency), so these are the exact strings
+    /// serde_json's own escaping produces, pinned here and on the bridge side.
     #[test]
     fn saved_paths_json_escapes_what_a_path_can_contain() {
         assert_eq!(json_string_array(&[]), "[]");
