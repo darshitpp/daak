@@ -109,6 +109,62 @@ describe('ThreadScreen', () => {
     expect(screen.getByText('b.png')).toBeTruthy();
   });
 
+  const many = (n: number) => Array.from({ length: n }, (_, i) => `/Users/d/f${i}.pdf`);
+
+  it('folds more than 3 files into one summary chip and keeps Send on the screen', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(40) });
+    expect(await screen.findByText('40 files · Review')).toBeTruthy();
+    expect(screen.queryByTestId('remove-f0.pdf')).toBeNull();
+    expect(screen.getByTestId('send')).not.toBeDisabled();
+  });
+
+  it('keeps one chip for each file at 3 files or fewer', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(3) });
+    expect(await screen.findByTestId('remove-f2.pdf')).toBeTruthy();
+    expect(screen.queryByTestId('files-review')).toBeNull();
+  });
+
+  it('opens the review sheet and lowers the count when a file is removed', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(40) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    expect(screen.getByText('40 files')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('review-remove-f0.pdf'));
+    expect(screen.getByText('39 files')).toBeTruthy();
+    expect(screen.getByText('39 files · Review')).toBeTruthy();
+    expect(screen.queryByTestId('review-remove-f0.pdf')).toBeNull();
+  });
+
+  it('keeps the sheet open at 3 files and closes it on Done', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    fireEvent.press(screen.getByTestId('review-remove-f0.pdf'));
+    // The sheet is open and the composer shows one chip for each file again.
+    expect(screen.getByTestId('files-review-done')).toBeTruthy();
+    expect(screen.getByTestId('remove-f1.pdf')).toBeTruthy();
+    expect(screen.getByTestId('review-remove-f1.pdf')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('files-review-done'));
+    expect(screen.queryByTestId('files-review-done')).toBeNull();
+  });
+
+  it('closes the sheet when the last file is removed', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    for (let i = 0; i < 4; i++) fireEvent.press(screen.getByTestId(`review-remove-f${i}.pdf`));
+    expect(screen.queryByTestId('files-review-done')).toBeNull();
+    expect(screen.queryByTestId('files-review')).toBeNull();
+  });
+
+  it('renders both rows for two files with the same base name and removes only one path', async () => {
+    mount(fakeEngine([peer]), {
+      initialFiles: ['/a/same.pdf', '/b/same.pdf', '/c/x.pdf', '/d/y.pdf'],
+    });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    expect(screen.getAllByTestId('review-remove-same.pdf')).toHaveLength(2);
+    fireEvent.press(screen.getAllByTestId('review-remove-same.pdf')[0]);
+    expect(screen.getAllByTestId('review-remove-same.pdf')).toHaveLength(1);
+    expect(screen.getByText('3 files')).toBeTruthy();
+  });
+
   it('toasts "1 file ready" for a single picked file', async () => {
     mount(fakeEngine([peer]), { onPickFiles: async () => ['/Users/d/a.pdf'] });
     await screen.findByText('Nothing here yet');

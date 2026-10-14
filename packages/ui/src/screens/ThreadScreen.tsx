@@ -21,6 +21,8 @@ import { humanBytes } from './quarantine-facts';
 import { EMPTY_THREAD, itemKey, mergeThread, prependOlder, type ThreadView } from './thread-merge';
 
 const PAGE = 50;
+// More staged files than this fold into one summary chip. The composer must keep a fixed height.
+const MAX_CHIPS = 3;
 // How near the bottom (in points) still counts as "reading the newest items".
 const NEAR_BOTTOM = 80;
 // Events that can change this thread. transfer.item and transfer.done carry no
@@ -96,6 +98,7 @@ export function ThreadScreen({
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<Result>(null);
   const [stopFor, setStopFor] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState(false);
 
   const alive = useRef(true);
   const seq = useRef(0);
@@ -323,6 +326,20 @@ export function ThreadScreen({
     );
   }
 
+  const removeChip = (p: string) => (
+    <Pressable
+      key={p}
+      onPress={() => setFiles((f) => f.filter((x) => x !== p))}
+      accessibilityRole="button"
+      accessibilityLabel={`Remove ${base(p)}`}
+      testID={`remove-${base(p)}`}
+      style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
+    >
+      <Text style={ui.chipLabel} numberOfLines={1}>{base(p)}</Text>
+      <Text style={ui.chipLabelOn}>×</Text>
+    </Pressable>
+  );
+
   const active = summaries.filter((s) => s.direction === 'out' && s.state === 'active');
   const offline = device != null && device.presence === 'offline';
 
@@ -449,19 +466,19 @@ export function ThreadScreen({
         {files.length > 0 ? (
           <View style={ui.stackSm}>
             <View style={[ui.row, { flexWrap: 'wrap' }]}>
-              {files.map((p) => (
+              {files.length > MAX_CHIPS ? (
                 <Pressable
-                  key={p}
-                  onPress={() => setFiles((f) => f.filter((x) => x !== p))}
+                  onPress={() => setReviewing(true)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Remove ${base(p)}`}
-                  testID={`remove-${base(p)}`}
+                  accessibilityLabel={`Review ${plural(files.length, 'file', 'files')}`}
+                  testID="files-review"
                   style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
                 >
-                  <Text style={ui.chipLabel} numberOfLines={1}>{base(p)}</Text>
-                  <Text style={ui.chipLabelOn}>×</Text>
+                  <Text style={ui.chipLabel}>{`${plural(files.length, 'file', 'files')} · Review`}</Text>
                 </Pressable>
-              ))}
+              ) : (
+                files.map((p) => removeChip(p))
+              )}
             </View>
           </View>
         ) : null}
@@ -480,6 +497,31 @@ export function ThreadScreen({
         </View>
       </View>
       </ComposerWrap>
+
+      <Sheet
+        open={reviewing && files.length > 0}
+        title={plural(files.length, 'file', 'files')}
+        onClose={() => setReviewing(false)}
+        actions={<Btn label="Done" variant="quiet" block onPress={() => setReviewing(false)} testID="files-review-done" />}
+      >
+        <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+          <View style={ui.list}>
+            {files.map((p) => (
+              <View key={p} style={ui.listRow}>
+                <Text style={[ui.rowTitle, ui.fill]} numberOfLines={1} ellipsizeMode="middle">{base(p)}</Text>
+                <Btn
+                  label="Remove"
+                  accessibilityLabel={`Remove ${base(p)}`}
+                  size="sm"
+                  variant="quiet"
+                  testID={`review-remove-${base(p)}`}
+                  onPress={() => setFiles((f) => f.filter((x) => x !== p))}
+                />
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </Sheet>
 
       <Sheet
         open={stopFor !== null}
