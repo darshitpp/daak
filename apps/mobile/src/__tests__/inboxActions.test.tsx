@@ -30,7 +30,7 @@ jest.mock('../BackgroundSyncNotice', () => ({ BackgroundSyncNotice: () => null }
 jest.mock('../PairingFlow', () => ({ PairingFlow: () => null }));
 
 import App from '../App';
-import { openFile, presentShare, copyToClipboard } from '@daak/platform';
+import { openFile, presentShare, copyToClipboard, fileSizes } from '@daak/platform';
 import { threadItem, threadPage } from '@daak/ui';
 
 const { engine } = jest.requireMock('../bootstrap');
@@ -86,4 +86,11 @@ it('warns when this device cannot open a file', async () => {
   fireEvent.press(await screen.findByLabelText('Preview report.pdf'));
   // Ruling: the warning is the design toast, not a note.
   expect(await screen.findByText('This device cannot open files.')).toBeTruthy();
+});
+
+it('hands the native fileSizes to the thread screen as an action', async () => {
+  (fileSizes as jest.Mock).mockResolvedValueOnce([1024, null]);
+  const { mobileInboxActions } = jest.requireActual('../inbox-actions');
+  await expect(mobileInboxActions.fileSizes?.(['/a', '/b'])).resolves.toEqual([1024, null]);
+  expect(fileSizes).toHaveBeenCalledWith(['/a', '/b']);
 });

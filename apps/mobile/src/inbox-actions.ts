@@ -1,4 +1,4 @@
-import { copyToClipboard, openFile, presentShare } from '@daak/platform';
+import { copyToClipboard, fileSizes, openFile, presentShare } from '@daak/platform';
 import type { InboxActions } from '@daak/ui';
 
 // The Inbox row's real verbs, wired to the native calls that exist.
@@ -19,6 +19,9 @@ export const mobileInboxActions: InboxActions = {
     // no second action to take.
     void presentShare({ urls: paths }).catch(() => {});
   },
+  // The review sheet shows a size for each staged file. The facade answers null
+  // for a path it cannot read, and for every path when the native call fails.
+  fileSizes: (paths) => fileSizes(paths),
   // R42i: put a received text back on the clipboard on demand. routeInboxEntry
   // already copies it once on arrival; this is the row's own verb for a user
   // who copied something else in between.
