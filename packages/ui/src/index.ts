@@ -19,6 +19,7 @@ export { PermissionsScreen, type PermissionRowSpec } from './screens/Permissions
 export { SaveLocationScreen, type SaveLocationFolder } from './screens/SaveLocationScreen';
 export { formatSas } from './screens/sas';
 export { DownloadFolderRow } from './components/DownloadFolderRow';
+export { PhotosAccessRow, type PhotosHost } from './components/PhotosAccessRow';
 export { PairFirstDeviceScreen } from './screens/PairFirstDeviceScreen';
 export { CantReachScreen, type QueuedTransfer } from './screens/CantReachScreen';
 export { UpdateRequiredScreen } from './screens/UpdateRequiredScreen';

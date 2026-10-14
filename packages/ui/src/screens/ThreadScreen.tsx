@@ -442,7 +442,11 @@ export function ThreadScreen({
                   }
                 : undefined
             }
-            onShare={actions?.share ? (i) => i.destPath !== null && actions.share?.([i.destPath]) : undefined}
+            onShare={
+              actions?.share && (it.destPath === null || (actions.canShare?.(it.destPath) ?? true))
+                ? (i) => i.destPath !== null && actions.share?.([i.destPath])
+                : undefined
+            }
             onOpenHeld={onOpenHeld ? (i) => onOpenHeld({ transferId: i.transferId, itemIndex: i.itemIndex }) : undefined}
             onRetry={(i) => void retry(i.transferId)}
             onStop={(i) => void stopWaiting(i.transferId)}

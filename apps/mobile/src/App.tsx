@@ -11,6 +11,7 @@ import {
   type SettingsHost,
   useBlockers,
 } from '@daak/ui';
+import { photosHost } from './photosHost';
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
@@ -417,6 +418,7 @@ export default function App() {
           // the phone and the desktop cannot disagree about when it opens (R43b).
           onCheckConnection={blockers.onCheckConnection}
           downloadFolder={downloadFolder}
+          photos={photosHost}
           initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
           // ?? '' and not `link.text`: a send link with NO text is an
           // instruction to send nothing, and undefined here would leave the

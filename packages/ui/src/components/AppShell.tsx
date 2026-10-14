@@ -6,6 +6,7 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 import { ThreadScreen } from '../screens/ThreadScreen';
 import { QuarantineScreen } from '../screens/QuarantineScreen';
 import type { InboxActions } from '../inbox-actions';
+import type { PhotosHost } from './PhotosAccessRow';
 import type { SettingsHost } from '../screens/settings/host';
 import { Sidebar, TabBar, type Tab } from './TabBar';
 import { Btn, type DeviceNoun } from './ds';
@@ -42,6 +43,7 @@ export function AppShell({
   settingsRouteToken,
   onCheckConnection,
   downloadFolder,
+  photos,
   onPickFiles,
   inboxActions,
   onUnpair,
@@ -81,6 +83,8 @@ export function AppShell({
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
   };
+  /** The Photos verbs for the Settings row. Injected: access is a platform call. */
+  photos?: PhotosHost;
   onPickFiles?: () => Promise<string[]>;
   /** The host's native verbs for thread items: copy, open, share. */
   inboxActions?: InboxActions;
@@ -200,6 +204,7 @@ export function AppShell({
         background={background}
         onCheckConnection={onCheckConnection}
         downloadFolder={downloadFolder}
+        photos={photos}
         onUnpair={onUnpair}
         settingsHost={settingsHost}
         deviceNoun={deviceNoun}

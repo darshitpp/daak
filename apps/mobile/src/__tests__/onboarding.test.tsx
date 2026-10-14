@@ -303,6 +303,14 @@ describe('the Save-location step', () => {
     expect(chooseDownloadFolder).toHaveBeenCalledTimes(1);
   });
 
+  it('asks for Photos access once on Continue, and a no still moves on', async () => {
+    const { requestPhotosAccess } = jest.requireMock('@daak/platform');
+    requestPhotosAccess.mockClear();
+    await reachPairStep();
+    expect(requestPhotosAccess).toHaveBeenCalledTimes(1);
+    expect(startEngineOnce).toHaveBeenCalled();
+  });
+
   it('goes back to Permissions without starting the engine', async () => {
     await reachSaveStep();
     fireEvent.press(screen.getByTestId('onb-back'));

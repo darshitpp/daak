@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import { Btn, Note } from '../components/ds';
 import { DownloadFolderRow } from '../components/DownloadFolderRow';
 import { OnboardingScreen } from '../components/Onboarding';
+import type { PhotosHost } from '../components/PhotosAccessRow';
 import { ui } from '../theme';
 
 export interface SaveLocationFolder {
@@ -26,8 +27,10 @@ export interface SaveLocationFolder {
  * `footer` is the sentence under the button. The host sets it, because the
  * number of steps that remain depends on the host.
  */
-export function SaveLocationScreen({ folder, onContinue, onBack, footer = 'One quick step left.' }: {
+export function SaveLocationScreen({ folder, photos, onContinue, onBack, footer = 'One quick step left.' }: {
   folder: SaveLocationFolder;
+  /** The host's Photos verbs. Continue asks for access once when this is set. */
+  photos?: PhotosHost;
   onContinue: () => void;
   onBack?: () => void;
   footer?: string | null;
@@ -40,7 +43,12 @@ export function SaveLocationScreen({ folder, onContinue, onBack, footer = 'One q
       testID="screen-save-location"
       actions={
         <>
-          <Btn variant="primary" block label="Continue" testID="save-location-continue" onPress={onContinue} />
+          <Btn variant="primary" block label="Continue" testID="save-location-continue" onPress={() => {
+              if (!photos) { onContinue(); return; }
+              // A denial or a failure does not block onboarding.
+              void photos.request().then(() => onContinue(), () => onContinue());
+            }}
+          />
           {footer === null ? null : <Text style={ui.hint}>{footer}</Text>}
         </>
       }
@@ -59,6 +67,9 @@ export function SaveLocationScreen({ folder, onContinue, onBack, footer = 'One q
             hideNote
           />
           <Text style={ui.hint}>Files from other devices land here.</Text>
+          {photos ? (
+            <Text style={ui.hint}>{`Photos and videos go to ${photos.destination}. Other files go to this folder.`}</Text>
+          ) : null}
           <Note title="Only on this device" body="Files are saved here, not in the cloud. Nothing is uploaded." />
         </>
       ) : (

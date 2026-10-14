@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { SaveLocationScreen } from './SaveLocationScreen';
 
 const noop = () => {};
@@ -45,6 +45,48 @@ describe('SaveLocationScreen', () => {
     render(<SaveLocationScreen folder={{ load: async () => null, choose: async () => null }} onContinue={next} />);
     fireEvent.press(screen.getByTestId('save-location-continue'));
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  describe('with a photos host', () => {
+    const photos = (request: () => Promise<boolean>) => ({
+      destination: 'Photos',
+      status: async () => 'undetermined' as const,
+      request,
+      openSettings: () => {},
+    });
+    const folder = { load: async () => null, choose: async () => null };
+
+    it('asks for access once, then continues', async () => {
+      const next = jest.fn();
+      const request = jest.fn(async () => true);
+      render(<SaveLocationScreen folder={folder} photos={photos(request)} onContinue={next} />);
+      expect(screen.getByText('Photos and videos go to Photos. Other files go to this folder.')).toBeTruthy();
+      fireEvent.press(screen.getByTestId('save-location-continue'));
+      await waitFor(() => expect(next).toHaveBeenCalledTimes(1));
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    it('continues when the answer is no', async () => {
+      const next = jest.fn();
+      render(<SaveLocationScreen folder={folder} photos={photos(async () => false)} onContinue={next} />);
+      fireEvent.press(screen.getByTestId('save-location-continue'));
+      await waitFor(() => expect(next).toHaveBeenCalledTimes(1));
+    });
+
+    it('continues when the request fails', async () => {
+      const next = jest.fn();
+      render(<SaveLocationScreen folder={folder} photos={photos(async () => { throw new Error('x'); })} onContinue={next} />);
+      fireEvent.press(screen.getByTestId('save-location-continue'));
+      await waitFor(() => expect(next).toHaveBeenCalledTimes(1));
+    });
+
+    it('shows no photos line and continues at once without a host', () => {
+      const next = jest.fn();
+      render(<SaveLocationScreen folder={folder} onContinue={next} />);
+      expect(screen.queryByText(/Photos and videos go to/)).toBeNull();
+      fireEvent.press(screen.getByTestId('save-location-continue'));
+      expect(next).toHaveBeenCalledTimes(1);
+    });
   });
 
   // Review Focus 2. A host that gives no `choose` gets the fallback. It is not

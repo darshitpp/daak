@@ -19,6 +19,9 @@ export const mobileInboxActions: InboxActions = {
     // no second action to take.
     void presentShare({ urls: paths }).catch(() => {});
   },
+  // A Photos marker names an asset and no file. The thread draws no Share
+  // button for it. Android content:// URIs stay shareable.
+  canShare: (path) => !path.startsWith('photos:'),
   // The review sheet shows a size for each staged file. The facade answers null
   // for a path it cannot read, and for every path when the native call fails.
   fileSizes: (paths) => fileSizes(paths),
