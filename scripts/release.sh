@@ -198,6 +198,9 @@ if run 10; then
     fi
     sleep 5
   done
+  if [ -f "release/notes-$VERSION.md" ]; then
+    gh release edit "$TAG" --repo "$REPO" --notes-file "release/notes-$VERSION.md"
+  fi
   ask "Upload 5 files to $TAG?" || die "stopped by the user"
   gh release upload "$TAG" --repo "$REPO" --clobber \
     "$APK_ARM64" "$APK_ARM32" "$APK_UNI" "$DMG" "$IPA"

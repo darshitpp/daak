@@ -1,0 +1,1 @@
+New: pair with a six digit code. Photos and videos go to the Gallery. Review many staged files in one sheet. Release builds use R8.
