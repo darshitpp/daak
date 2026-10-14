@@ -1,5 +1,5 @@
 /**
- * The prototype's per-row sheet has two verbs. They are INJECTED, like the
+ * The host injects these verbs into the thread screen. They are INJECTED, like the
  * file picker: "show in folder" is a different native call on every platform
  * (Android opens a viewer through its FileProvider, iOS deliberately has no
  * reveal at all, macOS has none either) and the share sheet is a TurboModule
@@ -19,5 +19,12 @@ export interface InboxActions {
    * the verb.
    */
   copy?: (text: string) => void;
+  /**
+   * The size in bytes of each staged file, in the same order as `paths`. A
+   * size is `null` when the host cannot read it. Injected for the same reason
+   * as `open`: reading a file is a native call that packages/ui must not
+   * import. The review sheet shows a size only when the host supplied the verb.
+   */
+  fileSizes?: (paths: string[]) => Promise<(number | null)[]>;
 }
 

@@ -5,11 +5,12 @@ vi.mock('@daak/rn-fspaths', () => ({
     chooseDownloadFolder: vi.fn(async () => undefined),
     downloadFolderName: vi.fn(async () => null),
     openFile: vi.fn(),
+    fileSizes: vi.fn(),
   },
 }));
 
 import NativeDaakFsPaths from '@daak/rn-fspaths';
-import { chooseDownloadFolder, openFile } from './fspaths';
+import { chooseDownloadFolder, fileSizes, openFile } from './fspaths';
 
 const native = vi.mocked(NativeDaakFsPaths);
 
@@ -40,5 +41,16 @@ describe('fspaths facade', () => {
   it('openFile resolves false when the native call rejects', async () => {
     native.openFile.mockRejectedValue(new Error('E_FSPATHS'));
     await expect(openFile('/gone')).resolves.toBe(false);
+  });
+
+  it('fileSizes forwards the paths and returns the native answer', async () => {
+    native.fileSizes.mockResolvedValue([10, null]);
+    await expect(fileSizes(['/a', '/gone'])).resolves.toEqual([10, null]);
+    expect(native.fileSizes).toHaveBeenCalledWith(['/a', '/gone']);
+  });
+
+  it('fileSizes gives null for every path when the native call rejects', async () => {
+    native.fileSizes.mockRejectedValue(new Error('E_FSPATHS'));
+    await expect(fileSizes(['/a', '/b'])).resolves.toEqual([null, null]);
   });
 });

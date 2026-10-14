@@ -27,6 +27,12 @@ export interface Spec extends TurboModule {
    */
   exists(path: string): Promise<boolean>;
   /**
+   * The size in bytes of each path, in the same order as `paths`. `null` means
+   * unknown: the file is missing, unreadable, or not a regular file. It is an
+   * ANSWER for one path, never a rejection of the whole call.
+   */
+  fileSizes(paths: string[]): Promise<(number | null)[]>;
+  /**
    * R42p: ask the OS for a folder to keep received files in, and REMEMBER it.
    * Resolves the folder's display name, or `null` when the user cancelled.
    */

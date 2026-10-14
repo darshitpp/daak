@@ -592,6 +592,43 @@ describe('fspaths exposes exists on the Spec and on both natives', () => {
   });
 });
 
+describe('fspaths exposes fileSizes on the Spec, on every native, and on the platform wrapper', () => {
+  const spec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const swiftIos = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const swiftMac = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift');
+  const mmIos = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.mm');
+  const mmMac = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.mm');
+  const kt = read(
+    repo +
+      'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const platform = read(repo + 'packages/platform/src/fspaths.ts');
+
+  it('declares it on the TurboModule Spec', () => {
+    expect(spec).toMatch(/fileSizes\(paths: string\[\]\): Promise<\(number \| null\)\[\]>;/);
+  });
+
+  it('implements it on Android, iOS, and macOS', () => {
+    expect(kt).toMatch(/override fun fileSizes\(paths: ReadableArray, promise: Promise\)/);
+    expect(kt).toMatch(/pushNull\(\)/);
+    for (const swift of [swiftIos, swiftMac]) {
+      expect(swift).toMatch(/@objc func fileSizes\(_ paths: \[String\]/);
+      expect(swift).toMatch(/\.typeRegular/);
+      expect(swift).toMatch(/NSNull\(\)/);
+    }
+  });
+
+  it('declares it in both .mm method tables', () => {
+    expect(mmIos).toMatch(/RCT_EXTERN_METHOD\(fileSizes:\(NSArray<NSString \*> \*\)paths/);
+    expect(mmMac).toMatch(/RCT_EXTERN_METHOD\(fileSizes:\(NSArray<NSString \*> \*\)paths/);
+  });
+
+  it('is re-exported by the platform wrapper', () => {
+    expect(platform).toMatch(/export async function fileSizes\(paths: string\[\]\)/);
+    expect(platform).toMatch(/NativeDaakFsPaths\.fileSizes\(paths\)/);
+  });
+});
+
 describe('the modules are autolinked, not hand-registered', () => {
   // MainApplication adds only DaakPackage, the one module that lives in the
   // app. rn-share and rn-notify are autolinked through PackageList, so a manual

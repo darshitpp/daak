@@ -1,5 +1,5 @@
 import React from 'react';
-import { KeyboardAvoidingView, ScrollView } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, ScrollView } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
@@ -7,7 +7,7 @@ import { fakeEngine } from '../testing/fakeEngine';
 import { threadItem, threadPage } from '../testing/threadFixtures';
 import { ToastProvider } from '../components/Toast';
 import { Note } from '../components/ds';
-import { ThreadScreen } from './ThreadScreen';
+import { ThreadScreen, splitExt } from './ThreadScreen';
 
 const peer: DeviceInfo = {
   deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true,
@@ -107,6 +107,171 @@ describe('ThreadScreen', () => {
     fireEvent.press(screen.getByTestId('remove-a.pdf'));
     expect(screen.queryByText('a.pdf')).toBeNull();
     expect(screen.getByText('b.png')).toBeTruthy();
+  });
+
+  const many = (n: number) => Array.from({ length: n }, (_, i) => `/Users/d/f${i}.pdf`);
+
+  it('folds more than 3 files into one summary chip and keeps Send on the screen', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(40) });
+    expect(await screen.findByText('40 files · Review')).toBeTruthy();
+    expect(screen.queryByTestId('remove-f0.pdf')).toBeNull();
+    expect(screen.getByTestId('send')).not.toBeDisabled();
+  });
+
+  it('keeps one chip for each file at 3 files or fewer', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(3) });
+    expect(await screen.findByTestId('remove-f2.pdf')).toBeTruthy();
+    expect(screen.queryByTestId('files-review')).toBeNull();
+  });
+
+  it('opens the review sheet and lowers the count when a file is removed', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(40) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    expect(screen.getByText('40 files')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('review-remove-f0.pdf'));
+    expect(screen.getByText('39 files')).toBeTruthy();
+    expect(screen.getByText('39 files · Review')).toBeTruthy();
+    expect(screen.queryByTestId('review-remove-f0.pdf')).toBeNull();
+  });
+
+  it('keeps the sheet open at 3 files and closes it on Done', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    fireEvent.press(screen.getByTestId('review-remove-f0.pdf'));
+    // The sheet is open and the composer shows one chip for each file again.
+    expect(screen.getByTestId('files-review-done')).toBeTruthy();
+    expect(screen.getByTestId('remove-f1.pdf')).toBeTruthy();
+    expect(screen.getByTestId('review-remove-f1.pdf')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('files-review-done'));
+    expect(screen.queryByTestId('files-review-done')).toBeNull();
+  });
+
+  it('closes the sheet when the last file is removed', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    for (let i = 0; i < 4; i++) fireEvent.press(screen.getByTestId(`review-remove-f${i}.pdf`));
+    expect(screen.queryByTestId('files-review-done')).toBeNull();
+    expect(screen.queryByTestId('files-review')).toBeNull();
+  });
+
+  it('renders both rows for two files with the same base name and removes only one path', async () => {
+    mount(fakeEngine([peer]), {
+      initialFiles: ['/a/same.pdf', '/b/same.pdf', '/c/x.pdf', '/d/y.pdf'],
+    });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    expect(screen.getAllByTestId('review-remove-same.pdf')).toHaveLength(2);
+    fireEvent.press(screen.getAllByTestId('review-remove-same.pdf')[0]);
+    expect(screen.getAllByTestId('review-remove-same.pdf')).toHaveLength(1);
+    expect(screen.getByText('3 files')).toBeTruthy();
+  });
+
+  it('shows each size and the total when every size is known', async () => {
+    const fileSizes = jest.fn(async (p: string[]) => p.map(() => 2048));
+    mount(fakeEngine([peer]), { initialFiles: many(4), actions: { fileSizes } });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    // 4 files of 2048 bytes: 8192 bytes is 8.0 KB.
+    expect(await screen.findByText('4 files · 8.0 KB')).toBeTruthy();
+    expect(screen.getAllByText('2.0 KB')).toHaveLength(4);
+    expect(fileSizes).toHaveBeenCalledTimes(1);
+    expect(fileSizes).toHaveBeenCalledWith(many(4));
+  });
+
+  it('shows the name only and no total when one size is unknown', async () => {
+    const fileSizes = jest.fn(async (p: string[]) => p.map((_, i) => (i === 1 ? null : 1024)));
+    mount(fakeEngine([peer]), { initialFiles: many(4), actions: { fileSizes } });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await waitFor(() => expect(fileSizes).toHaveBeenCalled());
+    await settle();
+    expect(screen.getByText('4 files')).toBeTruthy();
+    expect(screen.getAllByText('1.0 KB')).toHaveLength(3);
+  });
+
+  it('shows names only and no error when fileSizes rejects', async () => {
+    const fileSizes = jest.fn(async () => { throw new Error('E_FSPATHS'); });
+    mount(fakeEngine([peer]), { initialFiles: many(4), actions: { fileSizes } });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await waitFor(() => expect(fileSizes).toHaveBeenCalled());
+    await settle();
+    expect(screen.getByText('4 files')).toBeTruthy();
+    expect(screen.getByTestId('review-remove-f0.pdf')).toBeTruthy();
+  });
+
+  it('shows names only when the host has no fileSizes verb', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    expect(screen.getByText('4 files')).toBeTruthy();
+  });
+
+  it('asks for the size of a file added while the sheet is open', async () => {
+    const fileSizes = jest.fn(async (p: string[]) => p.map(() => 1024));
+    mount(fakeEngine([peer]), {
+      initialFiles: many(4),
+      actions: { fileSizes },
+      onPickFiles: async () => ['/Users/d/late.pdf'],
+    });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await screen.findByText('4 files · 4.0 KB');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    await screen.findByText('5 files · 5.0 KB');
+    expect(fileSizes).toHaveBeenLastCalledWith(['/Users/d/late.pdf']);
+  });
+
+  it('ignores a stale size answer after the user removed a file', async () => {
+    // Each call keeps its own resolver. The removal makes the first call stale.
+    const resolvers: ((v: number[]) => void)[] = [];
+    const fileSizes = jest.fn(() => new Promise<number[]>((r) => { resolvers.push(r); }));
+    mount(fakeEngine([peer]), { initialFiles: many(4), actions: { fileSizes } });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await waitFor(() => expect(fileSizes).toHaveBeenCalledTimes(1));
+    fireEvent.press(screen.getByTestId('review-remove-f0.pdf'));
+    await waitFor(() => expect(fileSizes).toHaveBeenCalledTimes(2));
+    // The stale answer (4 paths) arrives first. It must change nothing.
+    await act(async () => { resolvers[0]([1024, 1024, 1024, 1024]); });
+    expect(screen.getByText('3 files')).toBeTruthy();
+    // The current answer (3 paths) gives the total.
+    await act(async () => { resolvers[1]([1024, 1024, 1024]); });
+    expect(await screen.findByText('3 files · 3.0 KB')).toBeTruthy();
+  });
+
+  it('does not reopen the sheet when files are staged again after the last one was removed', async () => {
+    mount(fakeEngine([peer]), { initialFiles: many(4), onPickFiles: async () => many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    for (let i = 0; i < 4; i++) fireEvent.press(screen.getByTestId(`review-remove-f${i}.pdf`));
+    expect(screen.queryByTestId('files-review-done')).toBeNull();
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(await screen.findByTestId('files-review')).toBeTruthy();
+    expect(screen.queryByTestId('files-review-done')).toBeNull();
+  });
+
+  it('dismisses the keyboard when the summary chip opens the sheet', async () => {
+    const dismiss = jest.spyOn(Keyboard, 'dismiss').mockImplementation(() => {});
+    mount(fakeEngine([peer]), { initialFiles: many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    dismiss.mockRestore();
+  });
+
+  it('splits a file name at the last dot', () => {
+    expect(splitExt('a.pdf')).toEqual(['a', '.pdf']);
+    expect(splitExt('noext')).toEqual(['noext', '']);
+    expect(splitExt('.hidden')).toEqual(['.hidden', '']);
+    expect(splitExt('a.tar.gz')).toEqual(['a.tar', '.gz']);
+  });
+
+  it('asks for sizes again when a sent path is staged again', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: true });
+    const fileSizes = jest.fn(async (p: string[]) => p.map(() => 1024));
+    mount(engine, { initialFiles: many(4), actions: { fileSizes }, onPickFiles: async () => many(4) });
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await screen.findByText('4 files · 4.0 KB');
+    fireEvent.press(screen.getByTestId('files-review-done'));
+    fireEvent.press(screen.getByTestId('send'));
+    await screen.findByText('Sent to Pixel 9');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(await screen.findByTestId('files-review'));
+    await waitFor(() => expect(fileSizes).toHaveBeenCalledTimes(2));
+    expect(fileSizes).toHaveBeenLastCalledWith(many(4));
   });
 
   it('toasts "1 file ready" for a single picked file', async () => {

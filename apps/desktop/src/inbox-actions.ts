@@ -1,5 +1,5 @@
 import { shareViaSystem } from '@daak/rn-share/js/system-share';
-import { openFile } from '@daak/platform/src/fspaths';
+import { fileSizes, openFile } from '@daak/platform/src/fspaths';
 import type { InboxActions } from '@daak/ui';
 
 // Deep imports for the reason src/picker.ts records: the @daak/rn-share barrel
@@ -17,6 +17,7 @@ export const desktopInboxActions: InboxActions = {
   share: (paths) => {
     void shareViaSystem({ files: paths }).catch(() => {});
   },
+  fileSizes: (paths) => fileSizes(paths),
   // NO `copy`. modules/rn-clipboard is not in apps/desktop/macos/Podfile.lock,
   // so NativeDaakClipboard's getEnforcing('DaakClipboard') throws at
   // module-eval time and would take the whole desktop bundle down with it. The
