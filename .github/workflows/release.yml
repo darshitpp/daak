@@ -15,10 +15,6 @@ on:
   push:
     tags:
       - 'v*'
-    # Phase 0 only: a branch named repro/... builds the unsigned APKs. Remove
-    # this trigger when the proof step is done.
-    branches:
-      - 'repro/**'
   workflow_dispatch:
     inputs:
       ref:
@@ -65,7 +61,7 @@ jobs:
 
   android-unsigned:
     name: Android unsigned (${{ matrix.leg }})
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/repro/')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
