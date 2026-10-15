@@ -182,7 +182,9 @@ if run 9; then
   say 9 "OUT: commit the hashes, push main and the tag $TAG"
   [ -f "$SCRATCH/built-$VERSION.sha" ] || die "no built commit is recorded. Run stage 5 first."
   built="$(cat "$SCRATCH/built-$VERSION.sha")"
-  changed="$(git diff --name-only "$built" HEAD | grep -v '^release/' || true)"
+  git cat-file -e "$built^{commit}" 2>/dev/null || die "the recorded built commit is not valid. Run stage 5 again."
+  diff_names="$(git diff --name-only "$built" HEAD)"
+  changed="$(printf '%s\n' "$diff_names" | grep -v '^release/' | grep -v '^$' || true)"
   [ -z "$changed" ] || die "a commit after the built commit changed $(echo $changed). Build again."
   git add "$SUMS"
   if ! git diff --cached --quiet; then
