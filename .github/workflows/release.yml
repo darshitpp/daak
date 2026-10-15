@@ -77,11 +77,15 @@ jobs:
     steps:
       - name: Make the F-Droid build path
         run: |
+          set -euo pipefail
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA"; exit 1; }
           sudo mkdir -p /home/vagrant
           sudo chown "$USER" /home/vagrant
           mkdir -p /home/vagrant/build
           git clone "https://github.com/${GITHUB_REPOSITORY}.git" "$BUILD_DIR"
           git -C "$BUILD_DIR" checkout --detach "$REF"
+          git -C "$BUILD_DIR" merge-base --is-ancestor "$REF" origin/main || { echo "ref is not on main"; exit 1; }
+          echo "Built commit: $REF" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
@@ -151,9 +155,12 @@ jobs:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
+          umask 077
           [ -n "$KEYSTORE_BASE64" ] && [ -n "$KS_PASS" ] || { echo "the secrets are missing"; exit 1; }
-          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          [ -x "$apksigner" ] || { echo "apksigner 35.0.0 not found"; exit 1; }
           ks="$RUNNER_TEMP/upload.jks"
+          trap 'rm -f "$ks"' EXIT
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ks"
           mkdir signed
           count=0
