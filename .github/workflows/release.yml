@@ -156,7 +156,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          [ -n "$KEYSTORE_BASE64" ] && [ -n "$KS_PASS" ] || { echo "the secrets are missing"; exit 1; }
+          [ -n "$KEYSTORE_BASE64" ] || { echo "the secret ANDROID_KEYSTORE_BASE64 is missing or empty"; exit 1; }
+          [ -n "$KS_PASS" ] || { echo "the secret ANDROID_KEYSTORE_PASSWORD is missing or empty"; exit 1; }
           apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
           [ -x "$apksigner" ] || { echo "apksigner 35.0.0 not found"; exit 1; }
           ks="$RUNNER_TEMP/upload.jks"
@@ -166,9 +167,13 @@ jobs:
           count=0
           for f in unsigned/*.apk; do
             out="signed/$(basename "$f")"
+            # F-Droid copies this signature onto its own unsigned APK. So the
+            # zip must keep the layout of the unsigned APK: no v1 files, and
+            # no new alignment.
             "$apksigner" sign --ks "$ks" --ks-key-alias daak \
               --ks-pass env:KS_PASS --key-pass env:KS_PASS \
-              --v4-signing-enabled false --out "$out" "$f"
+              --v1-signing-enabled false --v4-signing-enabled false \
+              --alignment-preserved --out "$out" "$f"
             got="$("$apksigner" verify --print-certs "$out" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)"
             [ "$got" = "$EXPECTED_SIGNER" ] || { echo "signer mismatch for $out"; rm -f "$ks"; exit 1; }
             count=$((count + 1))
