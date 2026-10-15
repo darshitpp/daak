@@ -37,6 +37,7 @@ The results for earlier versions are in the Git history of this file.
 | F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PASS. Pipeline 2947616774 printed `Successfully built dev.darshit.daak:41` and `:42` from commit 5092cf4 (0.1.3, R8 on) |
 | F-Droid | CI on the merge request passes. | PASS. All 9 jobs of pipeline 2947616774 succeeded |
 | F-Droid | The merge request is open. | PASS. https://gitlab.com/fdroid/fdroiddata/-/merge_requests/52240 |
+| F-Droid | `fdroid build` with `binary:` passes, and the signer is allowed. | PENDING. Phase 0 proved the unsigned APKs equal for both ABIs. The signed run is next |
 | F-Droid | A maintainer merged the merge request. | PENDING. The maintainer asked for R8. 0.1.3 enables it |
 | F-Droid | The app shows in the F-Droid client. | PENDING |
 | Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. | PASS. The script pushes the cask only after the audit |

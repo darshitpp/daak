@@ -59,9 +59,58 @@ ABI splits emit three signed APKs in
 
 The two device APKs are the small download. The universal APK is the fallback.
 
+## Android signing on GitHub
+
+`release.sh` does not build the APKs on this machine. A GitHub run
+(`.github/workflows/release.yml`, started with `workflow_dispatch`) builds them
+on Linux at the F-Droid build path. A second job signs them in the environment
+`release`. `release.sh` downloads the signed APKs and checks them.
+
+The build must match the F-Droid build byte for byte. Then the recipe can use
+`binary:`, and F-Droid publishes the APK that this key signed.
+
+| Item | Rule |
+| --- | --- |
+| Secrets | `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`. They live in the environment `release`, not in the repository |
+| Reviewer | The owner approves each run in GitHub. "Prevent self-review" is off, because one person owns the repository |
+| Branch rule | The environment accepts the branch `main` only |
+| Sign job | It never checks out the repository. It runs only `apksigner` |
+| Build job | It holds no secret. It builds only a full commit SHA that is on `main` |
+| Same steps | The build steps in `fdroid/dev.darshit.daak.yml` and the job `android-unsigned` in `release.yml` must stay equal. If one changes, change the other |
+
+Create the environment and the secrets one time. The password goes from the
+Keychain through a pipe, so it never shows on the screen:
+
+    cd ~/Projects/daak
+    # 1. Check the password against the keystore. It prints nothing on success.
+    keytool -list -keystore "$ANDROID_KEYSTORE_PATH" -alias daak \
+      -storepass "$(security find-generic-password -a daak -s daak-android-upload -w)" >/dev/null && echo "password ok"
+
+    # 2. The environment: you as reviewer, branch main only.
+    uid="$(gh api user -q .id)"
+    jq -n --argjson id "$uid" '{reviewers:[{type:"User",id:$id}],prevent_self_review:false,deployment_branch_policy:{protected_branches:false,custom_branch_policies:true}}' \
+      | gh api -X PUT repos/darshitpp/daak/environments/release --input -
+    gh api -X POST repos/darshitpp/daak/environments/release/deployment-branch-policies -f name=main -f type=branch
+
+    # 3. The secrets, in the environment.
+    base64 < "$ANDROID_KEYSTORE_PATH" | tr -d '\n' | gh secret set ANDROID_KEYSTORE_BASE64 --env release --repo darshitpp/daak
+    security find-generic-password -a daak -s daak-android-upload -w | gh secret set ANDROID_KEYSTORE_PASSWORD --env release --repo darshitpp/daak
+
+Then run `gh secret list --env release --repo darshitpp/daak`. It lists both
+names.
+
+If the key leaks, another party can sign updates of `dev.darshit.daak`. First,
+delete both secrets. Then rotate the key with APK signature scheme v3 key
+rotation, or publish a new package.
+
+The F-Droid bot can build a tag before the release assets exist. The build then
+fails with HTTP 404. Run the pipeline again after stage 10 publishes the
+assets.
+
 ## Signing on this machine
 
-The script `scripts/sign-android.sh` reads the store password from the macOS
+This is the manual fallback. `release.sh` uses the GitHub run. The script
+`scripts/sign-android.sh` reads the store password from the macOS
 login Keychain. Nobody types the password for a build. No password file exists
 on disk. The script exports the four `ANDROID_KEY*` variables, runs the release
 Gradle task, and prints the APK path, its size, and the signer certificate
@@ -115,16 +164,16 @@ Then commit and run:
 
     ./scripts/release.sh 0.1.1
 
-Stages 1 to 8 change only local files. They check the tools, the tree, and the
-version stamp. They run the build gates and build and sign the APKs, the
-`.dmg`, and the `.ipa`. They write the SHA-256 values to
-`release/sha256-<version>.txt`.
+Stages 1 to 4 and 6 to 8 change only local files. They check the tools, the
+tree, and the version stamp. They run the build gates and write the SHA-256
+values to `release/sha256-<version>.txt`. Stage 5 pushes `main` after it asks.
 
 Stages 9 to 12 publish. Each one asks `y/N` first. The script has no
 `--yes` flag.
 
 | Stage | What it does |
 | --- | --- |
+| 5 | Pushes `main` (asks first). Starts the GitHub run. You approve the environment. Downloads and checks the 3 signed APKs. Builds the `.dmg` and the `.ipa`. |
 | 9 | Commits the hash file. Pushes `main` and the tag `v<version>`. |
 | 10 | Uploads the 5 files to the GitHub Release. Publishes it. |
 | 11 | Updates the cask in `darshitpp/homebrew-tap`. Runs `brew audit`. Pushes. |
@@ -162,6 +211,8 @@ What stays manual:
   `versionName`, `versionCode`, and `commit`. Do not put a version in any other
   field of the recipe. Stage 12 stops when `metadata/dev.darshit.daak.yml`
   exists upstream.
+- The recipe has `binary:` for each build. The F-Droid bot copies it to new
+  entries. The release assets must exist before the bot builds the tag.
 - Run `fdroid checkupdates` to see that a new tag exists.
 - Decide whether a Release is a pre-release.
 
