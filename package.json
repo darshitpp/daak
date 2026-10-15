@@ -16,5 +16,10 @@
   },
   "devDependencies": {
     "turbo": "2.3.3"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@react-native/gradle-plugin@0.83.10": "patches/@react-native__gradle-plugin@0.83.10.patch"
+    }
   }
 }
