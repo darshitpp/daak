@@ -1,14 +1,10 @@
-# This workflow does two things.
+# This workflow does three things.
 #
 # 1. A pushed version tag creates one draft Release.
-# 2. A manual run (workflow_dispatch) builds the Android APKs from the F-Droid
-#    recipe steps and signs them in the protected environment "release".
-#    release.sh starts the run, downloads the signed APKs, and uploads them.
-#
-# Ruling R27 no longer holds for the Android upload key. The key lives in the
-# environment "release" (decision of 2026-10-15). The Apple certificate stays
-# on the local machine. The build job holds no secret. The sign job never
-# checks out the repository.
+# 2. A manual run (workflow_dispatch) builds unsigned Android APKs from the
+#    F-Droid recipe steps. The build job holds no secret.
+# 3. The sign job signs the APKs in the environment "release". It never checks
+#    out the repository. The Apple certificate stays on the local machine.
 name: release
 
 on:
@@ -130,4 +126,51 @@ jobs:
         with:
           name: unsigned-${{ matrix.leg }}
           path: ${{ runner.temp }}/out/*.apk
+          if-no-files-found: error
+
+  android-sign:
+    name: Sign the Android APKs
+    needs: android-unsigned
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    env:
+      EXPECTED_SIGNER: 0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5
+    steps:
+      # No checkout. This job runs no repository code.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: unsigned-*
+          path: unsigned
+          merge-multiple: true
+      - name: Sign and check the signer
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "$KEYSTORE_BASE64" ] && [ -n "$KS_PASS" ] || { echo "the secrets are missing"; exit 1; }
+          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          ks="$RUNNER_TEMP/upload.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ks"
+          mkdir signed
+          count=0
+          for f in unsigned/*.apk; do
+            out="signed/$(basename "$f")"
+            "$apksigner" sign --ks "$ks" --ks-key-alias daak \
+              --ks-pass env:KS_PASS --key-pass env:KS_PASS \
+              --v4-signing-enabled false --out "$out" "$f"
+            got="$("$apksigner" verify --print-certs "$out" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)"
+            [ "$got" = "$EXPECTED_SIGNER" ] || { echo "signer mismatch for $out"; rm -f "$ks"; exit 1; }
+            count=$((count + 1))
+          done
+          rm -f "$ks"
+          [ "$count" -eq 3 ] || { echo "expected 3 APKs, found $count"; exit 1; }
+          sha256sum signed/*.apk
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-signed
+          path: signed/*.apk
           if-no-files-found: error
