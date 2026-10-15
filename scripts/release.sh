@@ -8,14 +8,15 @@
 # <version> must equal release/version.json. Bump that file, run
 # `node scripts/stamp-version.mjs`, and commit before you run this script.
 #
-# Stages 1 to 8 change only local files. Stages 9 to 12 are OUT stages: they
-# publish something. Each OUT stage prints what it will do and waits for `y`.
+# Stages 1 to 4 and 6 to 8 change only local files. Stage 5 pushes main so that
+# GitHub can build the APKs. Stages 9 to 12 are OUT stages: they publish something.
+# Each OUT stage prints what it will do and waits for `y`.
 # There is no --yes flag. The prompt is the approval.
 #
 # The script is safe to run again. Each OUT stage reads the remote state first
 # and skips work that is done. Use --from 9 to restart at the OUT stages.
 #
-# NEVER add `set -x`. The signing script reads a password from the Keychain.
+# NEVER add `set -x`. A trace can print a secret.
 set -euo pipefail
 
 VERSION="${1:-}"
@@ -48,7 +49,7 @@ env_file="${DAAK_RELEASE_ENV:-$HOME/.config/daak/release.env}"
 # shellcheck disable=SC1090
 [ -f "$env_file" ] && . "$env_file"
 
-APK_DIR="$ROOT/apps/mobile/android/app/build/outputs/apk/release"
+APK_DIR="$SCRATCH/apk-$VERSION"
 APK_ARM64="$APK_DIR/daak-$VERSION-arm64-v8a.apk"
 APK_ARM32="$APK_DIR/daak-$VERSION-armeabi-v7a.apk"
 APK_UNI="$APK_DIR/daak-$VERSION-universal.apk"
@@ -76,13 +77,12 @@ sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 if run 1; then
   say 1 "check the tools"
   # The paths come from the shell or from the env file loaded above.
-  for v in JAVA_HOME ANDROID_HOME ANDROID_KEYSTORE_PATH; do
+  for v in JAVA_HOME ANDROID_HOME; do
     [ -n "${!v:-}" ] || die "$v is not set. Export it, or put it in $env_file."
   done
   [ -d "$JAVA_HOME" ] || die "JAVA_HOME is not a directory: $JAVA_HOME"
   [ -d "$ANDROID_HOME" ] || die "ANDROID_HOME is not a directory: $ANDROID_HOME"
-  [ -f "$ANDROID_KEYSTORE_PATH" ] || die "no keystore at $ANDROID_KEYSTORE_PATH"
-  export JAVA_HOME ANDROID_HOME ANDROID_KEYSTORE_PATH
+  export JAVA_HOME ANDROID_HOME
   need git "Install Git."
   need node "Install Node."
   need pnpm "Install pnpm 9.12.0."
@@ -122,10 +122,19 @@ fi
 
 # ------------------------------------------------------------ 5: artifacts ---
 if run 5; then
-  say 5 "build and sign the artifacts"
+  say 5 "build the artifacts (APKs on GitHub, .dmg and .ipa here)"
   free_gib="$(( $(df -Pk "$SCRATCH" | awk 'NR==2 {print $4}') / 1048576 ))"
   [ "$free_gib" -ge 10 ] || die "only ${free_gib}GiB free. A native build needs 10 GiB."
-  ./scripts/sign-android.sh
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || die "the branch is not main"
+  [ -z "$(git status --porcelain)" ] || die "the tree is not clean. Commit or stash first."
+  head_sha="$(git rev-parse HEAD)"
+  git fetch -q origin main
+  if [ "$(git rev-parse origin/main)" != "$head_sha" ]; then
+    ask "Push main ($head_sha) so that GitHub can build the APKs?" || die "stopped by the user"
+    git push origin "$head_sha:refs/heads/main"
+  fi
+  ./scripts/android-from-actions.sh "$VERSION" "$head_sha" "$APK_DIR"
+  printf '%s\n' "$head_sha" > "$SCRATCH/built-$VERSION.sha"
   bash apps/desktop/macos/scripts/package-dmg.sh
   bash apps/mobile/scripts/package-ipa.sh
 fi
@@ -171,6 +180,12 @@ fi
 # ----------------------------------------------------- 9: OUT: commit, tag ---
 if run 9; then
   say 9 "OUT: commit the hashes, push main and the tag $TAG"
+  [ -f "$SCRATCH/built-$VERSION.sha" ] || die "no built commit is recorded. Run stage 5 first."
+  built="$(cat "$SCRATCH/built-$VERSION.sha")"
+  git cat-file -e "$built^{commit}" 2>/dev/null || die "the recorded built commit is not valid. Run stage 5 again."
+  diff_names="$(git diff --name-only "$built" HEAD)"
+  changed="$(printf '%s\n' "$diff_names" | grep -v '^release/' | grep -v '^$' || true)"
+  [ -z "$changed" ] || die "a commit after the built commit changed $(echo $changed). Build again."
   git add "$SUMS"
   if ! git diff --cached --quiet; then
     git commit -m "docs(release): record the $VERSION artifact hashes"

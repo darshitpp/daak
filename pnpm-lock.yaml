@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@react-native/gradle-plugin@0.83.10':
+    hash: i3zryf6nd6x6oqbli4rh76lzeq
+    path: patches/@react-native__gradle-plugin@0.83.10.patch
+
 importers:
 
   .:
@@ -138,7 +143,7 @@ importers:
         version: 0.83.10(@babel/core@7.29.7)
       '@react-native/gradle-plugin':
         specifier: 0.83.10
-        version: 0.83.10
+        version: 0.83.10(patch_hash=i3zryf6nd6x6oqbli4rh76lzeq)
       '@react-native/metro-config':
         specifier: 0.83.10
         version: 0.83.10(@babel/core@7.29.7)
@@ -4535,7 +4540,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@react-native/gradle-plugin@0.83.10': {}
+  '@react-native/gradle-plugin@0.83.10(patch_hash=i3zryf6nd6x6oqbli4rh76lzeq)': {}
 
   '@react-native/js-polyfills@0.83.10': {}
 
@@ -6449,7 +6454,7 @@ snapshots:
       '@react-native/assets-registry': 0.83.10
       '@react-native/codegen': 0.83.10(@babel/core@7.29.7)
       '@react-native/community-cli-plugin': 0.83.10(@react-native-community/cli@19.1.2)(@react-native/metro-config@0.83.10(@babel/core@7.29.7))
-      '@react-native/gradle-plugin': 0.83.10
+      '@react-native/gradle-plugin': 0.83.10(patch_hash=i3zryf6nd6x6oqbli4rh76lzeq)
       '@react-native/js-polyfills': 0.83.10
       '@react-native/normalize-colors': 0.83.10
       abort-controller: 3.0.0
@@ -6498,7 +6503,7 @@ snapshots:
       '@react-native/assets-registry': 0.83.10
       '@react-native/codegen': 0.83.10(@babel/core@7.29.7)
       '@react-native/community-cli-plugin': 0.83.10(@react-native-community/cli@19.1.2)(@react-native/metro-config@0.83.10(@babel/core@7.29.7))
-      '@react-native/gradle-plugin': 0.83.10
+      '@react-native/gradle-plugin': 0.83.10(patch_hash=i3zryf6nd6x6oqbli4rh76lzeq)
       '@react-native/js-polyfills': 0.83.10
       '@react-native/normalize-colors': 0.83.10
       '@react-native/virtualized-lists': 0.83.10(@types/react@19.3.0)(react-native@0.83.10(@babel/core@7.29.7)(@react-native-community/cli@19.1.2(typescript@5.6.3))(@react-native/metro-config@0.83.10(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
@@ -6546,7 +6551,7 @@ snapshots:
       '@react-native/assets-registry': 0.83.10
       '@react-native/codegen': 0.83.10(@babel/core@7.29.7)
       '@react-native/community-cli-plugin': 0.83.10(@react-native-community/cli@19.1.2)(@react-native/metro-config@0.83.10(@babel/core@7.29.7))
-      '@react-native/gradle-plugin': 0.83.10
+      '@react-native/gradle-plugin': 0.83.10(patch_hash=i3zryf6nd6x6oqbli4rh76lzeq)
       '@react-native/js-polyfills': 0.83.10
       '@react-native/normalize-colors': 0.83.10
       '@react-native/virtualized-lists': 0.83.10(@types/react@19.3.0)(react-native@0.83.10(@babel/core@7.29.7)(@react-native-community/cli@19.1.2)(@react-native/metro-config@0.83.10(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)

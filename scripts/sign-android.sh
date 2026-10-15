@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
 # Build and sign the Android release APK with the upload key.
+# This script is the manual fallback. It builds on macOS, so the APK does not
+# equal the F-Droid build. `release.sh` uses the GitHub run instead.
 #
 # NEVER add `set -x` to this file. NEVER print a password.
 # `set -x` prints every expanded value. The password export lines below would
