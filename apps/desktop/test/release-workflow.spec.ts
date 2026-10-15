@@ -2,10 +2,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// The release workflow publishes the draft GitHub Release when a version tag
-// lands. It must not sign and it must not build. This host builds and signs
-// the three artifacts. Ruling R27 keeps the Android keystore and the Apple
-// certificate on this host. So the workflow holds no signing secret.
+// The release workflow creates the draft GitHub Release when a version tag
+// lands. A manual run also builds the Android APKs and signs them. Only the job
+// android-sign holds the Android upload key, and it runs in the environment
+// release (decision of 2026-10-15, which replaces ruling R27 for Android). The
+// Apple certificate stays on this host. So no job holds an Apple secret.
 //
 // The workflow carries a required comment block. That block names the
 // keystore and the Apple certificate. A raw scan over the unstripped file
@@ -53,11 +54,12 @@ describe('the release workflow', () => {
     expect(code).toMatch(/--draft/);
   });
 
-  it('does not hold a signing secret or a signing tool', () => {
-    // The keystore and the Apple certificate stay on this host.
-    expect(code).not.toMatch(/ANDROID_KEY/);
-    expect(code).not.toMatch(/keystore/i);
-    expect(code).not.toMatch(/base64/i);
+  // android-sign is the last job in the file.
+  const signAt = code.indexOf('  android-sign:');
+  const beforeSign = code.slice(0, signAt);
+  const signJob = code.slice(signAt);
+
+  it('holds no Apple secret and no Apple signing tool', () => {
     expect(code).not.toMatch(/notarytool/);
     expect(code).not.toMatch(/fastlane/);
     expect(code).not.toMatch(/altool/);
@@ -65,10 +67,30 @@ describe('the release workflow', () => {
     expect(code).not.toMatch(/MACOS_CERT/);
   });
 
-  it('names only the GITHUB_TOKEN secret', () => {
-    const secrets = code.match(/secrets\.[A-Za-z0-9_]+/g) ?? [];
+  it('keeps the Android key out of every job except android-sign', () => {
+    expect(signAt).toBeGreaterThan(0);
+    expect(beforeSign).not.toMatch(/ANDROID_KEY/);
+    expect(beforeSign).not.toMatch(/keystore/i);
+    expect(beforeSign).not.toMatch(/base64/i);
+    expect(beforeSign).not.toMatch(/apksigner/);
+  });
+
+  it('names only the GITHUB_TOKEN secret outside android-sign', () => {
+    const secrets = beforeSign.match(/secrets\.[A-Za-z0-9_]+/g) ?? [];
     expect(secrets.length).toBeGreaterThan(0);
     expect(new Set(secrets)).toEqual(new Set(['secrets.GITHUB_TOKEN']));
+  });
+
+  it('gives android-sign exactly the two Android secrets, in the environment release', () => {
+    const secrets = signJob.match(/secrets\.[A-Za-z0-9_]+/g) ?? [];
+    expect(new Set(secrets)).toEqual(
+      new Set(['secrets.ANDROID_KEYSTORE_BASE64', 'secrets.ANDROID_KEYSTORE_PASSWORD']),
+    );
+    expect(signJob).toMatch(/^\s+environment: release$/m);
+  });
+
+  it('never checks out the repository in android-sign', () => {
+    expect(signJob).not.toMatch(/actions\/checkout/);
   });
 
   it('does not call a reusable _*.yml workflow', () => {
