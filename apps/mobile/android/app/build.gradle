@@ -135,6 +135,14 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 4
         versionName "0.1.3"
+        externalNativeBuild {
+            cmake {
+                // The linker hashes the unstripped library into the build id.
+                // That hash differs between build hosts, so the APK is not
+                // reproducible. No build id gives the same bytes everywhere.
+                arguments "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--build-id=none"
+            }
+        }
     }
     splits {
         abi {
