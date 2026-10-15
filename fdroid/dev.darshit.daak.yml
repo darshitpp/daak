@@ -15,7 +15,6 @@ Builds:
   - versionName: 0.1.1
     versionCode: 21
     commit: COMMIT_HASH
-    timeout: 7200
     subdir: apps/mobile/android
     sudo:
       - apt-get update
@@ -48,7 +47,6 @@ Builds:
   - versionName: 0.1.1
     versionCode: 22
     commit: COMMIT_HASH
-    timeout: 7200
     subdir: apps/mobile/android
     sudo:
       - apt-get update
