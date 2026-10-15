@@ -8,8 +8,9 @@
 # <version> must equal release/version.json. Bump that file, run
 # `node scripts/stamp-version.mjs`, and commit before you run this script.
 #
-# Stages 1 to 8 change only local files. Stages 9 to 12 are OUT stages: they
-# publish something. Each OUT stage prints what it will do and waits for `y`.
+# Stages 1 to 4 and 6 to 8 change only local files. Stage 5 pushes main so that
+# GitHub can build the APKs. Stages 9 to 12 are OUT stages: they publish something.
+# Each OUT stage prints what it will do and waits for `y`.
 # There is no --yes flag. The prompt is the approval.
 #
 # The script is safe to run again. Each OUT stage reads the remote state first
@@ -122,10 +123,16 @@ fi
 
 # ------------------------------------------------------------ 5: artifacts ---
 if run 5; then
-  say 5 "build and sign the artifacts"
+  say 5 "build the artifacts (APKs on GitHub, .dmg and .ipa here)"
   free_gib="$(( $(df -Pk "$SCRATCH" | awk 'NR==2 {print $4}') / 1048576 ))"
   [ "$free_gib" -ge 10 ] || die "only ${free_gib}GiB free. A native build needs 10 GiB."
-  ./scripts/sign-android.sh
+  head_sha="$(git rev-parse HEAD)"
+  git fetch -q origin main
+  if [ "$(git rev-parse origin/main)" != "$head_sha" ]; then
+    ask "Push main ($head_sha) so that GitHub can build the APKs?" || die "stopped by the user"
+    git push origin main
+  fi
+  ./scripts/android-from-actions.sh "$VERSION" "$head_sha" "$APK_DIR"
   bash apps/desktop/macos/scripts/package-dmg.sh
   bash apps/mobile/scripts/package-ipa.sh
 fi
