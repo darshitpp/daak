@@ -1,16 +1,30 @@
-# CI does not sign. The Android keystore and the Apple certificate stay on this
-# host. So this workflow holds no signing secret and no build job. Ruling R27
-# forbids the keystore and the Apple certificate from reaching GitHub.
+# This workflow does two things.
 #
-# This workflow creates one draft Release when a version tag lands. The host
-# builds and signs the three artifacts afterwards. The host then attaches each
-# artifact with `gh release upload`.
+# 1. A pushed version tag creates one draft Release.
+# 2. A manual run (workflow_dispatch) builds the Android APKs from the F-Droid
+#    recipe steps and signs them in the protected environment "release".
+#    release.sh starts the run, downloads the signed APKs, and uploads them.
+#
+# Ruling R27 no longer holds for the Android upload key. The key lives in the
+# environment "release" (decision of 2026-10-15). The Apple certificate stays
+# on the local machine. The build job holds no secret. The sign job never
+# checks out the repository.
 name: release
 
 on:
   push:
     tags:
       - 'v*'
+    # Phase 0 only: a branch named repro/... builds the unsigned APKs. Remove
+    # this trigger when the proof step is done.
+    branches:
+      - 'repro/**'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA to build
+        required: true
+        type: string
 
 # The preflight job only reads. Only the draft job needs contents: write.
 permissions:
@@ -23,6 +37,7 @@ concurrency:
 jobs:
   preflight:
     name: Preflight (version check)
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,6 +51,7 @@ jobs:
 
   draft:
     name: Draft Release
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: preflight
     runs-on: ubuntu-latest
     permissions:
@@ -46,3 +62,76 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "$GITHUB_REF_NAME" --draft --title "Daak $GITHUB_REF_NAME" --generate-notes
+
+  android-unsigned:
+    name: Android unsigned (${{ matrix.leg }})
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/repro/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { leg: arm64-v8a, archs: arm64-v8a }
+          - { leg: armeabi-v7a, archs: armeabi-v7a }
+          - { leg: universal, archs: 'armeabi-v7a,arm64-v8a' }
+    env:
+      # The F-Droid build path and tool homes. Rust embeds these paths.
+      BUILD_DIR: /home/vagrant/build/dev.darshit.daak
+      CARGO_HOME: /home/vagrant/.cargo
+      RUSTUP_HOME: /home/vagrant/.rustup
+      REF: ${{ inputs.ref || github.sha }}
+    steps:
+      - name: Make the F-Droid build path
+        run: |
+          sudo mkdir -p /home/vagrant
+          sudo chown "$USER" /home/vagrant
+          mkdir -p /home/vagrant/build
+          git clone "https://github.com/${GITHUB_REPOSITORY}.git" "$BUILD_DIR"
+          git -C "$BUILD_DIR" checkout --detach "$REF"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+      - name: Install the tools
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          sudo npm install -g pnpm@9.12.0
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;27.1.12297006" "platforms;android-35" "build-tools;35.0.0"
+          rustup toolchain install 1.98.1 --profile minimal \
+            --target aarch64-linux-android --target armv7-linux-androideabi
+          echo "$RUSTUP_HOME/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin" >> "$GITHUB_PATH"
+      - name: Prepare the build (the recipe prebuild)
+        working-directory: /home/vagrant/build/dev.darshit.daak
+        run: |
+          sed -i -e 's/^reactNativeArchitectures=.*/reactNativeArchitectures=${{ matrix.archs }}/' \
+            apps/mobile/android/gradle.properties
+          pnpm install --frozen-lockfile
+          ( cd apps/mobile/node_modules/@react-native/gradle-plugin \
+            && find . -name '*.kt*' -exec sed -i 's/(17)/(21)/;s/_17/_21/' {} + )
+          cargo fetch --locked
+      - name: Build the Rust library (the recipe build)
+        working-directory: /home/vagrant/build/dev.darshit.daak
+        env:
+          DAAK_CARGO_OFFLINE: '0'
+        run: bash apps/mobile/scripts/gen-android-ffi.sh
+      - name: Build the unsigned APK
+        working-directory: /home/vagrant/build/dev.darshit.daak/apps/mobile/android
+        run: ./gradlew assembleRelease
+      - name: Collect the APK
+        working-directory: /home/vagrant/build/dev.darshit.daak
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version release/version.json)"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "apps/mobile/android/app/build/outputs/apk/release/daak-${version}-${{ matrix.leg }}.apk" "$RUNNER_TEMP/out/"
+          sha="$(sha256sum "$RUNNER_TEMP/out/"*.apk)"
+          echo "$sha"
+          printf '%s\n' '```' "$sha" '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-${{ matrix.leg }}
+          path: ${{ runner.temp }}/out/*.apk
+          if-no-files-found: error
