@@ -83,8 +83,9 @@ Keychain through a pipe, so it never shows on the screen:
 
     cd ~/Projects/daak
     # 1. Check the password against the keystore. It prints nothing on success.
+    KS="$(security find-generic-password -a daak -s daak-android-upload -w)" \
     keytool -list -keystore "$ANDROID_KEYSTORE_PATH" -alias daak \
-      -storepass "$(security find-generic-password -a daak -s daak-android-upload -w)" >/dev/null && echo "password ok"
+      -storepass:env KS >/dev/null && echo "password ok"
 
     # 2. The environment: you as reviewer, branch main only.
     uid="$(gh api user -q .id)"
@@ -188,13 +189,18 @@ One-time setup:
 - Log in: `gh auth login` and `glab auth login`.
 - Install: `brew install gh glab fdroidserver`.
 - Create the empty repository `darshitpp/homebrew-tap` on GitHub.
-- Keep the upload key and the Keychain item (see Signing above).
+- Keep the upload key and the Keychain item (see Signing above). The release
+  script does not need the keystore. GitHub signs the APKs. You need the
+  keystore only for the manual fallback build.
 - Write the machine paths to `~/.config/daak/release.env`. The file is outside
   the repository and holds no password:
 
       export JAVA_HOME=<path to a JDK 17>
       export ANDROID_HOME=<path to the Android SDK>
-      export ANDROID_KEYSTORE_PATH=<path to the upload keystore>
+
+  `ANDROID_HOME` supplies `apksigner` for the check of the downloaded APKs.
+  `JAVA_HOME` is for the `.dmg` and `.ipa` builds. For the manual fallback build,
+  also export `ANDROID_KEYSTORE_PATH=<path to the upload keystore>`.
 
   `release.sh` loads this file for every stage. Set `DAAK_RELEASE_ENV` to use
   another path. A value already in the shell wins over the file.
@@ -215,9 +221,11 @@ What stays manual:
   entries. The release assets must exist before the bot builds the tag.
 - Run `fdroid checkupdates` to see that a new tag exists.
 - Decide whether a Release is a pre-release.
+- Stage 12 stops when the merge request is open. For an open merge request, add
+  `binary:` and `AllowedAPKSigningKeys` by hand in the fork clone.
 
-F-Droid signs its own APK with its own key. A user of the GitHub APK cannot
-update in place to the F-Droid app. The README says this.
+With `binary:` and `AllowedAPKSigningKeys`, F-Droid publishes the APK that the
+upload key signed. So a user can update between GitHub and F-Droid.
 
 The Linux build of the Rust library has a CI check (job `android-ffi` in
 `.github/workflows/ci.yml`). Run it from the Actions tab before a release.

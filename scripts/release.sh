@@ -16,7 +16,7 @@
 # The script is safe to run again. Each OUT stage reads the remote state first
 # and skips work that is done. Use --from 9 to restart at the OUT stages.
 #
-# NEVER add `set -x`. The signing script reads a password from the Keychain.
+# NEVER add `set -x`. A trace can print a secret.
 set -euo pipefail
 
 VERSION="${1:-}"
@@ -49,7 +49,7 @@ env_file="${DAAK_RELEASE_ENV:-$HOME/.config/daak/release.env}"
 # shellcheck disable=SC1090
 [ -f "$env_file" ] && . "$env_file"
 
-APK_DIR="$ROOT/apps/mobile/android/app/build/outputs/apk/release"
+APK_DIR="$SCRATCH/apk-$VERSION"
 APK_ARM64="$APK_DIR/daak-$VERSION-arm64-v8a.apk"
 APK_ARM32="$APK_DIR/daak-$VERSION-armeabi-v7a.apk"
 APK_UNI="$APK_DIR/daak-$VERSION-universal.apk"
@@ -77,13 +77,12 @@ sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 if run 1; then
   say 1 "check the tools"
   # The paths come from the shell or from the env file loaded above.
-  for v in JAVA_HOME ANDROID_HOME ANDROID_KEYSTORE_PATH; do
+  for v in JAVA_HOME ANDROID_HOME; do
     [ -n "${!v:-}" ] || die "$v is not set. Export it, or put it in $env_file."
   done
   [ -d "$JAVA_HOME" ] || die "JAVA_HOME is not a directory: $JAVA_HOME"
   [ -d "$ANDROID_HOME" ] || die "ANDROID_HOME is not a directory: $ANDROID_HOME"
-  [ -f "$ANDROID_KEYSTORE_PATH" ] || die "no keystore at $ANDROID_KEYSTORE_PATH"
-  export JAVA_HOME ANDROID_HOME ANDROID_KEYSTORE_PATH
+  export JAVA_HOME ANDROID_HOME
   need git "Install Git."
   need node "Install Node."
   need pnpm "Install pnpm 9.12.0."
@@ -135,6 +134,7 @@ if run 5; then
     git push origin "$head_sha:refs/heads/main"
   fi
   ./scripts/android-from-actions.sh "$VERSION" "$head_sha" "$APK_DIR"
+  printf '%s\n' "$head_sha" > "$SCRATCH/built-$VERSION.sha"
   bash apps/desktop/macos/scripts/package-dmg.sh
   bash apps/mobile/scripts/package-ipa.sh
 fi
@@ -180,6 +180,10 @@ fi
 # ----------------------------------------------------- 9: OUT: commit, tag ---
 if run 9; then
   say 9 "OUT: commit the hashes, push main and the tag $TAG"
+  [ -f "$SCRATCH/built-$VERSION.sha" ] || die "no built commit is recorded. Run stage 5 first."
+  built="$(cat "$SCRATCH/built-$VERSION.sha")"
+  changed="$(git diff --name-only "$built" HEAD | grep -v '^release/' || true)"
+  [ -z "$changed" ] || die "a commit after the built commit changed $(echo $changed). Build again."
   git add "$SUMS"
   if ! git diff --cached --quiet; then
     git commit -m "docs(release): record the $VERSION artifact hashes"

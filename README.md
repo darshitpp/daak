@@ -129,9 +129,8 @@ and the app shows in the F-Droid client). Until then, do not say Daak is on F-Dr
 #### F-Droid
 
 Install [F-Droid](https://f-droid.org), search for **Daak**, and install it.
-F-Droid signs the app with its own key. Android refuses an update across two
-keys. So if you installed an APK from GitHub, uninstall it first. You lose your
-pairings. Then install from F-Droid.
+F-Droid publishes the APK that the Daak upload key signed. This is the same
+key as the GitHub APK. So you can update between GitHub and F-Droid.
 -->
 
 ### macOS
