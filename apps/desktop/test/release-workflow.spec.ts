@@ -89,6 +89,13 @@ describe('the release workflow', () => {
     expect(signJob).toMatch(/^\s+environment: release$/m);
   });
 
+  it('signs so that F-Droid can copy the signature onto its own APK', () => {
+    // A v1 signature adds zip entries. A new alignment moves them. Either one
+    // breaks the apksigcopier check of fdroid build.
+    expect(signJob).toMatch(/--v1-signing-enabled false/);
+    expect(signJob).toMatch(/--alignment-preserved/);
+  });
+
   it('never checks out the repository in android-sign', () => {
     expect(signJob).not.toMatch(/actions\/checkout/);
   });
