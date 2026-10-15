@@ -9,16 +9,21 @@ export DAAK_SOURCE_ONLY=1
 
 fail() { echo "FAIL: $*"; exit 1; }
 work="$(mktemp -d "${TMPDIR%/}/daak/afa-test.XXXXXX")"
-trap 'rm -f "$work"/*; rmdir "$work"' EXIT
+trap 'rm -rf "$work"' EXIT
 
-# --- pick_run: ignores a run that started before the dispatch (Review Focus 3).
-runs='[{"databaseId":11,"createdAt":"2026-10-15T10:00:00Z"},
-       {"databaseId":12,"createdAt":"2026-10-15T12:00:05Z"},
-       {"databaseId":13,"createdAt":"2026-10-15T09:00:00Z"}]'
-[ "$(printf '%s' "$runs" | pick_run "2026-10-15T12:00:00Z")" = "12" ] || fail "pick_run: wrong run"
-[ -z "$(printf '%s' "$runs" | pick_run "2026-10-15T13:00:00Z")" ] || fail "pick_run: found an old run"
+# --- pick_run: picks only a new run that builds the expected commit.
+runs='[{"databaseId":11,"headSha":"aaa"},
+       {"databaseId":12,"headSha":"bbb"},
+       {"databaseId":13,"headSha":"bbb"},
+       {"databaseId":14,"headSha":"ccc"}]'
+[ "$(printf '%s' "$runs" | pick_run bbb "")" = "13" ] || fail "pick_run: wrong run"
+[ "$(printf '%s' "$runs" | pick_run bbb "13")" = "12" ] || fail "pick_run: ignored a known id"
+[ "$(printf '%s' "$runs" | pick_run bbb "12")" = "13" ] || fail "pick_run: picked a run with another commit"
+[ "$(printf '%s' "$runs" | pick_run ccc "")" = "14" ] || fail "pick_run: wrong run for ccc"
+[ -z "$(printf '%s' "$runs" | pick_run bbb "12,13")" ] || fail "pick_run: found a known run"
+[ -z "$(printf '%s' "$runs" | pick_run ddd "")" ] || fail "pick_run: found a run for another commit"
 
-# --- wait_run: stops at the deadline when the run never finishes (Review Focus 1).
+# --- wait_run: stops at the deadline when the run never finishes.
 cat > "$work/gh-pending" <<'EOS'
 #!/usr/bin/env bash
 echo '{"status":"waiting","conclusion":""}'
@@ -42,11 +47,18 @@ if GH="$work/gh-failed" DAAK_WAIT_SECONDS=5 DAAK_POLL_SECONDS=1 wait_run 12 >/de
   fail "wait_run: a failed run passed"
 fi
 
-# --- verify_apk: the signer must equal the expected value (Review Focus 2).
+# --- verify_apk: the signer must equal the expected value.
 : > "$work/app.apk"
-cat > "$work/apksigner-good" <<'EOS'
+EXPECTED_SIGNER="$(expected_signer)"
+[ ${#EXPECTED_SIGNER} -eq 64 ] || fail "expected_signer: not a SHA-256 value"
+cat > "$work/apksigner-good" <<EOS
 #!/usr/bin/env bash
-echo "Signer #1 certificate SHA-256 digest: 0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5"
+echo "Signer #1 certificate SHA-256 digest: $EXPECTED_SIGNER"
+EOS
+cat > "$work/apksigner-fail" <<EOS
+#!/usr/bin/env bash
+echo "Signer #1 certificate SHA-256 digest: $EXPECTED_SIGNER"
+exit 1
 EOS
 cat > "$work/apksigner-bad" <<'EOS'
 #!/usr/bin/env bash
@@ -65,12 +77,13 @@ cat > "$work/aapt2-ip" <<'EOS'
 printf '    resource 0x7f0d0054 string/react_native_dev_server_ip\n      () "192.168.0.226"\n'
 EOS
 chmod +x "$work"/apksigner-* "$work"/aapt-* "$work"/aapt2-*
-EXPECTED_SIGNER="$(expected_signer)"
-[ ${#EXPECTED_SIGNER} -eq 64 ] || fail "expected_signer: not a SHA-256 value"
 APKSIGNER="$work/apksigner-good" AAPT="$work/aapt-good" AAPT2="$work/aapt2-good" verify_apk "$work/app.apk" 0.1.3 \
   || fail "verify_apk: a good APK failed"
 if APKSIGNER="$work/apksigner-bad" AAPT="$work/aapt-good" AAPT2="$work/aapt2-good" verify_apk "$work/app.apk" 0.1.3 2>/dev/null; then
   fail "verify_apk: a wrong signer passed"
+fi
+if APKSIGNER="$work/apksigner-fail" AAPT="$work/aapt-good" AAPT2="$work/aapt2-good" verify_apk "$work/app.apk" 0.1.3 2>/dev/null; then
+  fail "verify_apk: a failed apksigner verify passed"
 fi
 if APKSIGNER="$work/apksigner-good" AAPT="$work/aapt-good" AAPT2="$work/aapt2-good" verify_apk "$work/app.apk" 0.9.9 2>/dev/null; then
   fail "verify_apk: a wrong version passed"

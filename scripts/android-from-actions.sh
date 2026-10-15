@@ -28,10 +28,14 @@ expected_signer() {
   sed -n 's/^ *EXPECTED_SIGNER: *\([0-9a-f]\{64\}\) *$/\1/p' "$ROOT/.github/workflows/$WORKFLOW" | head -1
 }
 
-# stdin: `gh run list --json databaseId,createdAt`. $1: the time before the
-# dispatch. Prints the id of the newest run that started after that time.
+# stdin: `gh run list --json databaseId,headSha`. $1: the full commit SHA.
+# $2: the ids of the runs that existed before the dispatch, comma separated (may be empty).
+# Prints the id of the newest run that is new and builds the commit $1.
 pick_run() {
-  jq -r --arg t "$1" '[.[] | select(.createdAt >= $t)] | sort_by(.createdAt) | last | .databaseId // empty'
+  jq -r --arg sha "$1" --arg known "$2" '
+    ($known | split(",") | map(select(. != "") | tonumber)) as $k
+    | [.[] | . as $r | select($r.headSha == $sha and (any($k[]; . == $r.databaseId) | not))]
+    | sort_by(.databaseId) | last | .databaseId // empty'
 }
 
 # $1: run id. Polls until the run ends. Fails on a bad conclusion or at the
@@ -54,11 +58,12 @@ wait_run() {
   done
 }
 
-# $1: APK file. $2: version. Checks the signer, the version, and the dev server address.
+# $1: APK file. $2: version. Checks the signature, the signer, the version, and the dev server address.
 verify_apk() {
   local apk="$1" version="$2" want got name ip
   want="$(expected_signer)"
   [ -n "$want" ] || { echo "cannot read EXPECTED_SIGNER from the workflow" >&2; return 1; }
+  "$APKSIGNER" verify "$apk" >/dev/null || { echo "$apk: apksigner verify failed" >&2; return 1; }
   got="$("$APKSIGNER" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)"
   [ "$got" = "$want" ] || { echo "$apk: signer $got is not $want" >&2; return 1; }
   name="$("$AAPT" dump badging "$apk" | sed -n "s/^package: .*versionName='\([^']*\)'.*/\1/p")"
@@ -86,14 +91,16 @@ mkdir -p "$OUT"
 # A stale APK from an earlier local build must never reach the release.
 for n in "${names[@]}"; do rm -f "$OUT/$n"; done
 
-before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# The ids of the runs that exist now. The new run is the one that is not in this list.
+known="$("$GH" run list --repo "$REPO" --workflow "$WORKFLOW" --event workflow_dispatch --limit 50 \
+      --json databaseId | jq -r '[.[].databaseId] | join(",")')"
 "$GH" workflow run "$WORKFLOW" --repo "$REPO" --ref main -f ref="$SHA"
 
 id=""
 for _ in $(seq 1 24); do
   sleep "${DAAK_POLL_SECONDS:-5}"
-  id="$("$GH" run list --repo "$REPO" --workflow "$WORKFLOW" --event workflow_dispatch --limit 20 \
-        --json databaseId,createdAt | pick_run "$before")"
+  id="$("$GH" run list --repo "$REPO" --workflow "$WORKFLOW" --event workflow_dispatch --limit 50 \
+        --json databaseId,headSha | pick_run "$SHA" "$known")"
   [ -n "$id" ] && break
 done
 [ -n "$id" ] || die "the run did not start"
@@ -101,10 +108,16 @@ echo "run $id: https://github.com/$REPO/actions/runs/$id"
 echo "Approve the environment 'release' in GitHub. The script waits."
 
 wait_run "$id" || die "the run failed or timed out"
-"$GH" run download "$id" --repo "$REPO" -n android-signed -D "$OUT"
+
+# Download and check in a new directory. Only the three checked APKs reach $OUT.
+mkdir -p "${TMPDIR%/}/daak"
+dl="$(mktemp -d "${TMPDIR%/}/daak/afa-dl.XXXXXX")"
+trap 'rm -rf "$dl"' EXIT
+"$GH" run download "$id" --repo "$REPO" -n android-signed -D "$dl"
 
 for n in "${names[@]}"; do
-  [ -s "$OUT/$n" ] || die "the run did not give $n"
-  verify_apk "$OUT/$n" "$VERSION" || die "check failed for $n"
+  [ -s "$dl/$n" ] || die "the run did not give $n"
+  verify_apk "$dl/$n" "$VERSION" || die "check failed for $n"
 done
+for n in "${names[@]}"; do mv -f "$dl/$n" "$OUT/$n"; done
 echo "android-from-actions: 3 signed APKs in $OUT"

@@ -126,11 +126,13 @@ if run 5; then
   say 5 "build the artifacts (APKs on GitHub, .dmg and .ipa here)"
   free_gib="$(( $(df -Pk "$SCRATCH" | awk 'NR==2 {print $4}') / 1048576 ))"
   [ "$free_gib" -ge 10 ] || die "only ${free_gib}GiB free. A native build needs 10 GiB."
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || die "the branch is not main"
+  [ -z "$(git status --porcelain)" ] || die "the tree is not clean. Commit or stash first."
   head_sha="$(git rev-parse HEAD)"
   git fetch -q origin main
   if [ "$(git rev-parse origin/main)" != "$head_sha" ]; then
     ask "Push main ($head_sha) so that GitHub can build the APKs?" || die "stopped by the user"
-    git push origin main
+    git push origin "$head_sha:refs/heads/main"
   fi
   ./scripts/android-from-actions.sh "$VERSION" "$head_sha" "$APK_DIR"
   bash apps/desktop/macos/scripts/package-dmg.sh
