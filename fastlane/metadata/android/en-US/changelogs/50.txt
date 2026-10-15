@@ -1,0 +1,1 @@
+The build is now reproducible: F-Droid and GitHub give the same APK. The APK no longer holds the IP address of the build machine. No other change.
