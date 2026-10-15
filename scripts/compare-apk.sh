@@ -14,6 +14,12 @@ set -euo pipefail
 a="$1"
 b="$2"
 
+# Input check: each argument must be a readable, valid zip. Exit 2 if not.
+for f in "$a" "$b"; do
+  [ -f "$f" ] && [ -r "$f" ] || { echo "error: not a readable file: $f" >&2; exit 2; }
+  unzip -tq "$f" >/dev/null 2>&1 || { echo "error: not a valid zip: $f" >&2; exit 2; }
+done
+
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 sa="$(sha "$a")"
 sb="$(sha "$b")"
