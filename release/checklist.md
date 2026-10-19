@@ -1,8 +1,9 @@
 # Daak release verification matrix
 
-This file records the release checks for version 0.1.3, build number 4.
-The build ran on 2026-10-14 from commit d39b684. The tag `v0.1.3` is commit 5092cf4, which adds only the hash file.
-The SHA-256 values are in `release/sha256-0.1.3.txt`.
+This file records the release checks for version 0.1.4, build number 5.
+The Android APKs came from a GitHub Actions run, built on Linux and signed in the environment `release`. The tag `v0.1.4` is commit 53c4939, which adds only the hash file.
+The SHA-256 values are in `release/sha256-0.1.4.txt`.
+The Android rows below still list the 0.1.3 host checks. Only the Store channels section is updated for 0.1.4.
 The results for earlier versions are in the Git history of this file.
 
 ## Checks that ran on the build host
@@ -34,11 +35,10 @@ The results for earlier versions are in the Git history of this file.
 
 | Channel | Check | Result |
 | --- | --- | --- |
-| F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PASS. Pipeline 2947616774 printed `Successfully built dev.darshit.daak:41` and `:42` from commit 5092cf4 (0.1.3, R8 on) |
-| F-Droid | CI on the merge request passes. | PASS. All 9 jobs of pipeline 2947616774 succeeded |
-| F-Droid | The merge request is open. | PASS. https://gitlab.com/fdroid/fdroiddata/-/merge_requests/52240 |
-| F-Droid | `fdroid build` with `binary:` passes, and the signer is allowed. | PENDING. Phase 0 proved the unsigned APKs equal for both ABIs. The signed run is next |
-| F-Droid | A maintainer merged the merge request. | PENDING. The maintainer asked for R8. 0.1.3 enables it |
-| F-Droid | The app shows in the F-Droid client. | PENDING |
+| F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PASS. Pipeline 2951570539 built `dev.darshit.daak:51` and `:52` from commit 53c4939 (0.1.4) |
+| F-Droid | CI on the merge request passes. | PASS. All 9 jobs of pipeline 2951668838 succeeded, including `fdroid rewritemeta`, `fdroid lint`, and `fdroid build` |
+| F-Droid | `fdroid build` with `binary:` passes, and the signer is allowed. | PASS. The log prints "compared built binary to supplied reference binary successfully" and "supplied reference binary has allowed signer" for both entries. The signer is `0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5` |
+| F-Droid | A maintainer merged the merge request. | PASS. https://gitlab.com/fdroid/fdroiddata/-/merge_requests/52240 merged on 2026-10-19 after the category changed to `File Transfer` |
+| F-Droid | The app shows in the F-Droid client. | PENDING. F-Droid publishes after its next cycle |
 | Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. | PASS. The script pushes the cask only after the audit |
-| Homebrew | `brew upgrade --cask darshitpp/tap/daak` installs the new version. | PASS for 0.1.1 to 0.1.2 and for 0.1.2 to 0.1.3. `brew list --cask --versions daak` printed `daak 0.1.3`. The cask commit is `95a5361` |
+| Homebrew | `brew upgrade --cask darshitpp/tap/daak` installs the new version. | PASS for 0.1.1 to 0.1.2 and for 0.1.2 to 0.1.3. `brew list --cask --versions daak` printed `daak 0.1.3`. The cask commit is `95a5361`. For 0.1.4 the cask commit is `3ab177e`. NOT run: `brew upgrade` to 0.1.4 |
