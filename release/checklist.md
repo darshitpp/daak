@@ -39,6 +39,6 @@ The results for earlier versions are in the Git history of this file.
 | F-Droid | CI on the merge request passes. | PASS. All 9 jobs of pipeline 2951668838 succeeded, including `fdroid rewritemeta`, `fdroid lint`, and `fdroid build` |
 | F-Droid | `fdroid build` with `binary:` passes, and the signer is allowed. | PASS. The log prints "compared built binary to supplied reference binary successfully" and "supplied reference binary has allowed signer" for both entries. The signer is `0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5` |
 | F-Droid | A maintainer merged the merge request. | PASS. https://gitlab.com/fdroid/fdroiddata/-/merge_requests/52240 merged on 2026-10-19 after the category changed to `File Transfer` |
-| F-Droid | The app shows in the F-Droid client. | PENDING. F-Droid publishes after its next cycle |
+| F-Droid | The app shows in the F-Droid client. | PASS. https://f-droid.org/packages/dev.darshit.daak/ is live (checked 2026-10-23). NOT run: an install from the F-Droid client |
 | Homebrew | `brew audit --cask --strict darshitpp/tap/daak` exits zero. | PASS. The script pushes the cask only after the audit |
 | Homebrew | `brew upgrade --cask darshitpp/tap/daak` installs the new version. | PASS for 0.1.1 to 0.1.2 and for 0.1.2 to 0.1.3. `brew list --cask --versions daak` printed `daak 0.1.3`. The cask commit is `95a5361`. For 0.1.4 the cask commit is `3ab177e`. NOT run: `brew upgrade` to 0.1.4 |
