@@ -49,6 +49,7 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     selfProfile: async () =>
       JSON.stringify({ name: 'Test Device', baseName: 'Test Device', deviceId: 'dd'.repeat(16) }),
     localPort: async () => 40001,
+    exportDebugBundle: async () => 'daak debug bundle\n',
     addListener: () => {},
     removeListeners: () => {},
   };

@@ -76,6 +76,8 @@ export function fakeEngine(devices: DeviceInfo[] = [
     // fake does not have, so it can neither fail nor prove anything.
     backgroundWake: async () => {},
     replaceInboxPaths: async () => {},
+    // Plain text. The Report an issue section shares this text as it is.
+    exportDebugBundle: async () => 'daak debug bundle\nengine: not started\n',
     on: (cb: (e: DaakEvent) => void) => {
       handlers.add(cb);
       return () => handlers.delete(cb);

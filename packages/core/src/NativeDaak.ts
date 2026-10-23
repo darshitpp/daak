@@ -69,6 +69,8 @@ export interface Spec extends TurboModule {
   setPresence(state: string): Promise<void>;
   /** UDL: local_port() -> u16 */
   localPort(): Promise<number>;
+  /** UDL: export_debug_bundle() -> the bundle text (not JSON). Works before start */
+  exportDebugBundle(): Promise<string>;
   /** UDL: shutdown() */
   shutdown(): Promise<void>;
   addListener(eventName: string): void;

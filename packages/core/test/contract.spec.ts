@@ -34,6 +34,8 @@ const METHODS: (keyof DaakEngine)[] = [
   // Phase 7: drain the outbox now. One Rust call, Engine::background_wake,
   // reached from every engine shape.
   'backgroundWake',
+  // The debug bundle text. It works before start.
+  'exportDebugBundle',
 ];
 
 // Compile-time only: adding, removing or renaming a DaakEvent member breaks tsc.
@@ -92,6 +94,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   setDisplayName: true,
   setPresence: true,
   localPort: true,
+  exportDebugBundle: true,
   shutdown: true,
   addListener: true,
   removeListeners: true,
@@ -120,6 +123,7 @@ describe('contract types', () => {
       retryItem: true, backgroundWake: true,
       armCodePairing: true, codePairingStatus: true, cancelCodePairing: true,
       codePairingSupported: true,
+      exportDebugBundle: true,
     };
     // 13 = the union's 13 members. peer.incompatible and outbox.queued are
     // pinned by tsc alone, via this Record's exhaustiveness, and NOT by the
@@ -171,7 +175,9 @@ describe('contract types', () => {
     // The four code pairing methods are the 31st to 34th: arm_code_pairing,
     // pair_with_code, code_pairing_status, and cancel_code_pairing, each a UDL
     // method and a TurboModule override on all three native modules.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(34);
+    // export_debug_bundle is the 35th: a UDL method and a TurboModule
+    // override on all three native modules. It works before start.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(35);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -239,6 +245,8 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
     start: async () => {},
     shutdown: async () => {},
     localPort: async () => 1234,
+    // The bundle is plain text, not JSON. The real method works before start.
+    exportDebugBundle: async () => 'daak debug bundle\nengine: not started\n',
     pairingBundle: async () => '{}',
     // R-T10-3: an unknown id is an ERROR, not a silent success. The fake has to
     // model that, or the shared suite's rejection assertion would be testing

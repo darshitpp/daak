@@ -352,5 +352,12 @@ export interface DaakEngine {
   selfProfile(): Promise<SelfProfile>;
   setDisplayName(name: string): Promise<void>;
   setPresence(state: 'online' | 'away'): Promise<void>;
+  /**
+   * The debug bundle as plain text: the app version, the platform, the
+   * engine state, and the newest log lines. It works before `start`.
+   * The daemon client rejects it, because the IPC request writes a file and
+   * returns no text.
+   */
+  exportDebugBundle(): Promise<string>;
   on(cb: (event: DaakEvent) => void): () => void;
 }

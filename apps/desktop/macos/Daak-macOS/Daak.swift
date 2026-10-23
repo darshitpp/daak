@@ -367,6 +367,20 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().localPort() }
   }
 
+  // The debug bundle text. It must work before start and after a failed
+  // start, so it does not use need(). With no engine, a new DaakEngine
+  // renders the bundle. That engine does not start. The Rust engine reads
+  // the key store only in start, so the keychain stays untouched. It uses
+  // newWithStore, because the plain constructor selects the file store.
+  // The log ring is global, so the bundle shows the same log lines.
+  @objc func exportDebugBundle(_ resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      let e = self.engine ?? DaakEngine.newWithStore(store: KeychainSecureStore(), sink: self)
+      return try e.exportDebugBundle()
+    }
+  }
+
   @objc func shutdown(_ resolve: @escaping RCTPromiseResolveBlock,
                       reject: @escaping RCTPromiseRejectBlock) {
     q.async {
