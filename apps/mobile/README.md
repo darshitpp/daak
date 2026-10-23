@@ -171,10 +171,12 @@ The ring keeps the last 2000 lines. Export the bundle before you quit the app.
 
 ### Live filters
 
-The engine writes each log line to the OS log and to the ring. Use the OS log
-to see engine, JavaScript, and native lines together.
+The engine writes each log line to the OS log and to the ring. The filters
+below show the engine lines and the native module lines. JavaScript lines
+appear in the OS log only if their text matches the filter. This is expected,
+not verified.
 
-Apple. The engine uses the subsystem `dev.darshit.daak` and the category
+On Apple, the engine uses the subsystem `dev.darshit.daak` and the category
 `engine`. The native modules use `NSLog` with the prefix `Daak:`.
 
 ```bash
@@ -199,16 +201,17 @@ proves the predicate is valid. It does not prove that the engine lines appear.
 /usr/bin/log show --last 1m --predicate 'subsystem == "dev.darshit.daak"' --style compact
 ```
 
-Android. The engine uses the logcat tag `daak`. The native modules use these
-tags: `DaakNotify`, `DaakSecureStore`, `DaakSyncService`, `DaakDrainWorker`,
-and `DaakFsPaths`.
+On Android, the engine uses the logcat tag `daak`. The native code uses these
+tags: `Daak`, `DaakNotify`, `DaakSecureStore`, `DaakSyncService`,
+`DaakDrainWorker`, `DaakFsPaths`, `ShareTarget`, and `KeystoreSecureStore`.
 
 ```bash
 # Recorded, NOT run in this environment: needs an emulator or a device with Daak running.
 # On this host `adb devices` listed no device, and `adb logcat` waits for one.
-adb logcat -s daak DaakNotify DaakSecureStore DaakSyncService DaakDrainWorker DaakFsPaths
-# Add ReactNativeJS to see the JavaScript console.warn lines.
-adb logcat -s daak ReactNativeJS DaakNotify DaakSecureStore DaakSyncService DaakDrainWorker DaakFsPaths
+adb logcat -s daak Daak DaakNotify DaakSecureStore DaakSyncService DaakDrainWorker DaakFsPaths ShareTarget KeystoreSecureStore
+# Add ReactNativeJS to show the JavaScript console.warn lines.
+# JavaScript visibility under this tag is expected, not verified.
+adb logcat -s daak Daak DaakNotify DaakSecureStore DaakSyncService DaakDrainWorker DaakFsPaths ShareTarget KeystoreSecureStore ReactNativeJS
 # Print the buffer once and exit:
 adb logcat -d -s daak
 ```
@@ -248,9 +251,9 @@ scheduling and frame timing.
 # Recorded, NOT run in this environment: needs an emulator or a device.
 ```
 
-Rust spans do not show in Perfetto in this version. The crate that would send
-them, `tracing_android_trace`, is an unstable 0.1.0 and is out of scope. For
-span durations, export the bundle from Settings, Report an issue.
+Rust spans do not show in Perfetto in this version. A Perfetto layer for
+`tracing` exists as a separate crate, `tracing_android_trace`. This project
+does not use it. For span durations, export the bundle from Settings, Report an issue.
 
 ## Prerequisites / not verified in this environment
 
