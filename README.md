@@ -14,6 +14,11 @@
   <b><a href="https://github.com/darshitpp/daak/releases">Download for Android, macOS, or iOS</a></b>
 </p>
 
+<p align="center">
+  <a href="https://f-droid.org/packages/dev.darshit.daak/"><img alt="Get it on F-Droid" src="https://f-droid.org/badge/get-it-on.png" height="80"></a>
+  <a href="obtainium://add/https://github.com/darshitpp/daak"><img alt="Get it on Obtainium" src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" height="80"></a>
+</p>
+
 Daak (डाक, "post") moves photos, files, and text between your own
 devices over your local network. Nothing goes through the internet. Nothing
 goes through a server. You do not create an account.
@@ -82,8 +87,8 @@ Windows and Linux are not released.
 Download the file for your system from the
 [Releases page](https://github.com/darshitpp/daak/releases).
 
-Daak is not in an app store. The release files are not signed with a paid
-developer account. Each system shows a warning. Follow the steps for your
+Daak is not in the Play Store or the App Store. The release files are not
+signed with a paid developer account. Each system shows a warning. Follow the steps for your
 system.
 
 ### Android
@@ -123,15 +128,19 @@ The printed `SHA-256 digest` must be:
 
 A different digest means a different key signed the file. Do not install it.
 
-<!-- Enable this block after F-Droid publishes Daak (the merge request is merged
-and the app shows in the F-Droid client). Until then, do not say Daak is on F-Droid.
-
 #### F-Droid
 
-Install [F-Droid](https://f-droid.org), search for **Daak**, and install it.
+Install [F-Droid](https://f-droid.org), search for **Daak**, and install it. Or
+open the [Daak page on F-Droid](https://f-droid.org/packages/dev.darshit.daak/).
 F-Droid publishes the APK that the Daak upload key signed. This is the same
 key as the GitHub APK. So you can update between GitHub and F-Droid.
--->
+
+#### Obtainium
+
+[Obtainium](https://obtainium.imranr.dev) installs and updates apps straight
+from GitHub Releases. Tap the Obtainium badge at the top of this page on your
+phone, or add `https://github.com/darshitpp/daak` as a source in Obtainium.
+Each release has 3 APKs. Set the APK filter to `arm64-v8a` for a modern phone.
 
 ### macOS
 
