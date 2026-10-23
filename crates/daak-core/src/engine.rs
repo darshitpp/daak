@@ -2490,10 +2490,12 @@ impl Engine {
                 hex::encode(transfer_id)
             ))
         })?;
+        // No path in the text: `daakd` logs it, and the path ends in the
+        // user file name.
         let f = std::fs::File::open(&held).map_err(|e| {
             CoreError::Transfer(format!(
-                "held-back file {} is unreadable: {e}",
-                held.display()
+                "held-back file for item {item_index} is unreadable: {:?}",
+                e.kind()
             ))
         })?;
         let actual = crate::hash::blake2b256_reader(f)?;
@@ -2590,9 +2592,10 @@ impl Engine {
             // failure the user has to hear about, because reporting a delete
             // that did not happen is the worst possible answer here.
             if e.kind() != std::io::ErrorKind::NotFound {
+                // No path in the text, for the reason in `quarantine_report`.
                 return Err(CoreError::Transfer(format!(
-                    "held-back file {} could not be deleted: {e}",
-                    held.display()
+                    "held-back file for item {item_index} could not be deleted: {:?}",
+                    e.kind()
                 )));
             }
         }
@@ -4683,6 +4686,91 @@ mod tests {
             db.due_outbox(i64::MAX).unwrap().is_empty(),
             "and it is not due again"
         );
+    }
+
+    // Task 5 privacy: the staged path ends in the user file name. When the
+    // staged file is gone, neither the log nor the `TransferFailed` error may
+    // hold that name or that path.
+    #[tokio::test]
+    async fn a_missing_staged_file_is_reported_without_its_name_or_path() {
+        const NAME: &str = "secret-trip-photo.bin";
+        let log = crate::diag::RecentLog::with_capacity(64, None);
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(log.clone())
+            .finish();
+        // A thread default, not the global one. The drain runs on this thread,
+        // because the test awaits it directly.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join(NAME);
+        std::fs::write(&f, b"data").unwrap();
+        let item =
+            crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT).unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![item],
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(
+            &db,
+            &staging,
+            &[9u8; 16],
+            &manifest,
+            std::slice::from_ref(&f),
+        )
+        .unwrap();
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        let staged = staging.staged_path(&row.payload_id, NAME);
+        std::fs::remove_file(&staged).unwrap();
+        assert!(db.mark_outbox_sending(&id).unwrap());
+
+        let sessions: SharedSessions = Arc::new(Mutex::new(SessionRegistry::new(
+            std::time::Duration::from_secs(1),
+            Box::new(|_| -> BoxFutureConn {
+                Box::pin(async { unreachable!("a missing staged file must not dial") })
+            }) as BoxConnect,
+        )));
+        let (tx, mut rx) = broadcast::channel(8);
+        drain_outbox_row(
+            DrainCtx {
+                db: db.clone(),
+                staging: staging.clone(),
+                tx,
+                sessions,
+                max_backoff_secs: 600,
+                observability: Arc::new(Observability::default()),
+            },
+            row,
+        )
+        .await;
+
+        let mut error = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let EngineEvent::TransferFailed { error: e, .. } = ev {
+                error = Some(e);
+            }
+        }
+        let error = error.expect("the drain sends TransferFailed");
+        let ring = log.snapshot().join("");
+        assert!(!ring.is_empty(), "the drain logs the missing file");
+        let root_text = root.path().display().to_string();
+        for (what, text) in [("log", &ring), ("TransferFailed error", &error)] {
+            assert!(!text.contains(NAME), "the {what} names the file: {text}");
+            assert!(
+                !text.contains(&root_text),
+                "the {what} names the staged path: {text}"
+            );
+        }
     }
 
     // ---------------------------------------------------------------- B4 ---

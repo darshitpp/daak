@@ -274,10 +274,10 @@ impl Item {
         if !root.is_dir() {
             // A missing path, or a plain file handed to from_folder, is the
             // caller's error -- not an empty share that "succeeds".
-            return Err(CoreError::Transfer(format!(
-                "not a directory: {}",
-                root.display()
-            )));
+            // No path in the text: `daakd` logs it, and it holds a user name.
+            return Err(CoreError::Transfer(
+                "the picked folder is not a directory".into(),
+            ));
         }
         let mut files = Vec::new();
         collect_files(root, &mut files)?;
@@ -1196,6 +1196,22 @@ mod tests {
         assert!(
             matches!(hash, Value::Bytes(b) if b.len() == 32),
             "hash must be a 32-byte CBOR bstr, got {hash:?}"
+        );
+    }
+
+    /// `daakd` logs each IPC error text. So an error that `from_folder`
+    /// returns must not name the picked path.
+    #[test]
+    fn from_folder_on_a_plain_file_does_not_name_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("private-diary.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let text = Item::from_folder(0, &file, CHUNK_SIZE_DEFAULT)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !text.contains("private-diary"),
+            "the error names the path: {text}"
         );
     }
 }

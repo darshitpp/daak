@@ -385,8 +385,10 @@ impl Browser {
             match event {
                 ServiceEvent::ServiceResolved(info) => {
                     if let Ok(a) = announce_from_service(&info) {
-                        tracker.found(info.get_fullname(), a.device_id);
-                        tracing::info!(peer = %crate::diag::short_id(&a.device_id), "peer resolved");
+                        // One line for each new record. A refresh writes no line.
+                        if tracker.found(info.get_fullname(), a.device_id) {
+                            tracing::info!(peer = %crate::diag::short_id(&a.device_id), "peer resolved");
+                        }
                         return Some(DiscoveryEvent::Found(a));
                     }
                 }
