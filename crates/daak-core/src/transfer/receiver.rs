@@ -368,6 +368,15 @@ pub async fn receive_transfer<T: FrameTransport>(
 
 /// Like `receive_transfer`. With `Some(id)`, the manifest must name `id` as its
 /// sender. The caller passes the device id of the authenticated peer.
+#[tracing::instrument(
+    name = "receive",
+    skip_all,
+    fields(
+        peer = tracing::field::Empty,
+        payload = tracing::field::Empty,
+        bytes = tracing::field::Empty
+    )
+)]
 pub async fn receive_transfer_from<T: FrameTransport>(
     conn: &mut T,
     expected_sender: Option<[u8; 16]>,
@@ -401,6 +410,14 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     };
 
     validate_manifest(&manifest)?;
+    let span = tracing::Span::current();
+    if let Some(id) = expected_sender {
+        span.record("peer", tracing::field::display(crate::diag::short_id(&id)));
+    }
+    span.record(
+        "payload",
+        tracing::field::display(crate::diag::short_id(&manifest.payload_id)),
+    );
     if expected_sender.is_some_and(|id| id != manifest.sender.device_id) {
         return Err(CoreError::Protocol(
             "manifest sender is not the authenticated peer".into(),
@@ -410,6 +427,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     // One sum for the row and for the progress events. A non-binary item is
     // never materialised, so its size must not count (B2).
     let bytes_total: u64 = manifest.binary_items().filter_map(|i| i.size).sum();
+    span.record("bytes", bytes_total);
 
     // D23: a re-delivery of a payload_id that is already in the inbox must not
     // write into the real destination. A half-written duplicate would truncate
@@ -703,7 +721,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
                 Ok(held) => held_paths.push((item.index, held)),
                 Err(e) => tracing::warn!(
                     item = item.index,
-                    error = %e,
+                    error = %crate::diag::log_err(&e),
                     "quarantine hold failed; item stays at its final path"
                 ),
             }

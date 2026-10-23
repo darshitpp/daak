@@ -174,7 +174,10 @@ impl Db {
     /// True only for the caller that actually moved the row; see
     /// `mark_outbox_awaiting_ack`.
     pub fn mark_outbox_terminal_failed(&self, id: &[u8; 16], error: &str) -> Result<bool> {
-        tracing::warn!("outbox row {} failed permanently: {error}", hex::encode(id));
+        tracing::warn!(
+            "outbox row {} failed permanently: {error}",
+            crate::diag::short_id(id)
+        );
         let n = self.conn().execute(
             // Guards the "pending/sending -> failed" edge: cancel acts on a
             // pending row and the drain's give-up path on a sending one; a row

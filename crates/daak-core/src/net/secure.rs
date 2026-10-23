@@ -57,7 +57,12 @@ pub async fn complete_handshake<T: FrameTransport>(
     driver: HandshakeDriver,
     initiator: bool,
 ) -> Result<([u8; 32], [u8; 32], Vec<u8>, [u8; 32])> {
+    use tracing::Instrument;
+    // The span follows the future across each `.await`. An entered guard
+    // would record the wrong time.
+    let span = tracing::info_span!("handshake", initiator);
     tokio::time::timeout(HANDSHAKE_DEADLINE, run_handshake(conn, driver, initiator))
+        .instrument(span)
         .await
         .map_err(|_| crate::CoreError::Protocol("handshake timed out".into()))?
 }

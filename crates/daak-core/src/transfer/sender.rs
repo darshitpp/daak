@@ -35,6 +35,14 @@ pub fn decode_chunk_body(body: &[u8]) -> Result<(u32, u64, Bytes)> {
     Ok((item_index, chunk_index, Bytes::copy_from_slice(&body[16..])))
 }
 
+#[tracing::instrument(
+    name = "send",
+    skip_all,
+    fields(
+        payload = %crate::diag::short_id(&manifest.payload_id),
+        bytes = tracing::field::Empty
+    )
+)]
 pub async fn send_transfer<T: FrameTransport>(
     conn: &mut T,
     manifest: &Manifest,
@@ -77,6 +85,8 @@ pub async fn send_transfer<T: FrameTransport>(
         });
     }
 
+    // One total for the span. No event for each chunk.
+    let mut sent: u64 = 0;
     for (item_index, chunk_index) in interleave(scheduled, 1) {
         if !chunk_in_ranges(ranges, item_index, chunk_index) {
             continue;
@@ -89,6 +99,7 @@ pub async fn send_transfer<T: FrameTransport>(
         })?;
         let body = encode_chunk_body(item_index, chunk_index, &chunk.data);
         on_progress(chunk.data.len() as u64);
+        sent += chunk.data.len() as u64;
         conn.send(
             crate::session::item_stream(item_index),
             RecordType::Chunk,
@@ -96,6 +107,7 @@ pub async fn send_transfer<T: FrameTransport>(
         )
         .await?;
     }
+    tracing::Span::current().record("bytes", sent);
 
     loop {
         match conn.recv().await? {

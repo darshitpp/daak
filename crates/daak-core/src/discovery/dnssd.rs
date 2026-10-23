@@ -888,6 +888,7 @@ fn spawn_browse(sink: Box<dyn FnMut(DiscoveryEvent) + Send>) -> Result<BrowseHan
     }
     // SAFETY: no thread runs yet.
     unsafe { (*state).browse = b };
+    tracing::info!("browse started");
     let stop = Arc::new(AtomicBool::new(false));
     let t_stop = stop.clone();
     let sp = SendPtr(state);
@@ -931,6 +932,16 @@ impl Browser {
     pub fn start() -> Result<Self> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = spawn_browse(Box::new(move |e| {
+            // One line for each record change. The line names the peer by
+            // its short id only, never by its display name.
+            match &e {
+                DiscoveryEvent::Found(a) => {
+                    tracing::info!(peer = %crate::diag::short_id(&a.device_id), "peer resolved")
+                }
+                DiscoveryEvent::Lost(id) => {
+                    tracing::info!(peer = %crate::diag::short_id(id), "peer lost")
+                }
+            }
             let _ = tx.send(e);
         }))?;
         Ok(Self {

@@ -167,6 +167,21 @@ impl<'a> MakeWriter<'a> for RecentLog {
     }
 }
 
+/// The log form of a peer id or a payload id: the first 4 bytes as hex. The
+/// log must not hold a full id.
+pub(crate) fn short_id(id: &[u8]) -> String {
+    hex::encode(&id[..id.len().min(4)])
+}
+
+/// The log form of an error. An I/O error prints its kind only, because the
+/// text of an I/O error can hold a path with a user file name.
+pub(crate) fn log_err(e: &crate::CoreError) -> String {
+    match e {
+        crate::CoreError::Io(io) => format!("io: {:?}", io.kind()),
+        other => other.to_string(),
+    }
+}
+
 static APP_LOG: OnceLock<RecentLog> = OnceLock::new();
 static INSTALLED: OnceLock<bool> = OnceLock::new();
 
@@ -210,4 +225,24 @@ pub fn init(os: Option<OsLayer>) -> bool {
         // reason that is not about `tracing`.
         tracing::subscriber::set_global_default(subscriber).is_ok()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_id_keeps_the_first_4_bytes() {
+        assert_eq!(short_id(&[0xab; 16]), "abababab");
+        assert_eq!(short_id(&[0x01, 0x02]), "0102");
+    }
+
+    #[test]
+    fn log_err_prints_only_the_kind_of_an_io_error() {
+        let e = crate::CoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "/home/u/holiday.jpg",
+        ));
+        assert_eq!(log_err(&e), "io: NotFound");
+    }
 }

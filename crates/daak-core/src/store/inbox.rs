@@ -83,7 +83,7 @@ impl Db {
         // a real answer ("no file is nameable") and is always written.
         if !paths.is_empty() && paths.len() != old.len() {
             tracing::warn!(
-                payload = %hex::encode(id),
+                payload = %crate::diag::short_id(id),
                 old = old.len(),
                 new = paths.len(),
                 "replace_inbox_paths: list length differs; nothing written"
