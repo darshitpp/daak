@@ -5,8 +5,8 @@
 use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
-use tracing::Level;
-use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing::{Level, Metadata};
+use tracing_subscriber::filter::{filter_fn, FilterFn, Targets};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -174,12 +174,26 @@ pub(crate) fn short_id(id: &[u8]) -> String {
 }
 
 /// The log form of an error. An I/O error prints its kind only, because the
-/// text of an I/O error can hold a path with a user file name.
+/// text of an I/O error can hold a path with a user file name. A quarantine
+/// error prints the short form of its transfer id.
 pub(crate) fn log_err(e: &crate::CoreError) -> String {
     match e {
         crate::CoreError::Io(io) => format!("io: {:?}", io.kind()),
+        crate::CoreError::Quarantined {
+            transfer_id,
+            item_index,
+        } => format!(
+            "receiver quarantined item {item_index} of transfer {}: hash mismatch",
+            short_id(transfer_id)
+        ),
         other => other.to_string(),
     }
+}
+
+/// Log a failed engine start. The bundle then shows the reason. `daak-ffi`
+/// calls it, because `daak-ffi` has no `tracing` dependency.
+pub fn log_start_failed(e: &crate::CoreError) {
+    tracing::warn!("start failed: {}", log_err(e));
 }
 
 static APP_LOG: OnceLock<RecentLog> = OnceLock::new();
@@ -199,19 +213,30 @@ pub fn capture_installed() -> bool {
 /// A boxed layer that fits the bare `Registry`. The apps pass an OS log layer.
 pub type OsLayer = Box<dyn Layer<Registry> + Send + Sync>;
 
+/// The OS layer filter. It keeps every span and the events at `events` or
+/// above.
+///
+/// `tracing-oslog` reads the current span in `on_event`. It panics when the
+/// span is not in its context, and the release profile aborts on a panic. A
+/// span that this filter rejects is not in that context. Thus the filter must
+/// keep every span.
+fn os_filter(events: Level) -> FilterFn<impl Fn(&Metadata<'_>) -> bool> {
+    filter_fn(move |m| m.is_span() || *m.level() <= events)
+}
+
 /// Install the global subscriber. It returns `true` when it installed it and
 /// `false` when a subscriber already existed. A second call returns the first
 /// result and does nothing.
 pub fn init(os: Option<OsLayer>) -> bool {
     *INSTALLED.get_or_init(|| {
-        let os_level = if cfg!(debug_assertions) {
-            LevelFilter::INFO
+        let os_events = if cfg!(debug_assertions) {
+            Level::INFO
         } else {
-            LevelFilter::WARN
+            Level::WARN
         };
         // The OS layer goes first. A boxed `Layer<Registry>` fits only the
         // bare `Registry`.
-        let os_layer = os.map(|l| l.with_filter(os_level));
+        let os_layer = os.map(|l| l.with_filter(os_filter(os_events)));
         let ring_filter = Targets::new()
             .with_target("daak", Level::DEBUG)
             .with_default(Level::WARN);
@@ -235,6 +260,60 @@ mod tests {
     fn short_id_keeps_the_first_4_bytes() {
         assert_eq!(short_id(&[0xab; 16]), "abababab");
         assert_eq!(short_id(&[0x01, 0x02]), "0102");
+    }
+
+    /// Records the span names and the event levels that reach it.
+    #[derive(Clone, Default)]
+    struct Seen(Arc<Mutex<Vec<String>>>);
+
+    impl<S: tracing::Subscriber> Layer<S> for Seen {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let name = attrs.metadata().name();
+            self.0.lock().unwrap().push(format!("span {name}"));
+        }
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let level = event.metadata().level();
+            self.0.lock().unwrap().push(format!("event {level}"));
+        }
+    }
+
+    #[test]
+    fn os_filter_keeps_info_spans_and_drops_info_events_at_warn() {
+        let seen = Seen::default();
+        let subscriber = registry().with(seen.clone().with_filter(os_filter(Level::WARN)));
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("probe_span");
+            let _guard = span.enter();
+            tracing::info!("dropped");
+            tracing::warn!("kept");
+        });
+        assert_eq!(
+            *seen.0.lock().unwrap(),
+            vec!["span probe_span".to_string(), "event WARN".to_string()]
+        );
+    }
+
+    #[test]
+    fn log_err_prints_a_short_transfer_id_for_a_quarantine() {
+        let e = crate::CoreError::Quarantined {
+            transfer_id: [0xcd; 16],
+            item_index: 2,
+        };
+        let line = log_err(&e);
+        assert_eq!(
+            line,
+            "receiver quarantined item 2 of transfer cdcdcdcd: hash mismatch"
+        );
+        assert!(!line.contains(&"cd".repeat(5)));
     }
 
     #[test]

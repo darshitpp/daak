@@ -2,6 +2,7 @@ import React from 'react';
 import { Linking } from 'react-native';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { AboutSection } from './AboutSection';
+import { colors, type, ui } from '../../theme';
 import { ABOUT_LINKS, RELEASES_URL } from '../about-links';
 
 afterEach(() => jest.restoreAllMocks());
@@ -78,7 +79,6 @@ it('keeps each link row at 44 points or more', () => {
   expect(flat.minHeight).toBeGreaterThanOrEqual(44);
 });
 
-
 // Task 8A: the section is collapsible.
 const flatStyle = (id: string) => {
   const style = screen.getByTestId(id).props.style;
@@ -134,4 +134,27 @@ it('puts the facts and the links in separate views', async () => {
   expect(within(links).getByText('Twitter')).toBeTruthy();
   expect(within(links).getByText('github.com/darshitpp/daak')).toBeTruthy();
   expect(within(links).queryByText('Works on')).toBeNull();
+});
+
+const textStyle = (text: string) => {
+  const style = screen.getByText(text).props.style;
+  return Array.isArray(style) ? Object.assign({}, ...style.flat().filter(Boolean)) : style;
+};
+
+// The prototype `.section-t` class with the weight of `.section-t-btn`.
+it('draws the header title as a muted small section title', () => {
+  render(<AboutSection />);
+  expect(textStyle('About Daak')).toMatchObject({ fontSize: type.sm, color: colors.muted, fontWeight: '600' });
+});
+
+it('draws the update line as a hint', () => {
+  render(<AboutSection />);
+  expect(textStyle('See whether Daak needs an update')).toMatchObject(ui.hint);
+});
+
+it('hides the chevron from accessibility', () => {
+  render(<AboutSection />);
+  const chevron = screen.getByTestId('about-chevron', { includeHiddenElements: true });
+  expect(chevron.props.accessibilityElementsHidden).toBe(true);
+  expect(chevron.props.importantForAccessibility).toBe('no-hide-descendants');
 });

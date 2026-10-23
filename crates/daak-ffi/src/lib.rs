@@ -495,7 +495,14 @@ impl DaakEngine {
             identity,
             db: Arc::new(db),
         };
-        let engine = Arc::new(self.rt.block_on(Engine::start(cfg)).map_err(engine_err)?);
+        let engine = match self.rt.block_on(Engine::start(cfg)) {
+            Ok(engine) => Arc::new(engine),
+            Err(e) => {
+                // The bundle then shows why the engine did not start.
+                daak_core::diag::log_start_failed(&e);
+                return Err(engine_err(e));
+            }
+        };
         // Every app build gates a new pairing on the user's SAS compare.
         engine.set_pairing_confirmation_required(true);
 
@@ -951,7 +958,12 @@ impl DaakEngine {
     /// It holds the device id, the dialable LAN address, and the recent log.
     /// It holds no display name.
     pub fn export_debug_bundle(&self) -> Result<String, FfiError> {
-        let engine = self.engine.lock().unwrap().clone();
+        // A poisoned lock must not stop the one diagnostic call.
+        let engine = self
+            .engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let (device_id, listen_addr) = match engine {
             Some(engine) => {
                 let (_name, id) = self.rt.block_on(engine.self_profile());
@@ -969,7 +981,9 @@ impl DaakEngine {
             listen_addr,
             events: daak_core::diag::app_log().snapshot(),
         };
-        Ok(daak_core::diag::render_capped("daak", &state))
+        // `daak-ffi`: the version is the engine library version, not the app
+        // version. The Settings screen adds the app version line.
+        Ok(daak_core::diag::render_capped("daak-ffi", &state))
     }
 
     pub fn shutdown(&self) -> Result<(), FfiError> {

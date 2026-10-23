@@ -90,7 +90,7 @@ export function AboutSection({ appInfo }: { appInfo?: () => Promise<Info> }) {
         ) : null}
       </View>
       <View style={ui.row}>
-        <Text style={[ui.sectionT, ui.fill]}>See whether Daak needs an update</Text>
+        <Text style={[ui.hint, ui.fill]}>See whether Daak needs an update</Text>
         <Btn label="Check for updates" variant="quiet" size="sm" testID="check-for-updates" onPress={() => open(RELEASES_URL)} />
       </View>
       {failed ? (
@@ -104,7 +104,13 @@ export function AboutSection({ appInfo }: { appInfo?: () => Promise<Info> }) {
 // a dependency of this package, so View borders draw it, as TabBar does.
 function Chevron({ expanded }: { expanded: boolean }) {
   return (
-    <View style={styles.chevronBox} pointerEvents="none">
+    <View
+      testID="about-chevron"
+      style={styles.chevronBox}
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
       <View style={[styles.chevron, { transform: [{ rotate: expanded ? '45deg' : '-45deg' }] }]} />
     </View>
   );
@@ -113,7 +119,8 @@ function Chevron({ expanded }: { expanded: boolean }) {
 const styles = StyleSheet.create({
   box: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, backgroundColor: colors.surface, overflow: 'hidden' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, minHeight: 44, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  title: { fontSize: type.body, fontWeight: '600', color: colors.fg },
+  // The prototype `.section-t` class with the weight of `.section-t-btn`.
+  title: { fontSize: type.sm, fontWeight: '600', color: colors.muted },
   content: { gap: spacing.md, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   chevronBox: { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' },
   chevron: { width: 8, height: 8, marginTop: -3, borderRightWidth: 1.75, borderBottomWidth: 1.75, borderColor: colors.fg },

@@ -62,11 +62,14 @@ it('saves the arrival switch through the platform preference store', async () =>
   expect(screen.queryByText('Play a sound too')).toBeNull();
 });
 
-it('shares the debug bundle through presentShare when Report an issue is tapped', async () => {
+// The section puts the host app version line before the bundle text.
+it('shares the app version line and the debug bundle through presentShare when Report an issue is tapped', async () => {
   const bundle = jest.spyOn(engine, 'exportDebugBundle').mockResolvedValue('BUNDLE TEXT');
   await openSettings();
   fireEvent.press(await screen.findByTestId('report-issue'));
-  await waitFor(() => expect(presentShare).toHaveBeenCalledWith({ text: 'BUNDLE TEXT' }));
+  await waitFor(() =>
+    expect(presentShare).toHaveBeenCalledWith({ text: 'app: 0.0.0-test (build 1)\nBUNDLE TEXT' }),
+  );
   expect(bundle).toHaveBeenCalledTimes(1);
 });
 

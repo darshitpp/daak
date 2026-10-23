@@ -53,7 +53,14 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       fileUris.drop(1).forEach { clip.addItem(ClipData.Item(it)) }
       intent.clipData = clip
     }
-    activity.startActivity(Intent.createChooser(intent, "Share via"))
+    // Since API 24 startActivity can throw, for example
+    // TransactionTooLargeException for a large EXTRA_TEXT. An uncaught throw in
+    // a @ReactMethod stops a release app, so the call rejects the promise.
+    try {
+      activity.startActivity(Intent.createChooser(intent, "Share via"))
+    } catch (t: Throwable) {
+      return promise.reject("E_SHARE", t)
+    }
     // Resolves when the OS chooser is up, not when a peer accepted anything.
     promise.resolve(null)
   }

@@ -13,9 +13,10 @@ impl EventSink for Silent {
     fn on_event(&self, _event: FfiEvent) {}
 }
 
-/// The version line that `render` writes for the product `daak`.
+/// The version line that `render` writes for the product `daak-ffi`. It is
+/// the engine library version. The Settings screen adds the app version.
 fn version_line() -> String {
-    format!("daak {}\n", env!("CARGO_PKG_VERSION"))
+    format!("daak-ffi {}\n", env!("CARGO_PKG_VERSION"))
 }
 
 /// Start an engine on a wildcard port with the display name `name`.
@@ -90,4 +91,28 @@ fn bundle_holds_no_display_name() {
         !bundle.contains("Quokka"),
         "the bundle holds the display name"
     );
+}
+
+#[test]
+fn bundle_after_a_failed_start_holds_the_reason() {
+    std::env::set_var("DAAK_MDNS_OFF_LAN", "1");
+    // The engine binds the IPv6 wildcard. This listener holds that port
+    // without SO_REUSEADDR, so the engine bind fails.
+    let held = std::net::TcpListener::bind("[::]:0").unwrap();
+    let port = held.local_addr().unwrap().port();
+    let dir = tempfile::tempdir().unwrap();
+    let engine = FfiEngine::new(Box::new(Silent));
+    let started = engine.start(dir.path().to_string_lossy().into(), "host".into(), port);
+    assert!(started.is_err(), "start must fail on a held port");
+
+    let bundle = engine.export_debug_bundle().unwrap();
+    assert!(
+        bundle.contains("device_id: engine: not started\n"),
+        "got {bundle}"
+    );
+    assert!(
+        bundle.contains("start failed: io: AddrInUse"),
+        "got {bundle}"
+    );
+    drop(held);
 }

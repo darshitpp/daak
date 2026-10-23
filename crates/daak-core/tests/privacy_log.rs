@@ -88,6 +88,40 @@ fn longest_hex_run(s: &str) -> usize {
     best
 }
 
+/// `true` when `line` logs the 6-digit `sas`. The first field is the time
+/// stamp, and its microseconds can hold the same 6 digits, so the check skips
+/// it. The SAS must be a whole digit run. A longer run, such as an all-digit
+/// short id, is not the SAS.
+fn logs_sas(line: &str, sas: &str) -> bool {
+    let body = line
+        .trim_start()
+        .split_once(char::is_whitespace)
+        .map_or("", |(_, rest)| rest);
+    body.split(|c: char| !c.is_ascii_digit())
+        .any(|run| run == sas)
+}
+
+#[test]
+fn the_sas_check_skips_the_time_stamp_and_finds_a_logged_sas() {
+    let sas = "123456";
+    // The microseconds of the time stamp hold the same 6 digits.
+    let stamp = "2026-10-23T08:45:12.123456Z  INFO daak_core::engine: paired";
+    assert!(!logs_sas(stamp, sas));
+    // A short id is 8 hex characters. An all-digit one is not the SAS.
+    assert!(!logs_sas(
+        "2026-10-23T08:45:12.000001Z  INFO peer=91234567",
+        sas
+    ));
+    assert!(logs_sas(
+        "2026-10-23T08:45:12.000001Z  INFO pairing sas=123456",
+        sas
+    ));
+    assert!(logs_sas(
+        "2026-10-23T08:45:12.000001Z  INFO code 123456 shown",
+        sas
+    ));
+}
+
 #[tokio::test]
 async fn the_ring_holds_no_name_content_key_or_long_id() {
     assert!(diag::init(None), "this binary owns the global subscriber");
@@ -166,7 +200,6 @@ async fn the_ring_holds_no_name_content_key_or_long_id() {
         ("file name", FILE_NAME.to_string()),
         ("file content", FILE_MARK.to_string()),
         ("text content", TEXT_MARK.to_string()),
-        ("SAS", sas.clone()),
         ("host static secret", host_keys.static_hex.clone()),
         ("host signing key", host_keys.signing_hex.clone()),
         ("joiner static secret", join_keys.static_hex.clone()),
@@ -183,6 +216,7 @@ async fn the_ring_holds_no_name_content_key_or_long_id() {
         );
     }
     for line in &lines {
+        assert!(!logs_sas(line, &sas), "the ring holds the SAS: {line}");
         assert!(
             longest_hex_run(line) <= 8,
             "a logged id is longer than 8 hex characters: {line}"

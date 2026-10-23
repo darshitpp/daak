@@ -20,7 +20,9 @@ export interface SettingsHost {
   /**
    * The share step of "Report an issue". The host supplies only this step,
    * because packages/ui imports no platform code. Absent: the section is hidden.
-   * The promise resolves when the share sheet closes, also when the user dismisses it.
+   * The promise does not wait for the user. iOS resolves it when the share
+   * sheet opens. Android and macOS resolve it at once. A dismissed sheet is
+   * not an error. The section adds an `appInfo` line before the bundle text.
    */
   reportIssue?: { share: (text: string) => Promise<void> };
 }
