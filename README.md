@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://f-droid.org/packages/dev.darshit.daak/"><img alt="Get it on F-Droid" src="https://f-droid.org/badge/get-it-on.png" height="80"></a>
+  <a href="https://f-droid.org/packages/dev.darshit.daak/"><img alt="Get it on F-Droid" src="docs/assets/fdroid-badge.png" height="80"></a>
   <a href="obtainium://add/https://github.com/darshitpp/daak"><img alt="Get it on Obtainium" src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" height="80"></a>
 </p>
 
