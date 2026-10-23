@@ -17,5 +17,11 @@ export interface SettingsHost {
   osAlerts?: { granted: () => Promise<boolean | undefined>; openSettings?: () => void };
   /** Label of the network row in Connection. Default 'This Wi-Fi'. The macOS host passes 'Network'. */
   networkLabel?: string;
+  /**
+   * The share step of "Report an issue". The host supplies only this step,
+   * because packages/ui imports no platform code. Absent: the section is hidden.
+   * The promise resolves when the share sheet closes, also when the user dismisses it.
+   */
+  reportIssue?: { share: (text: string) => Promise<void> };
 }
 

@@ -16,6 +16,8 @@ import { desktopPickFiles } from './picker';
 import { desktopInboxActions } from './inbox-actions';
 import { appInfo, formatAppInfo, type AppInfo } from '@daak/platform/src/appinfo';
 import { loadNotifyPrefs, saveNotifyPrefs } from '@daak/platform/src/notify-prefs';
+// Deep import, never the @daak/rn-share barrel (see inbox-actions.ts).
+import { shareViaSystem } from '@daak/rn-share/js/system-share';
 import { DesktopOnboardingGate } from './onboarding-gate';
 import { StartFaultNote } from './start-fault';
 import { DesktopPairing } from './pairing';
@@ -153,7 +155,13 @@ export function DaakDashboardShell({ engine, runtime }: {
   }, []);
   const settingsHost = useMemo<SettingsHost>(
     // Design v2: the Mac Connection card labels the row "Network".
-    () => ({ appInfo, notifyPrefs: { load: loadNotifyPrefs, save: saveNotifyPrefs }, networkLabel: 'Network' }),
+    () => ({
+      appInfo,
+      notifyPrefs: { load: loadNotifyPrefs, save: saveNotifyPrefs },
+      networkLabel: 'Network',
+      // Report an issue: the macOS system share, not presentShare.
+      reportIssue: { share: (text) => shareViaSystem({ text }) },
+    }),
     [],
   );
   const windowChrome = useMemo(

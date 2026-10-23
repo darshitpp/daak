@@ -25,7 +25,7 @@ jest.mock('../BackgroundSyncNotice', () => ({ BackgroundSyncNotice: () => null }
 jest.mock('../PairingFlow', () => ({ PairingFlow: () => null }));
 
 import App from '../App';
-import { appInfo, readOnboarding, saveNotifyPrefs } from '@daak/platform';
+import { appInfo, presentShare, readOnboarding, saveNotifyPrefs } from '@daak/platform';
 
 const { engine } = jest.requireMock('../bootstrap');
 const paired = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true };
@@ -60,6 +60,14 @@ it('saves the arrival switch through the platform preference store', async () =>
   fireEvent.press(await screen.findByLabelText('Tell me when a file arrives'));
   await waitFor(() => expect(saveNotifyPrefs).toHaveBeenCalledWith({ arrival: false }));
   expect(screen.queryByText('Play a sound too')).toBeNull();
+});
+
+it('shares the debug bundle through presentShare when Report an issue is tapped', async () => {
+  const bundle = jest.spyOn(engine, 'exportDebugBundle').mockResolvedValue('BUNDLE TEXT');
+  await openSettings();
+  fireEvent.press(await screen.findByTestId('report-issue'));
+  await waitFor(() => expect(presentShare).toHaveBeenCalledWith({ text: 'BUNDLE TEXT' }));
+  expect(bundle).toHaveBeenCalledTimes(1);
 });
 
 it('says the phone in the arrival hint', async () => {

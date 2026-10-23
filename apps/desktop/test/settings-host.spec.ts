@@ -38,6 +38,13 @@ describe('the desktop dashboard shell wires the Settings and window inputs', () 
     expect(shells).not.toMatch(/from '@daak\/platform'/);
   });
 
+  it('supplies reportIssue through the system share, not presentShare', () => {
+    expect(shells).toMatch(/\breportIssue:\s*\{\s*share:\s*\(text\)\s*=>\s*shareViaSystem\(\{\s*text\s*\}\)/);
+    expect(shells).toMatch(/from '@daak\/rn-share\/js\/system-share'/);
+    expect(shells).not.toMatch(/from '@daak\/rn-share'/);
+    expect(shells).not.toMatch(/presentShare/);
+  });
+
   it('keeps the version line in the window chrome', () => {
     expect(shells).toMatch(/formatAppInfo\(/);
   });
