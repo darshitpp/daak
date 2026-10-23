@@ -16,7 +16,7 @@
 
 <p align="center">
   <a href="https://f-droid.org/packages/dev.darshit.daak/"><img alt="Get it on F-Droid" src="docs/assets/fdroid-badge.png" height="80"></a>
-  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.darshit.daak%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fdarshitpp%2Fdaak%22%2C%22author%22%3A%22darshitpp%22%2C%22name%22%3A%22Daak%22%2C%22additionalSettings%22%3A%22%7B%5C%22autoApkFilterByArch%5C%22%3Atrue%7D%22%7D"><img alt="Get it on Obtainium" src="docs/assets/obtainium-badge.png" height="80"></a>
+  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.darshit.daak%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fdarshitpp%2Fdaak%22%2C%22author%22%3A%22darshitpp%22%2C%22name%22%3A%22Daak%22%7D"><img alt="Get it on Obtainium" src="docs/assets/obtainium-badge.png" height="80"></a>
 </p>
 
 Daak (डाक, "post") moves photos, files, and text between your own
@@ -140,9 +140,8 @@ key as the GitHub APK. So you can update between GitHub and F-Droid.
 [Obtainium](https://obtainium.imranr.dev) installs and updates apps straight
 from GitHub Releases. Tap the Obtainium badge at the top of this page on your
 phone, or add `https://github.com/darshitpp/daak` as a source in Obtainium.
-Each release has 3 APKs. The badge turns on **Attempt to filter APKs by CPU
-architecture if possible**, so Obtainium picks the APK for your phone. If you add the source
-by hand, turn that setting on.
+Each release has 3 APKs. Obtainium offers the universal APK and the APK for the
+CPU of your phone, and it selects the APK for your CPU. Keep that choice.
 
 ### macOS
 
