@@ -61,25 +61,36 @@ it('button is disabled and reads "Preparing…" while busy', async () => {
   idle();
 });
 
-it('a rejected exportDebugBundle shows the error note and returns to idle', async () => {
+it('a rejected exportDebugBundle shows the fixed note, logs the raw error, and returns to idle', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const raw = new Error('no root view controller');
   const share = jest.fn(async (_t: string) => {});
-  setup(share, async () => { throw new Error('bundle broke'); });
+  setup(share, async () => { throw raw; });
   await tap();
   expect(screen.getByText('The report did not open')).toBeTruthy();
-  expect(screen.getByText('bundle broke')).toBeTruthy();
+  expect(screen.getByText('The share sheet could not open on this device.')).toBeTruthy();
+  expect(screen.queryByText('no root view controller')).toBeNull();
+  expect(warn).toHaveBeenCalledWith('daak: report an issue failed:', raw);
+  warn.mockRestore();
   expect(share).not.toHaveBeenCalled();
   idle();
 });
 
-it('a rejected share shows the error note, with a fallback message, and returns to idle', async () => {
-  setup(async () => { throw 'nope'; });
+it('a rejected share shows the fixed note, logs the raw error, and returns to idle', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const raw = new Error('nothing to share');
+  setup(async () => { throw raw; });
   await tap();
+  expect(screen.queryByText('nothing to share')).toBeNull();
+  expect(warn).toHaveBeenCalledWith('daak: report an issue failed:', raw);
+  warn.mockRestore();
   expect(screen.getByTestId('report-issue-error')).toBeTruthy();
   expect(screen.getByText('The share sheet could not open on this device.')).toBeTruthy();
   idle();
 });
 
 it('clears the old note when the button is pressed again', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   let fail = true;
   setup(async () => { if (fail) throw new Error('x'); });
   await tap();
@@ -87,6 +98,7 @@ it('clears the old note when the button is pressed again', async () => {
   fail = false;
   await tap();
   expect(screen.queryByTestId('report-issue-error')).toBeNull();
+  warn.mockRestore();
 });
 
 it('a dismissed share sheet (share resolves) shows no note', async () => {
@@ -103,4 +115,16 @@ it('a second press while busy calls exportDebugBundle once', async () => {
   await tap();
   expect(exportDebugBundle).toHaveBeenCalledTimes(1);
   await act(async () => release());
+});
+
+// A disabled Pressable ignores the press, so this test calls the handler twice
+// in one tick, before the re-render. Only the busyRef guard stops the second call.
+it('two presses in the same tick call exportDebugBundle once', async () => {
+  const { exportDebugBundle } = setup(() => new Promise<void>(() => {}));
+  const button = screen.getByTestId('report-issue');
+  await act(async () => {
+    fireEvent.press(button);
+    fireEvent.press(button);
+  });
+  expect(exportDebugBundle).toHaveBeenCalledTimes(1);
 });

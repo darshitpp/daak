@@ -37,7 +37,9 @@ export function ReportIssueSection({ host }: { host?: SettingsHost }) {
     try {
       await share(await engine.exportDebugBundle());
     } catch (e) {
-      if (alive.current) setError(e instanceof Error && e.message ? e.message : FALLBACK);
+      // The note shows fixed text. The raw message is a developer string.
+      console.warn('daak: report an issue failed:', e);
+      if (alive.current) setError(FALLBACK);
     } finally {
       busyRef.current = false;
       if (alive.current) setBusy(false);
