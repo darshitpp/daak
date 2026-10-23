@@ -140,7 +140,8 @@ key as the GitHub APK. So you can update between GitHub and F-Droid.
 [Obtainium](https://obtainium.imranr.dev) installs and updates apps straight
 from GitHub Releases. Tap the Obtainium badge at the top of this page on your
 phone, or add `https://github.com/darshitpp/daak` as a source in Obtainium.
-Each release has 3 APKs. Set the APK filter to `arm64-v8a` for a modern phone.
+Each release has 3 APKs. Obtainium offers the universal APK and the APK for the
+CPU of your phone, and it selects the APK for your CPU. Keep that choice.
 
 ### macOS
 
