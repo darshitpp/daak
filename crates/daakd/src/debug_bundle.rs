@@ -2,24 +2,14 @@
 //! identity and recent log, written on request over IPC so a user can attach
 //! it to a bug report without opening a terminal.
 
-use std::collections::VecDeque;
+use daak_core::diag;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::{Mutex, OnceLock};
-use tracing_subscriber::fmt::MakeWriter;
+use std::sync::OnceLock;
 
-/// How many events the ring keeps. Enough to cover a failing startup or a
-/// transfer attempt; not so much that a runaway peer can grow the heap.
-pub const RING_CAPACITY: usize = 512;
-
-#[derive(Debug, Clone, Default)]
-pub struct DebugState {
-    pub version: String,
-    pub device_id: String,
-    pub listen_addr: String,
-    pub events: Vec<String>,
-}
+// The ring buffer and the bundle layout live in `daak_core::diag`.
+// These re-exports keep the old `debug_bundle` paths.
+pub use daak_core::diag::{DebugState, LineWriter, RecentLog, RING_CAPACITY};
 
 pub fn export(path: &Path, state: &DebugState) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -30,17 +20,7 @@ pub fn export(path: &Path, state: &DebugState) -> std::io::Result<()> {
     // 0600 regardless of umask. Windows has no Unix mode and the file is
     // already under the user profile the daemon owns.
     set_private(path)?;
-    writeln!(f, "=== daak debug bundle ===")?;
-    writeln!(f, "generated_at_ms: {}", daak_core::manifest::now_ms())?;
-    writeln!(f, "=== version ===")?;
-    writeln!(f, "daakd {}", state.version)?;
-    writeln!(f, "=== identity ===")?;
-    writeln!(f, "device_id: {}", state.device_id)?;
-    writeln!(f, "listen_addr: {}", state.listen_addr)?;
-    writeln!(f, "=== recent log ===")?;
-    for line in &state.events {
-        writeln!(f, "{line}")?;
-    }
+    f.write_all(diag::render("daakd", state).as_bytes())?;
     f.flush()
 }
 
@@ -53,78 +33,6 @@ fn set_private(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn set_private(_path: &Path) -> std::io::Result<()> {
     Ok(())
-}
-
-/// The last `RING_CAPACITY` formatted log lines.
-///
-/// It is a `MakeWriter` rather than a `Layer` because capturing the FORMATTED
-/// line is what the bundle needs, and the fmt layer already knows how to format
-/// one. A `Layer` would have to rebuild that same string by hand: either walk
-/// the event's fields through a typed visitor, or name `tracing_core::Event`
-/// and pick its fields apart, and either way the formatting lives in daakd
-/// instead of in the fmt layer that already gets it right. ponytail: this is
-/// the whole subscriber -- there is no level filter and no file sink; add those
-/// when a bug report needs more than the last 512 lines.
-#[derive(Clone, Default)]
-pub struct RecentLog {
-    lines: Arc<Mutex<VecDeque<String>>>,
-}
-
-impl RecentLog {
-    pub fn snapshot(&self) -> Vec<String> {
-        match self.lines.lock() {
-            Ok(q) => q.iter().cloned().collect(),
-            // A panic while a line was being formatted poisoned the lock. The
-            // bundle is a diagnostic; returning whatever survived beats
-            // failing the request the user sent to debug the failure.
-            Err(_) => Vec::new(),
-        }
-    }
-}
-
-/// Accumulates one event's `write` calls, then commits it as a single line on
-/// drop. The fmt layer makes a writer per event and drops it when it is done.
-pub struct LineWriter<'a> {
-    // Bytes, not String: the fmt layer may write one event in several chunks
-    // that split a multi-byte char, and from_utf8_lossy per chunk would turn
-    // that into replacement characters in the bundle.
-    buf: Vec<u8>,
-    lines: &'a Mutex<VecDeque<String>>,
-}
-
-impl Write for LineWriter<'_> {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.buf.extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Drop for LineWriter<'_> {
-    fn drop(&mut self) {
-        if self.buf.is_empty() {
-            return;
-        }
-        let line = String::from_utf8_lossy(&self.buf).into_owned();
-        if let Ok(mut q) = self.lines.lock() {
-            while q.len() >= RING_CAPACITY {
-                q.pop_front();
-            }
-            q.push_back(line);
-        }
-    }
-}
-
-impl<'a> MakeWriter<'a> for RecentLog {
-    type Writer = LineWriter<'a>;
-    fn make_writer(&'a self) -> Self::Writer {
-        LineWriter {
-            buf: Vec::new(),
-            lines: &self.lines,
-        }
-    }
 }
 
 static RECENT_LOG: OnceLock<RecentLog> = OnceLock::new();
@@ -206,6 +114,7 @@ pub fn snapshot_state(device_id: String, listen_addr: String) -> DebugState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
     fn the_ring_keeps_the_last_512_lines() {
