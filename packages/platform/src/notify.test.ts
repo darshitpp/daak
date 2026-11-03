@@ -22,6 +22,8 @@ import {
   DAK_REGISTERED_ACTIONS,
   DAK_RECEIVED_ACTIONS,
   DAK_RECEIVED_CATEGORY,
+  DAK_FAILED_ACTIONS,
+  DAK_FAILED_CATEGORY,
   handleNotificationAction,
   initNotifications,
   notifyFailedSend,
@@ -102,8 +104,13 @@ describe('initNotifications', () => {
   it('registers the received category with its registered action ids', async () => {
     await initNotifications();
     expect(native.registerCategories).toHaveBeenCalledWith(
-      JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+      JSON.stringify([
+        { id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS },
+        { id: DAK_FAILED_CATEGORY, actions: DAK_FAILED_ACTIONS },
+      ]),
     );
+    expect(DAK_FAILED_CATEGORY).toBe('daak.failed');
+    expect(DAK_FAILED_ACTIONS).toEqual(['daak.open']);
   });
 
   it('reports the runtime-permission answer', async () => {
@@ -142,7 +149,10 @@ describe('initNotifications', () => {
   it('registers only the actions that have a working handler (R37)', async () => {
     await initNotifications();
     expect(native.registerCategories).toHaveBeenCalledWith(
-      JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+      JSON.stringify([
+        { id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS },
+        { id: DAK_FAILED_CATEGORY, actions: DAK_FAILED_ACTIONS },
+      ]),
     );
     expect(DAK_REGISTERED_ACTIONS).toEqual(['daak.open', 'daak.share']);
     expect(DAK_RECEIVED_ACTIONS).toContain('daak.folder');
@@ -292,15 +302,14 @@ describe('notifyFailedSend', () => {
     body: 'Open Daak to try again.',
   };
 
-  // The same category and the same post as a received banner, so the same OS
-  // rules apply. The payload names the device, so a tap opens its thread.
+  // Its own category, so the OS gives it its own channel and its own buttons. The payload names the device, so a tap opens its thread.
   it('posts with its own id and a payload that names the device', async () => {
     await notifyFailedSend(notice);
     expect(native.post).toHaveBeenCalledWith(
       `failed:${'11'.repeat(16)}`,
       "Couldn't send album",
       'Open Daak to try again.',
-      DAK_RECEIVED_CATEGORY,
+      DAK_FAILED_CATEGORY,
       JSON.stringify({ transferId: '11'.repeat(16), peerDeviceId: 'aa'.repeat(16) }),
     );
   });

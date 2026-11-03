@@ -22,6 +22,15 @@ export type NotifyAction = (typeof DAK_RECEIVED_ACTIONS)[number];
  */
 export const DAK_REGISTERED_ACTIONS = ['daak.open', 'daak.share'] as const;
 
+/**
+ * The failed-send banner has its own category. On Android that gives it its own
+ * channel ("Send failures"), so a user who mutes "Received files" still sees a
+ * failure. On iOS it gives the banner only the Open button: Share needs saved
+ * paths, and a failed send has none.
+ */
+export const DAK_FAILED_CATEGORY = 'daak.failed';
+export const DAK_FAILED_ACTIONS = ['daak.open'] as const;
+
 export interface NotificationActionEvent {
   action: NotifyAction;
   /** The raw `InboxEntry` JSON the notification was posted with. */
@@ -61,7 +70,10 @@ export async function initNotifications(known?: boolean): Promise<boolean> {
   // reject startEngine, and no notification detail may take down app startup
   // (R36, which is not permission-specific).
   await NativeDaakNotify.registerCategories(
-    JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+    JSON.stringify([
+      { id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS },
+      { id: DAK_FAILED_CATEGORY, actions: DAK_FAILED_ACTIONS },
+    ]),
   ).catch(() => false);
   return granted;
 }
@@ -102,12 +114,11 @@ export async function notifyReceived(
  * Posts the banner for a send that ended in a failure. Never throws, for the
  * reason `notifyReceived` gives.
  *
- * It uses the same native post and the same category as a received banner, so
- * the same OS rules apply. iOS installs no `willPresent`, so the banner does not
+ * It uses the same native post as a received banner, with its own category
+ * (`DAK_FAILED_CATEGORY`). iOS installs no `willPresent`, so the banner does not
  * show while the app is in front (apps/mobile/ios/Daak/DaakNotificationDelegate.swift).
  * The payload names the device, so a tap opens the thread of that device
- * (`peerOfPayload` in apps/mobile). It has no `savedPaths`, so Share does
- * nothing. The arrival preference does not apply: this is not an arrival.
+ * (`peerOfPayload` in apps/mobile). The category has no Share button. The arrival preference does not apply: this is not an arrival.
  */
 export async function notifyFailedSend(notice: FailedSendNotice): Promise<void> {
   const id = `failed:${notice.transferId}`;
@@ -115,7 +126,7 @@ export async function notifyFailedSend(notice: FailedSendNotice): Promise<void> 
     id,
     notice.title,
     notice.body,
-    DAK_RECEIVED_CATEGORY,
+    DAK_FAILED_CATEGORY,
     JSON.stringify({ transferId: notice.transferId, peerDeviceId: notice.peerDeviceId }),
   ).catch((err: unknown) => {
     console.warn(`daak: no notification for ${id}: ${String(err)}`);
