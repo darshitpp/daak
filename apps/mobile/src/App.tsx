@@ -17,8 +17,8 @@ import {
   clearDownloadFolder,
   downloadFolderName,
   appInfo,
+  copyToClipboard,
   loadNotifyPrefs,
-  presentShare,
   readOnboarding,
   saveNotifyPrefs,
 } from '@daak/platform';
@@ -102,8 +102,12 @@ export default function App() {
           void Promise.resolve(Linking.openSettings()).catch(() => {});
         },
       },
-      // Report an issue: the host supplies only the share step.
-      reportIssue: { share: (text) => presentShare({ text }) },
+      // Report an issue: the host supplies only the copy step.
+      reportIssue: {
+        copy: async (text) => {
+          if (!(await copyToClipboard(text))) throw new Error('clipboard refused');
+        },
+      },
     }),
     [],
   );

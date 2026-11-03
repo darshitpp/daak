@@ -84,6 +84,18 @@ RCT_EXPORT_METHOD(share : (NSString *)payloadJson resolve : (RCTPromiseResolveBl
   resolve(nil);
 }
 
+// Puts text on the general pasteboard. The method queue is the main queue (see
+// methodQueue above), which is where AppKit wants NSPasteboard calls.
+// setString returns NO when the pasteboard refuses the write: resolve that
+// BOOL, so the caller can show a note.
+RCT_EXPORT_METHOD(copyText : (NSString *)text resolve : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
+  RCTAssertMainQueue();
+  NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+  [pasteboard clearContents];
+  BOOL ok = [pasteboard setString:text forType:NSPasteboardTypeString];
+  resolve(@(ok));
+}
+
 // The document picker. Same signature as the mobile DaakShare.pickDocuments, so
 // the composer's injected picker is one `() => Promise<string[]>` on every
 // platform and packages/ui cannot tell them apart.

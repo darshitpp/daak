@@ -38,8 +38,8 @@ describe('the desktop dashboard shell wires the Settings and window inputs', () 
     expect(shells).not.toMatch(/from '@daak\/platform'/);
   });
 
-  it('supplies reportIssue through the system share, not presentShare', () => {
-    expect(shells).toMatch(/\breportIssue:\s*\{\s*share:\s*\(text\)\s*=>\s*shareViaSystem\(\{\s*text\s*\}\)/);
+  it('supplies reportIssue through the pasteboard verb, not presentShare', () => {
+    expect(shells).toMatch(/\breportIssue:\s*\{\s*copy:\s*async\s*\(text\)\s*=>\s*\{\s*if \(!\(await copyText\(text\)\)\)\s*throw new Error\('clipboard refused'\)/);
     expect(shells).toMatch(/from '@daak\/rn-share\/js\/system-share'/);
     expect(shells).not.toMatch(/from '@daak\/rn-share'/);
     expect(shells).not.toMatch(/presentShare/);

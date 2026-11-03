@@ -1,30 +1,40 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Linking, Text, View } from 'react-native';
 import { useEngine } from '../../EngineContext';
 import { Btn, Note, Section } from '../../components/ds';
 import type { SettingsHost } from './host';
 import { ui } from '../../theme';
+import { useToast } from '../../components/Toast';
+import { ISSUES_URL } from '../about-links';
 
-const FALLBACK = 'The share sheet could not open on this device.';
+const COPY_FAILED = {
+  title: 'The report did not copy',
+  body: 'The report could not be copied on this device.',
+};
+const OPEN_FAILED = {
+  title: 'The report is copied',
+  body: 'Open github.com/darshitpp/daak/issues/new in a browser, then paste.',
+};
+const FENCE_OPEN = '```text\n';
+const FENCE_CLOSE = '\n```';
 
 /**
- * The longest report text, in UTF-16 code units. Android sends the text in one
- * Binder transaction as UTF-16, and that buffer is 1 MiB for the process. The
- * chooser can also copy the text into a ClipData. 128 Ki units are 256 KiB.
+ * The longest report text, in UTF-16 code units, fence lines included. A
+ * GitHub issue body holds at most 65,536 characters.
  */
-export const MAX_SHARE_CHARS = 128 * 1024;
+export const MAX_REPORT_CHARS = 60_000;
 const LOG_HEADER = '=== recent log ===\n';
 
 /**
- * Cut `text` to `MAX_SHARE_CHARS`. It keeps every line up to the log header
+ * Cut `text` to `limit` units. It keeps every line up to the log header
  * and the newest whole log lines. The cut is on a line boundary, so it never
  * splits a surrogate pair.
  */
-function fitShareText(text: string): string {
-  if (text.length <= MAX_SHARE_CHARS) return text;
+function fitText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
   const at = text.indexOf(LOG_HEADER);
   const head = at < 0 ? '' : text.slice(0, at + LOG_HEADER.length);
-  let start = text.length - (MAX_SHARE_CHARS - head.length);
+  let start = text.length - (limit - head.length);
   if (text[start - 1] !== '\n') {
     const nl = text.indexOf('\n', start);
     start = nl < 0 ? text.length : nl + 1;
@@ -48,13 +58,14 @@ async function appLine(host?: SettingsHost): Promise<string> {
 
 /**
  * Settings "Report an issue". A press asks the engine for the debug bundle,
- * then hands the text to the host share step. The host owns the share sheet.
- * A dismissed sheet resolves like a finished one, so it shows no note.
+ * then hands the fenced text to the host copy step. Then it shows a toast and
+ * opens the GitHub new-issue page. A failed copy never opens the page.
  */
 export function ReportIssueSection({ host }: { host?: SettingsHost }) {
   const engine = useEngine();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
+  const [error, setError] = useState<{ title: string; body: string } | null>(null);
   // A ref blocks a second press in the same tick, before state updates.
   const busyRef = useRef(false);
   const alive = useRef(true);
@@ -65,21 +76,26 @@ export function ReportIssueSection({ host }: { host?: SettingsHost }) {
     };
   }, []);
 
-  const share = host?.reportIssue?.share;
-  if (!share) return null;
+  const copy = host?.reportIssue?.copy;
+  if (!copy) return null;
 
   const press = async () => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
+    let copied = false;
     try {
       const bundle = await engine.exportDebugBundle();
-      await share(fitShareText((await appLine(host)) + bundle));
+      const text = fitText((await appLine(host)) + bundle, MAX_REPORT_CHARS - FENCE_OPEN.length - FENCE_CLOSE.length);
+      await copy(FENCE_OPEN + text + FENCE_CLOSE);
+      copied = true;
+      toast.show('Copied · paste it into the issue');
+      await Linking.openURL(ISSUES_URL);
     } catch (e) {
       // The note shows fixed text. The raw message is a developer string.
       console.warn('daak: report an issue failed:', e);
-      if (alive.current) setError(FALLBACK);
+      if (alive.current) setError(copied ? OPEN_FAILED : COPY_FAILED);
     } finally {
       busyRef.current = false;
       if (alive.current) setBusy(false);
@@ -102,10 +118,10 @@ export function ReportIssueSection({ host }: { host?: SettingsHost }) {
         </View>
       </View>
       <Text style={ui.hint}>
-        Opens the share sheet with a short log of what Daak did recently. You choose where it goes. Daak sends nothing by itself.
+        Copies a short log of what Daak did recently, then opens GitHub. Paste the log into a new issue. Issues are public, so read the log first. Daak sends nothing by itself.
       </Text>
       {error !== null ? (
-        <Note tone="err" title="The report did not open" body={error} testID="report-issue-error" />
+        <Note tone="err" title={error.title} body={error.body} testID="report-issue-error" />
       ) : null}
     </Section>
   );

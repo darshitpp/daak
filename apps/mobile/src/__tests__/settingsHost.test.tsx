@@ -25,7 +25,7 @@ jest.mock('../BackgroundSyncNotice', () => ({ BackgroundSyncNotice: () => null }
 jest.mock('../PairingFlow', () => ({ PairingFlow: () => null }));
 
 import App from '../App';
-import { appInfo, presentShare, readOnboarding, saveNotifyPrefs } from '@daak/platform';
+import { appInfo, copyToClipboard, readOnboarding, saveNotifyPrefs } from '@daak/platform';
 
 const { engine } = jest.requireMock('../bootstrap');
 const paired = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true };
@@ -63,12 +63,14 @@ it('saves the arrival switch through the platform preference store', async () =>
 });
 
 // The section puts the host app version line before the bundle text.
-it('shares the app version line and the debug bundle through presentShare when Report an issue is tapped', async () => {
+it('copies the app version line and the debug bundle through copyToClipboard when Report an issue is tapped', async () => {
   const bundle = jest.spyOn(engine, 'exportDebugBundle').mockResolvedValue('BUNDLE TEXT');
+  jest.mocked(copyToClipboard).mockResolvedValueOnce(true);
+  jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
   await openSettings();
   fireEvent.press(await screen.findByTestId('report-issue'));
   await waitFor(() =>
-    expect(presentShare).toHaveBeenCalledWith({ text: 'app: 0.0.0-test (build 1)\nBUNDLE TEXT' }),
+    expect(copyToClipboard).toHaveBeenCalledWith('```text\napp: 0.0.0-test (build 1)\nBUNDLE TEXT\n```'),
   );
   expect(bundle).toHaveBeenCalledTimes(1);
 });

@@ -10,3 +10,8 @@ export async function shareViaSystem(input: { text?: string; files?: string[] })
   const payload: SharePayload = normalizeShareItems(input);
   await NativeDaakSystemShare.share(JSON.stringify(payload));
 }
+
+/** Copies `text` to the system clipboard. Resolves `false` when the OS refused. */
+export async function copyText(text: string): Promise<boolean> {
+  return NativeDaakSystemShare.copyText(text);
+}

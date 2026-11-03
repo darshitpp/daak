@@ -212,7 +212,7 @@ describe('SettingsScreen sections', () => {
     render(
       <EngineProvider engine={fakeEngine([dev])}>
         <SettingsScreen
-          settingsHost={{ reportIssue: { share: async () => {} } }}
+          settingsHost={{ reportIssue: { copy: async () => {} } }}
           onCheckConnection={() => {}}
         />
       </EngineProvider>,

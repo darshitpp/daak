@@ -18,12 +18,12 @@ export interface SettingsHost {
   /** Label of the network row in Connection. Default 'This Wi-Fi'. The macOS host passes 'Network'. */
   networkLabel?: string;
   /**
-   * The share step of "Report an issue". The host supplies only this step,
+   * The copy step of "Report an issue". The host supplies only this step,
    * because packages/ui imports no platform code. Absent: the section is hidden.
-   * The promise does not wait for the user. iOS resolves it when the share
-   * sheet opens. Android and macOS resolve it at once. A dismissed sheet is
-   * not an error. The section adds an `appInfo` line before the bundle text.
+   * The promise rejects when the OS refuses the copy. The section opens the
+   * GitHub page itself. The section adds an `appInfo` line before the bundle
+   * text and puts the text in a fenced block.
    */
-  reportIssue?: { share: (text: string) => Promise<void> };
+  reportIssue?: { copy: (text: string) => Promise<void> };
 }
 
