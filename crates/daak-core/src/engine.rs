@@ -2717,7 +2717,15 @@ impl Engine {
         };
         // The roots are read now, before any move. The UI gets them in the
         // event. A later list_inbox reads the paths after the move.
-        let roots = crate::store::inbox::group_roots(db, &row.transfer_id)?;
+        // This data is extra. An error here must not lose the inbox row.
+        let roots = crate::store::inbox::group_roots(db, &row.transfer_id).unwrap_or_else(|e| {
+            tracing::warn!(
+                payload = %short_id(&row.id),
+                error = %e,
+                "record_inbox: folder roots not read; the row has none"
+            );
+            Vec::new()
+        });
         if db.add_inbox_once(&row)? {
             return Ok((
                 InboxRow {
@@ -3847,6 +3855,30 @@ async fn read_identity_public(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The folder roots are extra data. A failure to read them must not stop
+    // the inbox row from being stored.
+    #[test]
+    fn record_inbox_stores_the_row_when_group_roots_fails() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        // With no transfer_items table, group_roots returns an error.
+        db.conn()
+            .execute_batch("DROP TABLE transfer_items")
+            .unwrap();
+        let m = Manifest::new(
+            PayloadKind::Media,
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "x".into(),
+            },
+            vec![],
+        );
+        let (row, first) = Engine::record_inbox(&db, &m, &["/a".to_string()]).unwrap();
+        assert!(first);
+        assert!(row.group_roots.is_empty());
+        assert_eq!(db.list_inbox().unwrap().len(), 1);
+    }
 
     // P4 Task 12. The clock is a parameter, so these cases never sleep.
     #[test]

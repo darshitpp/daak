@@ -259,7 +259,7 @@ impl Item {
     /// out_dir-relative strings. Names are not destinations -- a folder child
     /// lands at its attrs["path"], a loose file at its bare name -- so the two
     /// sets are threaded separately, and it is their PAIR that must be unique.
-    /// The group name is claimed here too.
+    /// This function also claims the group name.
     /// It starts empty here, so a lone folder share is unaffected;
     /// `from_picked_paths` seeds it with every loose file up front.
     ///
@@ -322,7 +322,8 @@ impl Item {
     /// Folders and unknown (custom) types carry no chunk series of their own and
     /// must not enter the binary path. B1: a picked folder never reaches the wire
     /// as a Folder item -- `from_folder_into` flattens it into one binary item
-    /// per regular file, each carrying its share-root-relative `attrs["path"]`.
+    /// per regular file, each carrying `attrs["path"]`: the group name, then the
+    /// path below the folder.
     /// The item list is flat on the wire; the tree is rebuilt by the receiver.
     pub fn is_binary(&self) -> bool {
         !matches!(
@@ -370,9 +371,9 @@ fn item_rel(item: &Item) -> Result<&str> {
 /// A `\` becomes `_`, because the receiver splits a path on `\` as well as on
 /// `/`. A reserved name (`quarantine`, `staging`) gets `~1`: the receiver remaps
 /// a reserved component to `item_{index}` for each child, which would split the
-/// folder across `item_5/`, `item_6/` and so on. The name is claimed in `dests`
-/// through `unique_destination`, so a loose file or an earlier folder with the
-/// same name pushes this group to `~1`, `~2`.
+/// folder across `item_5/`, `item_6/` and so on. This function claims the name
+/// in `dests` through `unique_destination`. A loose file or an earlier folder
+/// with the same name pushes this group to `~1`, `~2`.
 fn unique_group(dests: &mut HashSet<String>, root: &Path, index: u32) -> Result<String> {
     let mut group = root
         .file_name()
@@ -510,8 +511,8 @@ pub fn from_picked_paths(
     // B1/F4: names are not destinations. A loose file lands at its bare name,
     // and a folder child lands at attrs["path"]. A shared NAME set cannot see
     // a collision between the two routes. Before the group name existed, a
-    // loose `x.bin` beside a folder with a top-level `x.bin` produced two items
-    // with unique names that both landed on out_dir/x.bin. The receiver
+    // loose `x.bin` beside a folder with a top-level `x.bin` made two items
+    // with unique names. Both items landed on out_dir/x.bin. The receiver
     // interleaved their chunks into one file. The invariant is distinct
     // DESTINATIONS.
     // Now every folder child path starts with the group name of its folder,
@@ -999,10 +1000,10 @@ mod tests {
         assert_distinct_and_accepted(&manifest);
     }
 
-    /// B1-C1 cross-population: a folder child and a loose file resolve by
-    /// DIFFERENT routes (attrs["path"] vs bare name), which is exactly where
-    /// the raw string used to agree with the destination and hide the remap.
-    /// Both pick orders, because the deciding index is handed out in pick order.
+    /// Regression guard for the group prefix. A folder child always lands under
+    /// its group folder, so it cannot collide with a loose top-level file, even
+    /// when both name a reserved component (`quarantine`, `staging`) or its
+    /// remap (`item_1`). The test uses both pick orders.
     #[test]
     fn a_folder_child_and_a_loose_file_naming_a_reserved_component_and_its_remap_are_split() {
         for (child, loose) in [

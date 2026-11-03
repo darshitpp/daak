@@ -52,8 +52,11 @@ impl Db {
     /// file, and `add_inbox_once` then writes nothing. Returns the new row, or
     /// `None` when no row exists or no path is new.
     pub fn merge_inbox_paths(&self, id: &[u8; 16], paths: &[String]) -> Result<Option<InboxRow>> {
-        let row = self
-            .conn()
+        let conn = self.conn();
+        // One transaction holds the SELECT and the UPDATE. A path rewrite
+        // between them would make this write a stale list.
+        let tx = conn.unchecked_transaction()?;
+        let row = tx
             .query_row(
                 "SELECT id, transfer_id, peer_device_id, kind, item_count, summary, received_at, saved_paths
                    FROM inbox_history WHERE id = ?1",
@@ -77,10 +80,11 @@ impl Db {
             return Ok(None);
         }
         row.saved_paths = crate::engine::json_string_array(&all);
-        self.conn().execute(
+        tx.execute(
             "UPDATE inbox_history SET saved_paths = ?2 WHERE id = ?1",
             rusqlite::params![&id[..], row.saved_paths],
         )?;
+        tx.commit()?;
         Ok(Some(row))
     }
 
@@ -221,6 +225,11 @@ pub fn group_roots(db: &Db, transfer_id: &[u8; 16]) -> Result<Vec<String>> {
         let Ok(parts) = crate::transfer::receiver::safe_components(rel, index) else {
             continue;
         };
+        // The receiver saves a bare name when no component is safe. That
+        // file is not in a folder.
+        if parts.is_empty() {
+            continue;
+        }
         let mut root = std::path::Path::new(&dest);
         for _ in 1..parts.len() {
             match root.parent() {
@@ -492,6 +501,26 @@ mod tests {
         assert_eq!(db.list_inbox().unwrap()[0], merged);
     }
 
+    // A moved row keeps its moved path. A new path is appended after it.
+    #[test]
+    fn merge_inbox_paths_keeps_a_moved_path_and_appends_the_new_one() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        db.replace_inbox_paths(&[1u8; 16], &["photos:ABC".to_string()])
+            .unwrap();
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/b".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["photos:ABC", "/b"]));
+        assert_eq!(db.list_inbox().unwrap()[0], merged);
+    }
+
     // A list of the wrong length cannot be paired with the old list by index.
     // Writing it would store a list that names the wrong files.
     #[test]
@@ -608,6 +637,34 @@ mod tests {
             group_roots(&db, &[1u8; 16]).unwrap(),
             vec!["/out/zeta".to_string(), "/out/album".to_string()]
         );
+    }
+
+    // A path of only `..` or `.` has no component. The receiver then saves a
+    // bare name in the output directory, so the file is not in a folder.
+    #[test]
+    fn group_roots_is_empty_when_the_path_has_no_safe_component() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut it = file_item(0, None);
+        it.attrs
+            .insert("group".into(), ciborium::value::Value::Text("g".into()));
+        it.attrs
+            .insert("path".into(), ciborium::value::Value::Text("..".into()));
+        let m = Manifest::new(
+            PayloadKind::Media,
+            DeviceRef {
+                device_id: [9u8; 16],
+                name: "x".into(),
+            },
+            vec![it],
+        );
+        db.upsert_transfer(&TransferRow {
+            manifest: m.to_cbor().unwrap(),
+            ..transfer(1)
+        })
+        .unwrap();
+        db.upsert_item(&item(1, 0, "/out/f0")).unwrap();
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
     }
 
     #[test]
