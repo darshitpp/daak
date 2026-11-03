@@ -1,11 +1,11 @@
-// Desktop-only store for the files that the Finder service "Send with Daak"
-// hands to the app. The native module DaakSystemShare holds the paths until
-// JavaScript takes them.
+// This file is the desktop store for the files that the Finder service
+// "Send with Daak" hands to the app. The native module DaakSystemShare holds
+// the paths until JavaScript takes them.
 //
 // This file reads NativeModules inside each call. It does not use a spec
-// import. A spec import evaluates getEnforcing at load, and that call throws
-// when the module is absent. index.js runs before the bridge fills
-// NativeModules, so a missing module is a normal case here.
+// import. A spec import runs getEnforcing at load, and that call throws when
+// the module is absent. index.js runs before the bridge fills NativeModules.
+// A missing module is a normal case here.
 import { NativeEventEmitter, NativeModules, type NativeModule } from 'react-native';
 import type { DaakEngine, DeviceInfo } from '@daak/core/src/engine/types';
 import { setDirectSharePeer } from './direct-share';
@@ -19,6 +19,7 @@ interface SystemShareModule extends NativeModule {
 }
 
 const EVENT = 'DaakServiceFilesPending';
+const DISMISSED = 'DaakServiceFilesDismissed';
 
 function nativeModule(): SystemShareModule | undefined {
   return NativeModules.DaakSystemShare as SystemShareModule | undefined;
@@ -97,14 +98,19 @@ export async function pullServiceFiles(): Promise<void> {
   }
 }
 
-// Pull once, then listen for later deliveries. Return a function that removes
-// the listener. When the native module is absent, do nothing and return a no-op.
+// Pull once, then listen for later deliveries. A dismissed event clears the
+// store. Return a function that removes both listeners. When the native module is absent, do nothing and return a no-op.
 export function onServiceFiles(): () => void {
   const native = nativeModule();
   if (!native) return () => {};
   void pullServiceFiles();
-  const sub = new NativeEventEmitter(native).addListener(EVENT, () => {
+  const emitter = new NativeEventEmitter(native);
+  const pending = emitter.addListener(EVENT, () => {
     void pullServiceFiles();
   });
-  return () => sub.remove();
+  const dismissed = emitter.addListener(DISMISSED, () => consumeServiceFiles());
+  return () => {
+    pending.remove();
+    dismissed.remove();
+  };
 }

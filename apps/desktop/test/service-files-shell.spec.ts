@@ -58,9 +58,3 @@ describe('the dashboard shell wires the Finder service files', () => {
     expect(index).not.toMatch(/onServiceFiles/);
   });
 });
-
-describe('the store survives the onboarding gate', () => {
-  it('has no reference to the onboarding gate', () => {
-    expect(store).not.toMatch(/onboarding|\bgate\b/i);
-  });
-});

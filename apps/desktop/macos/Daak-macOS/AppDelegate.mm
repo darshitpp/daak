@@ -82,6 +82,15 @@
   [[RNWindowHost shared] adoptRootViewFactory:self.rootViewFactory];
   [[RNWindowHost shared] adoptDashboardWindow:self.window];
 
+  // A closed dashboard window must not leave files staged. The red close button
+  // and Cmd-W both close the window, and AppKit posts this notification for each.
+  [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
+                                                    object:self.window
+                                                     queue:[NSOperationQueue mainQueue]
+                                                usingBlock:^(NSNotification *note) {
+    [RNShare dismissPendingFiles];
+  }];
+
   // A status item owns the popover; RNTray installs the icon and posts this
   // notification on click. The observer has to be registered HERE, not in the
   // window host: this delegate is the only object that holds both the
@@ -108,7 +117,9 @@
   NSArray<NSURL *> *urls = [pboard readObjectsForClasses:@[ NSURL.class ]
                                                  options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
   if (urls.count == 0) {
-    *error = @"No file was selected.";
+    if (error) {
+      *error = @"No file was selected.";
+    }
     return;
   }
   NSMutableArray<NSString *> *paths = [NSMutableArray arrayWithCapacity:urls.count];

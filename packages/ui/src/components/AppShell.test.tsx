@@ -168,7 +168,7 @@ describe('AppShell pending share actions', () => {
       </EngineProvider>,
     );
     fireEvent.press(await peerRow());
-    expect(await screen.findByText(/disk is full/)).toBeTruthy();
+    expect(await screen.findByText(/Could not send: disk is full/)).toBeTruthy();
     expect(screen.queryByTestId('thread-back')).toBeNull();
     expect(screen.getByTestId('pending-share')).toBeTruthy();
   });
@@ -191,6 +191,12 @@ describe('AppShell pending share actions', () => {
     fireEvent.press(await peerRow());
     expect(await screen.findByDisplayValue('note')).toBeTruthy();
     expect(onShareSend).not.toHaveBeenCalled();
+  });
+
+  it('without onCancelShare the note shows and there is no Cancel button', async () => {
+    shell(fakeEngine([peer]), { initialFiles: files });
+    expect(await screen.findByTestId('pending-share')).toBeTruthy();
+    expect(screen.queryByTestId('cancel-share')).toBeNull();
   });
 
   it('Cancel clears the pending share and calls onCancelShare', async () => {
@@ -239,7 +245,7 @@ describe('AppShell pending share actions', () => {
     render(
       <EngineProvider engine={fakeEngine([peer])}>
         <ToastProvider>
-          <AppShell initialFiles={files} onShareSend={() => d.promise} />
+          <AppShell initialFiles={files} onShareSend={() => d.promise} onCancelShare={() => {}} />
         </ToastProvider>
       </EngineProvider>,
     );
@@ -255,7 +261,7 @@ describe('AppShell pending share actions', () => {
     render(
       <EngineProvider engine={fakeEngine([peer])}>
         <ToastProvider>
-          <AppShell initialFiles={files} onShareSend={() => d.promise} />
+          <AppShell initialFiles={files} onShareSend={() => d.promise} onCancelShare={() => {}} />
         </ToastProvider>
       </EngineProvider>,
     );
@@ -270,10 +276,11 @@ describe('AppShell pending share actions', () => {
     const d = deferred();
     const cancel = jest.fn().mockResolvedValue(undefined);
     const onShareSend = () => d.promise;
-    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
+    const onCancelShare = () => {};
+    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend, onCancelShare });
     fireEvent.press(await peerRow());
     fireEvent.press(screen.getByTestId('cancel-share'));
-    again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend });
+    again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend, onCancelShare });
     await act(async () => d.resolve({ cancel }));
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('pending-share')).toBeTruthy();

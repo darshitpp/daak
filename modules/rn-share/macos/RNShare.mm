@@ -7,6 +7,7 @@
 // lives at class level. A lock guards it.
 static NSMutableArray<NSString *> *sPendingFiles;
 static NSString *const kServiceFilesPending = @"DaakServiceFilesPending";
+static NSString *const kServiceFilesDismissed = @"DaakServiceFilesDismissed";
 
 @implementation RNShare {
   NSSharingServicePicker *_picker;
@@ -22,30 +23,54 @@ RCT_EXPORT_MODULE(DaakSystemShare)
 - (dispatch_queue_t)methodQueue { return dispatch_get_main_queue(); }
 
 + (void)addPendingFiles:(NSArray<NSString *> *)paths {
-  @synchronized(self) {
-    if (sPendingFiles == nil) {
-      sPendingFiles = [NSMutableArray array];
-    }
-    [sPendingFiles addObjectsFromArray:paths];
+  // A new delivery replaces the old one. The user sees only the newest share.
+  @synchronized(RNShare.class) {
+    sPendingFiles = [NSMutableArray arrayWithArray:paths];
   }
   [[NSNotificationCenter defaultCenter] postNotificationName:kServiceFilesPending object:nil];
 }
 
-- (NSArray<NSString *> *)supportedEvents { return @[ @"DaakServiceFilesPending" ]; }
+// The dashboard window closed. Clear the list, then tell JavaScript to drop its copy.
++ (void)dismissPendingFiles {
+  @synchronized(RNShare.class) {
+    [sPendingFiles removeAllObjects];
+  }
+  [[NSNotificationCenter defaultCenter] postNotificationName:kServiceFilesDismissed object:nil];
+}
+
+- (NSArray<NSString *> *)supportedEvents { return @[ @"DaakServiceFilesPending", @"DaakServiceFilesDismissed" ]; }
 
 - (void)startObserving {
   [[NSNotificationCenter defaultCenter] addObserver:self
                                            selector:@selector(servicePathsPending:)
                                                name:kServiceFilesPending
                                              object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(servicePathsDismissed:)
+                                               name:kServiceFilesDismissed
+                                             object:nil];
+  // Paths can arrive between the first pull and this listener. Send the event
+  // now, so those paths do not wait for the next delivery.
+  BOOL hasPending;
+  @synchronized(RNShare.class) {
+    hasPending = sPendingFiles.count > 0;
+  }
+  if (hasPending) {
+    [self sendEventWithName:kServiceFilesPending body:nil];
+  }
 }
 
 - (void)stopObserving {
   [[NSNotificationCenter defaultCenter] removeObserver:self name:kServiceFilesPending object:nil];
+  [[NSNotificationCenter defaultCenter] removeObserver:self name:kServiceFilesDismissed object:nil];
 }
 
 - (void)servicePathsPending:(NSNotification *)note {
   [self sendEventWithName:kServiceFilesPending body:nil];
+}
+
+- (void)servicePathsDismissed:(NSNotification *)note {
+  [self sendEventWithName:kServiceFilesDismissed body:nil];
 }
 
 // Returns the stored paths, then clears the list.

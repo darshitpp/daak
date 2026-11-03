@@ -145,7 +145,7 @@ export function AppShell({
         handle = await onShareSend(d, { files, text: share?.text });
       } catch (e) {
         // The user cancelled. A failed send is the expected result then.
-        if (!cancelRequested.current) toast.show(e instanceof Error ? e.message : String(e));
+        if (!cancelRequested.current) toast.show(`Could not send: ${e instanceof Error ? e.message : String(e)}`);
         return;
       } finally {
         sending.current = false;
@@ -250,7 +250,7 @@ export function AppShell({
     screen = (
       <DashboardScreen
         onOpenThread={(d) => void openThread(d)}
-        onCancelShare={cancelShare}
+        onCancelShare={onCancelShare === undefined ? undefined : cancelShare}
         onPair={pair ? () => push({ name: 'pair' }) : undefined}
         onCheckConnection={onCheckConnection}
         pendingShare={share === null ? null : { fileCount: share.files?.length ?? 0, hasText: (share.text ?? '') !== '' }}

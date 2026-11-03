@@ -264,7 +264,7 @@ describe('onServiceFiles with the native module present', () => {
     onServiceFiles();
     await flush();
     expect(take).toHaveBeenCalledTimes(1);
-    expect(names).toEqual(['DaakServiceFilesPending']);
+    expect(names).toContain('DaakServiceFilesPending');
   });
 
   it('pulls again when the event fires', async () => {
@@ -275,10 +275,21 @@ describe('onServiceFiles with the native module present', () => {
     expect(take).toHaveBeenCalledTimes(2);
   });
 
-  it('the returned function removes the subscription', () => {
+  it('the dismissed event clears the store', async () => {
+    onServiceFiles();
+    await flush();
+    setServiceFiles(['/tmp/a.txt']);
+    const at = names.indexOf('DaakServiceFilesDismissed');
+    expect(at).toBeGreaterThan(-1);
+    handlers[at]();
+    expect(getServiceFiles()).toBeNull();
+  });
+
+  it('the returned function removes both subscriptions', () => {
     const off = onServiceFiles();
+    expect(names).toEqual(['DaakServiceFilesPending', 'DaakServiceFilesDismissed']);
     off();
-    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(2);
   });
 
   it('two events with different paths leave the newest paths and a higher token', async () => {

@@ -149,8 +149,9 @@ export function DaakDashboardShell({ engine, runtime }: {
     [],
   );
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
-  // The files from Finder Services. The store is module-level, so the files wait
-  // here while the onboarding gate shows. The subscribe identity stays stable.
+  // These are the files from Finder Services. The store is module-level, so the
+  // files wait here while the onboarding gate shows. The subscribe identity
+  // stays stable.
   const subscribeSvc = useCallback(
     (onChange: () => void) => subscribeServiceFiles(onChange),
     [],

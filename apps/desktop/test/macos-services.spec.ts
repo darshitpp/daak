@@ -41,4 +41,60 @@ describe('macOS Services entry', () => {
     expect(share).toMatch(/RCT_EXPORT_METHOD\(takePendingFiles/);
     expect(share).toMatch(/supportedEvents[\s\S]*@"DaakServiceFilesPending"/);
   });
+
+  // The source text of one Objective-C method, up to the next method or the end.
+  const method = (src: string, signature: string): string => {
+    const start = src.indexOf(signature);
+    expect(start).toBeGreaterThan(-1);
+    const next = src.slice(start + signature.length).search(/\n(?:[-+] \(|RCT_EXPORT_METHOD|@end)/);
+    return next === -1 ? src.slice(start) : src.slice(start, start + signature.length + next);
+  };
+
+  it('addPendingFiles replaces the list and does not append', () => {
+    const body = method(share, '+ (void)addPendingFiles:');
+    expect(body).not.toMatch(/addObjectsFromArray/);
+    expect(body).toMatch(/sPendingFiles = \[NSMutableArray arrayWithArray:paths\]/);
+  });
+
+  it('startObserving sends the pending event when the list is not empty', () => {
+    const body = method(share, '- (void)startObserving');
+    const observerAt = body.indexOf('addObserver:self');
+    const sendAt = body.indexOf('sendEventWithName:kServiceFilesPending');
+    expect(observerAt).toBeGreaterThan(-1);
+    expect(sendAt).toBeGreaterThan(observerAt);
+    expect(body).toMatch(/sPendingFiles\.count > 0/);
+  });
+
+  it('dismissPendingFiles clears the list and posts the dismissed event', () => {
+    const body = method(share, '+ (void)dismissPendingFiles');
+    expect(body).toMatch(/@synchronized\(RNShare\.class\)/);
+    expect(body).toMatch(/removeAllObjects/);
+    expect(body).toMatch(/postNotificationName:kServiceFilesDismissed/);
+  });
+
+  it('RNShare forwards the dismissed event to JavaScript', () => {
+    expect(share).toMatch(/kServiceFilesDismissed = @"DaakServiceFilesDismissed"/);
+    expect(share).toMatch(/supportedEvents[\s\S]*@"DaakServiceFilesDismissed"/);
+    const start = method(share, '- (void)startObserving');
+    const stop = method(share, '- (void)stopObserving');
+    expect(start).toMatch(/name:kServiceFilesDismissed/);
+    expect(stop).toMatch(/name:kServiceFilesDismissed/);
+  });
+
+  it('AppDelegate clears the share when the dashboard window closes', () => {
+    expect(delegate).toMatch(/NSWindowWillCloseNotification/);
+    expect(delegate).toMatch(/object:self\.window/);
+    expect(delegate).toMatch(/\[RNShare dismissPendingFiles\]/);
+  });
+
+  it('sendFiles guards the error out parameter', () => {
+    expect(delegate).toMatch(/if \(error\) \{\s*\*error = /);
+    expect(delegate.match(/\*error = /g)).toHaveLength(1);
+  });
+
+  it('every @synchronized in RNShare names RNShare.class', () => {
+    const uses = share.match(/@synchronized\([^)]*\)/g) ?? [];
+    expect(uses.length).toBeGreaterThanOrEqual(3);
+    for (const use of uses) expect(use).toBe('@synchronized(RNShare.class)');
+  });
 });
