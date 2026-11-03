@@ -327,6 +327,7 @@ pub fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value 
                 "error": i.error,
                 "truncated": i.truncated,
                 "textTruncated": i.text_truncated,
+                "group": i.group.as_ref().map(daak_core::thread::ThreadGroup::to_json),
             })
         })
         .collect();

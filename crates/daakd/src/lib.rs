@@ -226,6 +226,7 @@ fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value {
                 "error": i.error,
                 "truncated": i.truncated,
                 "textTruncated": i.text_truncated,
+                "group": i.group.as_ref().map(daak_core::thread::ThreadGroup::to_json),
             })
         })
         .collect();
@@ -1047,6 +1048,7 @@ mod tests {
                 error: None,
                 truncated: false,
                 text_truncated: false,
+                group: None,
             }],
             older_cursor: Some("5:00".into()),
         };
@@ -1097,6 +1099,7 @@ mod tests {
             error: None,
             truncated,
             text_truncated,
+            group: None,
         };
         let page = daak_core::thread::ThreadPage {
             items: vec![item(true, false), item(false, true)],

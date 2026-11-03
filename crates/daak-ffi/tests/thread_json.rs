@@ -21,6 +21,7 @@ fn item(text: Option<&str>, outbound: bool) -> ThreadItem {
         error: None,
         truncated: false,
         text_truncated: false,
+        group: None,
     }
 }
 
@@ -123,4 +124,26 @@ fn the_cut_flags_carry_their_values() {
     assert_eq!(v["items"][0]["textTruncated"], false);
     assert_eq!(v["items"][1]["truncated"], false);
     assert_eq!(v["items"][1]["textTruncated"], true);
+}
+
+// A folder item carries its group. A loose item carries null.
+#[test]
+fn a_folder_item_carries_its_group() {
+    let mut f = item(None, false);
+    f.group = Some(daak_core::thread::ThreadGroup {
+        name: "album".into(),
+        rel: "sub/mid.bin".into(),
+        files: 2,
+        bytes: 30,
+    });
+    let p = ThreadPage {
+        items: vec![f, item(None, false)],
+        older_cursor: None,
+    };
+    let v = thread_page_json(&p);
+    assert_eq!(v["items"][0]["group"]["name"], "album");
+    assert_eq!(v["items"][0]["group"]["rel"], "sub/mid.bin");
+    assert_eq!(v["items"][0]["group"]["files"], 2);
+    assert_eq!(v["items"][0]["group"]["bytes"], 30);
+    assert!(v["items"][1]["group"].is_null());
 }

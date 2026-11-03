@@ -15,6 +15,7 @@ export function threadItem(p: Partial<ThreadItem> = {}): ThreadItem {
     at: 1_700_000_000,
     transferState: 'done',
     error: null,
+    group: null,
     ...p,
   };
 }
