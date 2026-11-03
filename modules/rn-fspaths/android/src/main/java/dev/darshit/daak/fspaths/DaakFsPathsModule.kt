@@ -400,7 +400,11 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         path
       }
     }
-    pruneEmptyDirs(input)
+    // Best effort. A throw here must not reject the promise: the files already
+    // moved, and JavaScript must still get the new paths.
+    runCatching { pruneEmptyDirs(input) }.onFailure {
+      android.util.Log.w("DaakFsPaths", "the empty folders could not be removed", it)
+    }
     writable(out)
   }
 
@@ -424,7 +428,11 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     val out = input.mapIndexed { i, path ->
       try { saveOne(path, parallelAt(albums, i)) } catch (t: Throwable) { path }
     }
-    pruneEmptyDirs(input)
+    // Best effort. A throw here must not reject the promise: the files already
+    // moved, and JavaScript must still get the new paths.
+    runCatching { pruneEmptyDirs(input) }.onFailure {
+      android.util.Log.w("DaakFsPaths", "the empty folders could not be removed", it)
+    }
     writable(out)
   }
 

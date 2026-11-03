@@ -76,8 +76,8 @@ export interface Spec extends TurboModule {
    * type, an API level below 29, or any failure. It never rejects.
    *
    * `albums[i]` is the album for `paths[i]`, for example `album / sub`. `''` is
-   * no album. The array has one entry for each path. iOS finds or creates a
-   * Photos album with that title. Android uses `Pictures/Daak/album/sub` (or
+   * no album. The array has one entry for each path. iOS makes a new Photos
+   * album with that title for each call. Add-only access cannot look up albums. Android uses `Pictures/Daak/album/sub` (or
    * `Movies/Daak/...`). macOS ignores it.
    */
   saveToLibrary(paths: string[], albums: string[]): Promise<string[]>;

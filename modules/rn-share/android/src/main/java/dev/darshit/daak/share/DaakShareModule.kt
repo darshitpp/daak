@@ -213,7 +213,10 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       for (entry in entries) {
         val target = entry.parts.fold(dest) { dir, part -> File(dir, part) }
         if (entry.isDir) {
-          if (!target.isDirectory && !target.mkdirs()) throw IOException("could not make a folder")
+          // listTree adds each folder once. A folder that exists is a second
+          // folder with the same name, and the two must not merge in silence.
+          if (target.exists()) throw FolderPickError("E_COPY", "two folders have the name ${entry.parts.last()}")
+          if (!target.mkdirs()) throw IOException("could not make a folder")
           continue
         }
         // Some providers allow two items with one name. The second copy must

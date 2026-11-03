@@ -105,7 +105,7 @@ export function Popover({
     let live = true;
     saveFolderName().then(
       (n) => {
-        if (live) setSaveFolder(n ?? 'This app\u2019s own storage');
+        if (live) setSaveFolder(n ?? "the app's own storage");
       },
       () => {},
     );

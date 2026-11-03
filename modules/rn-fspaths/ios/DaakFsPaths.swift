@@ -194,7 +194,10 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       // The walk calls the handler on the queue of this block, so a plain
       // flag is safe.
       var unreadable = false
+      // A root that exists but cannot be read gives an empty walk and no error.
+      // So read the root first.
       guard values?.isDirectory == true, values?.isSymbolicLink != true,
+            (try? FileManager.default.contentsOfDirectory(atPath: root.path)) != nil,
             let walker = FileManager.default.enumerator(
               at: root, includingPropertiesForKeys: keys, options: [],
               errorHandler: { url, error in

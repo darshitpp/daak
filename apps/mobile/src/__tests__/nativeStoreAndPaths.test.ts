@@ -1282,3 +1282,73 @@ describe('Android folder pick, copy, and stats', () => {
     expect(sweep).toContain('deleteRecursively()');
   });
 });
+
+// Cleanup C: small findings from the folder send and receive reviews.
+describe('cleanup C native pins', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+  const mac = strip(read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift'));
+  const ios = strip(read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift'));
+  const kt = strip(
+    read(
+      repo +
+        'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+    ),
+  );
+  const share = strip(
+    read(repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/DaakShareModule.kt'),
+  );
+  const fsSpec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const from = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    return src.slice(at);
+  };
+
+  it('prunes empty folders on a best-effort basis, so a throw never rejects the moves', () => {
+    for (const name of ['override fun moveReceivedFiles(', 'override fun saveToLibrary(']) {
+      const fn = from(kt, name).split('\n  @ReactMethod')[0];
+      expect(fn).toMatch(/runCatching \{ pruneEmptyDirs\(input\) \}/);
+      expect(fn).toContain('Log.w(');
+      expect(fn.indexOf('runCatching')).toBeGreaterThan(fn.indexOf('val out'));
+      expect(fn.indexOf('runCatching')).toBeLessThan(fn.indexOf('writable(out)'));
+    }
+  });
+
+  it('fails the pick when a second folder has the same name', () => {
+    const copy = from(share, 'private fun copyPickedFolder').split('\n  private fun listTree')[0];
+    const dirBranch = copy.slice(copy.indexOf('if (entry.isDir) {'), copy.indexOf('continue'));
+    expect(dirBranch).toMatch(/if \(target\.exists\(\)\) throw (FolderPickError|IOException)/);
+    expect(dirBranch).not.toContain('!target.isDirectory');
+    expect(dirBranch).toContain('mkdirs()');
+  });
+
+  it.each([
+    ['macOS', mac],
+    ['iOS', ios],
+  ])('%s folderStats answers NSNull when the root cannot be read', (_n, src) => {
+    const fn = from(src, '@objc func folderStats').split('\n  /// ')[0];
+    expect(fn).toContain('contentsOfDirectory(atPath:');
+    expect(fn).toContain('errorHandler');
+    expect(fn).toMatch(/unreadable = true/);
+    expect(fn.indexOf('contentsOfDirectory(atPath:')).toBeLessThan(fn.indexOf('enumerator('));
+    expect(fn).toMatch(/if unreadable \{\s*resolve\(NSNull\(\)\)/);
+  });
+
+  it('says that iOS always makes a new album', () => {
+    expect(fsSpec).not.toContain('finds or creates');
+    expect(fsSpec).toMatch(/iOS makes a new Photos[\s*]+album/);
+  });
+
+  it('logs a failed folder make on macOS, as iOS does', () => {
+    const move = from(mac, '@objc func moveReceivedFiles');
+    const at = move.indexOf('createDirectory(at: target');
+    const catchAt = move.indexOf('catch', at);
+    const line = move.slice(catchAt).split('\n')[1];
+    expect(line).toMatch(/NSLog\("Daak: could not make a folder/);
+    expect(line).not.toMatch(/\.path|\bpath\b/);
+  });
+});

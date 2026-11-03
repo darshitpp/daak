@@ -121,9 +121,20 @@ class DaakFsPaths: NSObject {
       let root = URL(fileURLWithPath: path)
       let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
       let values = try? root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+      // The walk calls the handler on the queue of this block, so a plain
+      // flag is safe.
+      var unreadable = false
+      // A root that exists but cannot be read gives an empty walk and no error.
+      // So read the root first.
       guard values?.isDirectory == true, values?.isSymbolicLink != true,
+            (try? FileManager.default.contentsOfDirectory(atPath: root.path)) != nil,
             let walker = FileManager.default.enumerator(
-              at: root, includingPropertiesForKeys: keys, options: [])
+              at: root, includingPropertiesForKeys: keys, options: [],
+              errorHandler: { url, error in
+                NSLog("Daak: folderStats could not read \(url.path): \(error)")
+                unreadable = true
+                return false
+              })
       else {
         resolve(NSNull())
         return
@@ -135,6 +146,10 @@ class DaakFsPaths: NSObject {
               v.isSymbolicLink != true, v.isRegularFile == true else { continue }
         files += 1
         bytes += v.fileSize ?? 0
+      }
+      if unreadable {
+        resolve(NSNull())
+        return
       }
       resolve(["files": files, "bytes": bytes])
     }
@@ -267,6 +282,7 @@ class DaakFsPaths: NSObject {
       do {
         try fm.createDirectory(at: target, withIntermediateDirectories: true)
       } catch {
+        NSLog("Daak: could not make a folder in the download folder: \(error)")
         out.append(path)
         continue
       }
