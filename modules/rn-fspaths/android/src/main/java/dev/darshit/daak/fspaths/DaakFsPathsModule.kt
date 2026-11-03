@@ -356,35 +356,52 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    *
    * The answer for a moved file is a content:// URI, not a path, because that
    * is what the tree gives. The Inbox's open verb must accept it.
+   *
+   * `subdirs[i]` is the folder below the tree for `paths[i]`, for example
+   * `album/sub`. Each directory of it is found or created in the tree. A moved
+   * file is a content:// URI, and JavaScript does not send it again, so a
+   * second call never moves a file twice. After the move, the empty folders
+   * that the engine made below its output directory are removed.
    */
   @ReactMethod
-  override fun moveReceivedFiles(paths: ReadableArray, promise: Promise) = resolve(promise) {
+  override fun moveReceivedFiles(paths: ReadableArray, subdirs: ReadableArray, promise: Promise) =
+      resolve(promise) {
     // The generated spec hands a ReadableArray in and takes a WritableArray
     // back; that is the Android bridge's own shape for string[], and converting
-    // to List<String> here would not satisfy the abstract member.
-    val input = (0 until paths.size()).mapNotNull { paths.getString(it) }
+    // to List<String> here would not satisfy the abstract member. A null entry
+    // becomes "", so the answer count always equals the input count.
+    val input = (0 until paths.size()).map { paths.getString(it) ?: "" }
     val treeUri = prefs().getString(KEY_TREE, null)?.let(Uri::parse)
     if (treeUri == null) return@resolve writable(input)
     val resolver = reactApplicationContext.contentResolver
     val root =
         DocumentsContract.buildDocumentUriUsingTree(
             treeUri, DocumentsContract.getTreeDocumentId(treeUri))
-    writable(
-        input.map { path ->
+    // One lookup for each subdir in this call, not one for each file.
+    val dirs = HashMap<String, Uri?>()
+    val out = input.mapIndexed { i, path ->
       val src = File(path)
-      if (!src.exists()) return@map path
+      if (path.isEmpty() || !src.exists()) return@mapIndexed path
       try {
-        val dest = DocumentsContract.createDocument(resolver, root, guessMime(src.name), src.name)
-        if (dest == null) return@map path
-        resolver.openOutputStream(dest)?.use { out ->
-          src.inputStream().use { input -> input.copyTo(out) }
-        } ?: return@map path
+        val parts = safeParts(parallelAt(subdirs, i).split("/"))
+        val key = parts.joinToString("/")
+        val parent = if (dirs.containsKey(key)) dirs[key] else {
+          safDir(treeUri, root, parts).also { dirs[key] = it }
+        }
+        if (parent == null) return@mapIndexed path
+        val dest = DocumentsContract.createDocument(resolver, parent, guessMime(src.name), src.name)
+        if (dest == null) return@mapIndexed path
+        resolver.openOutputStream(dest)?.use { o ->
+          src.inputStream().use { input -> input.copyTo(o) }
+        } ?: return@mapIndexed path
         src.delete()
         dest.toString()
       } catch (t: Throwable) {
         path
       }
-        })
+    }
+    pruneEmptyDirs(input)
+    writable(out)
   }
 
   /**
@@ -392,13 +409,88 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    *
    * Android 10 (API 29) and later let any app add media with no permission.
    * Below 29 the input comes back unchanged and the folder move runs.
+   *
+   * `albums[i]` is the album for `paths[i]` in the JavaScript form `album / sub`.
+   * The file goes to `Pictures/Daak/album/sub` (or `Movies/Daak/...`). After
+   * the save, the empty folders that the engine made below its output
+   * directory are removed.
    */
   @ReactMethod
-  override fun saveToLibrary(paths: ReadableArray, promise: Promise) = resolve(promise) {
+  override fun saveToLibrary(paths: ReadableArray, albums: ReadableArray, promise: Promise) =
+      resolve(promise) {
     // A null entry becomes "". saveOne returns it unchanged, so the answer count
     // always equals the input count.
     val input = (0 until paths.size()).map { paths.getString(it) ?: "" }
-    writable(input.map { path -> try { saveOne(path) } catch (t: Throwable) { path } })
+    val out = input.mapIndexed { i, path ->
+      try { saveOne(path, parallelAt(albums, i)) } catch (t: Throwable) { path }
+    }
+    pruneEmptyDirs(input)
+    writable(out)
+  }
+
+  /** Entry `i` of a parallel array. A short array or a null entry is "". */
+  private fun parallelAt(values: ReadableArray, i: Int): String =
+      if (i < values.size()) values.getString(i) ?: "" else ""
+
+  /**
+   * The folder names of a subdir or an album. An empty part, `.`, and `..` are
+   * dropped, so a name can never point above the chosen folder.
+   */
+  private fun safeParts(parts: List<String>): List<String> =
+      parts.filter { it.isNotEmpty() && it != "." && it != ".." }
+
+  /**
+   * Find or create each directory of `parts` below `root` in the tree. An
+   * existing child directory with the same name is used again, so a second
+   * file of one folder does not make `album (1)`. Null when a step fails.
+   */
+  private fun safDir(treeUri: Uri, root: Uri, parts: List<String>): Uri? {
+    val resolver = reactApplicationContext.contentResolver
+    var parent = root
+    for (name in parts) {
+      val children = DocumentsContract.buildChildDocumentsUriUsingTree(
+          treeUri, DocumentsContract.getDocumentId(parent))
+      var found: Uri? = null
+      resolver.query(
+          children,
+          arrayOf(
+              DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+              DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+              DocumentsContract.Document.COLUMN_MIME_TYPE),
+          null, null, null)?.use { c ->
+        while (found == null && c.moveToNext()) {
+          if (c.getString(1) == name &&
+              c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
+            found = DocumentsContract.buildDocumentUriUsingTree(treeUri, c.getString(0))
+          }
+        }
+      }
+      parent = found
+          ?: DocumentsContract.createDocument(
+              resolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, name)
+          ?: return null
+    }
+    return parent
+  }
+
+  /**
+   * Remove each folder that is now empty, from the folder of each source up to
+   * the engine output directory. The output directory itself stays. A folder
+   * outside it is never touched. A folder that still holds a file stops the walk.
+   */
+  private fun pruneEmptyDirs(sources: List<String>) {
+    val outDir = File(dataDir(), "downloads").canonicalFile.toPath()
+    for (path in sources) {
+      if (path.isEmpty() || path.startsWith("content://")) continue
+      var dir: File? = try { File(path).canonicalFile.parentFile } catch (_: Throwable) { null }
+      while (dir != null) {
+        val at = dir.toPath()
+        if (!at.startsWith(outDir) || at == outDir) break
+        if (dir.list()?.isEmpty() != true) break
+        if (!dir.delete()) break
+        dir = dir.parentFile
+      }
+    }
   }
 
   /** No permission exists to ask for on Android 10 and later. */
@@ -416,8 +508,13 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    * One file. Writes the row as pending, copies the bytes, then clears the
    * pending flag, so no other app sees a half-written file. The source is
    * deleted only after that. A failure removes the row and keeps the source.
+   *
+   * `album` is `album / sub` (the JavaScript form). It becomes the nested path
+   * `album/sub` below `Pictures/Daak` or `Movies/Daak`. MediaStore makes each
+   * missing folder. A path that MediaStore refuses throws, and the caller then
+   * answers the original path, so the folder move takes the file.
    */
-  private fun saveOne(path: String): String {
+  private fun saveOne(path: String, album: String): String {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return path
     val src = File(path)
     if (!src.exists()) return path
@@ -430,10 +527,11 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
       else -> return path
     }
     val resolver = reactApplicationContext.contentResolver
+    val dirs = safeParts(album.split(" / ")).joinToString("/")
     val values = ContentValues().apply {
       put(MediaStore.MediaColumns.DISPLAY_NAME, src.name)
       put(MediaStore.MediaColumns.MIME_TYPE, mime)
-      put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/Daak")
+      put(MediaStore.MediaColumns.RELATIVE_PATH, if (dirs.isEmpty()) "$folder/Daak" else "$folder/Daak/$dirs")
       put(MediaStore.MediaColumns.IS_PENDING, 1)
     }
     val uri = resolver.insert(collection, values) ?: return path

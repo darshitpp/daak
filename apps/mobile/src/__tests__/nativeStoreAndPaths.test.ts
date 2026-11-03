@@ -746,7 +746,11 @@ describe('fspaths exposes the library methods on the Spec and on every native', 
   const platform = read(repo + 'packages/platform/src/fspaths.ts');
 
   it('declares the three methods on the Spec', () => {
-    expect(spec).toMatch(/saveToLibrary\(paths: string\[\]\): Promise<string\[\]>;/);
+    // Task 11: the second array is required on the bridge. The facade always
+    // sends it, with '' for a loose file, because an Objective-C selector has a
+    // fixed argument list.
+    expect(spec).toMatch(/saveToLibrary\(paths: string\[\], albums: string\[\]\): Promise<string\[\]>;/);
+    expect(spec).toMatch(/moveReceivedFiles\(paths: string\[\], subdirs: string\[\]\): Promise<string\[\]>;/);
     expect(spec).toMatch(/requestPhotosAccess\(\): Promise<boolean>;/);
     expect(spec).toMatch(/photosAccessStatus\(\): Promise</);
   });
@@ -754,15 +758,26 @@ describe('fspaths exposes the library methods on the Spec and on every native', 
   it('implements them in Swift on iOS and macOS and in Kotlin', () => {
     for (const p of ['ios', 'macos']) {
       const swift = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.swift');
-      expect(swift).toMatch(/@objc func saveToLibrary\(_ paths: \[String\]/);
+      expect(swift).toMatch(/@objc func saveToLibrary\(_ paths: \[String\],\s+albums: \[String\],/);
+      expect(swift).toMatch(/@objc func moveReceivedFiles\(_ paths: \[String\],\s+subdirs: \[String\],/);
       expect(swift).toMatch(/@objc func requestPhotosAccess\(/);
       expect(swift).toMatch(/@objc func photosAccessStatus\(/);
       const mm = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.mm');
-      expect(mm).toMatch(/RCT_EXTERN_METHOD\(saveToLibrary:/);
+      expect(mm).toMatch(
+        /RCT_EXTERN_METHOD\(saveToLibrary:\(NSArray<NSString \*> \*\)paths\s+albums:\(NSArray<NSString \*> \*\)albums\s+resolve:/,
+      );
+      expect(mm).toMatch(
+        /RCT_EXTERN_METHOD\(moveReceivedFiles:\(NSArray<NSString \*> \*\)paths\s+subdirs:\(NSArray<NSString \*> \*\)subdirs\s+resolve:/,
+      );
       expect(mm).toMatch(/RCT_EXTERN_METHOD\(requestPhotosAccess:/);
       expect(mm).toMatch(/RCT_EXTERN_METHOD\(photosAccessStatus:/);
     }
-    expect(kt).toMatch(/override fun saveToLibrary\(paths: ReadableArray, promise: Promise\)/);
+    expect(kt).toMatch(
+      /override fun saveToLibrary\(paths: ReadableArray, albums: ReadableArray, promise: Promise\)/,
+    );
+    expect(kt).toMatch(
+      /override fun moveReceivedFiles\(paths: ReadableArray, subdirs: ReadableArray, promise: Promise\)/,
+    );
     expect(kt).toMatch(/override fun requestPhotosAccess\(promise: Promise\)/);
     expect(kt).toMatch(/override fun photosAccessStatus\(promise: Promise\)/);
   });
@@ -771,6 +786,87 @@ describe('fspaths exposes the library methods on the Spec and on every native', 
     expect(platform).toMatch(/export async function saveToLibrary\(/);
     expect(platform).toMatch(/export async function requestPhotosAccess\(/);
     expect(platform).toMatch(/export async function photosAccessStatus\(/);
+  });
+
+  it('always sends one parallel entry for each path from the facade', () => {
+    expect(platform).not.toContain('ParallelCall');
+    expect(platform).not.toContain('withExtra');
+    expect(platform).toMatch(/NativeDaakFsPaths\.moveReceivedFiles\(paths, parallel\(paths, subdirs\)\)/);
+    expect(platform).toMatch(/NativeDaakFsPaths\.saveToLibrary\(paths, parallel\(paths, albums\)\)/);
+  });
+});
+
+// Task 11: a received folder keeps its structure in the library and in the save
+// folder. No native test target exists, so these pins hold the parts that fail
+// in silence.
+describe('native save and move keep the folder structure', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+  const kt = strip(
+    read(repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt'),
+  );
+  const ios = strip(read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift'));
+  const mac = strip(read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift'));
+  const from = (src: string, name: string) => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    return src.slice(at);
+  };
+
+  it('puts an Android album below Pictures/Daak or Movies/Daak as a real nested path', () => {
+    const fn = from(kt, 'private fun saveOne(');
+    // JavaScript sends the album as `album / sub`. Android needs `album/sub`.
+    expect(kt).toContain('.split(" / ")');
+    expect(fn).toMatch(/RELATIVE_PATH, if \(dirs\.isEmpty\(\)\) "\$folder\/Daak" else "\$folder\/Daak\/\$dirs"\)/);
+  });
+
+  it('finds or creates each SAF directory of the subdir before the Android move', () => {
+    const fn = from(kt, 'private fun safDir(');
+    expect(fn).toContain('DocumentsContract.Document.MIME_TYPE_DIR');
+    expect(fn).toContain('buildChildDocumentsUriUsingTree');
+    expect(fn.indexOf('buildChildDocumentsUriUsingTree')).toBeLessThan(fn.indexOf('MIME_TYPE_DIR'));
+  });
+
+  it('refuses a subdir part that is empty, a dot, or two dots on every platform', () => {
+    expect(kt).toMatch(/it\.isNotEmpty\(\) && it != "\." && it != "\.\."/);
+    for (const swift of [ios, mac]) {
+      expect(swift).toMatch(/!\$0\.isEmpty && \$0 != "\." && \$0 != "\.\."/);
+    }
+  });
+
+  it('removes only the empty directories below the engine output directory', () => {
+    for (const src of [kt, ios, mac]) {
+      expect(src).toMatch(/func? pruneEmptyDirs\(/);
+    }
+    expect(from(kt, 'private fun pruneEmptyDirs(')).toMatch(/list\(\)\?\.isEmpty\(\) != true\) break/);
+    for (const swift of [ios, mac]) {
+      const fn = from(swift, 'func pruneEmptyDirs(');
+      expect(fn).toContain('contentsOfDirectory(atPath:');
+      expect(fn).toMatch(/\.isEmpty else \{ break \}/);
+    }
+  });
+
+  it('answers the input path for a file that is already in its place on iOS and macOS', () => {
+    for (const swift of [ios, mac]) {
+      const fn = from(swift, 'func moveReceivedFiles(');
+      expect(fn).toMatch(/if Self\.samePath\(src\.deletingLastPathComponent\(\), target\) \{\s*out\.append\(path\)/);
+    }
+  });
+
+  // User decision (Task 11): keep add-only access. Add-only access cannot read
+  // albums, so each call makes a new album and adds its assets in the same
+  // change block. A second call with the same title makes a second album.
+  it('makes a new album and adds its assets in one change block on iOS, with add-only access', () => {
+    const save = ios.slice(ios.indexOf('func saveToLibrary('), ios.indexOf('func requestPhotosAccess('));
+    expect(save).toContain('creationRequestForAssetCollection(withTitle:');
+    expect(save).toContain('placeholderForCreatedAsset');
+    expect(save).toMatch(/addAssets\(placeholders as NSArray\)/);
+    expect(save).not.toContain('fetchAssetCollections');
+    expect(save).not.toContain('.readWrite');
+    expect(ios).not.toContain('fetchAssetCollections');
   });
 });
 
@@ -834,6 +930,11 @@ describe('iOS saves to the Photos library with add-only access', () => {
     expect(fn).not.toContain('try? FileManager.default.removeItem');
     expect(fn).toMatch(/do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{\s*NSLog\("Daak: the saved photo's source file was not removed: \\\(error\)"\)/);
     expect(fn).toContain('return "photos:" + identifier');
+  });
+
+  it('says in a comment that a second call makes a second album with the same name', () => {
+    const save = ios.slice(ios.indexOf('func saveToLibrary('), ios.indexOf('func requestPhotosAccess('));
+    expect(save).toMatch(/second album with the same name/);
   });
 
   it('declares the add-only usage description', () => {

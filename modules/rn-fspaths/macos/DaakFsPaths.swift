@@ -218,7 +218,14 @@ class DaakFsPaths: NSObject {
   /// A file that cannot be moved keeps its ORIGINAL path. That is the honest
   /// answer -- the file is still where the engine put it -- and it is why this
   /// returns one location per input rather than failing as a batch.
+  ///
+  /// `subdirs[i]` is the folder below the remembered folder for `paths[i]`, for
+  /// example `album/sub`. A file that is already in `<folder>/<subdir>` answers
+  /// its own path and does not move, so a second call moves nothing twice.
+  /// After the move, the empty folders that the engine made below its output
+  /// directory are removed.
   @objc func moveReceivedFiles(_ paths: [String],
+                               subdirs: [String],
                                resolve: @escaping RCTPromiseResolveBlock,
                                reject: @escaping RCTPromiseRejectBlock) {
     guard let bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey) else {
@@ -246,9 +253,24 @@ class DaakFsPaths: NSObject {
 
     let fm = FileManager.default
     var out: [String] = []
-    for path in paths {
+    for (i, path) in paths.enumerated() {
       let src = URL(fileURLWithPath: path)
-      var dest = folder.appendingPathComponent(src.lastPathComponent)
+      var target = folder
+      for part in Self.safeParts(i < subdirs.count ? subdirs[i] : "") {
+        target.appendPathComponent(part, isDirectory: true)
+      }
+      // The file is already in its place: an earlier event moved it.
+      if Self.samePath(src.deletingLastPathComponent(), target) {
+        out.append(path)
+        continue
+      }
+      do {
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+      } catch {
+        out.append(path)
+        continue
+      }
+      var dest = target.appendingPathComponent(src.lastPathComponent)
       // Never overwrite: two files called `photo.jpg` from two senders are two
       // files, and the second must not silently replace the first.
       var n = 1
@@ -256,7 +278,7 @@ class DaakFsPaths: NSObject {
         let base = src.deletingPathExtension().lastPathComponent
         let ext = src.pathExtension
         let name = ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)"
-        dest = folder.appendingPathComponent(name)
+        dest = target.appendingPathComponent(name)
         n += 1
       }
       do {
@@ -266,11 +288,52 @@ class DaakFsPaths: NSObject {
         out.append(path)
       }
     }
+    Self.pruneEmptyDirs(paths)
     resolve(out)
   }
 
+  /// The folder names of a subdir. An empty part, `.`, and `..` are dropped, so
+  /// a subdir can never point above the chosen folder.
+  private static func safeParts(_ subdir: String) -> [String] {
+    subdir.split(separator: "/").map(String.init)
+      .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+  }
+
+  /// `resolvingSymlinksInPath` drops a leading `/private` only when the path
+  /// exists. So drop it on both sides of a compare.
+  private static func withoutPrivate(_ path: String) -> String {
+    path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+  }
+
+  /// True when two folder URLs name the same folder.
+  private static func samePath(_ a: URL, _ b: URL) -> Bool {
+    let norm = { (u: URL) in withoutPrivate(u.standardizedFileURL.resolvingSymlinksInPath().path) }
+    return norm(a) == norm(b)
+  }
+
+  /// Remove each folder that is now empty, from the folder of each source up to
+  /// the engine output directory. The output directory itself stays. A folder
+  /// outside it is never touched. A folder that still holds a file stops the walk.
+  private static func pruneEmptyDirs(_ sources: [String]) {
+    let fm = FileManager.default
+    let outDir = withoutPrivate(dataDir().appendingPathComponent("downloads", isDirectory: true)
+      .standardizedFileURL.resolvingSymlinksInPath().path)
+    for path in sources {
+      var dir = URL(fileURLWithPath: path).deletingLastPathComponent()
+      while true {
+        let at = withoutPrivate(dir.standardizedFileURL.resolvingSymlinksInPath().path)
+        guard at.hasPrefix(outDir + "/") else { break }
+        guard let left = try? fm.contentsOfDirectory(atPath: at), left.isEmpty else { break }
+        do { try fm.removeItem(atPath: at) } catch { break }
+        dir = dir.deletingLastPathComponent()
+      }
+    }
+  }
+
   // macOS has no Photos support yet (R8). The shared relocate code calls these.
+  // `albums` is ignored.
   @objc func saveToLibrary(_ paths: [String],
+                           albums: [String],
                            resolve: @escaping RCTPromiseResolveBlock,
                            reject: @escaping RCTPromiseRejectBlock) {
     resolve(paths)

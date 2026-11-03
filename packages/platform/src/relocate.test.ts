@@ -14,8 +14,8 @@ vi.mock('@daak/rn-fspaths', () => ({
     chooseDownloadFolder: vi.fn(),
     downloadFolderName: vi.fn(),
     clearDownloadFolder: vi.fn(),
-    // The spread keeps the exact argument count, so a test can see whether the
-    // facade sent the second, parallel argument.
+    // The spread keeps the exact argument count, so a test can see that the
+    // facade always sends the second, parallel argument.
     moveReceivedFiles: (...args: [string[], string[]?]) => moveReceivedFiles(...args),
     saveToLibrary: (...args: [string[], string[]?]) => saveToLibrary(...args),
     requestPhotosAccess: vi.fn(),
@@ -23,7 +23,12 @@ vi.mock('@daak/rn-fspaths', () => ({
   },
 }));
 
-import { planRelocation, relocateReceivedFiles } from './fspaths';
+import {
+  moveReceivedFiles as facadeMove,
+  planRelocation,
+  relocateReceivedFiles,
+  saveToLibrary as facadeSave,
+} from './fspaths';
 
 function engineSpy() {
   const calls: Array<{ payloadId: string; paths: string[] }> = [];
@@ -111,8 +116,8 @@ it('sends media to the library and other files to the move, in order', async () 
       groupRoots: [],
     }),
   ).resolves.toEqual(['photos:ID1', '/Users/me/Downloads/b.pdf']);
-  expect(saveToLibrary).toHaveBeenCalledWith(['/app/a.JPG']);
-  expect(moveReceivedFiles).toHaveBeenCalledWith(['/app/b.pdf']);
+  expect(saveToLibrary).toHaveBeenCalledWith(['/app/a.JPG'], ['']);
+  expect(moveReceivedFiles).toHaveBeenCalledWith(['/app/b.pdf'], ['']);
   expect(engine.calls).toEqual([
     { payloadId: 'p', paths: ['photos:ID1', '/Users/me/Downloads/b.pdf'] },
   ]);
@@ -127,7 +132,7 @@ it('moves a media file the library did not take', async () => {
   await expect(
     relocateReceivedFiles(engine, { payloadId: 'p', savedPaths: ['/app/a.jpg'], groupRoots: [] }),
   ).resolves.toEqual(['/Users/me/Downloads/a.jpg']);
-  expect(moveReceivedFiles).toHaveBeenCalledWith(['/app/a.jpg']);
+  expect(moveReceivedFiles).toHaveBeenCalledWith(['/app/a.jpg'], ['']);
 });
 
 // Two files with one name stay two entries.
@@ -233,7 +238,8 @@ describe('planRelocation', () => {
       library: [{ index: 0, path: '/out/a.jpg', album: '' }],
       folder: [{ index: 1, path: '/out/b.pdf', subdir: '' }],
     });
-    // The native calls get no second argument for loose files, as before.
+    // A loose file gets '' in the second, parallel array. The bridge always
+    // gets 2 arrays, because an Objective-C selector has a fixed argument list.
     saveToLibrary.mockResolvedValue(['photos:ID1']);
     moveReceivedFiles.mockResolvedValue(['/save/b.pdf']);
     const engine = engineSpy();
@@ -244,8 +250,8 @@ describe('planRelocation', () => {
         groupRoots: [],
       }),
     ).resolves.toEqual(['photos:ID1', '/save/b.pdf']);
-    expect(saveToLibrary.mock.calls).toEqual([[['/out/a.jpg']]]);
-    expect(moveReceivedFiles.mock.calls).toEqual([[['/out/b.pdf']]]);
+    expect(saveToLibrary.mock.calls).toEqual([[['/out/a.jpg'], ['']]]);
+    expect(moveReceivedFiles.mock.calls).toEqual([[['/out/b.pdf'], ['']]]);
   });
 
   it('two_groups_with_one_album_name_stay_apart', () => {
@@ -387,5 +393,22 @@ describe('relocateReceivedFiles with a folder', () => {
     ).resolves.toBeNull();
     expect(saveToLibrary).not.toHaveBeenCalled();
     expect(again.calls).toHaveLength(0);
+  });
+});
+
+// Task 11: the native selector has a fixed argument list. The facade always
+// sends a second array with one entry for each path.
+describe('the facade pads the parallel array', () => {
+  it('sends one entry for each path, with the empty string for a missing one', async () => {
+    saveToLibrary.mockImplementation(async (paths) => paths);
+    moveReceivedFiles.mockImplementation(async (paths) => paths);
+    await facadeSave(['/a.jpg', '/b.jpg'], ['album']);
+    await facadeMove(['/a.pdf', '/b.pdf']);
+    await facadeMove(['/c.pdf'], ['album/sub', 'extra']);
+    expect(saveToLibrary.mock.calls).toEqual([[['/a.jpg', '/b.jpg'], ['album', '']]]);
+    expect(moveReceivedFiles.mock.calls).toEqual([
+      [['/a.pdf', '/b.pdf'], ['', '']],
+      [['/c.pdf'], ['album/sub']],
+    ]);
   });
 });

@@ -60,16 +60,27 @@ export interface Spec extends TurboModule {
    * With no folder remembered, or when a move fails, the ORIGINAL path comes
    * back for that entry: the file is still where the engine put it, and one
    * failure must not lose the location of the others.
+   *
+   * `subdirs[i]` is the folder below the remembered folder for `paths[i]`, for
+   * example `album/sub`. `''` is the top of the folder. The array has one entry
+   * for each path. A file that is already in `<folder>/<subdir>` answers its own
+   * path and does not move. After the move, the empty folders that the engine
+   * made below its output directory are removed.
    */
-  moveReceivedFiles(paths: string[]): Promise<string[]>;
+  moveReceivedFiles(paths: string[], subdirs: string[]): Promise<string[]>;
   /**
    * Add each image or video to the OS media library, answering one string per
    * input, in order. A saved file answers a MARKER (`photos:<id>` on iOS, a
    * `content://` URI on Android) and the engine copy is deleted. A file that
    * was not saved answers its ORIGINAL path: no permission, an unsupported
    * type, an API level below 29, or any failure. It never rejects.
+   *
+   * `albums[i]` is the album for `paths[i]`, for example `album / sub`. `''` is
+   * no album. The array has one entry for each path. iOS finds or creates a
+   * Photos album with that title. Android uses `Pictures/Daak/album/sub` (or
+   * `Movies/Daak/...`). macOS ignores it.
    */
-  saveToLibrary(paths: string[]): Promise<string[]>;
+  saveToLibrary(paths: string[], albums: string[]): Promise<string[]>;
   /**
    * Ask for add-only access to the photo library. `true` when access is
    * granted. Android needs no permission and answers `true`. macOS has no

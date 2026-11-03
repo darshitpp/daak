@@ -71,4 +71,34 @@ describe('iOS download folder', () => {
     expect(move.indexOf('NSLog("Daak: could not move')).toBeGreaterThan(move.indexOf('catch'));
     expect(code).toMatch(/NSLog\("Daak: the download folder/);
   });
+
+  // Task 11: a file of a received folder goes to `<save folder>/<subdir>`.
+  it('creates the subdir below the chosen folder before the move', () => {
+    const move = body('func moveReceivedFiles');
+    expect(move).toMatch(/func moveReceivedFiles\(_ paths: \[String\],\s+subdirs: \[String\],/);
+    expect(move).toMatch(/createDirectory\(at: target, withIntermediateDirectories: true\)/);
+    expect(move.indexOf('createDirectory(at: target')).toBeLessThan(move.indexOf('Self.place('));
+  });
+});
+
+// Task 11 (user decision): add-only access cannot read albums. So the album
+// and its assets are made in ONE change block, and no album is fetched.
+describe('iOS Photos album', () => {
+  it('creates the album and adds the assets of one title in one change block', () => {
+    const fn = body('static func addToNewAlbum(');
+    expect(fn.match(/performChangesAndWait/g)).toHaveLength(1);
+    const create = fn.indexOf('creationRequestForAssetCollection(withTitle: title)');
+    const asset = fn.indexOf('placeholderForCreatedAsset');
+    const add = fn.indexOf('addAssets(placeholders as NSArray)');
+    expect(create).toBeGreaterThan(fn.indexOf('performChangesAndWait'));
+    expect(asset).toBeGreaterThan(create);
+    expect(add).toBeGreaterThan(asset);
+    expect(fn).not.toContain('fetchAssetCollections');
+  });
+
+  it('answers one entry for each input, in order', () => {
+    const save = body('@objc func saveToLibrary');
+    expect(save).toMatch(/var out = paths/);
+    expect(save).toMatch(/out\[i\] = saved\[k\]/);
+  });
 });

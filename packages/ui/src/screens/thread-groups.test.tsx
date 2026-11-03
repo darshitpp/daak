@@ -138,6 +138,24 @@ describe('folderPlaces', () => {
     expect(isLibraryPath(null)).toBe(false);
   });
 
+  // Task 11: the strings that each native saveToLibrary returns. iOS returns
+  // `"photos:" + localIdentifier`. Android returns the MediaStore insert URI.
+  // These samples come from the native source. A device run must confirm them
+  // (task 11 report, human checklist).
+  it('native_library_paths_are_recognised_by_isLibraryPath', () => {
+    expect(isLibraryPath('photos:6F1A2B3C-4D5E-4F70-8192-A3B4C5D6E7F8/L0/001')).toBe(true);
+    expect(isLibraryPath('content://media/external/images/media/1000000034')).toBe(true);
+    expect(isLibraryPath('content://media/external/video/media/1000000035')).toBe(true);
+    // A file that moveReceivedFiles put in a SAF folder is not in the library.
+    expect(
+      isLibraryPath(
+        'content://com.android.externalstorage.documents/tree/primary%3ADaak/document/primary%3ADaak%2Falbum%2Fa.pdf',
+      ),
+    ).toBe(false);
+    // A file that moveReceivedFiles put in the iOS or macOS save folder.
+    expect(isLibraryPath('/Users/me/Downloads/album/sub/a.pdf')).toBe(false);
+  });
+
   it('places_is_mixed_when_some_children_are_library_paths', () => {
     const kids = [child('a.jpg', { destPath: 'photos:1' }), child('b.pdf')];
     expect(folderPlaces(kids, 1)).toBe('mixed');

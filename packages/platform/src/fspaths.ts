@@ -156,13 +156,11 @@ export async function clearDownloadFolder(): Promise<void> {
   return NativeDaakFsPaths.clearDownloadFolder();
 }
 
-// Task 11 adds the second, parallel argument to the native spec. Until then
-// the native type has one argument. The facade sends the second argument only
-// when it holds a value, so a call for loose files is the same as before.
-type ParallelCall = (paths: string[], extra?: string[]) => Promise<string[]>;
-
-function withExtra(call: ParallelCall, paths: string[], extra?: string[]): Promise<string[]> {
-  return extra && extra.some((e) => e !== '') ? call(paths, extra) : call(paths);
+// The native methods always get a second array with one entry for each path.
+// An Objective-C selector has a fixed argument list, so a call with 1 argument
+// cannot reach a method with 2. A missing entry is ''.
+function parallel(paths: string[], extra?: string[]): string[] {
+  return paths.map((_, i) => extra?.[i] ?? '');
 }
 
 /**
@@ -171,7 +169,7 @@ function withExtra(call: ParallelCall, paths: string[], extra?: string[]): Promi
  * file that is already at its place comes back with its own path.
  */
 export async function moveReceivedFiles(paths: string[], subdirs?: string[]): Promise<string[]> {
-  return withExtra(NativeDaakFsPaths.moveReceivedFiles as ParallelCall, paths, subdirs);
+  return NativeDaakFsPaths.moveReceivedFiles(paths, parallel(paths, subdirs));
 }
 
 export type PhotosAccess = 'granted' | 'denied' | 'undetermined' | 'unavailable';
@@ -182,7 +180,7 @@ export type PhotosAccess = 'granted' | 'denied' | 'undetermined' | 'unavailable'
  * album, as for a loose file.
  */
 export async function saveToLibrary(paths: string[], albums?: string[]): Promise<string[]> {
-  return withExtra(NativeDaakFsPaths.saveToLibrary as ParallelCall, paths, albums);
+  return NativeDaakFsPaths.saveToLibrary(paths, parallel(paths, albums));
 }
 
 export async function requestPhotosAccess(): Promise<boolean> {
