@@ -227,15 +227,16 @@ describe('notifyInboxEntry failed send', () => {
   const PEER = 'aa'.repeat(16);
   function failingEngine(direction: 'in' | 'out') {
     let handler: ((event: DaakEvent) => void) | undefined;
+    const at = { updatedAt: 1 };
     const engine: NotifyEngine = {
       on(cb) {
         handler = cb;
         return () => {};
       },
-      listTransfers: async () => [{ transferId: TID, peerDeviceId: PEER, direction, itemCount: 1 }],
+      listTransfers: async () => [{ transferId: TID, peerDeviceId: PEER, direction, itemCount: 1, updatedAt: at.updatedAt }],
       listThread: async () => ({ items: [{ transferId: TID, type: 'file' as const, name: 'report.pdf', group: null }] }),
     };
-    return { engine, emit: (e: DaakEvent) => handler?.(e) };
+    return { engine, at, emit: (e: DaakEvent) => handler?.(e) };
   }
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -247,6 +248,23 @@ describe('notifyInboxEntry failed send', () => {
     emit({ type: 'transfer.failed', transferId: TID, error: 'gone' });
     await flush();
     expect(failed).toEqual(["Couldn't send report.pdf"]);
+  });
+
+  // Fix round 1: Engine::retry keeps the transfer id. The same event again
+  // (same updatedAt) posts nothing. A new failure (new updatedAt) posts again.
+  it('posts again when a retried send fails again, and not for a repeat', async () => {
+    const { engine, at, emit } = failingEngine('out');
+    const failed: string[] = [];
+    notifyInboxEntry(engine, { post: async () => {}, postFailed: async (n) => void failed.push(n.title) });
+    emit({ type: 'transfer.failed', transferId: TID, error: 'gone' });
+    await flush();
+    emit({ type: 'transfer.failed', transferId: TID, error: 'gone' });
+    await flush();
+    expect(failed).toHaveLength(1);
+    at.updatedAt = 2;
+    emit({ type: 'transfer.failed', transferId: TID, error: 'gone' });
+    await flush();
+    expect(failed).toHaveLength(2);
   });
 
   it('posts nothing for an inbound failure or a zero id', async () => {

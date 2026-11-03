@@ -226,8 +226,8 @@ describe('failedSendNotice', () => {
       listTransfers: async () => {
         calls.transfers += 1;
         return [
-          { transferId: '22'.repeat(16), peerDeviceId: 'bb'.repeat(16), direction: 'out' as const, itemCount: 1 },
-          { transferId: TID, peerDeviceId: PEER, direction, itemCount },
+          { transferId: '22'.repeat(16), peerDeviceId: 'bb'.repeat(16), direction: 'out' as const, itemCount: 1, updatedAt: 5 },
+          { transferId: TID, peerDeviceId: PEER, direction, itemCount, updatedAt: 7 },
         ];
       },
       listThread: async (peer: string) => {
@@ -251,6 +251,7 @@ describe('failedSendNotice', () => {
     expect(await failedSendNotice(engine, TID)).toEqual({
       transferId: TID,
       peerDeviceId: PEER,
+      updatedAt: 7,
       title: "Couldn't send album",
       body: 'Open Daak to try again.',
     });
@@ -300,6 +301,7 @@ describe('buildFailedNotification', () => {
     const n = buildFailedNotification({
       transferId: '11'.repeat(16),
       peerDeviceId: 'aa'.repeat(16),
+      updatedAt: 1,
       title: "Couldn't send album",
       body: 'Open Daak to try again.',
     });

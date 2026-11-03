@@ -23,7 +23,7 @@ import type { DaakEngine, InboxEntry } from '@daak/core';
 import type { InboundShareItem } from '@daak/platform';
 // A deep import: actions.ts imports nothing, so it is safe on mobile. The
 // package barrel is the TurboModule and is not needed here.
-import { failedSendNotice, receivedFolders, receivedText } from '@daak/rn-notify/js/actions';
+import { failedSendNotice, failureKey, receivedFolders, receivedText } from '@daak/rn-notify/js/actions';
 import type { ReceivedPlaces } from '@daak/rn-notify/js/actions';
 import { isLibraryPath } from '@daak/ui';
 import { libraryOf, photosHost } from './photosHost';
@@ -176,24 +176,32 @@ async function receivedPlaces(): Promise<ReceivedPlaces> {
   return { library: libraryOf(photosHost), saveFolder, inLibrary: isLibraryPath };
 }
 
-// The transfer ids that have a failed-send banner. One send posts once, also
-// when the event comes again.
-const failedNotified = new Set<string>();
+// The failures that have a banner, keyed by `failureKey` (transfer id and
+// row time). A repeat of the same event posts once. A retry keeps the transfer
+// id, so a retry that fails again has a new key and posts again.
+const failedPosted = new Set<string>();
+// The transfer ids with a read in progress. Set before the first await, so two
+// events in one tick post once.
+const failedReading = new Set<string>();
 
 /**
  * Posts the banner for a send that ended in a failure. The engine sends
- * `transfer.failed` once, at the end, and never on a retry back-off.
+ * `transfer.failed` once for each end, and never on a retry back-off.
  * `failedSendNotice` ignores an inbound failure. Never throws, because it runs
  * inside the ONE engine event handler.
  */
 async function notifyFailedOnce(engine: DaakEngine, transferId: string): Promise<void> {
-  if (failedNotified.has(transferId)) return;
-  failedNotified.add(transferId);
+  if (failedReading.has(transferId)) return;
+  failedReading.add(transferId);
   try {
     const notice = await failedSendNotice(engine, transferId);
-    if (notice !== null) await notifyFailedSend(notice);
+    if (notice === null || failedPosted.has(failureKey(notice))) return;
+    failedPosted.add(failureKey(notice));
+    await notifyFailedSend(notice);
   } catch {
     // The banner is lost. The thread still shows the failed send.
+  } finally {
+    failedReading.delete(transferId);
   }
 }
 

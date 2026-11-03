@@ -307,6 +307,7 @@ describe('startEngine failed-send notification', () => {
     expect(posted).toHaveBeenCalledWith({
       transferId: tid,
       peerDeviceId: PEER,
+      updatedAt: 1,
       title: "Couldn't send album",
       body: 'Open Daak to try again.',
     });
@@ -321,6 +322,20 @@ describe('startEngine failed-send notification', () => {
     fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
     await settle();
     expect(posted).toHaveBeenCalledTimes(1);
+  });
+
+  // Fix round 1: Engine::retry keeps the transfer id. A retry that fails again
+  // is a new failure with a new updatedAt, so it posts a second banner.
+  it('a_retried_send_that_fails_again_posts_again', async () => {
+    const tid = '55'.repeat(16);
+    const { list, posted, fire } = await setup(tid);
+    fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
+    await settle();
+    const [first] = await createEngine().listTransfers();
+    list.mockResolvedValue([{ ...first, updatedAt: 2 }]);
+    fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
+    await settle();
+    expect(posted).toHaveBeenCalledTimes(2);
   });
 
   // A retry back-off sends no transfer.failed. It sends a queue count and

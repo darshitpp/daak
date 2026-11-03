@@ -287,6 +287,7 @@ describe('notifyFailedSend', () => {
   const notice = {
     transferId: '11'.repeat(16),
     peerDeviceId: 'aa'.repeat(16),
+    updatedAt: 1,
     title: "Couldn't send album",
     body: 'Open Daak to try again.',
   };

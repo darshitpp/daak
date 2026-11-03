@@ -16,7 +16,7 @@ import type { NotifyAction } from '@daak/rn-notify/js/actions';
 import type { FailedSendEngine, FailedSendNotice } from '@daak/rn-notify/js/actions';
 // The ONE value import at the top. actions.ts imports nothing at all, so it
 // touches no TurboModule and loads under the vitest stub.
-import { failedSendNotice } from '@daak/rn-notify/js/actions';
+import { failedSendNotice, failureKey } from '@daak/rn-notify/js/actions';
 
 // The decision, separated from the effects, for the reason src/tray-action.ts
 // gives: openDashboard() takes no argument, so a payload id carried through the
@@ -87,20 +87,29 @@ const PREFS_ON: NotifyPrefsLike = { arrival: true };
 //
 // Task 12: it also posts one banner for a send that ends in a failure. The
 // engine sends transfer.failed once, at the end, and never on a retry back-off.
-// The set keeps one banner for each send when the event comes again. It goes
+// `posted` keeps one banner for each failure (`failureKey`: transfer id and row
+// time), so a repeat of the event posts once and a retry that fails again posts
+// again. `reading` drops a second event while the first read runs. It goes
 // through the same native notify as a received banner, so the same rule applies
 // while the app is in front: the delegate in macos/RNNotify.mm has no
 // willPresent, so no banner shows then.
 export function notifyInboxEntry(engine: NotifyEngine, deps: NotifyDeps): () => void {
-  const failed = new Set<string>();
+  const posted = new Set<string>();
+  const reading = new Set<string>();
   return engine.on((event) => {
     if (event.type === 'transfer.failed') {
       const postFailed = deps.postFailed;
-      if (postFailed === undefined || failed.has(event.transferId)) return;
-      failed.add(event.transferId);
-      void failedSendNotice(engine, event.transferId)
-        .then((notice) => (notice === null ? undefined : postFailed(notice)))
-        .then(undefined, () => undefined);
+      const id = event.transferId;
+      if (postFailed === undefined || reading.has(id)) return;
+      reading.add(id);
+      void failedSendNotice(engine, id)
+        .then((notice) => {
+          if (notice === null || posted.has(failureKey(notice))) return undefined;
+          posted.add(failureKey(notice));
+          return postFailed(notice);
+        })
+        .then(undefined, () => undefined)
+        .finally(() => reading.delete(id));
       return;
     }
     if (event.type !== 'inbox.received') return;

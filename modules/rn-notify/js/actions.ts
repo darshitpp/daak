@@ -178,7 +178,9 @@ export function receivedText(
  * reads. Nothing here sends (R33).
  */
 export interface FailedSendEngine {
-  listTransfers(): Promise<{ transferId: string; peerDeviceId: string; direction: 'in' | 'out'; itemCount: number }[]>;
+  listTransfers(): Promise<
+    { transferId: string; peerDeviceId: string; direction: 'in' | 'out'; itemCount: number; updatedAt: number }[]
+  >;
   listThread(peerDeviceId: string): Promise<{
     items: { transferId: string; type: 'text' | 'file'; name: string | null; group?: { name: string } | null }[];
   }>;
@@ -187,6 +189,12 @@ export interface FailedSendEngine {
 export interface FailedSendNotice {
   transferId: string;
   peerDeviceId: string;
+  /**
+   * The `updatedAt` of the transfer row. `Engine::retry` keeps the transfer id
+   * and writes a new time, so `transferId:updatedAt` names one failure (see
+   * `failureKey`).
+   */
+  updatedAt: number;
   title: string;
   body: string;
 }
@@ -210,7 +218,23 @@ export async function failedSendNotice(engine: FailedSendEngine, transferId: str
   if (items.length > 0 && groups.size === 1 && !groups.has(undefined)) name = [...groups][0] as string;
   else if (row.itemCount === 1 && items.length === 1) name = items[0].type === 'text' ? 'a note' : items[0].name ?? files(1);
   else name = files(Math.max(row.itemCount, items.length));
-  return { transferId, peerDeviceId: row.peerDeviceId, title: `Couldn't send ${name}`, body: 'Open Daak to try again.' };
+  return {
+    transferId,
+    peerDeviceId: row.peerDeviceId,
+    updatedAt: row.updatedAt,
+    title: `Couldn't send ${name}`,
+    body: 'Open Daak to try again.',
+  };
+}
+
+/**
+ * The key of one failure. A repeat of the same event gives the same key. A
+ * retry that fails again gives a new key, because the retry writes a new
+ * `updatedAt` on the row. Do not key on the transfer id alone: a retried send
+ * that fails again would then post nothing.
+ */
+export function failureKey(notice: Pick<FailedSendNotice, 'transferId' | 'updatedAt'>): string {
+  return `${notice.transferId}:${notice.updatedAt}`;
 }
 
 /**
