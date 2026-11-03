@@ -26,8 +26,8 @@ export async function pickFiles(multiple = true): Promise<string[]> {
 
 /**
  * Ask the user for one folder. Resolves the folder path, or `null` on cancel.
- * Rejects with an `Error` whose message is `NO_SPACE:<needed bytes>` or
- * `EMPTY`. The bridge can deliver `undefined` for a cancel, so `?? null`
+ * Rejects with an `Error` whose message is `NO_SPACE:<needed bytes>`,
+ * `EMPTY`, or `NOT_DOWNLOADED` (an iCloud Drive file is not on the device). The bridge can deliver `undefined` for a cancel, so `?? null`
  * absorbs it here. Any other native error passes through unchanged.
  */
 export async function pickFolder(): Promise<string | null> {
@@ -43,6 +43,9 @@ export async function pickFolder(): Promise<string | null> {
       throw new Error(`NO_SPACE:${message}`);
     }
     if (err.code === 'EMPTY' && message !== 'EMPTY') throw new Error('EMPTY');
+    if (err.code === 'NOT_DOWNLOADED' && message !== 'NOT_DOWNLOADED') {
+      throw new Error('NOT_DOWNLOADED');
+    }
     throw e;
   }
 }

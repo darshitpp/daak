@@ -94,6 +94,17 @@ describe('pickFolder', () => {
     await expect(pickFolder()).rejects.toThrow('NO_SPACE:123');
     folderMock.pickFolder.mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'EMPTY' }));
     await expect(pickFolder()).rejects.toThrow(/^EMPTY$/);
+    folderMock.pickFolder.mockRejectedValueOnce(
+      Object.assign(new Error('x'), { code: 'NOT_DOWNLOADED' }),
+    );
+    await expect(pickFolder()).rejects.toThrow(/^NOT_DOWNLOADED$/);
+  });
+
+  // An iCloud Drive file that is not on the device is a placeholder. iOS
+  // refuses the whole pick, so the send never carries the placeholder.
+  it('keeps the NOT_DOWNLOADED message', async () => {
+    folderMock.pickFolder.mockRejectedValueOnce(new Error('NOT_DOWNLOADED'));
+    await expect(pickFolder()).rejects.toThrow(/^NOT_DOWNLOADED$/);
   });
 
   it('fails loudly when the platform has no native pickFolder', async () => {

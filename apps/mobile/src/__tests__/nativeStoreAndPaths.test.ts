@@ -966,6 +966,22 @@ describe('iOS folder pick, copy, and stats', () => {
     expect(share).toMatch(/reject\("EMPTY", "EMPTY"/);
   });
 
+  // An iCloud Drive file that is not on the device is a hidden placeholder,
+  // `.<name>.icloud`. A copy of it sends the placeholder, not the file, with no
+  // error. The listing refuses the whole pick before any copy starts.
+  it('refuses the pick with NOT_DOWNLOADED for an iCloud placeholder, before any copy', () => {
+    const list = body(share, 'static func listTree');
+    expect(list).toContain('isICloudPlaceholder(');
+    expect(list.indexOf('isICloudPlaceholder(')).toBeLessThan(list.indexOf('isSymbolicLink == true'));
+    expect(list).toMatch(/throw FolderCopyError\.notDownloaded/);
+    expect(share).toContain('"^\\.(.+)\\.icloud$"');
+    expect(share).toMatch(/reject\("NOT_DOWNLOADED", "NOT_DOWNLOADED"/);
+    // The listing runs before the space check and before the first folder is made.
+    const copy = body(share, 'static func copyPickedFolder');
+    expect(copy.indexOf('listTree(')).toBeLessThan(copy.indexOf('volumeAvailableCapacityForImportantUsage'));
+    expect(copy.indexOf('listTree(')).toBeLessThan(copy.indexOf('createDirectory('));
+  });
+
   it('deletes the partial copy on any failure', () => {
     const copy = body(share, 'static func copyPickedFolder');
     expect(copy).toMatch(/catch \{\s*try\? fm\.removeItem\(at: slot\)\s*throw error/);

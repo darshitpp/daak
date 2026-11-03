@@ -240,6 +240,8 @@ private var folderPickerDelegateKey: UInt8 = 0
 enum FolderCopyError: Error {
   case noSpace(Int64)
   case empty
+  /// An iCloud Drive file in the tree is not on the device.
+  case notDownloaded
 }
 
 final class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
@@ -261,6 +263,8 @@ final class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
         reject("NO_SPACE", "NO_SPACE:\(needed)", nil)
       } catch FolderCopyError.empty {
         reject("EMPTY", "EMPTY", nil)
+      } catch FolderCopyError.notDownloaded {
+        reject("NOT_DOWNLOADED", "NOT_DOWNLOADED", nil)
       } catch {
         NSLog("Daak: the picked folder could not be copied: \(error)")
         reject("E_COPY", "the folder could not be copied: \(error.localizedDescription)", error)
@@ -320,14 +324,24 @@ final class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
     }
   }
 
+  /// True for the hidden placeholder `.<name>.icloud` that iOS shows for an
+  /// iCloud Drive file that is not on the device.
+  static func isICloudPlaceholder(_ name: String) -> Bool {
+    name.range(of: #"^\.(.+)\.icloud$"#, options: .regularExpression) != nil
+  }
+
   /// List every folder and regular file below `dir`, hidden files included.
   /// A symlink is skipped, so the copy cannot leave the picked tree.
   /// An unreadable folder throws, so a copy never misses files in silence.
+  /// An iCloud placeholder throws `notDownloaded`. A copy of it sends the
+  /// placeholder and not the file. The listing runs before the first write,
+  /// so this refusal leaves nothing on disk.
   static func listTree(_ dir: URL, parts: [String], into out: inout [Entry]) throws {
     let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey]
     let children = try FileManager.default.contentsOfDirectory(
       at: dir, includingPropertiesForKeys: Array(keys), options: [])
     for child in children {
+      if isICloudPlaceholder(child.lastPathComponent) { throw FolderCopyError.notDownloaded }
       let v = try child.resourceValues(forKeys: keys)
       if v.isSymbolicLink == true { continue }
       let p = parts + [child.lastPathComponent]
