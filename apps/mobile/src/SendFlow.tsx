@@ -8,6 +8,9 @@
  * ponytail: delete this file with the shell's next rename. It exists so the
  * imports below keep working while that is a separate concern.
  */
-import { pickFiles } from '@daak/platform';
+import { pickFiles, pickFolder } from '@daak/platform';
 
 export const pickAttachedFiles = (): Promise<string[]> => pickFiles(true);
+
+/** The folder picker of the composer menu. It copies the folder and resolves the path of the copy. */
+export const pickAttachedFolder = (): Promise<string | null> => pickFolder();

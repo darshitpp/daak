@@ -58,13 +58,34 @@ it('reaches the platform picker from a tap on Add files', async () => {
   fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
   await waitFor(() => expect(screen.getByTestId('pick-files')).toBeTruthy());
   expect(pickFiles).not.toHaveBeenCalled();
+  // The phone add button is a paperclip with a menu: Files or Folder.
   fireEvent.press(screen.getByTestId('pick-files'));
+  expect(pickFiles).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByTestId('pick-menu-files'));
   // And what the picker returned has to reach the composer -- a picker that
   // resolved into a void is exactly what a broken TurboModule looks like here.
   await waitFor(() => expect(screen.getByText('a.pdf')).toBeTruthy());
   // The TurboModule itself, with the argument the composer needs. `true` =
   // multiple, so the user can select a batch.
   expect(pickFiles).toHaveBeenCalledWith(true);
+});
+
+// The Folder row reaches the platform folder picker, and the copy reaches the
+// composer as one folder chip with the count from folderStats.
+it('reaches the platform folder picker from the Folder row', async () => {
+  const { pickFolder, folderStats } = jest.requireMock('@daak/platform');
+  pickFolder.mockResolvedValueOnce('/cache/daak-send/U1/album');
+  folderStats.mockResolvedValueOnce({ files: 12, bytes: 1024 });
+  const pixel = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true, presence: 'online' as const, paired: true };
+  jest.spyOn(engine, 'devices').mockResolvedValue([pixel]);
+  render(<App />);
+  fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
+  await waitFor(() => expect(screen.getByTestId('pick-files')).toBeTruthy());
+  fireEvent.press(screen.getByTestId('pick-files'));
+  fireEvent.press(screen.getByTestId('pick-menu-folder'));
+  await waitFor(() => expect(screen.getByText('album · 12 files')).toBeTruthy());
+  expect(pickFolder).toHaveBeenCalledTimes(1);
+  expect(folderStats).toHaveBeenCalledWith('/cache/daak-send/U1/album');
 });
 
 // No Xcode on this host, so the macOS sheet anchor is pinned at the SOURCE

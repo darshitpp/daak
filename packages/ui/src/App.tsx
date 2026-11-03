@@ -28,7 +28,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -79,6 +79,14 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   initialShareToken?: number;
   onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<{ cancel: () => Promise<void> } | void>;
   onCancelShare?: () => void;
+  /** The phone folder picker. It resolves the path of a copy, or null on Cancel. */
+  onPickFolder?: () => Promise<string | null>;
+  /** The file count and the size of a folder. Null for a path that is not a folder. */
+  folderStats?: (path: string) => Promise<{ files: number; bytes: number } | null>;
+  /** Deletes a copy that `onPickFolder` made. */
+  discardPickedCopy?: (path: string) => Promise<void>;
+  /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
+  pickLabel?: string;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -109,6 +117,10 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             engine={engine}
             peerDeviceId={peerDeviceId}
             onPickFiles={onPickFiles}
+            onPickFolder={onPickFolder}
+            folderStats={folderStats}
+            discardPickedCopy={discardPickedCopy}
+            pickLabel={pickLabel}
             inboxActions={inboxActions}
             pair={pair}
             alert={alert}

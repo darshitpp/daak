@@ -400,6 +400,8 @@ export const ui = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm },
+  /** The design `#cd-add` on a phone: a 44 point square quiet button with an icon only. */
+  addIcon: { width: control.minHeight, height: control.minHeight, paddingHorizontal: 0 },
   threadList: { padding: spacing.lg, gap: spacing.md },
 
 });

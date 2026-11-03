@@ -65,6 +65,10 @@ export function AppShell({
   library,
   saveFolder,
   isMedia,
+  onPickFolder,
+  folderStats,
+  discardPickedCopy,
+  pickLabel,
 }: {
   background?: React.ReactNode;
   pair?: React.ReactNode;
@@ -120,6 +124,14 @@ export function AppShell({
   saveFolder?: string;
   /** True for a file name with a media extension. The host owns the list. */
   isMedia?: (name: string) => boolean;
+  /** The phone folder picker. It resolves the path of a copy, or null on Cancel. */
+  onPickFolder?: () => Promise<string | null>;
+  /** The file count and the size of a folder. Null for a path that is not a folder. */
+  folderStats?: (path: string) => Promise<{ files: number; bytes: number } | null>;
+  /** Deletes a copy that `onPickFolder` made. */
+  discardPickedCopy?: (path: string) => Promise<void>;
+  /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
+  pickLabel?: string;
 }) {
   const [root, setRoot] = useState<Tab>('devices');
   const [stack, setStack] = useState<Route[]>([]);
@@ -263,6 +275,10 @@ export function AppShell({
         library={library}
         saveFolder={saveFolder ?? folderName}
         isMedia={isMedia}
+        onPickFolder={onPickFolder}
+        folderStats={folderStats}
+        discardPickedCopy={discardPickedCopy}
+        pickLabel={pickLabel}
       />
     );
   } else if (shown !== undefined) {

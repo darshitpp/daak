@@ -1,5 +1,5 @@
 import React from 'react';
-import { Keyboard, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, ScrollView, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
@@ -939,5 +939,257 @@ describe('ThreadScreen folders', () => {
     expect(cancel).not.toHaveBeenCalled();
     fireEvent.press(screen.getByTestId('confirm-stop'));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(FOLDER));
+  });
+});
+
+// Task 9, frames F3 and F4: stage a folder in the composer.
+describe('ThreadScreen folder staging', () => {
+  const COPY = '/data/cache/daak-send/U1/album';
+  const STATS = { files: 12, bytes: 34 * 1024 * 1024 };
+  const flat = (s: unknown) => StyleSheet.flatten(s as StyleProp<ViewStyle>) ?? {};
+
+  // The phone host: a folder picker, the stats, and the discard of the copy.
+  const phone = (over: Partial<React.ComponentProps<typeof ThreadScreen>> = {}) => ({
+    onPickFiles: jest.fn(async () => ['/data/cache/a.pdf']),
+    onPickFolder: jest.fn(async (): Promise<string | null> => COPY),
+    folderStats: jest.fn(async (p: string) => (p === COPY ? STATS : null)),
+    discardPickedCopy: jest.fn(async () => {}),
+    ...over,
+  });
+
+  const stageFolder = async () => {
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    return screen.findByText('album · 12 files');
+  };
+
+  it('opens the file picker at once when the host gives no folder picker', async () => {
+    const onPickFiles = jest.fn(async () => ['/Users/d/a.pdf']);
+    mount(fakeEngine([peer]), { onPickFiles });
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(onPickFiles).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('pick-menu-folder')).toBeNull();
+    expect(await screen.findByText('a.pdf')).toBeTruthy();
+  });
+
+  it('shows the label that the macOS host gives', async () => {
+    mount(fakeEngine([peer]), { onPickFiles: async () => [], pickLabel: 'Add files or folders' });
+    expect(await screen.findByText('Add files or folders')).toBeTruthy();
+    expect(screen.queryByTestId('paperclip-icon')).toBeNull();
+  });
+
+  it('shows a paperclip and opens a menu with Files and Folder on a phone', async () => {
+    const host = phone();
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    const add = screen.getByTestId('pick-files');
+    expect(add.props.accessibilityLabel).toBe('Add files or folders');
+    expect(screen.getByTestId('paperclip-icon')).toBeTruthy();
+    expect(screen.queryByText('Add files')).toBeNull();
+    fireEvent.press(add);
+    expect(host.onPickFiles).not.toHaveBeenCalled();
+    expect(screen.getByText('Files')).toBeTruthy();
+    expect(screen.getByText('Folder')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('pick-menu-files'));
+    expect(host.onPickFiles).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('pick-menu-folder')).toBeNull();
+    expect(await screen.findByText('a.pdf')).toBeTruthy();
+  });
+
+  it('keeps the note field at its place and full width in both add button forms', async () => {
+    for (const props of [phone(), { onPickFiles: async () => [], pickLabel: 'Add files or folders' }]) {
+      const { unmount } = mount(fakeEngine([peer]), props);
+      await screen.findByText('Nothing here yet');
+      const note = screen.getByPlaceholderText('Or type a note');
+      expect(flat(note.props.style).flex).toBe(1);
+      // The order in the row: the add button, the note field, then Send.
+      const row = screen.getByTestId('composer-row');
+      const ids = React.Children.toArray(row.props.children).map(
+        (c) => (c as React.ReactElement<{ testID?: string; placeholder?: string }>).props.testID
+          ?? (c as React.ReactElement<{ placeholder?: string }>).props.placeholder,
+      );
+      expect(ids).toEqual(['pick-files', 'Or type a note', 'send']);
+      unmount();
+    }
+    // The paperclip is a 44 point square, so it does not take the width of the note field.
+    mount(fakeEngine([peer]), phone());
+    await screen.findByText('Nothing here yet');
+    expect(flat(screen.getByTestId('pick-files').props.style).width).toBe(44);
+  });
+
+  it('stages a picked folder as one chip with its file count', async () => {
+    const host = phone();
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, host);
+    await screen.findByText('Nothing here yet');
+    expect(await stageFolder()).toBeTruthy();
+    expect(host.onPickFolder).toHaveBeenCalledTimes(1);
+    expect(host.folderStats).toHaveBeenCalledWith(COPY);
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByTestId('send')).not.toBeDisabled();
+  });
+
+  it('removes the folder chip with its x and discards the copy', async () => {
+    const host = phone();
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    expect(screen.getByLabelText('Remove album')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('remove-album'));
+    expect(screen.queryByText('album · 12 files')).toBeNull();
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+  });
+
+  it('lists a folder as one row in the review sheet', async () => {
+    const host = phone();
+    const fileSizes = jest.fn(async (p: string[]) => p.map(() => 1024));
+    mount(fakeEngine([peer]), { ...host, initialFiles: ['/d/f0.pdf', '/d/f1.pdf', '/d/f2.pdf'], actions: { fileSizes } });
+    await screen.findByText('f0.pdf');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    fireEvent.press(await screen.findByText('4 items · Review'));
+    expect(screen.getByText('album')).toBeTruthy();
+    expect(screen.getByText('12 files · 34.0 MB')).toBeTruthy();
+    // The folder size counts in the total. The folder is never asked for a file size.
+    expect(await screen.findByText('4 items · 34.0 MB')).toBeTruthy();
+    expect(fileSizes).not.toHaveBeenCalledWith(expect.arrayContaining([COPY]));
+    fireEvent.press(screen.getByTestId('review-remove-album'));
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+    expect(screen.queryByText('album')).toBeNull();
+  });
+
+  // The pick rejects before the facade knows a folder name, so the text says "this folder".
+  it.each([
+    ['NO_SPACE:2254857830', 'Not enough space to prepare this folder. Free 2.1 GB and try again.'],
+    ['EMPTY', 'This folder has no files to send.'],
+    ['E_COPY', "Couldn't prepare this folder. Check that every file in it is on this device and try again."],
+    ['some other native error', "Couldn't prepare this folder. Check that every file in it is on this device and try again."],
+    ['NOT_DOWNLOADED', 'This folder has files that are not downloaded yet. Open the Files app, download the folder, and try again.'],
+  ])('shows the warning for a %s pick and stages no chip', async (message, text) => {
+    const host = phone({ onPickFolder: jest.fn(async () => { throw new Error(message); }) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(screen.queryByTestId('remove-album')).toBeNull();
+    expect(screen.queryByText('Preparing…')).toBeNull();
+    // The next pick clears the warning.
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-files'));
+    await screen.findByText('a.pdf');
+    expect(screen.queryByText(text)).toBeNull();
+  });
+
+  it('shows Preparing… and disables Send while the folder copies', async () => {
+    let finish: (p: string | null) => void = () => {};
+    const host = phone({ onPickFolder: jest.fn(() => new Promise<string | null>((r) => { finish = r; })) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hi');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    expect(await screen.findByText('Preparing…')).toBeTruthy();
+    expect(screen.getByTestId('send')).toBeDisabled();
+    await act(async () => { finish(COPY); });
+    expect(await screen.findByText('album · 12 files')).toBeTruthy();
+    expect(screen.queryByText('Preparing…')).toBeNull();
+    expect(screen.getByTestId('send')).not.toBeDisabled();
+  });
+
+  it('drops the chip on a cancelled picker', async () => {
+    const host = phone({ onPickFolder: jest.fn(async () => null) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    await waitFor(() => expect(host.onPickFolder).toHaveBeenCalled());
+    await settle();
+    expect(screen.queryByText('Preparing…')).toBeNull();
+    expect(screen.getByTestId('send')).toBeDisabled();
+  });
+
+  it('discards a copy that arrives after Cancel', async () => {
+    let finish: (p: string | null) => void = () => {};
+    const host = phone({ onPickFolder: jest.fn(() => new Promise<string | null>((r) => { finish = r; })) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    fireEvent.press(await screen.findByTestId('prepare-cancel'));
+    expect(screen.queryByText('Preparing…')).toBeNull();
+    await act(async () => { finish(COPY); });
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+    expect(screen.queryByText('album · 12 files')).toBeNull();
+  });
+
+  it('discards each copied folder after engine.send resolves', async () => {
+    const host = phone();
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: true });
+    mount(engine, host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-files'));
+    await screen.findByText('a.pdf');
+    expect(host.discardPickedCopy).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, files: [COPY, '/data/cache/a.pdf'] });
+    // A plain file is not a folder copy.
+    expect(host.discardPickedCopy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the copy when the send fails', async () => {
+    const host = phone();
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'send').mockRejectedValue(new Error('no'));
+    mount(engine, host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByTestId('thread-result')).toBeTruthy();
+    expect(host.discardPickedCopy).not.toHaveBeenCalled();
+    expect(screen.getByText('album · 12 files')).toBeTruthy();
+  });
+
+  it('discards the staged copies when the composer goes away', async () => {
+    const host = phone();
+    const { unmount } = mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    unmount();
+    expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY);
+  });
+
+  it('never throws when the discard fails', async () => {
+    const host = phone({ discardPickedCopy: jest.fn(async () => { throw new Error('gone'); }) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('remove-album'));
+    await settle();
+    expect(screen.getByTestId('pick-files')).toBeTruthy();
+  });
+
+  // macOS: the one panel picks files and folders. A folder there is the user's
+  // own folder, not a copy, so the composer never discards it.
+  it('shows a folder from the macOS panel as a folder chip and never discards it', async () => {
+    const discardPickedCopy = jest.fn(async () => {});
+    mount(fakeEngine([peer]), {
+      onPickFiles: async () => ['/Users/d/album'],
+      folderStats: async (p: string) => (p === '/Users/d/album' ? STATS : null),
+      discardPickedCopy,
+      pickLabel: 'Add files or folders',
+    });
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(await screen.findByText('album · 12 files')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('remove-album'));
+    await settle();
+    expect(discardPickedCopy).not.toHaveBeenCalled();
   });
 });

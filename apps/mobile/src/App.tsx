@@ -16,6 +16,8 @@ import {
   chooseDownloadFolder,
   clearDownloadFolder,
   downloadFolderName,
+  discardPickedCopy,
+  folderStats,
   isMedia,
   appInfo,
   copyToClipboard,
@@ -33,7 +35,7 @@ import {
 import { OnboardingFlow } from './OnboardingFlow';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
-import { pickAttachedFiles } from './SendFlow';
+import { pickAttachedFiles, pickAttachedFolder } from './SendFlow';
 import { mobileInboxActions } from './inbox-actions';
 import { onDeepLink, type DeepLink } from './deeplink';
 import { peerOfPayload } from './notification-route';
@@ -422,6 +424,11 @@ export default function App() {
           // packages/ui, which takes no @daak/platform dependency and no
           // TurboModule.
           onPickFiles={pickAttachedFiles}
+          // The paperclip menu: Files or Folder. A folder is copied first, and
+          // the composer discards the copy after the send.
+          onPickFolder={pickAttachedFolder}
+          folderStats={folderStats}
+          discardPickedCopy={discardPickedCopy}
           inboxActions={mobileInboxActions}
           // The prototype's "...isn't showing? See what to check" affordances,
           // on the Devices tab and in Settings. This is the ONLY thing that

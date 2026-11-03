@@ -63,5 +63,41 @@ describe('Dashboard (window mode)', () => {
     fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: peer.deviceId, files: ['/Users/d/Documents/a.pdf'] }]));
   });
+
+  // Frame F3 on macOS: the label and the folder stats reach the thread composer.
+  it('hands the add button label and the folder stats to the thread', async () => {
+    const { engine } = spyEngine();
+    render(
+      <Dashboard
+        state={initialUiState}
+        engine={engine}
+        peerDeviceId={peer.deviceId}
+        onPickFiles={async () => ['/Users/d/album']}
+        folderStats={async () => ({ files: 3, bytes: 10 })}
+        pickLabel="Add files or folders"
+      />,
+    );
+    fireEvent.press(await screen.findByText('Add files or folders'));
+    expect(await screen.findByText('album · 3 files')).toBeTruthy();
+  });
+
+  it('hands the folder picker to the thread', async () => {
+    const { engine } = spyEngine();
+    const onPickFolder = jest.fn(async () => '/c/daak-send/U/album');
+    render(
+      <Dashboard
+        state={initialUiState}
+        engine={engine}
+        peerDeviceId={peer.deviceId}
+        onPickFiles={async () => []}
+        onPickFolder={onPickFolder}
+        folderStats={async () => ({ files: 2, bytes: 10 })}
+      />,
+    );
+    fireEvent.press(await screen.findByLabelText('Add files or folders'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    expect(await screen.findByText('album · 2 files')).toBeTruthy();
+    expect(onPickFolder).toHaveBeenCalledTimes(1);
+  });
 });
 

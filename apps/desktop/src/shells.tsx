@@ -35,6 +35,7 @@ import {
   chooseDownloadFolder,
   clearDownloadFolder,
   downloadFolderName,
+  folderStats,
 } from '@daak/platform/src/fspaths';
 
 // The peers the daemon reduced to "out of step", read off the SAME UiState the
@@ -237,6 +238,9 @@ export function DaakDashboardShell({ engine, runtime }: {
           onShareSend={(d, share) => sendServiceFiles(engine, d, share)}
           onCancelShare={consumeServiceFiles}
           onPickFiles={desktopPickFiles}
+          // One panel picks files and folders, so there is no folder menu.
+          pickLabel="Add files or folders"
+          folderStats={folderStats}
           inboxActions={desktopInboxActions}
           // ONLY the dashboard branch gets this, and deliberately. The popover
           // is three peers and a file box; pairing is a one-time setup step a
