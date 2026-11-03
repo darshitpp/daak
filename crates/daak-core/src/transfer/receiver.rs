@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -388,9 +389,47 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     // and no row is written, so the caller must write no bytes_done and send
     // no event (P6 3.1). `initial` lets a resume that skips chunks start its
     // bar from the held bytes, so it reaches 100% (P6 3.2).
+    on_progress: impl FnMut([u8; 16], u64, u64, u64, bool),
+    db: Option<&Db>,
+    on_item: impl FnMut(EngineEvent),
+) -> Result<Manifest> {
+    receive_with_resume_limit(
+        conn,
+        expected_sender,
+        out_dir,
+        on_progress,
+        db,
+        on_item,
+        RESUME_MSG_MAX,
+    )
+    .await
+}
+
+/// The largest encoded `ResumeMsg` that the receiver sends. A version 100
+/// sender, or a sender that does not know the peer version, does not read
+/// while it streams. A message larger than both socket buffers then blocks
+/// both sides, and no frame deadline ends it. A message at or below this size
+/// fits in the socket buffers.
+const RESUME_MSG_MAX: usize = 64 * 1024;
+
+/// The encoded `ResumeMsg`, or `None` when it is larger than `limit`. With
+/// `None`, the receiver sends no message. A version 101 sender then waits for
+/// `RESUME_WAIT` and sends every chunk.
+fn resume_frame(msg: &ResumeMsg, limit: usize) -> Result<Option<Vec<u8>>> {
+    let bytes = msg.to_cbor()?;
+    Ok((bytes.len() <= limit).then_some(bytes))
+}
+
+/// `receive_transfer_from` with the `ResumeMsg` size limit as a parameter, so
+/// a test can use a small limit.
+async fn receive_with_resume_limit<T: FrameTransport>(
+    conn: &mut T,
+    expected_sender: Option<[u8; 16]>,
+    out_dir: &Path,
     mut on_progress: impl FnMut([u8; 16], u64, u64, u64, bool),
     db: Option<&Db>,
     mut on_item: impl FnMut(EngineEvent),
+    resume_limit: usize,
 ) -> Result<Manifest> {
     let manifest = loop {
         match conn.recv().await? {
@@ -442,7 +481,9 @@ pub async fn receive_transfer_from<T: FrameTransport>(
         Some(db) => db.list_items(&manifest.payload_id)?,
         None => Vec::new(),
     };
-    let redo: Vec<u32> = earlier
+    // Sets, not lists: the receiver looks up each item and each chunk, and a
+    // folder can hold 65 536 items.
+    let redo: HashSet<u32> = earlier
         .iter()
         .filter(|r| r.state == "quarantined" || r.state == "failed")
         .map(|r| r.item_index)
@@ -453,8 +494,8 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     };
     // A duplicate settles nothing. It writes every chunk into the discard
     // directory, as before, so an old sender that sends all chunks completes.
-    let settled: Vec<u32> = if dedupe {
-        Vec::new()
+    let settled: HashSet<u32> = if dedupe {
+        HashSet::new()
     } else {
         earlier
             .iter()
@@ -611,15 +652,22 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             .map(|b| b.as_ref().map(super::gaps_to_nack).unwrap_or_default())
             .collect(),
     };
-    if let Err(e) = conn
-        .send(
-            CONTROL_STREAM,
-            RecordType::Nack,
-            bytes::Bytes::from(resume.to_cbor()?),
-        )
-        .await
-    {
-        tracing::warn!(error = %crate::diag::log_err(&e), "resume message not sent");
+    // A message above the limit is not sent (see RESUME_MSG_MAX). The receive
+    // loop below accepts every chunk in both cases. It ignores only the chunks
+    // of a settled item.
+    match resume_frame(&resume, resume_limit)? {
+        Some(frame) => {
+            if let Err(e) = conn
+                .send(CONTROL_STREAM, RecordType::Nack, bytes::Bytes::from(frame))
+                .await
+            {
+                tracing::warn!(error = %crate::diag::log_err(&e), "resume message not sent");
+            }
+        }
+        None => tracing::info!(
+            items = manifest.items.len(),
+            "resume message too large; the sender sends every chunk"
+        ),
     }
 
     // The bytes a resume already holds: one chunk length for each bit the
@@ -773,8 +821,8 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     let mut failed_item: Option<u32> = None;
     // Every item whose hash DID fail, whether or not the move into quarantine
     // succeeded (I-4): the DB state follows the hash, not the rename.
-    let mut failed: Vec<u32> = Vec::new();
-    let mut held_paths: Vec<(u32, PathBuf)> = Vec::new();
+    let mut failed: HashSet<u32> = HashSet::new();
+    let mut held_paths: HashMap<u32, PathBuf> = HashMap::new();
     for item in manifest.binary_items().filter(|i| !is_settled(i.index)) {
         let path = item_destination(&dest_root, item)?;
         let f = std::fs::File::open(&path)?;
@@ -786,13 +834,15 @@ pub async fn receive_transfer_from<T: FrameTransport>(
         if failed_item.is_none() {
             failed_item = Some(item.index);
         }
-        failed.push(item.index);
+        failed.insert(item.index);
         if db.is_some() {
             // I-4: a rename failure unrelated to corruption (ENOTDIR,
             // cross-device, read-only out dir) must not take down the whole
             // transfer after every byte already landed.
             match quarantine.hold(&manifest.payload_id, &safe_item_name(item), &path) {
-                Ok(held) => held_paths.push((item.index, held)),
+                Ok(held) => {
+                    held_paths.insert(item.index, held);
+                }
                 Err(e) => tracing::warn!(
                     item = item.index,
                     error = %crate::diag::log_err(&e),
@@ -805,6 +855,12 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     // R-T12-6: persist the item rows (and the final transfer state) so a
     // quarantined item is reachable by retry_item / the UI.
     if let Some(db) = db.filter(|_| !dedupe) {
+        // The held path of each item that an earlier receive quarantined.
+        let held_before: HashMap<u32, &str> = earlier
+            .iter()
+            .filter(|r| r.state == "quarantined")
+            .filter_map(|r| Some((r.item_index, r.dest_path.as_deref()?)))
+            .collect();
         let mut bytes_done = 0u64;
         for item in &manifest.items {
             // A settled item keeps its row from the earlier receive.
@@ -823,8 +879,8 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             let dest_path: Option<String> = if !item.is_binary() {
                 None
             } else {
-                let dest = match held_paths.iter().find(|(i, _)| *i == item.index) {
-                    Some((_, p)) => p.clone(),
+                let dest = match held_paths.get(&item.index) {
+                    Some(p) => p.clone(),
                     None => item_destination(out_dir, item)?,
                 };
                 dest.to_str().map(|s| s.to_string())
@@ -860,10 +916,9 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             // A re-send repaired a held file, so the held copy goes. The path
             // comes from this device's own row. It must still be inside the
             // quarantine root.
-            let held = earlier
-                .iter()
-                .find(|r| r.item_index == item.index && r.state == "quarantined")
-                .and_then(|r| r.dest_path.as_deref())
+            let held = held_before
+                .get(&item.index)
+                .copied()
                 .map(Path::new)
                 .filter(|p| !quarantined && p.starts_with(dest_root.join("quarantine")));
             if let Some(held) = held {
@@ -961,6 +1016,83 @@ mod tests {
             ..Default::default()
         };
         Manifest::new(PayloadKind::Media, dev(), vec![item])
+    }
+
+    /// The largest manifest (65 536 binary items of one chunk each) gives a
+    /// `ResumeMsg` above `RESUME_MSG_MAX`. The receiver does not send it. A
+    /// small manifest still gets its full-range message.
+    #[test]
+    fn a_resume_message_above_the_limit_is_not_sent() {
+        let big = ResumeMsg {
+            transfer_id: [1u8; 16],
+            ranges: (0..MAX_ITEMS).map(|_| vec![(0u64, 1u64)]).collect(),
+        };
+        assert!(big.to_cbor().unwrap().len() > RESUME_MSG_MAX);
+        assert_eq!(resume_frame(&big, RESUME_MSG_MAX).unwrap(), None);
+
+        let small = ResumeMsg {
+            transfer_id: [1u8; 16],
+            ranges: vec![vec![(0, 4)]; 100],
+        };
+        let frame = resume_frame(&small, RESUME_MSG_MAX).unwrap().unwrap();
+        assert_eq!(ResumeMsg::from_cbor(&frame).unwrap(), small);
+    }
+
+    /// A sender pair over a byte pipe with small buffers. The manifest has
+    /// 2 000 text items and one binary item of 256 KiB, so its `ResumeMsg` is
+    /// larger than the 1 KiB pipe buffer. `limit` is the receiver's resume
+    /// limit. `wait` is `None` for a version 100 sender, which does not read
+    /// while it streams.
+    async fn receive_over_a_small_pipe(limit: usize, wait: Option<std::time::Duration>) {
+        use crate::net::Connection;
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("big.bin");
+        let bytes: Vec<u8> = (0..256 * 1024u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &bytes).unwrap();
+        let mut items: Vec<Item> = (0..2000u32).map(|i| Item::text(i, "")).collect();
+        items.push(Item::from_file(2000, &src, CHUNK_SIZE_MIN).unwrap());
+        let manifest = Manifest::new(PayloadKind::Batch, dev(), items);
+        let mut paths: Vec<Option<PathBuf>> = vec![None; 2000];
+        paths.push(Some(src.clone()));
+
+        let (a, b) = tokio::io::duplex(1024);
+        let mut tx = Connection::new(a, crate::framing::DEFAULT_MAX_FRAME);
+        let mut rx = Connection::new(b, crate::framing::DEFAULT_MAX_FRAME);
+        let m = manifest.clone();
+        let sender = tokio::spawn(async move {
+            match wait {
+                None => crate::transfer::send_transfer(&mut tx, &m, &paths, &[], |_| {}).await,
+                Some(w) => {
+                    crate::transfer::send_transfer_resuming(&mut tx, &m, &paths, Some(w), |_| {})
+                        .await
+                }
+            }
+        });
+        let out = dir.path().join("out");
+        let received = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            receive_with_resume_limit(&mut rx, None, &out, |_, _, _, _, _| {}, None, |_| {}, limit),
+        )
+        .await
+        .expect("the receive must not hang");
+        received.unwrap();
+        sender.await.unwrap().unwrap();
+        assert_eq!(std::fs::read(out.join("big.bin")).unwrap(), bytes);
+    }
+
+    /// A version 100 sender streams and does not read. A large `ResumeMsg`
+    /// then blocks both sides. Above the limit the receiver sends no message,
+    /// so the transfer completes.
+    #[tokio::test]
+    async fn a_large_resume_message_does_not_hang_a_sender_that_does_not_read() {
+        receive_over_a_small_pipe(1024, None).await;
+    }
+
+    /// A version 101 sender gets no `ResumeMsg` above the limit. It waits, then
+    /// sends every chunk, and the transfer completes.
+    #[tokio::test]
+    async fn a_resuming_sender_with_no_resume_message_sends_every_chunk() {
+        receive_over_a_small_pipe(1024, Some(std::time::Duration::from_millis(200))).await;
     }
 
     // 3.2: a fresh receive has an empty bitmap and holds NO bytes. The old

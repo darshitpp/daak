@@ -256,6 +256,66 @@ async fn a_folder_share_roundtrips_as_a_tree() {
     );
 }
 
+/// Two files whose names differ only in case, in two subfolders. On a
+/// case-insensitive host the second stage used to write its bytes into the
+/// first SOURCE file through the hard link. Both files must arrive with their
+/// own bytes, and both source files must keep their bytes.
+#[tokio::test]
+async fn two_files_whose_names_differ_only_in_case_both_arrive_intact() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let root = src.path().join("share");
+    std::fs::create_dir_all(root.join("x")).unwrap();
+    std::fs::create_dir_all(root.join("y")).unwrap();
+    let upper: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+    let lower: Vec<u8> = (0..30_000u32).map(|i| (i % 241) as u8).collect();
+    std::fs::write(root.join("x/A.txt"), &upper).unwrap();
+    std::fs::write(root.join("y/a.txt"), &lower).unwrap();
+
+    let (manifest, sources) = from_picked_paths(
+        sender_ref(),
+        std::slice::from_ref(&root),
+        CHUNK_SIZE_DEFAULT,
+    )
+    .unwrap();
+    let stage = tempfile::tempdir().unwrap();
+    let staging = Staging::new(stage.path().to_path_buf());
+    let paths = stage_manifest(&staging, &manifest, &sources);
+    assert_eq!(
+        std::fs::read(root.join("x/A.txt")).unwrap(),
+        upper,
+        "staging must not change the first source file"
+    );
+    assert_eq!(std::fs::read(root.join("y/a.txt")).unwrap(), lower);
+
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let sender = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        send_transfer(&mut conn, &m, &paths, &[], |_| {})
+            .await
+            .unwrap();
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    let received = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {}).await;
+    sender.await.unwrap();
+
+    received.expect("the share must not fail with a hash mismatch");
+    assert!(
+        !dst.path().join("quarantine").exists(),
+        "a file was quarantined"
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("share/x/A.txt")).unwrap(),
+        upper
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("share/y/a.txt")).unwrap(),
+        lower
+    );
+    assert_eq!(std::fs::read(root.join("x/A.txt")).unwrap(), upper);
+}
+
 /// A symlink pointing outside the shared root must not smuggle its target in,
 /// and a symlinked directory must not make the walk recurse forever.
 #[cfg(unix)]

@@ -2007,8 +2007,19 @@ impl Engine {
     /// Every received payload, newest first.
     pub fn list_inbox(&self) -> Result<Vec<InboxRow>> {
         let mut rows = self.db.list_inbox()?;
+        // One manifest decode for each transfer in each call, also when two
+        // rows name one transfer.
+        let mut roots: std::collections::HashMap<[u8; 16], Vec<String>> =
+            std::collections::HashMap::new();
         for r in rows.iter_mut() {
-            r.group_roots = crate::store::inbox::group_roots(&self.db, &r.transfer_id)?;
+            r.group_roots = match roots.get(&r.transfer_id) {
+                Some(known) => known.clone(),
+                None => {
+                    let found = crate::store::inbox::group_roots(&self.db, &r.transfer_id)?;
+                    roots.insert(r.transfer_id, found.clone());
+                    found
+                }
+            };
         }
         Ok(rows)
     }

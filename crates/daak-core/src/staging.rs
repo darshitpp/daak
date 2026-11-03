@@ -35,7 +35,20 @@ impl Staging {
         };
         let dest = dir.join(leaf);
         if std::fs::hard_link(src, &dest).is_err() {
-            std::fs::copy(src, &dest)?;
+            // The copy must create a NEW file. An existing `dest` can be a hard
+            // link to the source of an earlier item. This occurs when two names
+            // differ only in case on a case-insensitive file system. A copy
+            // that truncates `dest` then writes into the user's source file.
+            let mut from = std::fs::File::open(src)?;
+            let mut to = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&dest)
+                .map_err(|e| {
+                    // No name in the text: a log can hold it, and it is user data.
+                    crate::CoreError::Transfer(format!("cannot stage an item: {e}"))
+                })?;
+            std::io::copy(&mut from, &mut to)?;
         }
         Ok(dest)
     }
@@ -114,6 +127,61 @@ mod tests {
         assert!(root.path().join(hex::encode([1u8; 16])).exists());
         assert!(!root.path().join(hex::encode([2u8; 16])).exists());
         assert!(root.path().join("not-a-payload").exists());
+    }
+
+    /// On a case-insensitive file system, `a.txt` names the file that
+    /// `A.txt` already holds. That file is a hard link to the FIRST source. The
+    /// second stage must not write into it, so the first source keeps its
+    /// bytes. The second stage gives an error or a distinct file.
+    #[test]
+    fn a_second_stage_onto_a_taken_name_never_changes_the_first_source() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("x")).unwrap();
+        std::fs::create_dir_all(src.path().join("y")).unwrap();
+        let first = src.path().join("x/A.txt");
+        let second = src.path().join("y/a.txt");
+        std::fs::write(&first, b"first file bytes").unwrap();
+        std::fs::write(&second, b"second").unwrap();
+
+        let s = Staging::new(root.path().to_path_buf());
+        s.stage(&[7u8; 16], &first, "A.txt").unwrap();
+        let again = s.stage(&[7u8; 16], &second, "a.txt");
+
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            b"first file bytes",
+            "the first source file must stay byte-identical"
+        );
+        assert_eq!(std::fs::read(&second).unwrap(), b"second");
+        if let Ok(staged) = again {
+            assert_eq!(std::fs::read(staged).unwrap(), b"second");
+            assert_eq!(
+                std::fs::read(s.staged_path(&[7u8; 16], "A.txt")).unwrap(),
+                b"first file bytes"
+            );
+        }
+    }
+
+    /// A stage onto a name that already holds a file gives an error. It does
+    /// not truncate the file.
+    #[test]
+    fn a_stage_onto_an_existing_name_is_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let first = src.path().join("one.txt");
+        let second = src.path().join("two.txt");
+        std::fs::write(&first, b"one").unwrap();
+        std::fs::write(&second, b"two").unwrap();
+
+        let s = Staging::new(root.path().to_path_buf());
+        s.stage(&[7u8; 16], &first, "same.txt").unwrap();
+        assert!(s.stage(&[7u8; 16], &second, "same.txt").is_err());
+        assert_eq!(std::fs::read(&first).unwrap(), b"one");
+        assert_eq!(
+            std::fs::read(s.staged_path(&[7u8; 16], "same.txt")).unwrap(),
+            b"one"
+        );
     }
 
     /// `name` comes from the manifest, and the staging dir is meant to be flat.

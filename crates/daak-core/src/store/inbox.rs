@@ -214,8 +214,11 @@ pub fn group_roots(db: &Db, transfer_id: &[u8; 16]) -> Result<Vec<String>> {
         return Ok(Vec::new());
     };
     let mut roots: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (index, dest) in done {
-        let Some(item) = m.items.iter().find(|i| i.index == index) else {
+        // `validate_manifest` makes each item index equal to its position, so
+        // the lookup is direct. A row that does not agree names no folder.
+        let Some(item) = m.items.get(index as usize).filter(|i| i.index == index) else {
             continue;
         };
         let text = |key: &str| item.attrs.get(key).and_then(|v| v.as_text());
@@ -238,7 +241,7 @@ pub fn group_roots(db: &Db, transfer_id: &[u8; 16]) -> Result<Vec<String>> {
             }
         }
         let root = root.to_string_lossy().to_string();
-        if !roots.contains(&root) {
+        if seen.insert(root.clone()) {
             roots.push(root);
         }
     }
@@ -746,6 +749,42 @@ mod tests {
         db.migrate().unwrap();
         received(&db, 1, &[(Some(("album", "a.txt")), "album/a.txt", "done")]);
         assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+    }
+
+    // A fixed time limit fails on a busy host. So this test compares 2 sizes
+    // on the same host, the same as `expand_is_linear_in_the_item_count` in
+    // thread.rs. The large run has 16 times more items. A linear lookup takes
+    // about 16 times longer. A quadratic lookup takes about 256 times longer.
+    // Each size uses the best of 3 runs.
+    #[test]
+    fn group_roots_is_linear_in_the_item_count() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let best = |id: u8, n: u32| {
+            let names: Vec<String> = (0..n).map(|i| format!("f{i}.bin")).collect();
+            let dests: Vec<String> = names.iter().map(|f| format!("/out/album/{f}")).collect();
+            let entries: Vec<Entry> = names
+                .iter()
+                .zip(&dests)
+                .map(|(f, d)| (Some(("album", f.as_str())), d.as_str(), "done"))
+                .collect();
+            received(&db, id, &entries);
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..3 {
+                let start = std::time::Instant::now();
+                let roots = group_roots(&db, &[id; 16]).unwrap();
+                best = best.min(start.elapsed());
+                assert_eq!(roots, vec!["/out/album".to_string()]);
+            }
+            best
+        };
+        let small = best(1, 4096);
+        let large = best(2, 65536);
+        assert!(
+            large < small * 40,
+            "group_roots is not linear: 4096 items took {small:?}, 65536 items took {large:?}"
+        );
+        assert!(large < std::time::Duration::from_secs(30));
     }
 
     #[test]

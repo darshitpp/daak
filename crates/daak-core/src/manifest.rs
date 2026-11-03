@@ -392,7 +392,7 @@ fn unique_group(dests: &mut HashSet<String>, root: &Path, index: u32) -> Result<
 fn unique_name(used: &mut HashSet<String>, name: &str) -> String {
     let mut unique = name.to_owned();
     for n in 1.. {
-        if used.insert(unique.clone()) {
+        if used.insert(fold_case(&unique)) {
             break;
         }
         unique = format!("{name}~{n}");
@@ -405,12 +405,12 @@ fn unique_name(used: &mut HashSet<String>, name: &str) -> String {
 /// (`. .. quarantine staging`) becomes `item_{index}` there, so `quarantine`
 /// and `item_1` are distinct strings and ONE destination.
 fn unique_destination(dests: &mut HashSet<String>, rel: &str, index: u32) -> Result<String> {
-    if dests.insert(sanitised_destination(rel, index)?) {
+    if dests.insert(fold_case(&sanitised_destination(rel, index)?)) {
         return Ok(rel.to_owned());
     }
     for n in 1.. {
         let candidate = format!("{rel}~{n}");
-        if dests.insert(sanitised_destination(&candidate, index)?) {
+        if dests.insert(fold_case(&sanitised_destination(&candidate, index)?)) {
             return Ok(candidate);
         }
     }
@@ -458,7 +458,15 @@ fn name_is_free(
     name: &str,
     index: u32,
 ) -> bool {
-    !used.contains(name) && dests.insert(safe_component(name, index))
+    !used.contains(&fold_case(name)) && dests.insert(fold_case(&safe_component(name, index)))
+}
+
+/// The KEY of a name in the `used` and `dests` sets. A case-insensitive file
+/// system (APFS, NTFS) treats `A.txt` and `a.txt` as one file. Staging is flat,
+/// so two such names would stage onto one file. The returned name keeps its
+/// own spelling; only the key ignores case.
+fn fold_case(name: &str) -> String {
+    name.to_lowercase()
 }
 
 /// Depth-first walk collecting regular files. `symlink_metadata`, not
@@ -552,7 +560,7 @@ pub fn from_picked_paths(
         };
         let name = unique_name(&mut used, &basename.to_string_lossy());
         if safe_component(&name, 0) == name {
-            dests.insert(name.clone());
+            dests.insert(fold_case(&name));
         }
         *slot = Some(name);
     }
@@ -590,9 +598,9 @@ pub fn from_picked_paths(
                 // search would skip the name itself and land on a gratuitous
                 // `~1` whose layout then depends on the pick order.
                 if safe_component(name, start) != name {
-                    used.remove(name);
+                    used.remove(&fold_case(name));
                     let name = unique_flat_name(&mut dests, &used, name, start);
-                    used.insert(name.clone());
+                    used.insert(fold_case(&name));
                     item.name = Some(name);
                 }
             }
@@ -1157,6 +1165,83 @@ mod tests {
         assert_eq!(attr_text(&manifest.items[0], "group"), "photos");
         assert_eq!(attr_text(&manifest.items[1], "group"), "photos~1");
         assert_eq!(attr_text(&manifest.items[1], "path"), "photos~1/one.jpg");
+        assert_distinct_and_accepted(&manifest);
+    }
+
+    /// A case-insensitive file system (APFS, NTFS) treats `A.txt` and `a.txt`
+    /// as one name. Staging is flat, so the two items must get two names that
+    /// differ by more than case.
+    #[test]
+    fn two_files_whose_names_differ_only_in_case_get_distinct_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("share");
+        std::fs::create_dir_all(root.join("x")).unwrap();
+        std::fs::create_dir_all(root.join("y")).unwrap();
+        std::fs::write(root.join("x/A.txt"), b"first").unwrap();
+        std::fs::write(root.join("y/a.txt"), b"second").unwrap();
+
+        let (manifest, _) = from_picked_paths(dev(), &[root], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 2);
+        let names: Vec<String> = manifest
+            .items
+            .iter()
+            .map(|i| i.name.clone().unwrap())
+            .collect();
+        assert_eq!(names, ["A.txt", "a.txt~1"]);
+        assert_ne!(
+            names[0].to_lowercase(),
+            names[1].to_lowercase(),
+            "the names must differ without case"
+        );
+        assert_eq!(attr_text(&manifest.items[0], "path"), "share/x/A.txt");
+        assert_eq!(attr_text(&manifest.items[1], "path"), "share/y/a.txt");
+        assert_distinct_and_accepted(&manifest);
+    }
+
+    /// Two folders `Photos` and `photos` are one folder on a case-insensitive
+    /// receiver. The second folder gets its own group.
+    #[test]
+    fn two_folders_whose_names_differ_only_in_case_get_distinct_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut picked = Vec::new();
+        for (parent, name) in [("a", "Photos"), ("b", "photos")] {
+            let root = dir.path().join(parent).join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("one.jpg"), parent.as_bytes()).unwrap();
+            picked.push(root);
+        }
+        let (manifest, _) = from_picked_paths(dev(), &picked, CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(attr_text(&manifest.items[0], "group"), "Photos");
+        assert_eq!(attr_text(&manifest.items[1], "group"), "photos~1");
+        assert_eq!(attr_text(&manifest.items[1], "path"), "photos~1/one.jpg");
+        let names: Vec<String> = manifest
+            .items
+            .iter()
+            .map(|i| i.name.clone().unwrap())
+            .collect();
+        assert_eq!(names, ["one.jpg", "one.jpg~1"]);
+        assert_distinct_and_accepted(&manifest);
+    }
+
+    /// A loose file and a loose file whose names differ only in case. The
+    /// pre-pass claims both names, so the second one gets `~1`.
+    #[test]
+    fn two_loose_files_whose_names_differ_only_in_case_get_distinct_names() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("x")).unwrap();
+        std::fs::create_dir_all(dir.path().join("y")).unwrap();
+        let first = dir.path().join("x/README.md");
+        let second = dir.path().join("y/readme.md");
+        std::fs::write(&first, b"first").unwrap();
+        std::fs::write(&second, b"second").unwrap();
+
+        let (manifest, _) = from_picked_paths(dev(), &[first, second], CHUNK_SIZE_DEFAULT).unwrap();
+        let names: Vec<String> = manifest
+            .items
+            .iter()
+            .map(|i| i.name.clone().unwrap())
+            .collect();
+        assert_eq!(names, ["README.md", "readme.md~1"]);
         assert_distinct_and_accepted(&manifest);
     }
 
