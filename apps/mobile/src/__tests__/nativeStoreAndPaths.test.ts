@@ -843,9 +843,14 @@ describe('native save and move keep the folder structure', () => {
     }
     expect(from(kt, 'private fun pruneEmptyDirs(')).toMatch(/list\(\)\?\.isEmpty\(\) != true\) break/);
     for (const swift of [ios, mac]) {
-      const fn = from(swift, 'func pruneEmptyDirs(');
+      const rest = from(swift, 'func pruneEmptyDirs(');
+      const fn = rest.slice(0, rest.indexOf('\n  }\n'));
       expect(fn).toContain('contentsOfDirectory(atPath:');
       expect(fn).toMatch(/\.isEmpty else \{ break \}/);
+      // Review fix: removeItem deletes a folder and its files. rmdir(2) fails on
+      // a folder that is not empty, so a file that arrives after the check stays.
+      expect(fn).toMatch(/rmdir\(at\) == 0 else \{ break \}/);
+      expect(fn).not.toContain('removeItem');
     }
   });
 

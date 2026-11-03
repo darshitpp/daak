@@ -81,6 +81,17 @@ describe('iOS download folder', () => {
   });
 });
 
+// Task 11 review: the prune step removes only an EMPTY folder. rmdir(2) refuses
+// a folder that is not empty. removeItem deletes the files in it.
+describe('iOS prune of empty folders', () => {
+  it('removes a folder with rmdir and never with removeItem', () => {
+    const fn = body('static func pruneEmptyDirs(');
+    expect(fn).toMatch(/rmdir\(at\) == 0 else \{ break \}/);
+    expect(fn).not.toContain('removeItem');
+    expect(fn).toMatch(/at\.hasPrefix\(outDir \+ "\/"\)/);
+  });
+});
+
 // Task 11 (user decision): add-only access cannot read albums. So the album
 // and its assets are made in ONE change block, and no album is fetched.
 describe('iOS Photos album', () => {

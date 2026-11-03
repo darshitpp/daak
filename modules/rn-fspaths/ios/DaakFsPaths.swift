@@ -494,7 +494,10 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         let at = withoutPrivate(dir.standardizedFileURL.resolvingSymlinksInPath().path)
         guard at.hasPrefix(outDir + "/") else { break }
         guard let left = try? fm.contentsOfDirectory(atPath: at), left.isEmpty else { break }
-        do { try fm.removeItem(atPath: at) } catch { break }
+        // rmdir(2) removes only an EMPTY folder. A file that arrives after the
+        // check above makes it fail, and the file stays. removeItem would
+        // delete the folder and that file. A failure only stops the walk.
+        guard rmdir(at) == 0 else { break }
         dir = dir.deletingLastPathComponent()
       }
     }
