@@ -12,6 +12,13 @@ import type { TrayAction } from '@daak/rn-tray';
 import { closePopover, openDashboard, quitApp } from './window-host';
 import { applyTrayAction } from './tray-action';
 import { getDirectSharePeer, publishDevices, subscribeDirectSharePeer } from './direct-share';
+import {
+  consumeServiceFiles,
+  getServiceFiles,
+  onServiceFiles,
+  sendServiceFiles,
+  subscribeServiceFiles,
+} from './service-files';
 import { desktopPickFiles } from './picker';
 import { desktopInboxActions } from './inbox-actions';
 import { appInfo, formatAppInfo, type AppInfo } from '@daak/platform/src/appinfo';
@@ -142,6 +149,19 @@ export function DaakDashboardShell({ engine, runtime }: {
     [],
   );
   const peerDeviceId = useSyncExternalStore(subscribePeer, getDirectSharePeer);
+  // These are the files from Finder Services. The store is module-level, so the
+  // files wait here while the onboarding gate shows. The subscribe identity
+  // stays stable.
+  const subscribeSvc = useCallback(
+    (onChange: () => void) => subscribeServiceFiles(onChange),
+    [],
+  );
+  const svc = useSyncExternalStore(subscribeSvc, getServiceFiles);
+  // The bridge is ready when an effect runs. This call pulls files that arrived
+  // before launch ended, then listens for later files.
+  useEffect(() => {
+    return onServiceFiles();
+  }, []);
   // appInfo is async (P2). The window chrome reads it in an effect, and the
   // sidebar footer shows the version line after the answer. The About row reads
   // it on its own.
@@ -212,6 +232,10 @@ export function DaakDashboardShell({ engine, runtime }: {
           engine={engine}
           runtime={runtime}
           peerDeviceId={peerDeviceId ?? undefined}
+          initialFiles={svc?.files}
+          initialShareToken={svc?.token}
+          onShareSend={(d, share) => sendServiceFiles(engine, d, share)}
+          onCancelShare={consumeServiceFiles}
           onPickFiles={desktopPickFiles}
           inboxActions={desktopInboxActions}
           // ONLY the dashboard branch gets this, and deliberately. The popover

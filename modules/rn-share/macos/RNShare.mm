@@ -3,6 +3,12 @@
 #import <Cocoa/Cocoa.h>
 #import <React/RCTUtils.h>
 
+// The Services handler can run before the React bridge exists, so the list
+// lives at class level. A lock guards it.
+static NSMutableArray<NSString *> *sPendingFiles;
+static NSString *const kServiceFilesPending = @"DaakServiceFilesPending";
+static NSString *const kServiceFilesDismissed = @"DaakServiceFilesDismissed";
+
 @implementation RNShare {
   NSSharingServicePicker *_picker;
   NSOpenPanel *_panel;
@@ -15,6 +21,67 @@ RCT_EXPORT_MODULE(DaakSystemShare)
 // and every RCTAssertMainQueue below is a Debug abort.
 + (BOOL)requiresMainQueueSetup { return YES; }
 - (dispatch_queue_t)methodQueue { return dispatch_get_main_queue(); }
+
++ (void)addPendingFiles:(NSArray<NSString *> *)paths {
+  // A new delivery replaces the old one. The user sees only the newest share.
+  @synchronized(RNShare.class) {
+    sPendingFiles = [NSMutableArray arrayWithArray:paths];
+  }
+  [[NSNotificationCenter defaultCenter] postNotificationName:kServiceFilesPending object:nil];
+}
+
+// The dashboard window closed. Clear the list, then tell JavaScript to drop its copy.
++ (void)dismissPendingFiles {
+  @synchronized(RNShare.class) {
+    [sPendingFiles removeAllObjects];
+  }
+  [[NSNotificationCenter defaultCenter] postNotificationName:kServiceFilesDismissed object:nil];
+}
+
+- (NSArray<NSString *> *)supportedEvents { return @[ @"DaakServiceFilesPending", @"DaakServiceFilesDismissed" ]; }
+
+- (void)startObserving {
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(servicePathsPending:)
+                                               name:kServiceFilesPending
+                                             object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(servicePathsDismissed:)
+                                               name:kServiceFilesDismissed
+                                             object:nil];
+  // Paths can arrive between the first pull and this listener. Send the event
+  // now, so those paths do not wait for the next delivery.
+  BOOL hasPending;
+  @synchronized(RNShare.class) {
+    hasPending = sPendingFiles.count > 0;
+  }
+  if (hasPending) {
+    [self sendEventWithName:kServiceFilesPending body:nil];
+  }
+}
+
+- (void)stopObserving {
+  [[NSNotificationCenter defaultCenter] removeObserver:self name:kServiceFilesPending object:nil];
+  [[NSNotificationCenter defaultCenter] removeObserver:self name:kServiceFilesDismissed object:nil];
+}
+
+- (void)servicePathsPending:(NSNotification *)note {
+  [self sendEventWithName:kServiceFilesPending body:nil];
+}
+
+- (void)servicePathsDismissed:(NSNotification *)note {
+  [self sendEventWithName:kServiceFilesDismissed body:nil];
+}
+
+// Returns the stored paths, then clears the list.
+RCT_EXPORT_METHOD(takePendingFiles : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
+  NSArray<NSString *> *paths;
+  @synchronized(RNShare.class) {
+    paths = sPendingFiles != nil ? [sPendingFiles copy] : @[];
+    [sPendingFiles removeAllObjects];
+  }
+  resolve(paths);
+}
 
 RCT_EXPORT_METHOD(share : (NSString *)payloadJson resolve : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
   RCTAssertMainQueue();

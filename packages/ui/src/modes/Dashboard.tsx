@@ -23,7 +23,7 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
@@ -51,6 +51,11 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   keyboardAvoiding?: boolean;
   /** The injected Settings functions: arrival prefs, app version, OS grant. */
   settingsHost?: SettingsHost;
+  /** A share from the OS. It routes to Devices, which asks for a device. */
+  initialFiles?: string[];
+  initialShareToken?: number;
+  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<{ cancel: () => Promise<void> } | void>;
+  onCancelShare?: () => void;
 }) {
   void state;
   return (
@@ -73,6 +78,10 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           windowChrome={windowChrome}
           keyboardAvoiding={keyboardAvoiding}
           settingsHost={settingsHost}
+          initialFiles={initialFiles}
+          initialShareToken={initialShareToken}
+          onShareSend={onShareSend}
+          onCancelShare={onCancelShare}
         />
       </View>
     </EngineProvider>

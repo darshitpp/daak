@@ -262,6 +262,13 @@ A new pairing stays pending until you confirm it.
 2. Add text, a file, a photo, or a video.
 3. Send.
 
+On a Mac, you can also start in Finder. Right-click a file or a folder, then
+choose **Services > Send with Daak**. Daak opens and asks for a device. Tap a
+device and Daak sends. If the entry is missing, turn it on in **System
+Settings > Keyboard > Keyboard Shortcuts > Services > Files and Folders**.
+Daak must be in the Applications folder. Open Daak once before macOS lists the
+entry. On a new install, Daak shows its setup first.
+
 The other device shows a notification. On iPhone and Android, received photos
 and videos go to Photos or the Gallery. Other received files go to the save
 folder that you choose in **Settings**. On iPhone, Daak asks once for
