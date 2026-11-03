@@ -140,12 +140,26 @@ fn a_directory_becomes_one_item_per_file_with_relative_paths() {
         assert!(item.chunk_count.is_some(), "item {i} has no chunk_count");
     }
     let paths: Vec<String> = items.iter().map(rel_path).collect();
-    assert!(paths.contains(&"top.txt".to_string()), "got {paths:?}");
-    assert!(paths.contains(&"sub/mid.bin".to_string()), "got {paths:?}");
+    // Every path starts with the picked folder name, and every item names its
+    // group.
     assert!(
-        paths.contains(&"sub/nested/deep.txt".to_string()),
+        paths.contains(&"album/top.txt".to_string()),
         "got {paths:?}"
     );
+    assert!(
+        paths.contains(&"album/sub/mid.bin".to_string()),
+        "got {paths:?}"
+    );
+    assert!(
+        paths.contains(&"album/sub/nested/deep.txt".to_string()),
+        "got {paths:?}"
+    );
+    for item in &items {
+        assert_eq!(
+            item.attrs.get("group"),
+            Some(&ciborium::value::Value::Text("album".into()))
+        );
+    }
     // Names are unique within the share: staging is a flat namespace keyed by
     // name, so two "index.html" in different folders would otherwise stage
     // onto each other and ship one file's bytes under the other's hash.
@@ -223,10 +237,11 @@ async fn a_folder_share_roundtrips_as_a_tree() {
         .unwrap();
     sender.await.unwrap();
 
-    // Every source file, byte for byte, at its place in the tree.
+    // Every source file, byte for byte, at its place in the tree. The tree sits
+    // inside a folder with the name of the picked folder.
     for f in walk(&root) {
         let rel = f.strip_prefix(&root).unwrap();
-        let landed = dst.path().join(rel);
+        let landed = dst.path().join("album").join(rel);
         assert!(
             landed.exists(),
             "a folder child did not land: {}",
@@ -257,7 +272,7 @@ fn a_symlink_out_of_the_shared_root_is_not_followed() {
 
     let items = Item::from_folder(0, &root, CHUNK_SIZE_DEFAULT).unwrap();
     let paths: Vec<String> = items.iter().map(rel_path).collect();
-    assert_eq!(paths, vec!["ok.txt".to_string()], "got {paths:?}");
+    assert_eq!(paths, vec!["album/ok.txt".to_string()], "got {paths:?}");
 }
 
 /// An empty directory is a legitimate share: zero items, not an error, and
@@ -413,8 +428,8 @@ fn a_folder_share_never_puts_an_absolute_path_on_the_wire() {
     for item in &manifest.items {
         let rel = rel_path(item);
         assert!(
-            !rel.starts_with('/') && !rel.contains("album"),
-            "attrs[path] must be relative to the share root, got: {rel}"
+            !rel.starts_with('/') && rel.starts_with("album/"),
+            "attrs[path] must be relative and start with the folder name, got: {rel}"
         );
     }
 }
@@ -551,7 +566,11 @@ fn sources_stay_aligned_with_item_indices() {
             "item {i} hash does not match its own source"
         );
         if sources[i].starts_with(&root) {
-            assert_eq!(sources[i], root.join(rel_path(item)), "item {i} path");
+            assert_eq!(
+                sources[i],
+                root.parent().unwrap().join(rel_path(item)),
+                "item {i} path"
+            );
         }
     }
 }
@@ -657,7 +676,7 @@ async fn a_folder_share_resumes_mid_folder_through_the_real_receiver() {
     let nested_index = manifest
         .items
         .iter()
-        .position(|i| rel_path(i) == "sub/nested/deep.bin")
+        .position(|i| rel_path(i) == "album/sub/nested/deep.bin")
         .expect("the nested item must be in the manifest");
     let nested_bytes = std::fs::read(paths[nested_index].as_ref().unwrap()).unwrap();
     let dropper = tokio::spawn(async move {
@@ -697,7 +716,7 @@ async fn a_folder_share_resumes_mid_folder_through_the_real_receiver() {
         "a mid-folder drop must be an interrupt, got {first:?}"
     );
 
-    let deep = dst.path().join("sub/nested/deep.bin");
+    let deep = dst.path().join("album/sub/nested/deep.bin");
     assert!(
         deep.exists(),
         "the nested destination must exist after the first pass"
@@ -768,7 +787,7 @@ async fn a_folder_share_resumes_mid_folder_through_the_real_receiver() {
 
     assert_eq!(std::fs::read(&deep).unwrap(), nested);
     assert_eq!(
-        std::fs::read(dst.path().join("top.txt")).unwrap(),
+        std::fs::read(dst.path().join("album/top.txt")).unwrap(),
         b"top level"
     );
 }
@@ -833,11 +852,12 @@ async fn a_mixed_text_and_folder_share_is_received_end_to_end() {
         .find(|i| !i.is_binary())
         .expect("the text item must survive the round trip");
     assert_eq!(text.text.as_deref(), Some("here is my note"));
-    // And the folder landed as a tree, with the loose file beside it.
+    // And the folder landed as a tree inside `album/`, with the loose file
+    // beside it.
     for f in walk(&root) {
         let rel = f.strip_prefix(&root).unwrap();
         assert_eq!(
-            std::fs::read(dst.path().join(rel)).unwrap(),
+            std::fs::read(dst.path().join("album").join(rel)).unwrap(),
             std::fs::read(&f).unwrap(),
             "folder child {}",
             rel.display()
@@ -850,24 +870,12 @@ async fn a_mixed_text_and_folder_share_is_received_end_to_end() {
 /// a folder `album/` that also contains a TOP-LEVEL `x.bin` -- what the iOS
 /// share sheet produces when a user picks a folder plus a file from inside it.
 ///
-/// The two items got distinct MANIFEST names (`x.bin` and `x.bin~1`), so
-/// staging held two files and the sender streamed both correctly -- but names
-/// are not destinations. The loose item carries no attrs["path"] and resolved
-/// to out_dir/x.bin, while the folder child carries attrs["path"] == "x.bin"
-/// and ALSO resolves to out_dir/x.bin. The receiver opened ONE file with
-/// truncate(false) for both
-/// and interleaved their chunks: BLAKE2b on item 0 failed, the whole transfer
-/// errored, and the file was quarantined with no explanation. A hard failure on
-/// an entirely ordinary mixed share.
-///
-/// The fix is in the BUILDER, because that is where the collision is created:
-/// from_picked_paths now deduplicates the folder child's attrs["path"] against
-/// every loose file's destination, so the child goes out as `x.bin~1` and the
-/// two land in different files. The receiver keeps its duplicate-destination
-/// rejection as a backstop against a hand-built or hostile manifest; it must
-/// never fire on a manifest the builder produced, and the socket-free unit test
-/// in manifest.rs (a_loose_file_naming_a_folder_child_gets_a_distinct_destination)
-/// is what pins that. This file just proves the bytes land.
+/// Before the group name, the loose item resolved to out_dir/x.bin and the
+/// folder child also resolved to out_dir/x.bin. The receiver interleaved their
+/// chunks, and the hash check failed. Now the folder child carries
+/// `album/x.bin`, so the two land in different files. The receiver keeps its
+/// duplicate-destination rejection as a backstop against a hand-built or
+/// hostile manifest.
 #[tokio::test]
 async fn a_loose_file_naming_a_folder_child_does_not_collide_on_the_receiver() {
     let src = tempfile::tempdir().unwrap();
@@ -883,14 +891,8 @@ async fn a_loose_file_naming_a_folder_child_does_not_collide_on_the_receiver() {
     let (manifest, sources) =
         from_picked_paths(sender_ref(), &[loose_path, root], CHUNK_SIZE_DEFAULT).unwrap();
     assert_eq!(manifest.items.len(), 2);
-    // The premise: the two items claim one destination through the two
-    // DIFFERENT resolution paths. Without this the test proves nothing.
     assert!(!manifest.items[0].attrs.contains_key("path"));
-    // The FOLDER child yields, because from_picked_paths seeds the destination
-    // set with every loose file up front, so the outcome does not depend on
-    // pick order: the loose file always keeps the bare `x.bin` and the child is
-    // suffixed on its way out.
-    assert_eq!(rel_path(&manifest.items[1]), "x.bin~1");
+    assert_eq!(rel_path(&manifest.items[1]), "album/x.bin");
     assert_ne!(manifest.items[0].name, manifest.items[1].name);
 
     let stage = tempfile::tempdir().unwrap();
@@ -911,30 +913,20 @@ async fn a_loose_file_naming_a_folder_child_does_not_collide_on_the_receiver() {
 
     let received = received.expect("the share must not fail with a hash mismatch");
     assert_eq!(received.items.len(), 2);
-    // Nothing quarantined, and both bytes intact at the two DISTINCT places the
-    // rules put them: the loose file flat, the folder child under its path.
     assert!(
         !dst.path().join("quarantine").exists(),
         "a file was quarantined"
     );
     assert_eq!(std::fs::read(dst.path().join("x.bin")).unwrap(), loose);
-    // FLAT under the share root, exactly as `a_folder_share_roundtrips_as_a_tree`
-    // already pins: attrs["path"] is relative to the picked ROOT, so picking
-    // `album/` does not recreate an `album/` level on the receiver -- the share
-    // root IS out_dir. The picked folder's own basename is not preserved as a
-    // directory. See the folder-tree note in the B1 ledger entry.
     assert_eq!(
-        std::fs::read(dst.path().join("x.bin~1")).unwrap(),
+        std::fs::read(dst.path().join("album/x.bin")).unwrap(),
         in_folder,
-        "the folder child must land at its (deduplicated) attrs path"
+        "the folder child must land inside its own folder"
     );
 }
 
 /// The same share picked the other way round: the folder first, the loose file
-/// second. The builder seeds its destination set with the loose files, so the
-/// FOLDER yields the name in both orders and the receiver ends up with the same
-/// two files either way -- a picker that reorders the user's selection must not
-/// decide whether their share works.
+/// second. The two files land in the same two places in both orders.
 #[tokio::test]
 async fn the_folder_first_order_also_delivers_both_files() {
     let src = tempfile::tempdir().unwrap();
@@ -950,7 +942,7 @@ async fn the_folder_first_order_also_delivers_both_files() {
     let (manifest, sources) =
         from_picked_paths(sender_ref(), &[root, loose_path], CHUNK_SIZE_DEFAULT).unwrap();
     assert_eq!(manifest.items.len(), 2);
-    assert_eq!(rel_path(&manifest.items[0]), "x.bin~1");
+    assert_eq!(rel_path(&manifest.items[0]), "album/x.bin");
     assert!(!manifest.items[1].attrs.contains_key("path"));
 
     let stage = tempfile::tempdir().unwrap();
@@ -977,8 +969,108 @@ async fn the_folder_first_order_also_delivers_both_files() {
     );
     assert_eq!(std::fs::read(dst.path().join("x.bin")).unwrap(), loose);
     assert_eq!(
-        std::fs::read(dst.path().join("x.bin~1")).unwrap(),
+        std::fs::read(dst.path().join("album/x.bin")).unwrap(),
         in_folder,
-        "the folder child must land under its (deduplicated) attrs path"
+        "the folder child must land inside its own folder"
+    );
+}
+
+/// The round trip of the new shape: a received folder lands inside a folder
+/// that has the name of the picked folder, at every depth.
+#[tokio::test]
+async fn a_received_folder_lands_inside_its_own_folder() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let root = src.path().join("album");
+    make_tree(&root);
+
+    let (manifest, sources) = from_picked_paths(
+        sender_ref(),
+        std::slice::from_ref(&root),
+        CHUNK_SIZE_DEFAULT,
+    )
+    .unwrap();
+    let stage = tempfile::tempdir().unwrap();
+    let staging = Staging::new(stage.path().to_path_buf());
+    let paths = stage_manifest(&staging, &manifest, &sources);
+
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let sender = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        send_transfer(&mut conn, &m, &paths, &[], |_| {})
+            .await
+            .unwrap();
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
+        .await
+        .unwrap();
+    sender.await.unwrap();
+
+    let out = dst.path().join("album");
+    assert_eq!(std::fs::read(out.join("top.txt")).unwrap(), b"top level");
+    assert_eq!(
+        std::fs::read(out.join("sub/mid.bin")).unwrap(),
+        vec![1u8; 70_000]
+    );
+    assert_eq!(
+        std::fs::read(out.join("sub/nested/deep.txt")).unwrap(),
+        b"deep"
+    );
+    assert_eq!(walk(dst.path()).len(), 3, "nothing lands outside album/");
+}
+
+/// An old sender sends no `attrs["group"]`. The receiver must still land each
+/// file at its path.
+#[tokio::test]
+async fn a_manifest_without_group_still_lands_by_path() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let a = src.path().join("a.txt");
+    let b = src.path().join("b.txt");
+    std::fs::write(&a, b"alpha").unwrap();
+    std::fs::write(&b, b"bravo").unwrap();
+
+    let mut items = Vec::new();
+    for (index, (file, path)) in [(&a, "old/a.txt"), (&b, "old/sub/b.txt")]
+        .into_iter()
+        .enumerate()
+    {
+        let mut item = Item::from_file(index as u32, file, CHUNK_SIZE_DEFAULT).unwrap();
+        item.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text(path.to_string()),
+        );
+        items.push(item);
+    }
+    let manifest = Manifest::batch(sender_ref(), items).unwrap();
+    assert!(manifest
+        .items
+        .iter()
+        .all(|i| !i.attrs.contains_key("group")));
+
+    let paths = vec![Some(a), Some(b)];
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let sender = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        send_transfer(&mut conn, &m, &paths, &[], |_| {})
+            .await
+            .unwrap();
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
+        .await
+        .unwrap();
+    sender.await.unwrap();
+
+    assert_eq!(
+        std::fs::read(dst.path().join("old/a.txt")).unwrap(),
+        b"alpha"
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("old/sub/b.txt")).unwrap(),
+        b"bravo"
     );
 }

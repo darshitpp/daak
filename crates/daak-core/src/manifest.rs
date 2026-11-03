@@ -232,8 +232,9 @@ impl Item {
         })
     }
 
-    /// One binary item per REGULAR FILE under `root`, flattened, each
-    /// carrying its share-root-relative path in `attrs["path"]`. `start_index`
+    /// One binary item per REGULAR FILE under `root`, flattened. Each item
+    /// carries `attrs["group"]` (the folder name) and `attrs["path"]` (the
+    /// group name, then the path below `root`). `start_index`
     /// is the first item index to hand out, so a folder can follow other items
     /// in a mixed share and stay contiguous (Manifest::batch rejects a gap).
     pub fn from_folder(start_index: u32, root: &Path, chunk_size: u32) -> Result<Vec<Self>> {
@@ -258,6 +259,7 @@ impl Item {
     /// out_dir-relative strings. Names are not destinations -- a folder child
     /// lands at its attrs["path"], a loose file at its bare name -- so the two
     /// sets are threaded separately, and it is their PAIR that must be unique.
+    /// The group name is claimed here too.
     /// It starts empty here, so a lone folder share is unaffected;
     /// `from_picked_paths` seeds it with every loose file up front.
     ///
@@ -286,12 +288,21 @@ impl Item {
         // time. Sorting the paths does it once, here.
         files.sort();
         let mut out = Vec::with_capacity(files.len());
+        if files.is_empty() {
+            // An empty folder claims no group name, so it cannot push a later
+            // folder of the same name onto `~1`.
+            return Ok(out);
+        }
+        let group = unique_group(dests, root, start_index)?;
         for (n, path) in files.iter().enumerate() {
             let index = start_index + n as u32;
             let mut item = Self::from_file(index, path, chunk_size)?;
-            let rel = unique_destination(dests, &relative_under(root, path)?, index)?;
+            let rel = format!("{group}/{}", relative_under(root, path)?);
+            let rel = unique_destination(dests, &rel, index)?;
             item.attrs
                 .insert("path".into(), ciborium::value::Value::Text(rel));
+            item.attrs
+                .insert("group".into(), ciborium::value::Value::Text(group.clone()));
             let name = item.name.clone().unwrap_or_else(|| format!("item_{index}"));
             item.name = Some(unique_name(used, &name));
             out.push((item, path.clone()));
@@ -350,6 +361,27 @@ fn item_rel(item: &Item) -> Result<&str> {
             item.index
         ))),
     }
+}
+
+/// The group name of a picked folder: its own name, made safe, then made
+/// unique among the destinations already claimed. Every child path starts with
+/// it, so the whole folder lands under one top folder on the receiver.
+///
+/// A `\` becomes `_`, because the receiver splits a path on `\` as well as on
+/// `/`. A reserved name (`quarantine`, `staging`) gets `~1`: the receiver remaps
+/// a reserved component to `item_{index}` for each child, which would split the
+/// folder across `item_5/`, `item_6/` and so on. The name is claimed in `dests`
+/// through `unique_destination`, so a loose file or an earlier folder with the
+/// same name pushes this group to `~1`, `~2`.
+fn unique_group(dests: &mut HashSet<String>, root: &Path, index: u32) -> Result<String> {
+    let mut group = root
+        .file_name()
+        .map_or_else(|| "folder".to_owned(), |n| n.to_string_lossy().into_owned())
+        .replace('\\', "_");
+    if safe_component(&group, 0) != group {
+        group.push_str("~1");
+    }
+    unique_destination(dests, &group, index)
 }
 
 /// Staging is a FLAT namespace keyed by name, so two "index.html" in
@@ -475,16 +507,20 @@ pub fn from_picked_paths(
     // staged file was hard-linked over the first and the sender streamed one
     // file's bytes against the other's hash. Loose files join the set too.
     let mut used: HashSet<String> = HashSet::new();
-    // B1/F4: names are not destinations. A folder child lands at its
-    // attrs["path"] and a loose file at its bare name, so the two resolve by
-    // different routes and a shared NAME set cannot see the collision: a loose
-    // `x.bin` beside a folder holding a top-level `x.bin` produced two
-    // uniquely-named items that both landed on out_dir/x.bin, and the receiver
+    // B1/F4: names are not destinations. A loose file lands at its bare name,
+    // and a folder child lands at attrs["path"]. A shared NAME set cannot see
+    // a collision between the two routes. Before the group name existed, a
+    // loose `x.bin` beside a folder with a top-level `x.bin` produced two items
+    // with unique names that both landed on out_dir/x.bin. The receiver
     // interleaved their chunks into one file. The invariant is distinct
-    // DESTINATIONS. Two picked folders cannot collide -- the receiver puts
-    // each under its own attrs["path"] root, so their children never share a
-    // destination -- so seeding from the loose files is enough, and it makes
-    // the outcome independent of pick order.
+    // DESTINATIONS.
+    // Now every folder child path starts with the group name of its folder,
+    // and `unique_group` claims that name in `dests`. Two folders with one
+    // name get `photos` and `photos~1`. A loose file named like a folder gets
+    // the bare name, and the folder group moves to `~1`. So no child of one
+    // folder shares a destination with a child of another folder or with a
+    // loose file. The claim of each loose file below makes the outcome
+    // independent of pick order.
     // The claim is a PRE-PASS, and it has to claim BOTH sets. Doing it as the
     // walk reached each loose file made the outcome depend on pick order, so a
     // folder picked first handed the bare `x.bin` to its own child and the
@@ -755,7 +791,7 @@ mod tests {
         for item in Item::from_folder(0, &root, CHUNK_SIZE_DEFAULT).unwrap() {
             let rel = item_rel(&item).unwrap();
             assert!(!rel.starts_with('/'), "attrs[path] must be relative: {rel}");
-            assert_eq!(rel, "ok.txt");
+            assert_eq!(rel, "album/ok.txt");
         }
     }
 
@@ -1058,73 +1094,199 @@ mod tests {
         assert_distinct_and_accepted(&manifest);
     }
 
-    /// F4, builder half: a loose picked file and a folder child of the same
-    /// name resolve through DIFFERENT routes (bare name vs attrs["path"]), so
-    /// deduplicating only the manifest name let them land on one file -- the
-    /// receiver then interleaved both chunk series into it and failed the
-    /// hash. The builder must guarantee distinct DESTINATIONS, not names.
-    #[test]
-    fn a_loose_file_naming_a_folder_child_gets_a_distinct_destination() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("album");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("x.bin"), b"in the folder").unwrap();
-        let loose = dir.path().join("x.bin");
-        std::fs::write(&loose, b"loose").unwrap();
-
-        let (manifest, sources) =
-            from_picked_paths(dev(), &[loose.clone(), root.clone()], CHUNK_SIZE_DEFAULT).unwrap();
-        assert_eq!(manifest.items.len(), 2);
-        assert!(!manifest.items[0].attrs.contains_key("path"));
-        assert_ne!(
-            item_rel(&manifest.items[1]).unwrap(),
-            "x.bin",
-            "the folder child, not the loose file, yields the claim on the name"
-        );
-        assert_distinct_and_accepted(&manifest);
-        // The dedup is a destination-only trick: sources[i] must still be the
-        // file on disk that was actually picked, with its own content. This is
-        // why from_folder_into hands the source back instead of the caller
-        // rebuilding it as root.join(attrs["path"]): that name now carries a
-        // `~1` that no file on disk has.
-        assert_eq!(sources[0], loose);
-        assert_eq!(sources[1], root.join("x.bin"));
-        assert_eq!(std::fs::read(&sources[1]).unwrap(), b"in the folder");
+    fn attr_text(item: &Item, key: &str) -> String {
+        match item.attrs.get(key) {
+            Some(ciborium::value::Value::Text(s)) => s.clone(),
+            other => panic!("expected a text attrs[{key}], got {other:?}"),
+        }
     }
 
-    /// The other half of `a_loose_file_naming_a_folder_child_gets_a_distinct_destination`:
-    /// a same-name share must deliver the same SET of files in EITHER pick
-    /// order, so a picker that reorders the user's selection cannot decide
-    /// whether their share works. A reserved name against a literal `item_N`
-    /// is exempt and is covered by
-    /// `a_folder_child_and_a_loose_file_naming_a_reserved_component_and_its_remap_are_split`:
-    /// the remap is `item_{index}`, so the two orders legitimately differ.
+    /// The first path component below `/out` that an item lands in.
+    fn top_folder(item: &Item) -> String {
+        let dest = crate::transfer::receiver::item_destination(Path::new("/out"), item).unwrap();
+        dest.strip_prefix("/out")
+            .unwrap()
+            .components()
+            .next()
+            .unwrap()
+            .as_os_str()
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
-    fn the_folder_first_pick_order_is_collision_free_too() {
+    fn folder_children_carry_group_and_a_path_that_starts_with_it() {
+        // `e` plus a combining acute accent: the NFD form, not the single
+        // character U+00E9.
+        let name = "cafe\u{301}";
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("top.txt"), b"top").unwrap();
+        std::fs::write(root.join("sub/mid.bin"), b"mid").unwrap();
+
+        let (manifest, _) = from_picked_paths(dev(), &[root], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 2);
+        let mut paths = Vec::new();
+        for item in &manifest.items {
+            let group = attr_text(item, "group");
+            assert_eq!(group.as_bytes(), name.as_bytes(), "group bytes differ");
+            let path = attr_text(item, "path");
+            assert!(path.starts_with(&format!("{group}/")), "path: {path}");
+            paths.push(path);
+        }
+        paths.sort();
+        assert_eq!(
+            paths,
+            [format!("{name}/sub/mid.bin"), format!("{name}/top.txt")]
+        );
+    }
+
+    #[test]
+    fn two_folders_with_one_name_get_distinct_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut picked = Vec::new();
+        for parent in ["a", "b"] {
+            let root = dir.path().join(parent).join("photos");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("one.jpg"), parent.as_bytes()).unwrap();
+            picked.push(root);
+        }
+        let (manifest, _) = from_picked_paths(dev(), &picked, CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(attr_text(&manifest.items[0], "group"), "photos");
+        assert_eq!(attr_text(&manifest.items[1], "group"), "photos~1");
+        assert_eq!(attr_text(&manifest.items[1], "path"), "photos~1/one.jpg");
+        assert_distinct_and_accepted(&manifest);
+    }
+
+    #[test]
+    fn a_folder_and_a_loose_file_with_one_name_do_not_collide() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("album");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("x.bin"), b"in the folder").unwrap();
-        let loose = dir.path().join("x.bin");
+        std::fs::write(root.join("x.txt"), b"in").unwrap();
+        let loose = dir.path().join("loose").join("album");
+        std::fs::create_dir_all(loose.parent().unwrap()).unwrap();
         std::fs::write(&loose, b"loose").unwrap();
 
-        let (folder_first, sources) =
-            from_picked_paths(dev(), &[root.clone(), loose.clone()], CHUNK_SIZE_DEFAULT).unwrap();
-        let (loose_first, _) =
-            from_picked_paths(dev(), &[loose, root], CHUNK_SIZE_DEFAULT).unwrap();
+        for picked in [vec![root.clone(), loose.clone()], vec![loose, root]] {
+            let (manifest, _) = from_picked_paths(dev(), &picked, CHUNK_SIZE_DEFAULT).unwrap();
+            let child = manifest
+                .items
+                .iter()
+                .find(|i| i.attrs.contains_key("group"))
+                .unwrap();
+            assert_eq!(attr_text(child, "group"), "album~1");
+            assert_distinct_and_accepted(&manifest);
+        }
+    }
 
-        assert_eq!(folder_first.items.len(), 2, "folder-first");
-        assert_eq!(loose_first.items.len(), 2, "loose-first");
-        assert_distinct_and_accepted(&folder_first);
-        assert_distinct_and_accepted(&loose_first);
-        assert_eq!(sources.len(), 2);
-        // A picker that reorders the user's selection must not change the set
-        // of files the share delivers.
-        let mut a = destinations(&folder_first);
-        let mut b = destinations(&loose_first);
-        a.sort();
-        b.sort();
-        assert_eq!(a, b, "pick order changed the delivered layout");
+    #[test]
+    fn a_reserved_folder_name_still_lands_under_one_folder() {
+        for reserved in ["quarantine", "staging"] {
+            let dir = tempfile::tempdir().unwrap();
+            let loose = dir.path().join("loose.txt");
+            std::fs::write(&loose, b"x").unwrap();
+            let root = dir.path().join(reserved);
+            std::fs::create_dir_all(root.join("sub")).unwrap();
+            std::fs::write(root.join("a.txt"), b"a").unwrap();
+            std::fs::write(root.join("b.txt"), b"b").unwrap();
+            std::fs::write(root.join("sub/c.txt"), b"c").unwrap();
+
+            // The loose file first, so the children start at index 1.
+            let (manifest, _) =
+                from_picked_paths(dev(), &[loose, root], CHUNK_SIZE_DEFAULT).unwrap();
+            let children: Vec<&Item> = manifest
+                .items
+                .iter()
+                .filter(|i| i.attrs.contains_key("group"))
+                .collect();
+            assert_eq!(children.len(), 3, "{reserved}");
+            let group = attr_text(children[0], "group");
+            assert_ne!(group, reserved, "the group must not be a reserved name");
+            for child in children {
+                assert_eq!(attr_text(child, "group"), group, "{reserved}");
+                assert_eq!(top_folder(child), group, "{reserved}: split folder");
+            }
+            assert_distinct_and_accepted(&manifest);
+        }
+    }
+
+    #[test]
+    fn a_folder_name_with_a_backslash_lands_under_one_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("a\\b");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("one.txt"), b"1").unwrap();
+        std::fs::write(root.join("two.txt"), b"2").unwrap();
+
+        let (manifest, _) = from_picked_paths(dev(), &[root], CHUNK_SIZE_DEFAULT).unwrap();
+        for item in &manifest.items {
+            let group = attr_text(item, "group");
+            assert!(!group.contains('\\'), "group: {group}");
+            assert_eq!(top_folder(item), group);
+        }
+    }
+
+    #[test]
+    fn a_root_without_a_file_name_gets_the_group_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("one.txt"), b"1").unwrap();
+        // `..` has no file name.
+        let root = dir.path().join("sub").join("..");
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        assert!(root.file_name().is_none());
+
+        let items = Item::from_folder(0, &root, CHUNK_SIZE_DEFAULT).unwrap();
+        let one = items
+            .iter()
+            .find(|i| i.name.as_deref() == Some("one.txt"))
+            .unwrap();
+        assert_eq!(attr_text(one, "group"), "folder");
+        assert_eq!(attr_text(one, "path"), "folder/one.txt");
+    }
+
+    #[test]
+    fn a_tree_over_the_cap_is_refused_by_the_sender() {
+        // group + 62 directories + file = 64 components: the cap.
+        let build = |dirs: usize| {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("album");
+            let deep = (0..dirs).fold(root.clone(), |d, i| d.join(format!("d{i}")));
+            std::fs::create_dir_all(&deep).unwrap();
+            std::fs::write(deep.join("leaf.bin"), b"x").unwrap();
+            let result = from_picked_paths(dev(), &[root], CHUNK_SIZE_DEFAULT);
+            (dir, result)
+        };
+        let (_keep, ok) = build(62);
+        assert_eq!(ok.unwrap().0.items.len(), 1);
+        let (_keep, err) = build(63);
+        assert!(matches!(err.unwrap_err(), CoreError::Protocol(_)));
+    }
+
+    #[test]
+    fn an_empty_folder_beside_a_file_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, b"x").unwrap();
+
+        let (manifest, sources) =
+            from_picked_paths(dev(), &[empty, file], CHUNK_SIZE_DEFAULT).unwrap();
+        assert_eq!(manifest.items.len(), 1);
+        assert_eq!(sources.len(), 1);
+    }
+
+    #[test]
+    fn a_share_of_only_empty_folders_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let err = from_picked_paths(dev(), &[a, b], CHUNK_SIZE_DEFAULT).unwrap_err();
+        assert!(err.to_string().contains("nothing to send"), "got {err}");
     }
 
     /// The receiver's backstop: a HAND-BUILT manifest claiming one destination
