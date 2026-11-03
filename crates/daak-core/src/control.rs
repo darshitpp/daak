@@ -127,6 +127,32 @@ impl NackMsg {
     }
 }
 
+/// The chunks that the receiver still needs, for each item (version 101).
+///
+/// The receiver sends one `ResumeMsg` as a `RecordType::Nack` frame on
+/// `CONTROL_STREAM`, after it accepts the manifest. `ranges[i]` is for item
+/// index `i`. Each range is half-open `[start, end)`, the same form as
+/// `gaps_to_nack`. A present and empty list means "I have the whole item".
+/// A version 100 sender skips the frame in its ack loop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeMsg {
+    #[serde(with = "crate::manifest::byte_array")]
+    pub transfer_id: [u8; 16],
+    pub ranges: Vec<Vec<(u64, u64)>>,
+}
+
+impl ResumeMsg {
+    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        ciborium::ser::into_writer(self, &mut out).map_err(|e| CoreError::Cbor(e.to_string()))?;
+        Ok(out)
+    }
+
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+        ciborium::de::from_reader(bytes).map_err(|e| CoreError::Cbor(e.to_string()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ControlMsg {
     Rekey {
@@ -162,6 +188,15 @@ mod tests {
             hash_ok: true,
         };
         assert_eq!(AckMsg::from_cbor(&a.to_cbor().unwrap()).unwrap(), a);
+    }
+
+    #[test]
+    fn resume_cbor_roundtrip_keeps_an_empty_item_list() {
+        let r = ResumeMsg {
+            transfer_id: [4u8; 16],
+            ranges: vec![vec![(0, 3)], vec![], vec![(1, 2), (5, 9)]],
+        };
+        assert_eq!(ResumeMsg::from_cbor(&r.to_cbor().unwrap()).unwrap(), r);
     }
 
     #[test]

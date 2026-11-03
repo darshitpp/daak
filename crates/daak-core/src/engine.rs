@@ -579,6 +579,17 @@ async fn note_found(
 /// accept loop hands it to `handle_inbound`. R42d.
 pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
 
+/// The protocol version that each peer announced over mDNS. The send path
+/// reads it: a peer of version 101 or more gets the resume wait. A peer that
+/// never announced has no entry, and the sender then sends every chunk.
+pub(crate) type PeerVersions = Arc<std::sync::Mutex<HashMap<[u8; 16], u16>>>;
+
+/// The resume wait for a send to this peer.
+fn resume_wait_for(versions: &PeerVersions, peer: &[u8; 16]) -> Option<std::time::Duration> {
+    let version = versions.lock().ok().and_then(|v| v.get(peer).copied());
+    crate::transfer::resume_wait(version)
+}
+
 pub struct Engine {
     local_addr: SocketAddr,
     tx: broadcast::Sender<EngineEvent>,
@@ -650,6 +661,8 @@ pub struct Engine {
     /// R-T11-3/R-T11-11: behind a Mutex because the Engine is only ever held by
     /// &self, and the per-row outbox drain drives sends through the same Arc.
     sessions: SharedSessions,
+    /// The announced protocol version of each peer. See `PeerVersions`.
+    peer_versions: PeerVersions,
     pending_pairing: Arc<Mutex<Option<PendingPairing>>>,
     /// R5: the one armed code, its attempts and its deadline, plus the reason
     /// the last arm ended. One lock covers both.
@@ -1017,6 +1030,7 @@ impl Engine {
         // R-T11-3: the registry owns dialling. The connect closure resolves the
         // peer's SocketAddr from the device map and runs the ONE initiator
         // handshake (net::secure::open_secure) -- no second handshake anywhere.
+        let peer_versions: PeerVersions = Arc::default();
         let sessions: SharedSessions = {
             let db = db.clone();
             let identity = identity.clone();
@@ -1060,6 +1074,7 @@ impl Engine {
             let drain_tx = tx.clone();
             let drain_battery = battery_saver.clone();
             let drain_obs = observability.clone();
+            let drain_versions = peer_versions.clone();
             let policy = DrainPolicy::default();
             // The drain closure reads the battery-saver flag at drain time, so
             // the cap follows a mode change without rebuilding the worker. A
@@ -1097,6 +1112,7 @@ impl Engine {
                     sessions: drain_sessions.clone(),
                     max_backoff_secs,
                     observability: drain_obs.clone(),
+                    peer_versions: drain_versions.clone(),
                 };
                 // ponytail: per-row drain tasks are intentionally untracked (a JoinSet
                 // here costs more than it buys); a crash mid-drain is recovered at
@@ -1192,6 +1208,7 @@ impl Engine {
             let me = device_id;
             let outbox = outbox.clone();
             let identity = identity.clone();
+            let peer_versions = peer_versions.clone();
             tokio::spawn(async move {
                 while let Some(event) = browser.recv().await {
                     let PeerAnnounce {
@@ -1228,6 +1245,9 @@ impl Engine {
                             our_version: crate::discovery::mdns::PROTO_VERSION,
                         });
                         continue;
+                    }
+                    if let Ok(mut versions) = peer_versions.lock() {
+                        versions.insert(device_id, proto_version);
                     }
                     let info = DeviceInfo {
                         device_id,
@@ -1453,6 +1473,7 @@ impl Engine {
             battery_saver,
             confirm_required,
             sessions,
+            peer_versions,
             pending_pairing,
             code_slot,
             code_generation,
@@ -2389,6 +2410,7 @@ impl Engine {
             &paths,
             &self.tx,
             &self.db,
+            resume_wait_for(&self.peer_versions, &peer_device_id),
         )
         .await?;
         Ok(transfer_id)
@@ -3244,6 +3266,8 @@ impl ProgressGate {
     }
 }
 
+/// `resume` is the time to wait for the receiver's `ResumeMsg`, or `None` for
+/// a peer that does not send one (see `transfer::resume_wait`).
 async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     sessions: &SharedSessions<T>,
     peer_device_id: [u8; 16],
@@ -3251,9 +3275,10 @@ async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     paths: &[Option<PathBuf>],
     tx: &broadcast::Sender<EngineEvent>,
     db: &Db,
+    resume: Option<std::time::Duration>,
 ) -> Result<()> {
     let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
-    match send_on_session(&handle, manifest, paths, tx, db).await {
+    match send_on_session(&handle, manifest, paths, tx, db, resume).await {
         Ok(()) => return Ok(()),
         // B4: a hash mismatch is a PERMANENT verdict on bytes the receiver
         // already holds, so the retry below cannot change it -- it would upload
@@ -3261,12 +3286,11 @@ async fn send_secure_with<T: crate::net::FrameTransport + Send>(
         Err(e @ CoreError::Quarantined { .. }) => return Err(e),
         Err(_) => {}
     }
-    // ponytail: the retry re-sends the WHOLE payload, so a transient error after
-    // the receiver already wrote the bytes costs a full re-send. Upgrade to the
-    // NACK-driven ranges (transfer::resume) once the receiver can use them.
+    // A version 101 receiver names the chunks that it still lacks, so this
+    // second attempt sends only those. A version 100 peer gets every chunk.
     sessions.lock().await.remove(&peer_device_id);
     let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
-    send_on_session(&handle, manifest, paths, tx, db).await?;
+    send_on_session(&handle, manifest, paths, tx, db, resume).await?;
     Ok(())
 }
 
@@ -3279,18 +3303,21 @@ async fn send_on_session<T: crate::net::FrameTransport + Send>(
     paths: &[Option<PathBuf>],
     tx: &broadcast::Sender<EngineEvent>,
     db: &Db,
+    resume: Option<std::time::Duration>,
 ) -> Result<()> {
     let mut s = handle.lock().await;
     let transfer_id = manifest.payload_id;
     // The same sum the receiver writes to the row. One sum, not a second one.
     let total: u64 = manifest.binary_items().filter_map(|i| i.size).sum();
     let mut gate = ProgressGate::new(0, total, PROGRESS_INTERVAL, std::time::Instant::now());
-    let r = crate::transfer::send_transfer(&mut s.conn, manifest, paths, &[], |n| {
+    // On a resume, the first progress value is the bytes that the receiver
+    // already holds. So the bar starts there and not at 0.
+    let r = crate::transfer::send_transfer_resuming(&mut s.conn, manifest, paths, resume, |n| {
         if let Some((done, total)) = gate.add(n, std::time::Instant::now()) {
             // The stored value follows the events. This is an ABSOLUTE write,
-            // because a retry re-sends the whole payload and a delta would
-            // overshoot. A direct send may have no row, and then the UPDATE
-            // matches nothing.
+            // because a retry starts again from the held bytes and a delta
+            // would overshoot. A direct send may have no row, and then the
+            // UPDATE matches nothing.
             let _ = db.set_bytes_done(&transfer_id, done);
             let _ = tx.send(EngineEvent::TransferProgress {
                 transfer_id,
@@ -3326,6 +3353,8 @@ struct DrainCtx<T = TcpConn> {
     max_backoff_secs: i64,
     /// The shared trace buffer. The drain records success and failure here.
     observability: Arc<Observability>,
+    /// The announced protocol version of each peer, for the resume wait.
+    peer_versions: PeerVersions,
 }
 
 /// Give up on a row after this many failed delivery attempts. 8 with the 4.3
@@ -3630,6 +3659,7 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
         &paths,
         &ctx.tx,
         db,
+        resume_wait_for(&ctx.peer_versions, &row.peer_device_id),
     )
     .await
     {
@@ -4666,6 +4696,7 @@ mod tests {
                 sessions,
                 max_backoff_secs: 600,
                 observability: Arc::new(Observability::default()),
+                peer_versions: Arc::default(),
             },
             row,
         )
@@ -4749,6 +4780,7 @@ mod tests {
                 sessions,
                 max_backoff_secs: 600,
                 observability: Arc::new(Observability::default()),
+                peer_versions: Arc::default(),
             },
             row,
         )
@@ -4896,6 +4928,7 @@ mod tests {
                 sessions,
                 max_backoff_secs: 600,
                 observability: Arc::new(Observability::default()),
+                peer_versions: Arc::default(),
             },
             row,
         )
@@ -4906,6 +4939,125 @@ mod tests {
             seen.push(e);
         }
         seen
+    }
+
+    /// Task 2b: a drain to a peer that announced 101 waits for the resume
+    /// message. The peer holds the whole file, so no chunk goes out, and the
+    /// stored progress is the held bytes, not 0.
+    #[tokio::test]
+    async fn a_drain_to_a_101_peer_sends_only_what_the_receiver_lacks() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let id = enqueued_file(&db, &staging);
+        let chunks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = chunks.clone();
+        let sessions: SharedSessions<crate::net::secure::MemConn> =
+            Arc::new(Mutex::new(SessionRegistry::new(
+                std::time::Duration::from_secs(30),
+                Box::new(move |_p: [u8; 16]| {
+                    let seen = seen.clone();
+                    Box::pin(async move {
+                        let (mine, mut theirs) = crate::net::secure::SecureConnection::<
+                            crate::net::secure::MemConn,
+                        >::test_pair();
+                        tokio::spawn(async move {
+                            use crate::net::FrameTransport;
+                            let Ok(Some(f)) = theirs.recv().await else {
+                                return;
+                            };
+                            let m = Manifest::from_cbor(&f.body).unwrap();
+                            let resume = crate::control::ResumeMsg {
+                                transfer_id: m.payload_id,
+                                ranges: vec![vec![]],
+                            };
+                            let _ = theirs
+                                .send(
+                                    crate::session::CONTROL_STREAM,
+                                    RecordType::Nack,
+                                    Bytes::from(resume.to_cbor().unwrap()),
+                                )
+                                .await;
+                            // A sender that ignores the resume message sends
+                            // its chunk now. Count it before the ack.
+                            let wait = std::time::Duration::from_millis(300);
+                            if let Ok(Ok(Some(f))) = tokio::time::timeout(wait, theirs.recv()).await
+                            {
+                                if f.kind == RecordType::Chunk {
+                                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                }
+                            }
+                            let ack = crate::control::AckMsg {
+                                transfer_id: m.payload_id,
+                                item_index: 0,
+                                complete: true,
+                                hash_ok: true,
+                            };
+                            let _ = theirs
+                                .send(
+                                    crate::session::CONTROL_STREAM,
+                                    RecordType::Ack,
+                                    Bytes::from(ack.to_cbor().unwrap()),
+                                )
+                                .await;
+                            // Keep the peer end open until the sender is done.
+                            let _ = theirs.recv().await;
+                        });
+                        Ok(mine)
+                    })
+                        as crate::session::BoxFutureConn<crate::net::secure::MemConn>
+                }) as crate::session::BoxConnect<crate::net::secure::MemConn>,
+            )));
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        let peer_versions: PeerVersions = Arc::default();
+        peer_versions
+            .lock()
+            .unwrap()
+            .insert(row.peer_device_id, crate::discovery::mdns::PROTO_VERSION);
+        let (tx, mut rx) = broadcast::channel(64);
+        drain_outbox_row(
+            DrainCtx {
+                db: db.clone(),
+                staging: staging.clone(),
+                tx,
+                sessions,
+                max_backoff_secs: 600,
+                observability: Arc::new(Observability::default()),
+                peer_versions,
+            },
+            row,
+        )
+        .await;
+        assert_eq!(
+            chunks.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the receiver holds the file, so no chunk goes out"
+        );
+        let mut progress = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            if let EngineEvent::TransferProgress { bytes_done, .. } = e {
+                progress.push(bytes_done);
+            }
+        }
+        assert_eq!(progress, vec![4], "the bar starts at the held bytes");
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().bytes_done, 4);
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "done");
+    }
+
+    /// The resume wait follows the announced version. No announce, no wait.
+    #[test]
+    fn the_resume_wait_follows_the_announced_version() {
+        let versions: PeerVersions = Arc::default();
+        assert_eq!(resume_wait_for(&versions, &[1u8; 16]), None);
+        versions.lock().unwrap().insert([1u8; 16], 100);
+        assert_eq!(resume_wait_for(&versions, &[1u8; 16]), None);
+        versions.lock().unwrap().insert([1u8; 16], 101);
+        assert_eq!(
+            resume_wait_for(&versions, &[1u8; 16]),
+            Some(crate::transfer::RESUME_WAIT)
+        );
     }
 
     /// B4 core: a hash-mismatch ack must NOT go through the generic retry
@@ -5095,6 +5247,7 @@ mod tests {
                 sessions,
                 max_backoff_secs: 600,
                 observability: Arc::new(Observability::default()),
+                peer_versions: Arc::default(),
             },
             row,
         )

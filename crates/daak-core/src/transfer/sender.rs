@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::chunk::ChunkReader;
-use crate::control::AckMsg;
+use crate::control::{AckMsg, ResumeMsg};
 use crate::error::{CoreError, Result};
 use crate::framing::RecordType;
 use crate::manifest::{Manifest, CHUNK_SIZE_DEFAULT};
@@ -35,6 +36,23 @@ pub fn decode_chunk_body(body: &[u8]) -> Result<(u32, u64, Bytes)> {
     Ok((item_index, chunk_index, Bytes::copy_from_slice(&body[16..])))
 }
 
+/// The first protocol version whose receiver sends a `ResumeMsg`.
+pub const RESUME_MIN_VERSION: u16 = 101;
+
+/// The time that a sender waits for the `ResumeMsg` of a version 101 peer.
+/// When no frame arrives in this time, the sender sends every chunk.
+pub const RESUME_WAIT: Duration = Duration::from_secs(10);
+
+/// The resume wait for a peer with this announced version. A peer that
+/// announced 100, or a peer with no known version, gets no wait.
+pub fn resume_wait(peer_version: Option<u16>) -> Option<Duration> {
+    peer_version
+        .filter(|v| *v >= RESUME_MIN_VERSION)
+        .map(|_| RESUME_WAIT)
+}
+
+/// Send the manifest, then the chunks inside `ranges`, then read the ack.
+/// This is the version 100 sender: it reads no frame before its ack loop.
 #[tracing::instrument(
     name = "send",
     skip_all,
@@ -50,15 +68,168 @@ pub async fn send_transfer<T: FrameTransport>(
     // Per-item half-open chunk ranges; &[] or a missing entry = all chunks, a
     // present-but-empty entry = none (R-T7-4).
     ranges: &[Vec<(u64, u64)>],
+    on_progress: impl FnMut(u64),
+) -> Result<()> {
+    send_manifest(conn, manifest).await?;
+    stream_and_await_ack(conn, manifest, paths, ranges, on_progress).await
+}
+
+/// Send the manifest, then wait up to `wait` for the receiver's `ResumeMsg`.
+/// Then send only the chunks that the message names, and read the ack.
+///
+/// `wait` is `None` for a peer that does not send a `ResumeMsg`. The sender
+/// then sends every chunk at once. When no frame arrives in `wait`, the sender
+/// also sends every chunk.
+///
+/// When the receiver already holds bytes, `on_progress` first gets that byte
+/// count, once. Each later call is the length of one chunk on the wire. So the
+/// sum of all calls is the transfer total.
+#[tracing::instrument(
+    name = "send",
+    skip_all,
+    fields(
+        payload = %crate::diag::short_id(&manifest.payload_id),
+        bytes = tracing::field::Empty
+    )
+)]
+pub async fn send_transfer_resuming<T: FrameTransport>(
+    conn: &mut T,
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+    wait: Option<Duration>,
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
+    send_manifest(conn, manifest).await?;
+    let ranges = match wait {
+        None => Vec::new(),
+        Some(wait) => match await_resume(conn, manifest, wait).await? {
+            Resume::Ranges(r) => r,
+            Resume::TimedOut => {
+                tracing::info!("no resume message; the sender sends every chunk");
+                Vec::new()
+            }
+            Resume::Done(verdict) => return verdict,
+        },
+    };
+    let held = bytes_held(manifest, &ranges);
+    if held > 0 {
+        on_progress(held);
+    }
+    stream_and_await_ack(conn, manifest, paths, &ranges, on_progress).await
+}
+
+async fn send_manifest<T: FrameTransport>(conn: &mut T, manifest: &Manifest) -> Result<()> {
     conn.send(
         CONTROL_STREAM,
         RecordType::Manifest,
         Bytes::from(manifest.to_cbor()?),
     )
-    .await?;
+    .await
+}
 
+enum Resume {
+    /// The receiver named the chunks that it needs.
+    Ranges(Vec<Vec<(u64, u64)>>),
+    /// No resume message arrived in time.
+    TimedOut,
+    /// The receiver sent its final ack before any chunk. This is the verdict.
+    Done(Result<()>),
+}
+
+/// Read frames until the `ResumeMsg`, a final ack, or the deadline.
+async fn await_resume<T: FrameTransport>(
+    conn: &mut T,
+    manifest: &Manifest,
+    wait: Duration,
+) -> Result<Resume> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        // The frame codec keeps a partial frame in its buffer, so a timeout
+        // here does not lose bytes. The ack loop reads the frame later.
+        let frame = match tokio::time::timeout_at(deadline, conn.recv()).await {
+            Err(_) => return Ok(Resume::TimedOut),
+            Ok(frame) => frame?,
+        };
+        match frame {
+            Some(f) if f.kind == RecordType::Nack => {
+                let msg = ResumeMsg::from_cbor(&f.body)?;
+                if msg.transfer_id != manifest.payload_id {
+                    return Err(CoreError::Protocol(
+                        "resume message for a different transfer".into(),
+                    ));
+                }
+                return Ok(Resume::Ranges(msg.ranges));
+            }
+            Some(f) if f.kind == RecordType::Ack => {
+                if let Some(verdict) = ack_verdict(manifest, &AckMsg::from_cbor(&f.body)?) {
+                    return Ok(Resume::Done(verdict));
+                }
+            }
+            Some(_) => continue,
+            None => {
+                return Err(CoreError::Protocol(
+                    "connection closed before transfer ack".into(),
+                ))
+            }
+        }
+    }
+}
+
+/// The bytes that the receiver already holds: for each binary item with a
+/// list, the item size less the bytes inside its ranges. An item with no
+/// list holds 0 bytes, because the sender sends all of it.
+fn bytes_held(manifest: &Manifest, ranges: &[Vec<(u64, u64)>]) -> u64 {
+    manifest
+        .binary_items()
+        .filter_map(|item| {
+            let wanted = ranges.get(item.index as usize)?;
+            let size = item.size?;
+            let chunk = item.chunk_size.unwrap_or(CHUNK_SIZE_DEFAULT) as u64;
+            let missing: u64 = wanted
+                .iter()
+                .map(|&(start, end)| {
+                    let lo = start.saturating_mul(chunk).min(size);
+                    let hi = end.saturating_mul(chunk).min(size);
+                    hi.saturating_sub(lo)
+                })
+                .fold(0u64, u64::saturating_add);
+            Some(size.saturating_sub(missing))
+        })
+        .fold(0u64, u64::saturating_add)
+}
+
+/// The result that a final ack gives, or `None` when the ack is not final.
+fn ack_verdict(manifest: &Manifest, ack: &AckMsg) -> Option<Result<()>> {
+    // Never trust the caller-side convention that only one transfer is in
+    // flight per connection: an Ack for another transfer is a protocol
+    // violation, and skipping it would hang on an Ack that is never coming.
+    if ack.transfer_id != manifest.payload_id {
+        return Some(Err(CoreError::Protocol(
+            "ack for a different transfer".into(),
+        )));
+    }
+    if !ack.complete {
+        return None;
+    }
+    if !ack.hash_ok {
+        // B4: a quarantine, not a transfer failure. The receiver got every
+        // byte and hashed it; the verdict is about THESE bytes. Naming the
+        // item keeps the caller from having to parse the message to find it.
+        return Some(Err(CoreError::Quarantined {
+            transfer_id: manifest.payload_id,
+            item_index: ack.item_index,
+        }));
+    }
+    Some(Ok(()))
+}
+
+async fn stream_and_await_ack<T: FrameTransport>(
+    conn: &mut T,
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+    ranges: &[Vec<(u64, u64)>],
+    mut on_progress: impl FnMut(u64),
+) -> Result<()> {
     let mut scheduled = Vec::with_capacity(manifest.items.len());
     // ponytail: one open reader per binary item for the whole transfer (mirrors the
     // receiver's all-files-open pattern). A folder of many hundreds of items can
@@ -112,29 +283,12 @@ pub async fn send_transfer<T: FrameTransport>(
     loop {
         match conn.recv().await? {
             Some(f) if f.kind == RecordType::Ack => {
-                let ack = AckMsg::from_cbor(&f.body)?;
-                // Never trust the caller-side convention that only one transfer
-                // is in flight per connection: an Ack for another transfer is a
-                // protocol violation, and skipping it would hang on an Ack that
-                // is never coming.
-                if ack.transfer_id != manifest.payload_id {
-                    return Err(CoreError::Protocol("ack for a different transfer".into()));
-                }
-                if ack.complete {
-                    if !ack.hash_ok {
-                        // B4: a quarantine, not a transfer failure. The
-                        // receiver got every byte and hashed it; the verdict is
-                        // about THESE bytes, so it can never be re-sent into a
-                        // different answer. Naming the item keeps the caller
-                        // from having to parse the message to find it.
-                        return Err(CoreError::Quarantined {
-                            transfer_id: manifest.payload_id,
-                            item_index: ack.item_index,
-                        });
-                    }
-                    return Ok(());
+                if let Some(verdict) = ack_verdict(manifest, &AckMsg::from_cbor(&f.body)?) {
+                    return verdict;
                 }
             }
+            // A version 101 receiver sends a ResumeMsg (Nack) first. This
+            // loop skips it, like every other kind it does not know.
             Some(_) => continue,
             None => {
                 return Err(CoreError::Protocol(

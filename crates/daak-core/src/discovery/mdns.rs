@@ -13,7 +13,9 @@ pub const SERVICE_TYPE: &str = "_daak._tcp.local.";
 /// The wire protocol version. The major part is `PROTO_VERSION / 100`.
 /// Major 1: the session keys come from the secret Noise `split()` output.
 /// Major 0 (value 1) derived them from the public handshake hash.
-pub const PROTO_VERSION: u16 = 100;
+/// Minor 1 (value 101): the receiver sends a `ResumeMsg` after the manifest,
+/// and the sender sends only the chunks that it names. 100 and 101 interwork.
+pub const PROTO_VERSION: u16 = 101;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerAnnounce {

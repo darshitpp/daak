@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use crate::chunk::ChunkBitmap;
-use crate::control::AckMsg;
+use crate::control::{AckMsg, ResumeMsg};
 use crate::engine::EngineEvent;
 use crate::error::{ensure_compatible, CoreError, Result};
 use crate::framing::RecordType;
@@ -432,10 +432,37 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     // the first good copy. Every item write goes to a discard directory
     // instead, and the sender still gets its Ack so it stops re-sending. The
     // guard removes the directory on every return path.
+    //
+    // Resume (version 101): the item rows of an EARLIER receive of this
+    // payload. A `done` item is settled: the receiver asks for none of its
+    // chunks and does not touch its file, because the platform can have moved
+    // it. A `quarantined` or `failed` item is received again in full. While
+    // such an item exists, the payload is not a duplicate.
+    let earlier: Vec<ItemRow> = match db {
+        Some(db) => db.list_items(&manifest.payload_id)?,
+        None => Vec::new(),
+    };
+    let redo: Vec<u32> = earlier
+        .iter()
+        .filter(|r| r.state == "quarantined" || r.state == "failed")
+        .map(|r| r.item_index)
+        .collect();
     let dedupe = match db {
-        Some(db) => db.payload_seen(&manifest.payload_id)?,
+        Some(db) => redo.is_empty() && db.payload_seen(&manifest.payload_id)?,
         None => false,
     };
+    // A duplicate settles nothing. It writes every chunk into the discard
+    // directory, as before, so an old sender that sends all chunks completes.
+    let settled: Vec<u32> = if dedupe {
+        Vec::new()
+    } else {
+        earlier
+            .iter()
+            .filter(|r| r.state == "done")
+            .map(|r| r.item_index)
+            .collect()
+    };
+    let is_settled = |index: u32| settled.contains(&index);
     let dest_root = if dedupe {
         out_dir
             .join("dedupe-discard")
@@ -519,6 +546,11 @@ pub async fn receive_transfer_from<T: FrameTransport>(
                 "manifest chunks exceed total cap {MAX_TOTAL_CHUNKS}"
             )));
         }
+        if is_settled(item.index) {
+            files.push(None);
+            bitmaps.push(None);
+            continue;
+        }
         let path = item_destination(&dest_root, item)?;
         if let Some(parent) = path.parent() {
             // B1: a folder's children arrive in subdirectories that do not
@@ -553,17 +585,53 @@ pub async fn receive_transfer_from<T: FrameTransport>(
         // A bitmap persisted under a DIFFERENT chunk_count is benign: set_word
         // drops words past this bitmap's end, so both shortening (stale extra
         // words ignored) and lengthening (new tail still zero) stay safe.
-        let bitmap = match db {
+        //
+        // A duplicate writes into a NEW discard directory, so a stored bitmap
+        // does not describe those files. A redo item must hash fresh bytes, so
+        // its stored bitmap is dropped.
+        let bitmap = match db.filter(|_| !dedupe) {
+            Some(db) if redo.contains(&item.index) => {
+                db.clear_bitmap(&manifest.payload_id, item.index)?;
+                ChunkBitmap::new(chunk_count)
+            }
             Some(db) => db.load_bitmap(&manifest.payload_id, item.index, chunk_count)?,
             None => ChunkBitmap::new(chunk_count),
         };
         bitmaps.push(Some(bitmap));
     }
 
+    // Version 101: tell the sender which chunks this receiver still needs. A
+    // version 100 sender skips the frame. A send failure is not fatal here:
+    // the peer can have closed after its last chunk, and the frames that it
+    // sent are still in the buffer. The receive loop below reads them.
+    let resume = ResumeMsg {
+        transfer_id: manifest.payload_id,
+        ranges: bitmaps
+            .iter()
+            .map(|b| b.as_ref().map(super::gaps_to_nack).unwrap_or_default())
+            .collect(),
+    };
+    if let Err(e) = conn
+        .send(
+            CONTROL_STREAM,
+            RecordType::Nack,
+            bytes::Bytes::from(resume.to_cbor()?),
+        )
+        .await
+    {
+        tracing::warn!(error = %crate::diag::log_err(&e), "resume message not sent");
+    }
+
     // The bytes a resume already holds: one chunk length for each bit the
     // persisted bitmap has set, capped at the item size. Zero for a fresh
     // receive, so the bar does not start one chunk ahead (P6 3.2).
-    let bytes_held = bytes_held(&manifest, &bitmaps);
+    // A settled item counts in full.
+    let bytes_held = bytes_held(&manifest, &bitmaps)
+        + manifest
+            .binary_items()
+            .filter(|i| is_settled(i.index))
+            .filter_map(|i| i.size)
+            .sum::<u64>();
 
     let all_received = |bitmaps: &[Option<ChunkBitmap>]| {
         bitmaps
@@ -579,28 +647,36 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     let mut chunks_since_persist: u64 = 0;
 
     while !all_received(&bitmaps) {
-        let frame = match conn.recv().await? {
-            Some(f) => f,
-            None => {
-                if let Some(db) = db {
-                    if received_any {
-                        for (i, bm) in bitmaps.iter().enumerate() {
-                            if let Some(bm) = bm {
-                                // R-T7-5: keyed by manifest.payload_id, never a
-                                // transfer id -- the resuming peer must find these.
-                                db.save_bitmap(&manifest.payload_id, i as u32, bm)?;
-                            }
+        // With a Db, a reset connection is an interrupt, the same as a close.
+        // The bitmap is saved in both cases, so the next connection resumes.
+        let frame = match conn.recv().await {
+            Ok(Some(f)) => f,
+            Ok(None) | Err(CoreError::Io(_)) if db.is_some() => {
+                // `received_any` stays false for a duplicate, so a duplicate
+                // saves no bitmap.
+                if let Some(db) = db.filter(|_| received_any) {
+                    for (i, bm) in bitmaps.iter().enumerate() {
+                        if let Some(bm) = bm {
+                            // R-T7-5: keyed by manifest.payload_id, never a
+                            // transfer id -- the resuming peer must find these.
+                            db.save_bitmap(&manifest.payload_id, i as u32, bm)?;
                         }
                     }
-                    return Err(CoreError::TransferInterrupted);
                 }
-                return Err(CoreError::Protocol("closed mid-transfer".into()));
+                return Err(CoreError::TransferInterrupted);
             }
+            Ok(None) => return Err(CoreError::Protocol("closed mid-transfer".into())),
+            Err(e) => return Err(e),
         };
         if frame.kind != RecordType::Chunk {
             continue;
         }
         let (item_index, chunk_index, data) = decode_chunk_body(&frame.body)?;
+        // A version 100 sender sends every chunk, also for a settled item.
+        // The receiver ignores those chunks.
+        if is_settled(item_index) {
+            continue;
+        }
         let idx = item_index as usize;
         let chunk_size = manifest
             .items
@@ -659,7 +735,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
                 "chunk index {chunk_index} out of range for item {item_index}"
             )));
         }
-        if let Some(db) = db {
+        if let Some(db) = db.filter(|_| !dedupe) {
             received_any = true;
             chunks_since_persist += 1;
             if chunks_since_persist >= BITMAP_PERSIST_INTERVAL {
@@ -699,7 +775,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     // succeeded (I-4): the DB state follows the hash, not the rename.
     let mut failed: Vec<u32> = Vec::new();
     let mut held_paths: Vec<(u32, PathBuf)> = Vec::new();
-    for item in manifest.binary_items() {
+    for item in manifest.binary_items().filter(|i| !is_settled(i.index)) {
         let path = item_destination(&dest_root, item)?;
         let f = std::fs::File::open(&path)?;
         let actual = blake2b256_reader(f)?;
@@ -731,6 +807,13 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     if let Some(db) = db.filter(|_| !dedupe) {
         let mut bytes_done = 0u64;
         for item in &manifest.items {
+            // A settled item keeps its row from the earlier receive.
+            if is_settled(item.index) {
+                if item.is_binary() {
+                    bytes_done += item.size.unwrap_or(0);
+                }
+                continue;
+            }
             let quarantined = failed.contains(&item.index);
             // Computed ONCE and used for BOTH the row and the event below, so
             // the two can never name two different files.
