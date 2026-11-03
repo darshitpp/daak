@@ -28,7 +28,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -74,6 +74,11 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   toastLayout?: 'bar' | 'pill';
   /** The injected Settings functions: arrival prefs, app version, OS grant. */
   settingsHost?: SettingsHost;
+  /** Dashboard mode only. A share from the OS. */
+  initialFiles?: string[];
+  initialShareToken?: number;
+  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<void>;
+  onCancelShare?: () => void;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -117,6 +122,10 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             windowChrome={windowChrome}
             keyboardAvoiding={keyboardAvoiding}
             settingsHost={settingsHost}
+            initialFiles={initialFiles}
+            initialShareToken={initialShareToken}
+            onShareSend={onShareSend}
+            onCancelShare={onCancelShare}
           />}
     </View>
     </SheetProvider>

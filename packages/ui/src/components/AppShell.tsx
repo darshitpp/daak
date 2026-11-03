@@ -10,6 +10,7 @@ import type { PhotosHost } from './PhotosAccessRow';
 import type { SettingsHost } from '../screens/settings/host';
 import { Sidebar, TabBar, type Tab } from './TabBar';
 import { Btn, type DeviceNoun } from './ds';
+import { useToast } from './Toast';
 import { spacing, ui } from '../theme';
 
 type RouteBody =
@@ -51,6 +52,9 @@ export function AppShell({
   initialPeerDeviceId,
   initialText,
   initialFiles,
+  initialShareToken,
+  onShareSend,
+  onCancelShare,
   pairBundle,
   inboxRouteToken,
   inboxPeerDeviceId,
@@ -91,6 +95,12 @@ export function AppShell({
   initialPeerDeviceId?: string;
   initialText?: string;
   initialFiles?: string[];
+  /** A new value shows the share again, even when the files are the same. */
+  initialShareToken?: number;
+  /** The desktop sends the files at once. Mobile sets none and keeps the composer seed. */
+  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<void>;
+  /** The host drops its copy of the share. */
+  onCancelShare?: () => void;
   pairBundle?: string;
   inboxRouteToken?: string;
   inboxPeerDeviceId?: string;
@@ -115,9 +125,33 @@ export function AppShell({
     setStack([]);
   };
 
-  const openThread = (d: DeviceInfo) => {
-    push({ name: 'thread', peerDeviceId: d.deviceId, text: share?.text, files: share?.files });
+  const toast = useToast();
+  const sending = useRef(false);
+
+  const openThread = async (d: DeviceInfo) => {
+    if (sending.current) return;
+    const files = share?.files;
+    if (onShareSend !== undefined && files !== undefined && files.length > 0) {
+      sending.current = true;
+      try {
+        await onShareSend(d, { files, text: share?.text });
+      } catch (e) {
+        toast.show(e instanceof Error ? e.message : String(e));
+        return;
+      } finally {
+        sending.current = false;
+      }
+      push({ name: 'thread', peerDeviceId: d.deviceId, text: share?.text });
+      setShare(null);
+      return;
+    }
+    push({ name: 'thread', peerDeviceId: d.deviceId, text: share?.text, files });
     setShare(null);
+  };
+
+  const cancelShare = () => {
+    setShare(null);
+    onCancelShare?.();
   };
 
   // ponytail: keyed on the string values, so an OS re-delivery of the SAME
@@ -135,7 +169,7 @@ export function AppShell({
       setStack([]);
       setShare({ text: initialText, files: initialFiles });
     }
-  }, [initialPeerDeviceId, pairBundle, initialFiles, initialText]);
+  }, [initialPeerDeviceId, pairBundle, initialFiles, initialText, initialShareToken]);
 
   // The token alone triggers the route. The peer id is read from the same
   // render, because the host sets both in one batch.
@@ -192,7 +226,8 @@ export function AppShell({
   } else if (root === 'devices') {
     screen = (
       <DashboardScreen
-        onOpenThread={openThread}
+        onOpenThread={(d) => void openThread(d)}
+        onCancelShare={cancelShare}
         onPair={pair ? () => push({ name: 'pair' }) : undefined}
         onCheckConnection={onCheckConnection}
         pendingShare={share === null ? null : { fileCount: share.files?.length ?? 0, hasText: (share.text ?? '') !== '' }}

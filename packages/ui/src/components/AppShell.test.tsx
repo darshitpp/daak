@@ -6,6 +6,7 @@ import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
 import { threadItem, threadPage } from '../testing/threadFixtures';
 import { AppShell } from './AppShell';
+import { ToastProvider } from './Toast';
 
 const peer: DeviceInfo = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true };
 const second: DeviceInfo = { deviceId: 'cc'.repeat(16), name: 'ThinkPad', addr: '', online: true, presence: 'online', paired: true };
@@ -124,6 +125,98 @@ describe('AppShell thread route', () => {
     fireEvent.press(screen.getByTestId('thread-back'));
     await screen.findByText('Your devices');
     expect(screen.queryByText('Pick a device for what you shared')).toBeNull();
+  });
+});
+
+describe('AppShell pending share actions', () => {
+  const files = ['/Users/me/a.png'];
+  const peerRow = () => screen.findByTestId('open-' + peer.deviceId);
+
+  it('a new initialShareToken with the same files shows the pending share again after a cancel', async () => {
+    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onCancelShare: () => {} });
+    expect(await screen.findByTestId('pending-share')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('cancel-share'));
+    expect(screen.queryByTestId('pending-share')).toBeNull();
+    again({ initialFiles: files, initialShareToken: 2, onCancelShare: () => {} });
+    expect(await screen.findByTestId('pending-share')).toBeTruthy();
+  });
+
+  it('with onShareSend, tapping a device calls onShareSend with that device and the files, then opens the thread with no files in the composer', async () => {
+    const onShareSend = jest.fn().mockResolvedValue(undefined);
+    shell(fakeEngine([peer]), { initialFiles: files, onShareSend });
+    fireEvent.press(await peerRow());
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
+    expect(onShareSend).toHaveBeenCalledWith(expect.objectContaining({ deviceId: peer.deviceId }), { files, text: undefined });
+    expect(screen.queryByText('a.png')).toBeNull();
+    expect(screen.queryByTestId('pending-share')).toBeNull();
+  });
+
+  it('without onShareSend, tapping a device opens the thread with the files in the composer', async () => {
+    shell(fakeEngine([peer]), { initialFiles: files });
+    fireEvent.press(await peerRow());
+    expect(await screen.findByText('a.png')).toBeTruthy();
+  });
+
+  it('when onShareSend rejects, the share stays pending and a toast shows the error', async () => {
+    const onShareSend = jest.fn().mockRejectedValue(new Error('disk is full'));
+    const engine = fakeEngine([peer]);
+    render(
+      <EngineProvider engine={engine}>
+        <ToastProvider>
+          <AppShell initialFiles={files} onShareSend={onShareSend} />
+        </ToastProvider>
+      </EngineProvider>,
+    );
+    fireEvent.press(await peerRow());
+    expect(await screen.findByText(/disk is full/)).toBeTruthy();
+    expect(screen.queryByTestId('thread-back')).toBeNull();
+    expect(screen.getByTestId('pending-share')).toBeTruthy();
+  });
+
+  it('ignores a second device tap while onShareSend is pending', async () => {
+    let release: () => void = () => {};
+    const onShareSend = jest.fn().mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    shell(fakeEngine([peer]), { initialFiles: files, onShareSend });
+    const row = await peerRow();
+    fireEvent.press(row);
+    fireEvent.press(row);
+    expect(onShareSend).toHaveBeenCalledTimes(1);
+    await act(async () => release());
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
+  });
+
+  it('a text-only share never calls onShareSend', async () => {
+    const onShareSend = jest.fn().mockResolvedValue(undefined);
+    shell(fakeEngine([peer]), { initialText: 'note', onShareSend });
+    fireEvent.press(await peerRow());
+    expect(await screen.findByDisplayValue('note')).toBeTruthy();
+    expect(onShareSend).not.toHaveBeenCalled();
+  });
+
+  it('Cancel clears the pending share and calls onCancelShare', async () => {
+    const onCancelShare = jest.fn();
+    shell(fakeEngine([peer]), { initialFiles: files, onCancelShare });
+    fireEvent.press(await screen.findByTestId('cancel-share'));
+    expect(screen.queryByTestId('pending-share')).toBeNull();
+    expect(onCancelShare).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new initialShareToken replaces a pending share', async () => {
+    const onShareSend = jest.fn().mockResolvedValue(undefined);
+    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
+    await screen.findByTestId('pending-share');
+    again({ initialFiles: ['/Users/me/b.png', '/Users/me/c.png'], initialShareToken: 2, onShareSend });
+    fireEvent.press(await peerRow());
+    await waitFor(() => expect(onShareSend).toHaveBeenCalledTimes(1));
+    expect(onShareSend.mock.calls[0][1].files).toEqual(['/Users/me/b.png', '/Users/me/c.png']);
+  });
+
+  // Intended: a consumed delivery sets initialFiles to undefined. The pending share stays.
+  it('initialFiles becoming undefined after a consume leaves the pending share in place', async () => {
+    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1 });
+    await screen.findByTestId('pending-share');
+    again({ initialFiles: undefined, initialShareToken: 1 });
+    expect(screen.getByTestId('pending-share')).toBeTruthy();
   });
 });
 

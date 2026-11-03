@@ -49,12 +49,14 @@ function shareText(s: { fileCount: number; hasText: boolean }): string {
  * when it is offline, because the engine queues the send. Nothing on this
  * screen sends. Unpair is in Settings.
  */
-export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendingShare }: {
+export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendingShare, onCancelShare }: {
   onOpenThread?: (d: DeviceInfo) => void;
   onPair?: () => void;
   /** The "A device you paired isn't showing?" link. The host owns the check. */
   onCheckConnection?: () => void;
   pendingShare?: { fileCount: number; hasText: boolean } | null;
+  /** Shows Cancel on the pending share row. */
+  onCancelShare?: () => void;
 } = {}) {
   const engine = useEngine();
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -179,7 +181,10 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
           Everything on your Wi-Fi. Tap a device you've paired with to open your conversation, or pair a new one.
         </Text>
         {pendingShare ? (
-          <Note tone="ok" title="Pick a device for what you shared" body={shareText(pendingShare)} testID="pending-share" />
+          <View>
+            <Note tone="ok" title="Pick a device for what you shared" body={shareText(pendingShare)} testID="pending-share" />
+            {onCancelShare ? <Btn variant="quiet" testID="cancel-share" label="Cancel" onPress={onCancelShare} /> : null}
+          </View>
         ) : null}
         {error ? <Note tone="err" title="No device list" body={error} testID="devices-error" /> : null}
 

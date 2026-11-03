@@ -332,3 +332,21 @@ describe('DashboardScreen (Devices)', () => {
   });
 });
 
+describe('DashboardScreen pending share Cancel', () => {
+  it('the pending-share row shows Cancel only when onCancelShare is set', async () => {
+    const onCancelShare = jest.fn();
+    const share = { fileCount: 1, hasText: false };
+    const first = mount(fakeEngine([dev('Pixel', 'online')]), { pendingShare: share });
+    expect(await screen.findByTestId('pending-share')).toBeTruthy();
+    expect(screen.queryByTestId('cancel-share')).toBeNull();
+    first.unmount();
+    mount(fakeEngine([dev('Pixel', 'online')]), { pendingShare: share, onCancelShare });
+    fireEvent.press(await screen.findByTestId('cancel-share'));
+    expect(onCancelShare).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pending share with no paired devices still shows Cancel', async () => {
+    mount(fakeEngine([]), { pendingShare: { fileCount: 1, hasText: false }, onCancelShare: () => {} });
+    expect(await screen.findByTestId('cancel-share')).toBeTruthy();
+  });
+});
