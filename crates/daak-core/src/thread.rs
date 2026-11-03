@@ -586,25 +586,39 @@ mod tests {
         }
     }
 
+    // A fixed time limit fails on a busy host. So this test compares 2 sizes
+    // on the same host. The large run has 16 times more items. A linear
+    // expand takes about 16 times longer. A quadratic expand takes about 256
+    // times longer. Load slows both runs, so the ratio stays stable. Each
+    // size uses the best of 3 runs, to ignore one noisy run.
     #[test]
     fn expand_is_linear_in_the_item_count() {
         let db = db();
-        let items: Vec<Item> = (0..65536u32)
-            .map(|i| folder_file(i, "album", &format!("f{i}.bin"), 1))
-            .collect();
-        let m = manifest(items);
-        put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 65536);
-        let t = db.get_transfer(&[1u8; 16]).unwrap().unwrap();
-        let start = std::time::Instant::now();
-        let mut out = Vec::new();
-        expand(&db, &t, &mut out).unwrap();
-        assert_eq!(out.len(), 65536);
-        assert_eq!(out[65535].group.as_ref().unwrap().files, 65536);
+        let best = |id: u8, n: u32| {
+            let items: Vec<Item> = (0..n)
+                .map(|i| folder_file(i, "album", &format!("f{i}.bin"), 1))
+                .collect();
+            let m = manifest(items);
+            put(&db, id, 3, "out", "done", 10, m.to_cbor().unwrap(), n);
+            let t = db.get_transfer(&[id; 16]).unwrap().unwrap();
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..3 {
+                let start = std::time::Instant::now();
+                let mut out = Vec::new();
+                expand(&db, &t, &mut out).unwrap();
+                best = best.min(start.elapsed());
+                assert_eq!(out.len(), n as usize);
+                assert_eq!(out[n as usize - 1].group.as_ref().unwrap().files, n);
+            }
+            best
+        };
+        let small = best(1, 4096);
+        let large = best(2, 65536);
         assert!(
-            start.elapsed() < std::time::Duration::from_secs(2),
-            "expand took {:?}",
-            start.elapsed()
+            large < small * 40,
+            "expand is not linear: 4096 items took {small:?}, 65536 items took {large:?}"
         );
+        assert!(large < std::time::Duration::from_secs(30));
     }
 
     #[test]
