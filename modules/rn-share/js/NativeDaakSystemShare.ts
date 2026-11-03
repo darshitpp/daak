@@ -20,6 +20,10 @@ export interface Spec extends TurboModule {
    * Puts `text` on the system clipboard. Resolves `false` when the OS refused.
    */
   copyText(text: string): Promise<boolean>;
+  /**
+   * Returns the paths that the Finder Services entry stored, then clears them.
+   */
+  takePendingFiles(): Promise<string[]>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }

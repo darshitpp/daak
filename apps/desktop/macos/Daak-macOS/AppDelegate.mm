@@ -3,6 +3,7 @@
 #import <Carbon/Carbon.h>
 #import <React/RCTBundleURLProvider.h>
 #import <React/RCTLinkingManager.h>
+#import <RNShare.h>
 #import <RNWindowHost.h>
 
 @implementation AppDelegate
@@ -18,6 +19,9 @@
   self.initialProps = @{};
 
   [super applicationDidFinishLaunching:notification];
+
+  // Finder sends Services requests to this object. The entry is in Info.plist.
+  NSApp.servicesProvider = self;
 
   // Normal app: Info.plist has no LSUIElement, so the app has a Dock icon, a
   // Cmd-Tab entry, and the standard app menu bar. The dashboard must not appear
@@ -92,6 +96,27 @@
                                                 usingBlock:^(NSNotification *note) {
     [[RNWindowHost shared] presentPopoverFrom:(NSStatusItem *)note.object];
   }];
+}
+
+// The Services entry "Send with Daak" calls this method. The app can get the
+// call before the React bridge exists, so the paths go to a class-level list.
+// The handler does not read file contents. A folder arrives as a folder path.
+- (void)sendFiles:(NSPasteboard *)pboard
+         userData:(NSString *)userData
+            error:(NSString **)error
+{
+  NSArray<NSURL *> *urls = [pboard readObjectsForClasses:@[ NSURL.class ]
+                                                 options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
+  if (urls.count == 0) {
+    *error = @"No file was selected.";
+    return;
+  }
+  NSMutableArray<NSString *> *paths = [NSMutableArray arrayWithCapacity:urls.count];
+  for (NSURL *url in urls) {
+    [paths addObject:url.path];
+  }
+  [RNShare addPendingFiles:paths];
+  [[RNWindowHost shared] openDashboard];
 }
 
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge

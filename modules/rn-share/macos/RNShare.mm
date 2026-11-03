@@ -3,6 +3,11 @@
 #import <Cocoa/Cocoa.h>
 #import <React/RCTUtils.h>
 
+// The Services handler can run before the React bridge exists, so the list
+// lives at class level. A lock guards it.
+static NSMutableArray<NSString *> *sPendingFiles;
+static NSString *const kServiceFilesPending = @"DaakServiceFilesPending";
+
 @implementation RNShare {
   NSSharingServicePicker *_picker;
   NSOpenPanel *_panel;
@@ -15,6 +20,43 @@ RCT_EXPORT_MODULE(DaakSystemShare)
 // and every RCTAssertMainQueue below is a Debug abort.
 + (BOOL)requiresMainQueueSetup { return YES; }
 - (dispatch_queue_t)methodQueue { return dispatch_get_main_queue(); }
+
++ (void)addPendingFiles:(NSArray<NSString *> *)paths {
+  @synchronized(self) {
+    if (sPendingFiles == nil) {
+      sPendingFiles = [NSMutableArray array];
+    }
+    [sPendingFiles addObjectsFromArray:paths];
+  }
+  [[NSNotificationCenter defaultCenter] postNotificationName:kServiceFilesPending object:nil];
+}
+
+- (NSArray<NSString *> *)supportedEvents { return @[ @"DaakServiceFilesPending" ]; }
+
+- (void)startObserving {
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(servicePathsPending:)
+                                               name:kServiceFilesPending
+                                             object:nil];
+}
+
+- (void)stopObserving {
+  [[NSNotificationCenter defaultCenter] removeObserver:self name:kServiceFilesPending object:nil];
+}
+
+- (void)servicePathsPending:(NSNotification *)note {
+  [self sendEventWithName:kServiceFilesPending body:nil];
+}
+
+// Returns the stored paths, then clears the list.
+RCT_EXPORT_METHOD(takePendingFiles : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
+  NSArray<NSString *> *paths;
+  @synchronized(RNShare.class) {
+    paths = sPendingFiles != nil ? [sPendingFiles copy] : @[];
+    [sPendingFiles removeAllObjects];
+  }
+  resolve(paths);
+}
 
 RCT_EXPORT_METHOD(share : (NSString *)payloadJson resolve : (RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject) {
   RCTAssertMainQueue();
