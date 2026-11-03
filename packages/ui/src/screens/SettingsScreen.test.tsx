@@ -208,6 +208,22 @@ describe('SettingsScreen sections', () => {
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
 
+  it('sections appear in the order Connection, Report an issue, About Daak', async () => {
+    render(
+      <EngineProvider engine={fakeEngine([dev])}>
+        <SettingsScreen
+          settingsHost={{ reportIssue: { copy: async () => {} } }}
+          onCheckConnection={() => {}}
+        />
+      </EngineProvider>,
+    );
+    await screen.findByText('Pixel 9');
+    const tree = JSON.stringify(screen.toJSON());
+    const at = ['Connection', 'Report an issue', 'About Daak'].map((t) => tree.indexOf('"' + t + '"'));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+  });
+
   it('toasts "Saved · {name}" after a save and "Type a name first" for a blank box', async () => {
     const engine = fakeEngine([]);
     let current = 'Desk';

@@ -16,6 +16,10 @@ export interface Spec extends TurboModule {
    * and desktop modules must not share a barrel.
    */
   pickDocuments(multiple: boolean): Promise<string[]>;
+  /**
+   * Puts `text` on the system clipboard. Resolves `false` when the OS refused.
+   */
+  copyText(text: string): Promise<boolean>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }

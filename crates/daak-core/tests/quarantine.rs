@@ -354,3 +354,30 @@ async fn a_quarantined_item_is_not_in_the_inbox_saved_paths() {
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
+
+/// `daakd` logs each IPC error text. So the errors for a held file that is
+/// gone, or that cannot be deleted, must not name the held path. The held
+/// path ends in the user file name.
+#[tokio::test]
+async fn held_file_errors_do_not_name_the_file() {
+    std::env::set_var("DAAK_MDNS_OFF_LAN", "1");
+    let (a, b, b_db, a_dir, _b_dir) = paired().await;
+    let src = a_dir.path().join("harbor-private.bin");
+    std::fs::write(&src, vec![3u8; 40_000]).unwrap();
+    let payload_id = send_mismatched(&a, &b, &src, &b_db).await;
+    let held = std::path::PathBuf::from(b.quarantine_report(payload_id, 0).unwrap().held_path);
+
+    // First, a held file that is gone: the report cannot read it.
+    std::fs::remove_file(&held).unwrap();
+    let text = b.quarantine_report(payload_id, 0).unwrap_err().to_string();
+    assert!(!text.contains("harbor"), "the error names the file: {text}");
+
+    // Then, a held path that is a directory: the delete fails.
+    std::fs::create_dir(&held).unwrap();
+    std::fs::write(held.join("inner"), b"x").unwrap();
+    let text = b
+        .delete_quarantined_item(payload_id, 0)
+        .unwrap_err()
+        .to_string();
+    assert!(!text.contains("harbor"), "the error names the file: {text}");
+}

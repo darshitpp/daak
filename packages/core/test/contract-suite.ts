@@ -34,7 +34,7 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
       'retry', 'quarantineReport', 'deleteQuarantined', 'listQuarantineReports',
       'listTransfers', 'listThread', 'getItemText', 'listInbox', 'setDisplayName', 'setPresence', 'on',
       'armHostPairing', 'armCodePairing', 'codePairingStatus', 'cancelCodePairing',
-      'selfProfile',
+      'selfProfile', 'exportDebugBundle',
     ];
     for (const m of methods) expect(typeof e[m], `${name}.${m}`).toBe('function');
     await e.stop();
@@ -55,6 +55,31 @@ export function runContractSuite(name: string, factory: () => Promise<DaakEngine
       // The in-process engine arms its accept slot. There is no peer yet, so
       // this must NOT throw and must NOT invent a pairing.
       await expect(e.armHostPairing()).resolves.toBeUndefined();
+    }
+    await e.stop();
+  });
+
+  // exportDebugBundle is the second method whose behaviour differs per engine.
+  // The in-process engine returns the bundle text. It does not need a started
+  // engine. The IPC request ExportDebugBundle writes a file and returns no
+  // text, so the daemon client rejects the call. The IPC shape does not change.
+  const bundleTitle = name === 'daemon'
+    ? `${name}: DaemonClient rejects exportDebugBundle as unsupported`
+    : `${name}: exportDebugBundle returns the bundle text`;
+  it(bundleTitle, async () => {
+    const e = await factory();
+    if (name === 'daemon') {
+      await expect(e.exportDebugBundle()).rejects.toThrow(
+        'exportDebugBundle is not supported by the daemon client',
+      );
+    } else {
+      const before = await e.exportDebugBundle();
+      expect(typeof before).toBe('string');
+      expect(before.length).toBeGreaterThan(0);
+      await e.start();
+      const after = await e.exportDebugBundle();
+      expect(typeof after).toBe('string');
+      expect(after.length).toBeGreaterThan(0);
     }
     await e.stop();
   });

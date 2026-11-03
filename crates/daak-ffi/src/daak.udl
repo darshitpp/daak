@@ -201,6 +201,7 @@ interface DaakEngine {
   // this device can declare about itself.
   [Throws=FfiError] void set_presence(string state);
   [Throws=FfiError] u16 local_port();
+  [Throws=FfiError] string export_debug_bundle();
   [Throws=FfiError] void shutdown();
   // The event callback carries an FfiEvent, not a string, so the platform
   // sinks need this to turn one into the JSON packages/core reads. Same mapping

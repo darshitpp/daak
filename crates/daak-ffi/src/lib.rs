@@ -456,6 +456,10 @@ impl DaakEngine {
         store: Option<Arc<dyn daak_core::crypto::secret_store::SecretStore>>,
         sink: Box<dyn EventSink + Send + Sync>,
     ) -> Self {
+        // Install the log subscriber here and not in start(). The debug
+        // bundle must hold the log of a start() that failed. A second engine
+        // in the same process does not install it again.
+        daak_core::diag::init(os_layer());
         DaakEngine {
             rt: tokio::runtime::Runtime::new().expect("tokio runtime"),
             engine: Mutex::new(None),
@@ -491,7 +495,14 @@ impl DaakEngine {
             identity,
             db: Arc::new(db),
         };
-        let engine = Arc::new(self.rt.block_on(Engine::start(cfg)).map_err(engine_err)?);
+        let engine = match self.rt.block_on(Engine::start(cfg)) {
+            Ok(engine) => Arc::new(engine),
+            Err(e) => {
+                // The bundle then shows why the engine did not start.
+                daak_core::diag::log_start_failed(&e);
+                return Err(engine_err(e));
+            }
+        };
         // Every app build gates a new pairing on the user's SAS compare.
         engine.set_pairing_confirmation_required(true);
 
@@ -943,6 +954,38 @@ impl DaakEngine {
         Ok(self.engine()?.local_addr().port())
     }
 
+    /// The debug bundle text for "Report an issue". It works before start().
+    /// It holds the device id, the dialable LAN address, and the recent log.
+    /// It holds no display name.
+    pub fn export_debug_bundle(&self) -> Result<String, FfiError> {
+        // A poisoned lock must not stop the one diagnostic call.
+        let engine = self
+            .engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (device_id, listen_addr) = match engine {
+            Some(engine) => {
+                let (_name, id) = self.rt.block_on(engine.self_profile());
+                // The engine binds a wildcard. A wildcard names no host, so
+                // the bundle shows the address that a peer can dial.
+                let addr = dialable_local_addr(engine.local_addr().port())
+                    .map_or_else(|| "none".to_string(), |a| a.to_string());
+                (to_hex(&id), addr)
+            }
+            None => (NOT_STARTED.to_string(), NOT_STARTED.to_string()),
+        };
+        let state = daak_core::diag::DebugState {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            device_id,
+            listen_addr,
+            events: daak_core::diag::app_log().snapshot(),
+        };
+        // `daak-ffi`: the version is the engine library version, not the app
+        // version. The Settings screen adds the app version line.
+        Ok(daak_core::diag::render_capped("daak-ffi", &state))
+    }
+
     pub fn shutdown(&self) -> Result<(), FfiError> {
         if let Some(engine) = self.engine.lock().unwrap().take() {
             self.rt.block_on(engine.shutdown()).map_err(engine_err)?;
@@ -957,6 +1000,33 @@ impl DaakEngine {
     pub fn ffi_event_json(&self, ev: FfiEvent) -> Result<String, FfiError> {
         ffi_event_json(&ev)
     }
+}
+
+/// The bundle text for the device id and the address before start().
+const NOT_STARTED: &str = "engine: not started";
+
+/// The OS log layer: the unified log on Apple targets.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn os_layer() -> Option<daak_core::diag::OsLayer> {
+    Some(Box::new(tracing_oslog::OsLogger::new(
+        "dev.darshit.daak",
+        "engine",
+    )))
+}
+
+/// The OS log layer: logcat with the tag `daak` on Android. When logcat
+/// refuses the tag, the app runs with the ring layer only.
+#[cfg(target_os = "android")]
+fn os_layer() -> Option<daak_core::diag::OsLayer> {
+    tracing_android::layer("daak")
+        .ok()
+        .map(|l| Box::new(l) as daak_core::diag::OsLayer)
+}
+
+/// No OS log layer on the other targets.
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+fn os_layer() -> Option<daak_core::diag::OsLayer> {
+    None
 }
 
 fn device_ref(engine: &Engine, name: String) -> DeviceRef {

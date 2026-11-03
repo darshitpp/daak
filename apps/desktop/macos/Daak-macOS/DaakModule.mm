@@ -134,6 +134,9 @@ RCT_EXTERN_METHOD(setPresence:(NSString *)state
 RCT_EXTERN_METHOD(localPort:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(exportDebugBundle:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 

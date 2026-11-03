@@ -165,8 +165,8 @@ for abi in $order; do
 
   # API level 21, not the app's minSdk 24: the NDK's own wrappers are generated
   # per API level and 21 is the oldest that has all four clang wrappers, which
-  # is what makes one mapping table enough. The cdylib itself only pulls in
-  # libdl/libm/libc, all of which are API-1.
+  # is what makes one mapping table enough. The cdylib pulls in libdl, libm,
+  # and libc. tracing-android also links liblog for logcat. All four are API-1.
   #
   # cc-rs needs CC *and* AR per target (libsqlite3-sys compiles the bundled
   # SQLite C for the host, and a host `ar` would emit Mach-O objects), and cargo

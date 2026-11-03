@@ -9,3 +9,6 @@ export const ABOUT_LINKS = [
 // Decision D2. Daak makes no request. "Check for updates" opens this page.
 export const RELEASES_URL = 'https://github.com/darshitpp/daak/releases/latest';
 
+// "Report an issue" opens this page. The URL carries no log data.
+export const ISSUES_URL = 'https://github.com/darshitpp/daak/issues/new';
+

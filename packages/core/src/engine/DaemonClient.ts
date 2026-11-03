@@ -315,6 +315,12 @@ export class DaemonClientEngine implements DaakEngine {
     await this.tx.request({ Request: { SetPresence: { state } } });
   }
 
+  // The IPC request ExportDebugBundle writes a file and returns no text.
+  // Do not change the IPC shape. No shipped app uses this client.
+  async exportDebugBundle(): Promise<string> {
+    throw new Error('exportDebugBundle is not supported by the daemon client');
+  }
+
   on(cb: (e: DaakEvent) => void): () => void {
     this.handlers.add(cb);
     return () => { this.handlers.delete(cb); };

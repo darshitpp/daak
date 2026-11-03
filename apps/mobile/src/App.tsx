@@ -17,6 +17,7 @@ import {
   clearDownloadFolder,
   downloadFolderName,
   appInfo,
+  copyToClipboard,
   loadNotifyPrefs,
   readOnboarding,
   saveNotifyPrefs,
@@ -99,6 +100,12 @@ export default function App() {
         granted: () => readOnboarding().then((s) => s.alerts),
         openSettings: () => {
           void Promise.resolve(Linking.openSettings()).catch(() => {});
+        },
+      },
+      // Report an issue: the host supplies only the copy step.
+      reportIssue: {
+        copy: async (text) => {
+          if (!(await copyToClipboard(text))) throw new Error('clipboard refused');
         },
       },
     }),

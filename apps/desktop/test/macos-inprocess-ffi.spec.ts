@@ -150,6 +150,7 @@ describe('macOS runs the engine in-process', () => {
       'setDisplayName:',
       'setPresence:',
       'localPort:',
+      'exportDebugBundle:',
       'shutdown:',
     ]) {
       expect(mm).toContain(m);

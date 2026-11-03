@@ -6,9 +6,11 @@ use std::sync::Arc;
 use bytes::Bytes;
 use rand::Rng;
 use tokio::sync::{broadcast, mpsc, Mutex};
+use tracing::Instrument;
 
 use crate::control::{Hello, ListenAddr};
 use crate::crypto::identity::{verify_static_binding, Identity, IdentityPublic};
+use crate::diag::{log_err, short_id};
 use crate::discovery::beacon::{pairing_presence_key, SealedBeacon};
 use crate::discovery::status::{Liveness, StatusChange};
 use crate::discovery::{
@@ -717,6 +719,11 @@ impl Engine {
     /// ordering `record_inbox` + `InboxReceived` follows. A single function is
     /// the point: four call sites each emitting after their own upsert is four
     /// chances to forget one.
+    #[tracing::instrument(
+        name = "pairing_commit",
+        skip_all,
+        fields(peer = %short_id(&pairing.peer_device_id))
+    )]
     async fn commit_pairing(
         db: &Db,
         pairing: &Pairing,
@@ -969,7 +976,7 @@ impl Engine {
         let presence = match PresenceSocket::bind().await {
             Ok(p) => Some(Arc::new(p)),
             Err(e) => {
-                tracing::warn!("presence socket unavailable: {e}");
+                tracing::warn!("presence socket unavailable: {}", log_err(&e));
                 None
             }
         };
@@ -991,7 +998,7 @@ impl Engine {
             .and_then(|ids| staging.sweep_orphans(&ids.into_iter().collect()))
         {
             Ok(n) => tracing::info!(removed = n, "startup staging sweep complete"),
-            Err(e) => tracing::warn!("startup staging sweep failed: {e}"),
+            Err(e) => tracing::warn!("startup staging sweep failed: {}", log_err(&e)),
         }
         // The accept loop needs the RESOLVED name to answer a pairing, and a
         // rename takes this same lock, so hand the loop a shared handle rather
@@ -1094,7 +1101,15 @@ impl Engine {
                 // ponytail: per-row drain tasks are intentionally untracked (a JoinSet
                 // here costs more than it buys); a crash mid-drain is recovered at
                 // startup by Task 7's reset_inflight_outbox().
-                tokio::spawn(async move { drain_outbox_row(ctx, row).await });
+                // `.instrument`, not an entered guard: the span must follow
+                // the task across each `.await`, or it records the wrong time.
+                let span = tracing::info_span!(
+                    "outbox_drain",
+                    peer = %short_id(&row.peer_device_id),
+                    payload = %short_id(&row.payload_id),
+                    bytes = row.total_bytes
+                );
+                tokio::spawn(drain_outbox_row(ctx, row).instrument(span));
             })
         });
 
@@ -1121,10 +1136,10 @@ impl Engine {
                         Ok(v) => v,
                         Err(e) => {
                             if accept_error_is_fatal(&e) {
-                                tracing::warn!("accept failed, stopping listener: {e}");
+                                tracing::warn!("accept failed, stopping listener: {}", log_err(&e));
                                 break;
                             }
-                            tracing::warn!("rejected connection: {e}");
+                            tracing::warn!("rejected connection: {}", log_err(&e));
                             continue;
                         }
                     };
@@ -1157,7 +1172,7 @@ impl Engine {
                         )
                         .await
                         {
-                            tracing::warn!("inbound connection failed: {e}");
+                            tracing::warn!("inbound connection failed: {}", log_err(&e));
                         }
                     });
                     while set.try_join_next().is_some() {}
@@ -1196,8 +1211,10 @@ impl Engine {
                         continue;
                     }
                     if let Err(e) = ensure_proto_compatible(proto_version) {
+                        // No display name in the log. The short id names the peer.
                         tracing::warn!(
-                            "peer {name} ({addr}) advertises incompatible proto version {proto_version}: {e}"
+                            peer = %short_id(&device_id),
+                            "peer at {addr} advertises incompatible proto version {proto_version}: {e}"
                         );
                         // The warn! above is for the operator; this is for the
                         // UI. Without it the peer is silently absent from the
@@ -1279,7 +1296,7 @@ impl Engine {
                                 ),
                             });
                             tracing::warn!(
-                                peer = %hex::encode(beacon.device_id),
+                                peer = %short_id(&beacon.device_id),
                                 "dropped an unauthenticated presence beacon"
                             );
                             continue;
@@ -1647,7 +1664,7 @@ impl Engine {
             d.paired = false;
         }
         let _ = tx.send(EngineEvent::PairingRevoked(peer));
-        tracing::info!(peer = %hex::encode(peer), "pairing revoked by the peer");
+        tracing::info!(peer = %short_id(&peer), "pairing revoked by the peer");
         Ok(())
     }
 
@@ -1693,11 +1710,11 @@ impl Engine {
         match tokio::time::timeout(std::time::Duration::from_secs(3), send).await {
             Ok(Ok(())) => true,
             Ok(Err(e)) => {
-                tracing::warn!(peer = %hex::encode(peer), "unpair notice failed: {e}");
+                tracing::warn!(peer = %short_id(&peer), "unpair notice failed: {}", log_err(&e));
                 false
             }
             Err(_) => {
-                tracing::warn!(peer = %hex::encode(peer), "unpair notice timed out");
+                tracing::warn!(peer = %short_id(&peer), "unpair notice timed out");
                 false
             }
         }
@@ -1768,8 +1785,9 @@ impl Engine {
                 // A staging dir already gone is not a failed revoke, but a real
                 // IO error must be visible.
                 tracing::warn!(
-                    payload = %hex::encode(payload_id),
-                    "staging cleanup failed during revoke: {e}"
+                    payload = %short_id(payload_id),
+                    "staging cleanup failed during revoke: {}",
+                    log_err(&e)
                 );
             }
         }
@@ -1802,7 +1820,7 @@ impl Engine {
         // too. A later re-pair learns a fresh state and must not be held back.
         self.announced_offline.lock().await.remove(&peer_device_id);
         tracing::info!(
-            peer = %hex::encode(peer_device_id),
+            peer = %short_id(&peer_device_id),
             purged = payloads.len(),
             canceled,
             "pairing revoked"
@@ -2223,13 +2241,22 @@ impl Engine {
     /// As `accept_pairing_once`, and also returns the peer that paired. The
     /// host needs the id to confirm the SAS, and the id is available at this
     /// point only.
+    #[tracing::instrument(name = "pairing", skip_all, fields(peer = tracing::field::Empty))]
     pub async fn accept_pairing_once_with_peer(&self) -> Result<(String, [u8; 16])> {
         let mut rx = self.pairing_rx.lock().await;
-        rx.recv()
+        let (sas, peer) = rx
+            .recv()
             .await
-            .ok_or_else(|| CoreError::Protocol("pairing channel closed".into()))
+            .ok_or_else(|| CoreError::Protocol("pairing channel closed".into()))?;
+        tracing::Span::current().record("peer", tracing::field::display(short_id(&peer)));
+        Ok((sas, peer))
     }
 
+    #[tracing::instrument(
+        name = "pairing",
+        skip_all,
+        fields(peer = %short_id(&peer.identity.device_id))
+    )]
     pub async fn pair_with(
         &self,
         addr: SocketAddr,
@@ -2292,6 +2319,8 @@ impl Engine {
     /// Manual-code pairing: no pre-scanned QR bundle. The initiator sends its
     /// identity in-band, reads the responder's identity, then runs the SPAKE2
     /// exchange inside `pairing::pair` with `PairMode::Code`.
+    // `skip_all`: the span must not record the pairing code.
+    #[tracing::instrument(name = "pairing", skip_all, fields(peer = tracing::field::Empty))]
     pub async fn pair_with_code(&self, addr: SocketAddr, code: &str) -> Result<(String, [u8; 16])> {
         let mut conn = tcp::dial(addr).await?;
         conn.send(
@@ -2307,6 +2336,10 @@ impl Engine {
         )
         .await?;
         let peer_public = read_identity_public(&mut conn).await?;
+        tracing::Span::current().record(
+            "peer",
+            tracing::field::display(short_id(&peer_public.device_id)),
+        );
         // The host identity carries no name, so use the hex id until the host
         // sends its display name below.
         let name = hex::encode(peer_public.device_id);
@@ -2409,7 +2442,7 @@ impl Engine {
             // gets Ok(()) and nothing at all happens.
             None => tracing::info!(
                 "outbox retry refused: transfer {} is not in a re-armable state",
-                hex::encode(transfer_id)
+                short_id(&transfer_id)
             ),
         }
         Ok(())
@@ -2457,10 +2490,12 @@ impl Engine {
                 hex::encode(transfer_id)
             ))
         })?;
+        // No path in the text: `daakd` logs it, and the path ends in the
+        // user file name.
         let f = std::fs::File::open(&held).map_err(|e| {
             CoreError::Transfer(format!(
-                "held-back file {} is unreadable: {e}",
-                held.display()
+                "held-back file for item {item_index} is unreadable: {:?}",
+                e.kind()
             ))
         })?;
         let actual = crate::hash::blake2b256_reader(f)?;
@@ -2557,9 +2592,10 @@ impl Engine {
             // failure the user has to hear about, because reporting a delete
             // that did not happen is the worst possible answer here.
             if e.kind() != std::io::ErrorKind::NotFound {
+                // No path in the text, for the reason in `quarantine_report`.
                 return Err(CoreError::Transfer(format!(
-                    "held-back file {} could not be deleted: {e}",
-                    held.display()
+                    "held-back file for item {item_index} could not be deleted: {:?}",
+                    e.kind()
                 )));
             }
         }
@@ -2655,13 +2691,14 @@ impl Engine {
                 transfer_id: r.transfer_id,
             });
         } else {
-            tracing::info!(payload = %hex::encode(r.id), "duplicate payload delivery ignored");
+            tracing::info!(payload = %short_id(&r.id), "duplicate payload delivery ignored");
         }
         Ok(first)
     }
 
     /// Called by the accept loop for every inbound connection.
     #[allow(clippy::too_many_arguments)] // pending_pairing + code_slot are the two pairing slots
+    #[tracing::instrument(name = "inbound", skip_all, fields(peer = tracing::field::Empty))]
     pub(crate) async fn handle_inbound(
         identity: &Identity,
         db: &Db,
@@ -2684,6 +2721,8 @@ impl Engine {
         _peer_addr: SocketAddr,
     ) -> Result<()> {
         let hello = read_hello(conn).await?;
+        tracing::Span::current()
+            .record("peer", tracing::field::display(short_id(&hello.device_id)));
         // Read the name INSIDE the lock and copy it: a rename swaps the whole
         // Profile, and a pairing bundle answered with a stale name would show
         // the peer a name this device no longer advertises.
@@ -3027,7 +3066,7 @@ impl Engine {
                         let _ = tx.send(EngineEvent::InboxReceived(row));
                     }
                     Ok((row, false)) => tracing::info!(
-                        payload = %hex::encode(row.id),
+                        payload = %short_id(&row.id),
                         "duplicate payload delivery; inbox row unchanged"
                     ),
                     Err(e) => tracing::warn!("failed to record inbox row: {e}"),
@@ -3543,7 +3582,7 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
     let manifest = match Manifest::from_cbor(&row.manifest) {
         Ok(m) => m,
         Err(e) => {
-            tracing::warn!("outbox drain: row {} undecodable: {e}", hex::encode(row.id));
+            tracing::warn!("outbox drain: row {} undecodable: {e}", short_id(&row.id));
             // An undecodable manifest is permanent: retrying re-reads the same
             // bytes forever. Terminal instead of burning the attempt budget.
             terminal(db, format!("undecodable manifest: {e}"));
@@ -3566,12 +3605,17 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             // user, but the harm (a 35 minute silent burn) is not. Terminal on
             // the first attempt, exactly like an undecodable manifest above.
             if !path.exists() {
+                // The staged path ends in the user file name, so neither the
+                // log nor the reason names the path.
                 tracing::warn!(
-                    "outbox drain: row {} staged file {} is gone",
-                    hex::encode(row.id),
-                    path.display()
+                    "outbox drain: row {} staged file for item {} is gone",
+                    short_id(&row.id),
+                    item.index
                 );
-                terminal(db, format!("staged file is missing: {}", path.display()));
+                terminal(
+                    db,
+                    format!("staged file for item {} is missing", item.index),
+                );
                 return;
             }
             paths[item.index as usize] = Some(path);
@@ -3697,7 +3741,7 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 tracing::warn!(
                     "outbox drain: peer quarantined item {} of transfer {}",
                     item_index,
-                    hex::encode(row.id),
+                    short_id(&row.id),
                 );
                 terminal(
                     db,
@@ -3706,8 +3750,9 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 return;
             }
             tracing::warn!(
-                "outbox drain: send to {} failed: {e}",
-                hex::encode(row.peer_device_id)
+                "outbox drain: send to {} failed: {}",
+                short_id(&row.peer_device_id),
+                log_err(&e)
             );
             retry(rand::random::<u64>() % 10);
         }
@@ -4641,6 +4686,91 @@ mod tests {
             db.due_outbox(i64::MAX).unwrap().is_empty(),
             "and it is not due again"
         );
+    }
+
+    // Task 5 privacy: the staged path ends in the user file name. When the
+    // staged file is gone, neither the log nor the `TransferFailed` error may
+    // hold that name or that path.
+    #[tokio::test]
+    async fn a_missing_staged_file_is_reported_without_its_name_or_path() {
+        const NAME: &str = "secret-trip-photo.bin";
+        let log = crate::diag::RecentLog::with_capacity(64, None);
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(log.clone())
+            .finish();
+        // A thread default, not the global one. The drain runs on this thread,
+        // because the test awaits it directly.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join(NAME);
+        std::fs::write(&f, b"data").unwrap();
+        let item =
+            crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT).unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![item],
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(
+            &db,
+            &staging,
+            &[9u8; 16],
+            &manifest,
+            std::slice::from_ref(&f),
+        )
+        .unwrap();
+        let row = db.get_outbox(&id).unwrap().unwrap();
+        let staged = staging.staged_path(&row.payload_id, NAME);
+        std::fs::remove_file(&staged).unwrap();
+        assert!(db.mark_outbox_sending(&id).unwrap());
+
+        let sessions: SharedSessions = Arc::new(Mutex::new(SessionRegistry::new(
+            std::time::Duration::from_secs(1),
+            Box::new(|_| -> BoxFutureConn {
+                Box::pin(async { unreachable!("a missing staged file must not dial") })
+            }) as BoxConnect,
+        )));
+        let (tx, mut rx) = broadcast::channel(8);
+        drain_outbox_row(
+            DrainCtx {
+                db: db.clone(),
+                staging: staging.clone(),
+                tx,
+                sessions,
+                max_backoff_secs: 600,
+                observability: Arc::new(Observability::default()),
+            },
+            row,
+        )
+        .await;
+
+        let mut error = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let EngineEvent::TransferFailed { error: e, .. } = ev {
+                error = Some(e);
+            }
+        }
+        let error = error.expect("the drain sends TransferFailed");
+        let ring = log.snapshot().join("");
+        assert!(!ring.is_empty(), "the drain logs the missing file");
+        let root_text = root.path().display().to_string();
+        for (what, text) in [("log", &ring), ("TransferFailed error", &error)] {
+            assert!(!text.contains(NAME), "the {what} names the file: {text}");
+            assert!(
+                !text.contains(&root_text),
+                "the {what} names the staged path: {text}"
+            );
+        }
     }
 
     // ---------------------------------------------------------------- B4 ---

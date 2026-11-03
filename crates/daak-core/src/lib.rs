@@ -2,6 +2,7 @@ pub mod cache;
 pub mod chunk;
 pub mod control;
 pub mod crypto;
+pub mod diag;
 pub mod discovery;
 pub mod engine;
 pub mod error;

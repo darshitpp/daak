@@ -226,6 +226,11 @@ export class InProcessEngine implements DaakEngine {
     await this.native.setPresence(state);
   }
 
+  exportDebugBundle(): Promise<string> {
+    // The native module returns the text itself, not JSON.
+    return this.native.exportDebugBundle();
+  }
+
   on(cb: (e: DaakEvent) => void): () => void {
     return this.subscribe((raw) => {
       const s = typeof raw === 'string' ? raw : raw?.event;

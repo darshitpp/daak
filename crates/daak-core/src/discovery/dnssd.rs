@@ -578,7 +578,11 @@ fn emit_and_track(state: &mut State, svc: &Svc) {
     if let Some(id) = emit(svc, &mut state.sink) {
         // SAFETY: `ctx` is the Key of this Svc. The Svc owns it until it drops.
         let key = unsafe { &(*svc.ctx).key };
-        state.tracker.found(key, id);
+        // One line for each new record. A refresh writes no line. The line
+        // names the peer by its short id only, never by its display name.
+        if state.tracker.found(key, id) {
+            tracing::info!(peer = %crate::diag::short_id(&id), "peer resolved");
+        }
     }
 }
 
@@ -609,6 +613,7 @@ extern "C" fn browse_cb(
         }
         // The sink call frees no ref. A record that never resolved gives None.
         if let Some(id) = state.tracker.removed(&key) {
+            tracing::info!(peer = %crate::diag::short_id(&id), "peer lost");
             (state.sink)(DiscoveryEvent::Lost(id));
         }
         return;
@@ -888,6 +893,7 @@ fn spawn_browse(sink: Box<dyn FnMut(DiscoveryEvent) + Send>) -> Result<BrowseHan
     }
     // SAFETY: no thread runs yet.
     unsafe { (*state).browse = b };
+    tracing::info!("browse started");
     let stop = Arc::new(AtomicBool::new(false));
     let t_stop = stop.clone();
     let sp = SendPtr(state);
@@ -930,6 +936,8 @@ pub struct Browser {
 impl Browser {
     pub fn start() -> Result<Self> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // `emit_and_track` and `browse_cb` write the `peer resolved` and
+        // `peer lost` lines: one line for each new record.
         let handle = spawn_browse(Box::new(move |e| {
             let _ = tx.send(e);
         }))?;

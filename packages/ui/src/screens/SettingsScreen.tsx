@@ -7,6 +7,7 @@ import { PhotosAccessRow, type PhotosHost } from '../components/PhotosAccessRow'
 import { PairedSection } from './settings/PairedSection';
 import { ArrivalSection } from './settings/ArrivalSection';
 import { ConnectionSection } from './settings/ConnectionSection';
+import { ReportIssueSection } from './settings/ReportIssueSection';
 import { AboutSection } from './settings/AboutSection';
 import { PresenceSection } from './settings/PresenceSection';
 import { useConnection } from '../state/useConnection';
@@ -262,6 +263,8 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
           networkLabel={settingsHost?.networkLabel}
           onCheckConnection={onCheckConnection}
         />
+
+        <ReportIssueSection host={settingsHost} />
 
         <AboutSection appInfo={settingsHost?.appInfo} />
 

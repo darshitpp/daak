@@ -214,11 +214,13 @@ pub(crate) fn safe_component(raw: &str, index: u32) -> String {
 /// in depth, not a privilege boundary -- the attacker would already need write
 /// access to the receiver's own out_dir, which is what lets them write the
 /// victim file directly.
+///
+/// The error text names the item index only. It reaches the log, and each
+/// path below ends in a user file or folder name.
 async fn ensure_real_dir_chain(out_dir: &Path, parent: &Path, index: u32) -> Result<()> {
     let rel = parent.strip_prefix(out_dir).map_err(|_| {
         CoreError::Protocol(format!(
-            "item {index} destination {} is outside the output directory",
-            parent.display()
+            "item {index} destination is outside the output directory"
         ))
     })?;
     let mut dir = out_dir.to_path_buf();
@@ -227,18 +229,14 @@ async fn ensure_real_dir_chain(out_dir: &Path, parent: &Path, index: u32) -> Res
         match tokio::fs::symlink_metadata(&dir).await {
             Ok(m) if m.file_type().is_symlink() => {
                 return Err(CoreError::Protocol(format!(
-                    "item {index} destination {} traverses the symlink {}",
-                    parent.display(),
-                    dir.display()
+                    "item {index} destination traverses a symlink"
                 )));
             }
             // An existing FILE cannot become a directory, and descending into it
             // is not what the peer asked for.
             Ok(m) if !m.is_dir() => {
                 return Err(CoreError::Protocol(format!(
-                    "item {index} destination {} is blocked by the non-directory {}",
-                    parent.display(),
-                    dir.display()
+                    "item {index} destination is blocked by a non-directory"
                 )));
             }
             Ok(_) => {}
@@ -251,8 +249,8 @@ async fn ensure_real_dir_chain(out_dir: &Path, parent: &Path, index: u32) -> Res
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(e) => {
                         return Err(CoreError::Protocol(format!(
-                            "item {index} cannot create {}: {e}",
-                            dir.display()
+                            "item {index} cannot create a destination directory: {:?}",
+                            e.kind()
                         )));
                     }
                 }
@@ -261,8 +259,8 @@ async fn ensure_real_dir_chain(out_dir: &Path, parent: &Path, index: u32) -> Res
             // permissions wall, an I/O error) is not something to write through.
             Err(e) => {
                 return Err(CoreError::Protocol(format!(
-                    "item {index} destination {} is not inspectable: {e}",
-                    dir.display()
+                    "item {index} destination is not inspectable: {:?}",
+                    e.kind()
                 )));
             }
         }
@@ -313,10 +311,10 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
     for item in manifest.items.iter().filter(|i| i.is_binary()) {
         let dest = item_destination(Path::new(""), item)?;
         if !seen.insert(dest.clone()) {
+            // No path in the text: it reaches the log and holds the name.
             return Err(CoreError::Protocol(format!(
-                "item {} resolves to an already-claimed destination {}",
-                item.index,
-                dest.display()
+                "item {} resolves to an already-claimed destination",
+                item.index
             )));
         }
     }
@@ -368,6 +366,15 @@ pub async fn receive_transfer<T: FrameTransport>(
 
 /// Like `receive_transfer`. With `Some(id)`, the manifest must name `id` as its
 /// sender. The caller passes the device id of the authenticated peer.
+#[tracing::instrument(
+    name = "receive",
+    skip_all,
+    fields(
+        peer = tracing::field::Empty,
+        payload = tracing::field::Empty,
+        bytes = tracing::field::Empty
+    )
+)]
 pub async fn receive_transfer_from<T: FrameTransport>(
     conn: &mut T,
     expected_sender: Option<[u8; 16]>,
@@ -401,6 +408,14 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     };
 
     validate_manifest(&manifest)?;
+    let span = tracing::Span::current();
+    if let Some(id) = expected_sender {
+        span.record("peer", tracing::field::display(crate::diag::short_id(&id)));
+    }
+    span.record(
+        "payload",
+        tracing::field::display(crate::diag::short_id(&manifest.payload_id)),
+    );
     if expected_sender.is_some_and(|id| id != manifest.sender.device_id) {
         return Err(CoreError::Protocol(
             "manifest sender is not the authenticated peer".into(),
@@ -410,6 +425,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
     // One sum for the row and for the progress events. A non-binary item is
     // never materialised, so its size must not count (B2).
     let bytes_total: u64 = manifest.binary_items().filter_map(|i| i.size).sum();
+    span.record("bytes", bytes_total);
 
     // D23: a re-delivery of a payload_id that is already in the inbox must not
     // write into the real destination. A half-written duplicate would truncate
@@ -703,7 +719,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
                 Ok(held) => held_paths.push((item.index, held)),
                 Err(e) => tracing::warn!(
                     item = item.index,
-                    error = %e,
+                    error = %crate::diag::log_err(&e),
                     "quarantine hold failed; item stays at its final path"
                 ),
             }
@@ -1936,6 +1952,12 @@ mod tests {
             matches!(res, Err(CoreError::Protocol(_))),
             "writing through a symlinked directory must be refused, got {res:?}"
         );
+        // The error text reaches the log. It must not name the path.
+        let text = res.unwrap_err().to_string();
+        assert!(
+            !text.contains("planted") && !text.contains("sub"),
+            "the error names the path: {text}"
+        );
         assert!(
             !outside.path().join("planted.bin").exists(),
             "no byte may land outside out_dir"
@@ -1981,6 +2003,12 @@ mod tests {
         assert!(
             matches!(res, Err(CoreError::Protocol(_))),
             "a symlinked INTERMEDIATE component must be refused before anything is created beneath it, got {res:?}"
+        );
+        // The error text reaches the log. It must not name the path.
+        let text = res.as_ref().unwrap_err().to_string();
+        assert!(
+            !text.contains("planted") && !text.contains("leaf.bin"),
+            "the error names the path: {text}"
         );
         assert!(
             !outside.path().join("deep/leaf.bin").exists(),
@@ -2052,7 +2080,7 @@ mod tests {
         );
         assert!(matches!(
             validate_manifest(&manifest),
-            Err(CoreError::Protocol(m)) if m.contains("same") && m.contains("item 1")
+            Err(CoreError::Protocol(m)) if !m.contains("place.bin") && m.contains("item 1")
         ));
     }
 
@@ -2104,7 +2132,7 @@ mod tests {
         let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![flat, carried]);
         assert!(matches!(
             validate_manifest(&manifest),
-            Err(CoreError::Protocol(m)) if m.contains("x.bin") && m.contains("item 1")
+            Err(CoreError::Protocol(m)) if !m.contains("x.bin") && m.contains("item 1")
         ));
     }
 
@@ -2159,7 +2187,7 @@ mod tests {
         let manifest = Manifest::new(PayloadKind::Batch, dev(), vec![mk(0), mk(1)]);
         assert!(matches!(
             validate_manifest(&manifest),
-            Err(CoreError::Protocol(m)) if m.contains("dup.bin") && m.contains("item 1")
+            Err(CoreError::Protocol(m)) if !m.contains("dup.bin") && m.contains("item 1")
         ));
     }
 

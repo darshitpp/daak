@@ -17,5 +17,13 @@ export interface SettingsHost {
   osAlerts?: { granted: () => Promise<boolean | undefined>; openSettings?: () => void };
   /** Label of the network row in Connection. Default 'This Wi-Fi'. The macOS host passes 'Network'. */
   networkLabel?: string;
+  /**
+   * The copy step of "Report an issue". The host supplies only this step,
+   * because packages/ui imports no platform code. Absent: the section is hidden.
+   * The promise rejects when the OS refuses the copy. The section opens the
+   * GitHub page itself. The section adds an `appInfo` line before the bundle
+   * text and puts the text in a fenced block.
+   */
+  reportIssue?: { copy: (text: string) => Promise<void> };
 }
 

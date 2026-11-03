@@ -20,8 +20,12 @@ pub struct RecordTracker {
 
 impl RecordTracker {
     /// Remember that `record` announces `id`. A record name ignores case.
-    pub fn found(&mut self, record: &str, id: [u8; 16]) {
-        self.by_record.insert(record.to_ascii_lowercase(), id);
+    /// Returns `true` when the record is new, and `false` for a refresh of a
+    /// known record.
+    pub fn found(&mut self, record: &str, id: [u8; 16]) -> bool {
+        self.by_record
+            .insert(record.to_ascii_lowercase(), id)
+            .is_none()
     }
 
     /// Forget `record`. Returns `Some(id)` only when no other record names `id`.
@@ -56,6 +60,16 @@ mod tests {
         t.found("old", [1; 16]);
         t.found("new", [1; 16]);
         assert_eq!(t.removed("old"), None);
+    }
+
+    #[test]
+    fn found_is_true_for_a_new_record_and_false_for_a_repeat() {
+        let mut t = RecordTracker::default();
+        assert!(t.found("a._daak._tcp", [1; 16]));
+        assert!(!t.found("a._daak._tcp", [1; 16]));
+        // A record name ignores case, so this is a repeat too.
+        assert!(!t.found("A._daak._tcp", [1; 16]));
+        assert!(t.found("b._daak._tcp", [1; 16]));
     }
 
     #[test]

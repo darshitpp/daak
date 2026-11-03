@@ -369,6 +369,7 @@ impl Browser {
         let rx = daemon
             .browse(SERVICE_TYPE)
             .map_err(|e| CoreError::Discovery(e.to_string()))?;
+        tracing::info!("browse started");
         Ok(Self {
             daemon,
             rx,
@@ -384,12 +385,16 @@ impl Browser {
             match event {
                 ServiceEvent::ServiceResolved(info) => {
                     if let Ok(a) = announce_from_service(&info) {
-                        tracker.found(info.get_fullname(), a.device_id);
+                        // One line for each new record. A refresh writes no line.
+                        if tracker.found(info.get_fullname(), a.device_id) {
+                            tracing::info!(peer = %crate::diag::short_id(&a.device_id), "peer resolved");
+                        }
                         return Some(DiscoveryEvent::Found(a));
                     }
                 }
                 ServiceEvent::ServiceRemoved(_, fullname) => {
                     if let Some(id) = tracker.removed(&fullname) {
+                        tracing::info!(peer = %crate::diag::short_id(&id), "peer lost");
                         return Some(DiscoveryEvent::Lost(id));
                     }
                 }

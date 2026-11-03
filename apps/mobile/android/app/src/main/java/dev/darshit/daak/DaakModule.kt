@@ -286,6 +286,20 @@ class DaakModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     override fun localPort(promise: Promise) = resolve(promise) { handle().localPort().toDouble() }
 
+    // The debug bundle text. It must work before start and after a failed
+    // start, so it does not use handle() and does not wait for a start. With
+    // no engine, a new DaakEngine renders the bundle. That engine does not
+    // start. The Rust engine reads the key store only in start, so the
+    // keystore stays untouched. It uses newWithStore, because the plain
+    // constructor selects the file store. The log ring is global, so the
+    // bundle shows the same log lines. use() frees the native engine at once.
+    @ReactMethod
+    override fun exportDebugBundle(promise: Promise) = resolve(promise) {
+        synchronized(lock) { engine }?.exportDebugBundle()
+            ?: DaakEngine.newWithStore(KeystoreSecureStore(reactApplicationContext), this)
+                .use { it.exportDebugBundle() }
+    }
+
     @ReactMethod
     override fun shutdown(promise: Promise) = resolve(promise) {
         val e = synchronized(lock) { engine.also { engine = null } }
