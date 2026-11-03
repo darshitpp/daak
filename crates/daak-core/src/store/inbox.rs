@@ -12,6 +12,10 @@ pub struct InboxRow {
     pub summary: String,
     pub received_at: i64,
     pub saved_paths: String,
+    /// The folders in this payload, as file system directories. Not stored.
+    /// `Engine::list_inbox` and the `InboxReceived` event fill it from
+    /// `group_roots`.
+    pub group_roots: Vec<String>,
 }
 
 impl Db {
@@ -176,6 +180,62 @@ impl Db {
     }
 }
 
+/// The directory of each received folder, once each, in item order. Reads the
+/// items in state `done` whose `dest_path` is an absolute file system path. A
+/// `photos:` value, a `content://` value, and a relative value name no
+/// directory, so they add no root. The root is the `dest_path` without the
+/// last `n - 1` components, where `n` is the count of components in
+/// `attrs["path"]` (`<group>/<rel>`).
+pub fn group_roots(db: &Db, transfer_id: &[u8; 16]) -> Result<Vec<String>> {
+    let done: Vec<_> = db
+        .list_items(transfer_id)?
+        .into_iter()
+        .filter(|r| r.state == "done")
+        .filter_map(|r| {
+            let dest = r.dest_path?;
+            let is_fs_path = !dest.starts_with("photos:")
+                && !dest.starts_with("content://")
+                && std::path::Path::new(&dest).is_absolute();
+            is_fs_path.then_some((r.item_index, dest))
+        })
+        .collect();
+    if done.is_empty() {
+        return Ok(Vec::new());
+    }
+    // A manifest that does not parse names no folder.
+    let Some(t) = db.get_transfer(transfer_id)? else {
+        return Ok(Vec::new());
+    };
+    let Ok(m) = crate::manifest::Manifest::from_cbor(&t.manifest) else {
+        return Ok(Vec::new());
+    };
+    let mut roots: Vec<String> = Vec::new();
+    for (index, dest) in done {
+        let Some(item) = m.items.iter().find(|i| i.index == index) else {
+            continue;
+        };
+        let text = |key: &str| item.attrs.get(key).and_then(|v| v.as_text());
+        let (Some(_), Some(rel)) = (text("group"), text("path")) else {
+            continue;
+        };
+        let Ok(parts) = crate::transfer::receiver::safe_components(rel, index) else {
+            continue;
+        };
+        let mut root = std::path::Path::new(&dest);
+        for _ in 1..parts.len() {
+            match root.parent() {
+                Some(up) => root = up,
+                None => break,
+            }
+        }
+        let root = root.to_string_lossy().to_string();
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
+}
+
 fn row_to_inbox(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxRow> {
     let a16 = |v: Vec<u8>| -> rusqlite::Result<[u8; 16]> {
         v.try_into().map_err(|_| rusqlite::Error::InvalidQuery)
@@ -189,6 +249,7 @@ fn row_to_inbox(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxRow> {
         summary: r.get(5)?,
         received_at: r.get(6)?,
         saved_paths: r.get(7)?,
+        group_roots: Vec::new(),
     })
 }
 
@@ -206,6 +267,7 @@ mod tests {
             summary: format!("payload {id}"),
             received_at: at,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         }
     }
 
@@ -453,6 +515,208 @@ mod tests {
         assert_eq!(dest_of(&db, 1, 0).as_deref(), Some("/app/a.jpg"));
         assert_eq!(db.list_inbox().unwrap()[0].saved_paths, r#"["/app/a.jpg"]"#);
     }
+
+    use crate::manifest::{DeviceRef, Item, ItemType, Manifest, PayloadKind};
+
+    fn file_item(index: u32, group: Option<(&str, &str)>) -> Item {
+        let mut it = Item {
+            index,
+            item_type: ItemType::Document,
+            name: Some(format!("f{index}")),
+            size: Some(1),
+            ..Default::default()
+        };
+        if let Some((g, rel)) = group {
+            it.attrs
+                .insert("group".into(), ciborium::value::Value::Text(g.into()));
+            it.attrs.insert(
+                "path".into(),
+                ciborium::value::Value::Text(format!("{g}/{rel}")),
+            );
+        }
+        it
+    }
+
+    // One received transfer: the manifest items and the matching item rows.
+    // Each entry is (group and rel, dest_path, state).
+    type Entry<'a> = (Option<(&'a str, &'a str)>, &'a str, &'a str);
+
+    fn received(db: &Db, id: u8, items: &[Entry]) {
+        let m = Manifest::new(
+            PayloadKind::Media,
+            DeviceRef {
+                device_id: [9u8; 16],
+                name: "x".into(),
+            },
+            items
+                .iter()
+                .enumerate()
+                .map(|(i, (g, _, _))| file_item(i as u32, *g))
+                .collect(),
+        );
+        db.upsert_transfer(&TransferRow {
+            manifest: m.to_cbor().unwrap(),
+            item_count: items.len() as u32,
+            ..transfer(id)
+        })
+        .unwrap();
+        for (i, (_, dest, state)) in items.iter().enumerate() {
+            db.upsert_item(&ItemRow {
+                state: (*state).into(),
+                ..item(id, i as u32, dest)
+            })
+            .unwrap();
+        }
+    }
+
+    fn album(db: &Db) {
+        received(
+            db,
+            1,
+            &[
+                (Some(("album", "a.txt")), "/out/album/a.txt", "done"),
+                (Some(("album", "sub/b.txt")), "/out/album/sub/b.txt", "done"),
+            ],
+        );
+    }
+
+    #[test]
+    fn group_roots_returns_the_folder_directory() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        album(&db);
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/album".to_string()]
+        );
+    }
+
+    #[test]
+    fn group_roots_lists_each_folder_once_in_item_order() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(
+            &db,
+            1,
+            &[
+                (Some(("zeta", "a.txt")), "/out/zeta/a.txt", "done"),
+                (Some(("album", "a.txt")), "/out/album/a.txt", "done"),
+                (Some(("zeta", "s/b.txt")), "/out/zeta/s/b.txt", "done"),
+            ],
+        );
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/zeta".to_string(), "/out/album".to_string()]
+        );
+    }
+
+    #[test]
+    fn group_roots_is_empty_for_loose_files_and_old_senders() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut old = file_item(1, None);
+        old.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("x/old.bin".into()),
+        );
+        let m = Manifest::new(
+            PayloadKind::Media,
+            DeviceRef {
+                device_id: [9u8; 16],
+                name: "x".into(),
+            },
+            vec![file_item(0, None), old],
+        );
+        db.upsert_transfer(&TransferRow {
+            manifest: m.to_cbor().unwrap(),
+            ..transfer(1)
+        })
+        .unwrap();
+        db.upsert_item(&item(1, 0, "/out/loose.txt")).unwrap();
+        db.upsert_item(&item(1, 1, "/out/x/old.bin")).unwrap();
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+        assert!(group_roots(&db, &[7u8; 16]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn group_roots_follows_a_move_to_another_directory() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        album(&db);
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/out/album/a.txt", "/out/album/sub/b.txt"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        db.replace_inbox_paths(
+            &[1u8; 16],
+            &[
+                "/save/album/a.txt".to_string(),
+                "/save/album/sub/b.txt".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/save/album".to_string()]
+        );
+    }
+
+    #[test]
+    fn group_roots_skips_library_and_content_paths() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        album(&db);
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/out/album/a.txt", "/out/album/sub/b.txt"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        db.replace_inbox_paths(
+            &[1u8; 16],
+            &[
+                "photos:ABC".to_string(),
+                "content://media/external/images/media/7".to_string(),
+            ],
+        )
+        .unwrap();
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn group_roots_skips_a_relative_path() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(&db, 1, &[(Some(("album", "a.txt")), "album/a.txt", "done")]);
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn group_roots_skips_quarantined_items() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(
+            &db,
+            1,
+            &[
+                (
+                    Some(("album", "a.txt")),
+                    "/out/quarantine/x/a.txt",
+                    "quarantined",
+                ),
+                (Some(("album", "b.txt")), "/out/album/b.txt", "done"),
+                (
+                    Some(("other", "c.txt")),
+                    "/out/quarantine/x/c.txt",
+                    "quarantined",
+                ),
+            ],
+        );
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/album".to_string()]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -469,6 +733,7 @@ mod dedupe_tests {
             summary: "hi".into(),
             received_at: 1,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         }
     }
 

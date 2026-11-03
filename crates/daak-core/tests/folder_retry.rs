@@ -316,6 +316,39 @@ async fn retry_sends_only_the_failed_files() {
 }
 
 #[tokio::test]
+async fn the_inbox_received_event_carries_the_roots_before_the_move() {
+    let p = pair().await;
+    let src = tempfile::tempdir().unwrap();
+    let (manifest, sources) = mixed_folder(src.path(), [0u8; 16]);
+    let mut rx = p.b.events();
+    let id =
+        p.a.enqueue_outbox_send(p.b_id, manifest, sources)
+            .await
+            .unwrap();
+    let events = b_done(&mut rx, id).await;
+    let root = p.b_out.path().join("album").to_string_lossy().to_string();
+    let told: Vec<&InboxRow> = events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::InboxReceived(r) if r.id == id => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told.len(), 1, "one event");
+    assert_eq!(told[0].group_roots, vec![root.clone()]);
+    let listed = p.b.list_inbox().unwrap();
+    assert_eq!(listed[0].group_roots, vec![root]);
+
+    // The platform moves the files to the library. The paths are no longer
+    // file system paths, so a later list names no root.
+    let moved: Vec<String> = (0..3).map(|i| format!("photos:{i}")).collect();
+    p.b_db.replace_inbox_paths(&id, &moved).unwrap();
+    assert!(p.b.list_inbox().unwrap()[0].group_roots.is_empty());
+    p.a.shutdown().await.unwrap();
+    p.b.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_resumed_folder_lists_every_file_in_its_inbox_row() {
     let p = pair().await;
     // Only a0 crosses the wire. The cut is inside b0.
@@ -445,6 +478,7 @@ async fn a_100_sender_against_a_101_receiver_with_a_done_item_finishes() {
         summary: "3 file(s)".into(),
         received_at: 0,
         saved_paths: "[]".into(),
+        group_roots: Vec::new(),
     })
     .unwrap();
 

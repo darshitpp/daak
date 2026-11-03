@@ -280,6 +280,7 @@ fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Valu
         "summary": row.summary,
         "receivedAt": row.received_at,
         "savedPaths": saved_paths,
+        "groupRoots": row.group_roots,
     })
 }
 
@@ -1505,6 +1506,7 @@ mod tests {
             summary: "hi".into(),
             received_at: 0,
             saved_paths: "{not json".into(),
+            group_roots: Vec::new(),
         };
         assert!(inbox_entry_json(&row)["savedPaths"].is_null());
         // A real empty list stays an empty list.
@@ -1514,6 +1516,25 @@ mod tests {
         assert_eq!(
             inbox_entry_json(&row)["savedPaths"],
             serde_json::json!(["/tmp/a.bin"])
+        );
+    }
+
+    #[test]
+    fn the_inbox_entry_carries_the_group_roots() {
+        let row = daak_core::store::inbox::InboxRow {
+            id: [1u8; 16],
+            transfer_id: [1u8; 16],
+            peer_device_id: [2u8; 16],
+            kind: "batch".into(),
+            item_count: 1,
+            summary: "1 file(s)".into(),
+            received_at: 0,
+            saved_paths: "[]".into(),
+            group_roots: vec!["/out/album".into()],
+        };
+        assert_eq!(
+            inbox_entry_json(&row)["groupRoots"],
+            serde_json::json!(["/out/album"])
         );
     }
 }

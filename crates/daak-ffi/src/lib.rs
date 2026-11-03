@@ -379,6 +379,7 @@ pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::
         "summary": row.summary,
         "receivedAt": row.received_at,
         "savedPaths": saved_paths,
+        "groupRoots": row.group_roots,
     })
 }
 

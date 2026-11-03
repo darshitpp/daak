@@ -623,6 +623,7 @@ async fn every_engine_event_maps_to_an_encodable_ipc_event() {
             summary: "meet at 6".into(),
             received_at: 1_700_000_000,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         }),
     ];
     for ev in cases {
@@ -658,6 +659,7 @@ fn a_corrupt_saved_paths_reaches_the_ipc_client_as_null_not_an_empty_list() {
         summary: String::new(),
         received_at: 0,
         saved_paths: "{not json".into(),
+        group_roots: Vec::new(),
     };
     let IpcEvent::InboxReceived { payload_json } =
         daakd::to_ipc_event(EngineEvent::InboxReceived(row))

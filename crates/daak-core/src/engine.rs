@@ -2006,7 +2006,11 @@ impl Engine {
 
     /// Every received payload, newest first.
     pub fn list_inbox(&self) -> Result<Vec<InboxRow>> {
-        self.db.list_inbox()
+        let mut rows = self.db.list_inbox()?;
+        for r in rows.iter_mut() {
+            r.group_roots = crate::store::inbox::group_roots(&self.db, &r.transfer_id)?;
+        }
+        Ok(rows)
     }
 
     // One page of the thread of a peer: sent and received items together,
@@ -2709,15 +2713,37 @@ impl Engine {
             // recomputation from the manifest, which would name the final path
             // of an item that was remapped into quarantine.
             saved_paths: json_string_array(saved_paths),
+            group_roots: Vec::new(),
         };
+        // The roots are read now, before any move. The UI gets them in the
+        // event. A later list_inbox reads the paths after the move.
+        let roots = crate::store::inbox::group_roots(db, &row.transfer_id)?;
         if db.add_inbox_once(&row)? {
-            return Ok((row, true));
+            return Ok((
+                InboxRow {
+                    group_roots: roots,
+                    ..row
+                },
+                true,
+            ));
         }
         // A re-send repaired a held file. Its new path goes into the existing
         // row, and the caller tells the UI. A true duplicate has no new path.
         match db.merge_inbox_paths(&row.id, saved_paths)? {
-            Some(merged) => Ok((merged, true)),
-            None => Ok((row, false)),
+            Some(merged) => Ok((
+                InboxRow {
+                    group_roots: roots,
+                    ..merged
+                },
+                true,
+            )),
+            None => Ok((
+                InboxRow {
+                    group_roots: roots,
+                    ..row
+                },
+                false,
+            )),
         }
     }
 

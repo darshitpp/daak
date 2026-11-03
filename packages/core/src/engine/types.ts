@@ -70,6 +70,12 @@ export interface InboxEntry {
    * for an unparseable saved_paths blob.
    */
   savedPaths: string[] | null;
+  /**
+   * The folders in this payload, as directories. Absent from an old engine:
+   * treat `undefined` as `[]`. The `inbox.received` event holds the true roots.
+   * After a move to Photos or Gallery, `listInbox` returns `[]` for a folder.
+   */
+  groupRoots?: string[];
 }
 
 export type DaakEvent =

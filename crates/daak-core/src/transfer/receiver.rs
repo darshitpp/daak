@@ -1594,6 +1594,7 @@ mod tests {
             summary: "1 file(s)".into(),
             received_at: 1,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         })
         .unwrap();
         assert!(db.payload_seen(&manifest.payload_id).unwrap());
@@ -1640,6 +1641,7 @@ mod tests {
             summary: "1 file(s)".into(),
             received_at: 1,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         })
         .unwrap();
         assert!(db.payload_seen(&manifest.payload_id).unwrap());

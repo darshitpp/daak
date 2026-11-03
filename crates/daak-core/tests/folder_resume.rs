@@ -187,6 +187,7 @@ async fn a_file_that_failed_its_hash_is_sent_again_in_full() {
         summary: "3 file(s)".into(),
         received_at: 0,
         saved_paths: "[]".into(),
+        group_roots: Vec::new(),
     })
     .unwrap();
 

@@ -620,6 +620,31 @@ describe('InProcessEngine', () => {
     expect(row.savedPaths).toBeNull();
   });
 
+  it('parses groupRoots as a string array', async () => {
+    const engine = new InProcessEngine(
+      fakeNative({
+        listInbox: async () =>
+          JSON.stringify([
+            {
+              payloadId: 'aa'.repeat(16),
+              transferId: 'aa'.repeat(16),
+              peerDeviceId: 'bb'.repeat(16),
+              kind: 'batch',
+              itemCount: 2,
+              summary: '2 file(s)',
+              receivedAt: 0,
+              savedPaths: ['/out/album/a.txt', '/out/album/b.txt'],
+              groupRoots: ['/out/album'],
+            },
+          ]),
+      }),
+      () => () => {},
+    );
+    const [row] = await engine.listInbox();
+    const roots: string[] = row.groupRoots ?? [];
+    expect(roots).toEqual(['/out/album']);
+  });
+
   it('rejects a list payload that is not an array instead of returning it typed', async () => {
     const engine = new InProcessEngine(
       fakeNative({ listTransfers: async () => '{}', listInbox: async () => 'null' }),
