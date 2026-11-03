@@ -1865,6 +1865,15 @@ impl Engine {
         Ok(())
     }
 
+    /// Record the protocol version of a peer, as an mDNS announce does. An
+    /// integration test has no mDNS, so it calls this.
+    #[doc(hidden)]
+    pub fn note_peer_version(&self, peer: [u8; 16], version: u16) {
+        if let Ok(mut versions) = self.peer_versions.lock() {
+            versions.insert(peer, version);
+        }
+    }
+
     /// R-T11-3: the registry resolves a peer's address from the device map, so a
     /// caller that was GIVEN an address (the CLI's `send --to`) must seed it.
     /// Discovery inserts the same entry; this is the one-shot path.
@@ -2671,8 +2680,9 @@ impl Engine {
     }
 
     /// Called from the accept loop after a successful inbound transfer.
-    /// Returns the row it built and a flag. The flag is true only on the first
-    /// application of this `payload_id`. A duplicate writes no row.
+    /// Returns the row and a flag. The flag is true on the first application
+    /// of this `payload_id`, and when a re-send adds a path to the row. A
+    /// duplicate writes no row.
     fn record_inbox(
         db: &Db,
         manifest: &Manifest,
@@ -2700,8 +2710,15 @@ impl Engine {
             // of an item that was remapped into quarantine.
             saved_paths: json_string_array(saved_paths),
         };
-        let first = db.add_inbox_once(&row)?;
-        Ok((row, first))
+        if db.add_inbox_once(&row)? {
+            return Ok((row, true));
+        }
+        // A re-send repaired a held file. Its new path goes into the existing
+        // row, and the caller tells the UI. A true duplicate has no new path.
+        match db.merge_inbox_paths(&row.id, saved_paths)? {
+            Some(merged) => Ok((merged, true)),
+            None => Ok((row, false)),
+        }
     }
 
     /// Applies an inbound payload once. A duplicate delivery is acknowledged

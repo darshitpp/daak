@@ -857,6 +857,24 @@ pub async fn receive_transfer_from<T: FrameTransport>(
             if !quarantined && item.is_binary() {
                 bytes_done += item.size.unwrap_or(0);
             }
+            // A re-send repaired a held file, so the held copy goes. The path
+            // comes from this device's own row. It must still be inside the
+            // quarantine root.
+            let held = earlier
+                .iter()
+                .find(|r| r.item_index == item.index && r.state == "quarantined")
+                .and_then(|r| r.dest_path.as_deref())
+                .map(Path::new)
+                .filter(|p| !quarantined && p.starts_with(dest_root.join("quarantine")));
+            if let Some(held) = held {
+                if let Err(e) = std::fs::remove_file(held) {
+                    tracing::warn!(item = item.index, error = %e, "held copy not removed");
+                }
+                // The slot directory goes when it is empty. Else it stays.
+                if let Some(dir) = held.parent() {
+                    let _ = std::fs::remove_dir(dir);
+                }
+            }
         }
         db.upsert_transfer(&TransferRow {
             transfer_id: manifest.payload_id,

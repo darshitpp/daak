@@ -44,6 +44,42 @@ impl Db {
         Ok(changed == 1)
     }
 
+    /// Add each path that the row does not list yet. A re-send repairs a held
+    /// file, and `add_inbox_once` then writes nothing. Returns the new row, or
+    /// `None` when no row exists or no path is new.
+    pub fn merge_inbox_paths(&self, id: &[u8; 16], paths: &[String]) -> Result<Option<InboxRow>> {
+        let row = self
+            .conn()
+            .query_row(
+                "SELECT id, transfer_id, peer_device_id, kind, item_count, summary, received_at, saved_paths
+                   FROM inbox_history WHERE id = ?1",
+                rusqlite::params![&id[..]],
+                row_to_inbox,
+            )
+            .optional()?;
+        let Some(mut row) = row else {
+            return Ok(None);
+        };
+        let mut all = crate::engine::parse_json_string_array(&row.saved_paths);
+        let before = all.len();
+        all.extend(
+            paths
+                .iter()
+                .filter(|p| !all.contains(p))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        if all.len() == before {
+            return Ok(None);
+        }
+        row.saved_paths = crate::engine::json_string_array(&all);
+        self.conn().execute(
+            "UPDATE inbox_history SET saved_paths = ?2 WHERE id = ?1",
+            rusqlite::params![&id[..], row.saved_paths],
+        )?;
+        Ok(Some(row))
+    }
+
     /// True when an inbound payload with this `payload_id` is already stored.
     pub fn payload_seen(&self, payload_id: &[u8; 16]) -> Result<bool> {
         let n: i64 = self.conn().query_row(
@@ -365,6 +401,33 @@ mod tests {
         assert_eq!(db.list_inbox().unwrap()[0].saved_paths, "[]");
         assert_eq!(dest_of(&db, 1, 0).as_deref(), Some("/a"));
         assert_eq!(dest_of(&db, 1, 1).as_deref(), Some("/b"));
+    }
+
+    // A repaired file adds its path once. A known path or a missing row
+    // changes nothing, so the caller sends no event.
+    #[test]
+    fn merge_inbox_paths_adds_only_a_new_path() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        assert_eq!(
+            db.merge_inbox_paths(&[1u8; 16], &["/a".into()]).unwrap(),
+            None
+        );
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a", "/c"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        assert_eq!(
+            db.merge_inbox_paths(&[1u8; 16], &["/a".into()]).unwrap(),
+            None
+        );
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/b".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["/a", "/c", "/b"]));
+        assert_eq!(db.list_inbox().unwrap()[0], merged);
     }
 
     // A list of the wrong length cannot be paired with the old list by index.
