@@ -127,9 +127,13 @@ export function AppShell({
 
   const toast = useToast();
   const sending = useRef(false);
+  // The latest share. A send in flight compares it to the share that it sent.
+  const shareRef = useRef<Share | null>(null);
+  shareRef.current = share;
 
   const openThread = async (d: DeviceInfo) => {
     if (sending.current) return;
+    const sent = share;
     const files = share?.files;
     if (onShareSend !== undefined && files !== undefined && files.length > 0) {
       sending.current = true;
@@ -141,7 +145,9 @@ export function AppShell({
       } finally {
         sending.current = false;
       }
-      push({ name: 'thread', peerDeviceId: d.deviceId, text: share?.text });
+      // A newer share arrived during the send. Keep it pending. Do not open the thread.
+      if (shareRef.current !== sent) return;
+      push({ name: 'thread', peerDeviceId: d.deviceId, text: sent?.text });
       setShare(null);
       return;
     }

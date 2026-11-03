@@ -209,6 +209,19 @@ describe('AppShell pending share actions', () => {
     fireEvent.press(await peerRow());
     await waitFor(() => expect(onShareSend).toHaveBeenCalledTimes(1));
     expect(onShareSend.mock.calls[0][1].files).toEqual(['/Users/me/b.png', '/Users/me/c.png']);
+    await screen.findByTestId('thread-back');
+    await act(async () => {});
+  });
+
+  it('a share delivered during a pending send stays pending after the send finishes', async () => {
+    let release: () => void = () => {};
+    const onShareSend = jest.fn().mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
+    fireEvent.press(await peerRow());
+    again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend });
+    await act(async () => release());
+    expect(screen.getByTestId('pending-share')).toBeTruthy();
+    expect(screen.queryByTestId('thread-back')).toBeNull();
   });
 
   // Intended: a consumed delivery sets initialFiles to undefined. The pending share stays.
