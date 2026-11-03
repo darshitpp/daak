@@ -901,3 +901,114 @@ describe('Android saves to MediaStore without a permission', () => {
     expect(manifest).not.toContain('READ_MEDIA_AUDIO');
   });
 });
+
+// Folder send on iOS (Task 7). The picked folder is outside the sandbox, and its
+// security scope closes. So pickFolder copies the tree into the app cache, and
+// the engine sends from that copy. No iOS unit-test target exists, so these pins
+// hold the parts that fail in silence: a copy that loads a whole file into
+// memory, a symlink that escapes the tree, and a delete outside the cache.
+describe('iOS folder pick, copy, and stats', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+  const share = strip(read(repo + 'modules/rn-share/ios/DaakShare.swift'));
+  const shareMm = read(repo + 'modules/rn-share/ios/DaakShare.mm');
+  const fs = strip(read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift'));
+  const fsMm = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.mm');
+  // From the function name to the next member at the same indent.
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest.slice(1).search(/\n  (@objc )?(private )?(static )?func |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  it('declares pickFolder in Swift and in the .mm table', () => {
+    expect(share).toMatch(/@objc func pickFolder\(_ resolve: @escaping RCTPromiseResolveBlock/);
+    expect(shareMm).toMatch(/RCT_EXTERN_METHOD\(pickFolder:\(RCTPromiseResolveBlock\)resolve/);
+  });
+
+  it('opens a folder picker and assigns its delegate', () => {
+    const pick = body(share, '@objc func pickFolder');
+    expect(pick).toContain('UIDocumentPickerViewController(forOpeningContentTypes: [.folder])');
+    expect(pick).toMatch(/picker\.delegate = delegate/);
+  });
+
+  it('opens the security scope for the copy and closes it in a defer', () => {
+    const copy = body(share, 'static func copyPickedFolder');
+    const open = copy.indexOf('startAccessingSecurityScopedResource()');
+    expect(open).toBeGreaterThan(-1);
+    expect(copy).toMatch(/defer \{[^}]*stopAccessingSecurityScopedResource\(\)/);
+  });
+
+  it('copies into <caches>/daak-send/<uuid>/<folder name>, file by file, with no file in memory', () => {
+    expect(share).toMatch(/\.cachesDirectory/);
+    expect(share).toContain('"daak-send"');
+    const copy = body(share, 'static func copyPickedFolder');
+    expect(copy).toContain('UUID().uuidString');
+    expect(copy).toContain('lastPathComponent');
+    expect(copy).toMatch(/copyItem\(at:/);
+    expect(share).not.toMatch(/Data\(contentsOf: (e|entry|file|src)/);
+    expect(share).not.toMatch(/copyItem\(at: folder/);
+  });
+
+  it('skips symlinks in the copy walk', () => {
+    expect(body(share, 'static func listTree')).toMatch(/isSymbolicLink == true \{ continue \}/);
+  });
+
+  it('rejects NO_SPACE:<bytes> below size x 1.1 and EMPTY for a tree with no file', () => {
+    expect(share).toContain('volumeAvailableCapacityForImportantUsage');
+    expect(share).toMatch(/\* 1\.1/);
+    expect(share).toContain('"NO_SPACE:\\(');
+    expect(share).toMatch(/reject\("EMPTY", "EMPTY"/);
+  });
+
+  it('deletes the partial copy on any failure', () => {
+    const copy = body(share, 'static func copyPickedFolder');
+    expect(copy).toMatch(/catch \{\s*try\? fm\.removeItem\(at: slot\)\s*throw error/);
+  });
+
+  it('copies off the main thread', () => {
+    expect(share).toMatch(/DispatchQueue\.global\([^)]*\)\.async \{[\s\S]*copyPickedFolder/);
+  });
+
+  it('declares the three fspaths methods in Swift and in the .mm table', () => {
+    expect(fs).toMatch(/@objc func folderStats\(_ path: String/);
+    expect(fs).toMatch(/@objc func discardPickedCopy\(_ path: String/);
+    expect(fs).toMatch(/@objc func sweepPickedCopies\(_ resolve: @escaping RCTPromiseResolveBlock/);
+    expect(fsMm).toMatch(/RCT_EXTERN_METHOD\(folderStats:\(NSString \*\)path/);
+    expect(fsMm).toMatch(/RCT_EXTERN_METHOD\(discardPickedCopy:\(NSString \*\)path/);
+    expect(fsMm).toMatch(/RCT_EXTERN_METHOD\(sweepPickedCopies:\(RCTPromiseResolveBlock\)resolve/);
+  });
+
+  it('folderStats skips symlinks, has an error handler, and answers NSNull for an unreadable root', () => {
+    const stats = body(fs, '@objc func folderStats');
+    expect(stats).toContain('errorHandler');
+    expect(stats).toContain('isSymbolicLink');
+    expect(stats).toContain('NSNull()');
+    expect(stats).toContain('DispatchQueue.global');
+  });
+
+  it('discardPickedCopy resolves symlinks and .. BEFORE the daak-send prefix check, and refuses the rest', () => {
+    const discard = body(fs, '@objc func discardPickedCopy');
+    const resolveAt = discard.indexOf('resolvingSymlinksInPath()');
+    const standardAt = discard.indexOf('standardizedFileURL');
+    const prefixAt = discard.indexOf('hasPrefix(');
+    expect(resolveAt).toBeGreaterThan(-1);
+    expect(standardAt).toBeGreaterThan(-1);
+    expect(prefixAt).toBeGreaterThan(resolveAt);
+    expect(prefixAt).toBeGreaterThan(standardAt);
+    expect(discard).toMatch(/reject\("E_NOT_PICKED_COPY"/);
+    expect(fs).toContain('"daak-send"');
+  });
+
+  it('sweepPickedCopies deletes under daak-send only, and keeps a copy that a pick makes during the sweep', () => {
+    const sweep = body(fs, '@objc func sweepPickedCopies');
+    expect(sweep).toContain('pickedCopiesRoot()');
+    expect(sweep).toContain('creationDate');
+    expect(sweep).toMatch(/removeItem\(at: slot\)/);
+  });
+});

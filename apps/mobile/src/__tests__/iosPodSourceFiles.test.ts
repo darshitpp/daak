@@ -191,9 +191,10 @@ describe('every iOS TurboModule still registers via the legacy interop path', ()
 describe('every method in the JS Spec is exported by the .mm table', () => {
   // `name(args): Promise<T>;` / `name(args): void;` at the top level of
   // `interface Spec`. addListener/removeListeners are RCTEventEmitter's and are
-  // declared by the base class, not by the table.
+  // declared by the base class, not by the table. An optional method
+  // (`name?(args)`) counts too: iOS implements it, so the table must declare it.
   const specMethodsOf = (src: string): string[] =>
-    [...src.matchAll(/^ {2}([a-zA-Z]\w*)\([^)]*\)\s*:\s*(?:Promise<|void)/gm)]
+    [...src.matchAll(/^ {2}([a-zA-Z]\w*)\??\([^)]*\)\s*:\s*(?:Promise<|void)/gm)]
       .map((m) => m[1])
       .filter((m) => m !== 'addListener' && m !== 'removeListeners');
 

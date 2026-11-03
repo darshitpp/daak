@@ -14,6 +14,7 @@ import {
   routeInboxEntry,
   startTransferForeground,
   stopTransferForeground,
+  sweepPickedCopies,
   syncShortcutTargets,
 } from '@daak/platform';
 import type { DaakEngine, InboxEntry } from '@daak/core';
@@ -141,6 +142,16 @@ async function notifyAfterRelocate(engine: DaakEngine, entry: InboxEntry): Promi
 }
 
 export async function startEngine(): Promise<void> {
+  // Delete the folder copies that an earlier run left in <caches>/daak-send. A
+  // killed app leaves a partial copy there. This runs first, before the user
+  // can pick a folder. It is not awaited: a large copy must not delay the
+  // engine. The native sweep keeps a copy that a pick makes during the sweep.
+  // It is cleanup, so every error is caught and the start continues.
+  try {
+    void sweepPickedCopies().catch(() => {});
+  } catch {
+    // No native module. Nothing to sweep.
+  }
   await engine.start();
   // R36: a denied permission is an ordinary answer, not a startup failure. The
   // banner is lost; the transfer is not. The RESULT is recorded rather than

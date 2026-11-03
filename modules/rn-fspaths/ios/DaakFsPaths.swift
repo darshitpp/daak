@@ -181,6 +181,117 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     resolve(sizes)
   }
 
+  /// The file count and the byte count of the regular files below `path`.
+  /// Hidden files count. A symlink does not count. Resolves NSNull for a path
+  /// that is not a folder, or for a tree that has an unreadable part.
+  @objc func folderStats(_ path: String,
+                         resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let root = URL(fileURLWithPath: path)
+      let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+      let values = try? root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+      // The walk calls the handler on the queue of this block, so a plain
+      // flag is safe.
+      var unreadable = false
+      guard values?.isDirectory == true, values?.isSymbolicLink != true,
+            let walker = FileManager.default.enumerator(
+              at: root, includingPropertiesForKeys: keys, options: [],
+              errorHandler: { url, error in
+                NSLog("Daak: folderStats could not read \(url.path): \(error)")
+                unreadable = true
+                return false
+              })
+      else {
+        resolve(NSNull())
+        return
+      }
+      var files = 0
+      var bytes = 0
+      for case let url as URL in walker {
+        guard let v = try? url.resourceValues(forKeys: Set(keys)),
+              v.isSymbolicLink != true, v.isRegularFile == true else { continue }
+        files += 1
+        bytes += v.fileSize ?? 0
+      }
+      if unreadable {
+        resolve(NSNull())
+        return
+      }
+      resolve(["files": files, "bytes": bytes])
+    }
+  }
+
+  /// `<caches>/daak-send`, the parent of every copy that DaakShare.pickFolder
+  /// makes. Keep this path equal to the one in DaakShare.copyPickedFolder.
+  private static func pickedCopiesRoot() -> URL {
+    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("daak-send", isDirectory: true)
+  }
+
+  /// Delete one copy that pickFolder made: the whole `<uuid>` slot that holds
+  /// `path`. Rejects a path that is not below `<caches>/daak-send` after the
+  /// symlinks and the `..` parts are resolved.
+  @objc func discardPickedCopy(_ path: String,
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    let fm = FileManager.default
+    let rootURL = Self.pickedCopiesRoot()
+    // The root must exist, so the root and the target resolve the same way.
+    try? fm.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    let root = Self.withoutPrivate(rootURL.standardizedFileURL.resolvingSymlinksInPath().path)
+    let target = Self.withoutPrivate(
+      URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path)
+    let rootPath = root.hasSuffix("/") ? root : root + "/"
+    guard target.hasPrefix(rootPath),
+          let slotName = target.dropFirst(rootPath.count).split(separator: "/").first
+    else {
+      reject("E_NOT_PICKED_COPY", "refused: \(path) is not a copy under daak-send", nil)
+      return
+    }
+    let slot = URL(fileURLWithPath: rootPath, isDirectory: true)
+      .appendingPathComponent(String(slotName), isDirectory: true)
+    DispatchQueue.global(qos: .utility).async {
+      // A copy that is already gone is the wanted result.
+      if fm.fileExists(atPath: slot.path) {
+        do { try fm.removeItem(at: slot) } catch {
+          reject("E_DISCARD", "the copy could not be deleted: \(error.localizedDescription)", error)
+          return
+        }
+      }
+      resolve(nil)
+    }
+  }
+
+  /// `resolvingSymlinksInPath` drops a leading `/private` only when the path
+  /// exists. On iOS `/private/var` and `/var` are the same folder. So drop it on
+  /// both sides of a compare, and a missing path compares like an existing one.
+  private static func withoutPrivate(_ path: String) -> String {
+    path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+  }
+
+  /// Delete every copy under `<caches>/daak-send` that an earlier run left.
+  /// A slot made after this sweep started belongs to a pick that runs now, so
+  /// the sweep keeps it.
+  @objc func sweepPickedCopies(_ resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    let started = Date()
+    DispatchQueue.global(qos: .utility).async {
+      let fm = FileManager.default
+      let slots = (try? fm.contentsOfDirectory(
+        at: Self.pickedCopiesRoot(), includingPropertiesForKeys: [.creationDateKey],
+        options: [])) ?? []
+      for slot in slots {
+        let made = (try? slot.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+        if let made, made >= started { continue }
+        do { try fm.removeItem(at: slot) } catch {
+          NSLog("Daak: an old folder copy could not be deleted: \(error)")
+        }
+      }
+      resolve(nil)
+    }
+  }
+
   private static func documents() -> URL {
     // create: true, so a first launch has a directory and not a promise of one.
     let fm = FileManager.default
