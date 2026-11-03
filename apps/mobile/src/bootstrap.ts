@@ -168,7 +168,7 @@ async function receivedPlaces(): Promise<ReceivedPlaces> {
   let saveFolder: string | undefined = 'Daak';
   if (Platform.OS !== 'ios') {
     try {
-      saveFolder = (await downloadFolderName()) ?? 'This app’s own storage';
+      saveFolder = (await downloadFolderName()) ?? "the app's own storage";
     } catch {
       saveFolder = undefined;
     }

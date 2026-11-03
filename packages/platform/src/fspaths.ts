@@ -214,7 +214,7 @@ export function isMedia(path: string): boolean {
 }
 
 export type RelocationPlan = {
-  library: { index: number; path: string; album: string }[];
+  library: { index: number; path: string; album: string; subdir: string }[];
   folder: { index: number; path: string; subdir: string }[];
 };
 
@@ -227,7 +227,7 @@ function alreadyMoved(path: string): boolean {
 // The folder of `path` from the parent of its group root, for example
 // `album/sub`. `''` for a path under no root. The longest root wins, and a root
 // matches only on a whole path component, so `/out/photos` does not match
-// `/out/photos~1/a.jpg`.
+// `/out/photos~1/a.jpg`. It handles only `/` separators. Windows is not released.
 function subdirOf(path: string, roots: string[]): string {
   let best = '';
   for (const raw of roots) {
@@ -261,7 +261,7 @@ export function planRelocation(
     if (alreadyMoved(path)) return;
     const subdir = subdirOf(path, groupRoots);
     if (photosOn && isMedia(path)) {
-      plan.library.push({ index, path, album: subdir.split('/').join(' / ') });
+      plan.library.push({ index, path, album: subdir.split('/').join(' / '), subdir });
     } else {
       plan.folder.push({ index, path, subdir });
     }
@@ -330,23 +330,19 @@ export async function relocateReceivedFiles(
 
   // Step 2: the chosen folder, for each planned file that is still at its
   // original path. A media file that the library did not take keeps its
-  // folder structure: its subdir comes from the plan with no library.
-  const subdirs = new Map(
-    planRelocation(before, payload.groupRoots, false).folder.map((e) => [e.index, e.subdir]),
-  );
+  // folder structure: each library entry has its own subdir.
   const stillAt = [...plan.library, ...plan.folder]
-    .map((e) => e.index)
-    .filter((i) => after[i] === before[i])
-    .sort((a, b) => a - b);
+    .filter((e) => after[e.index] === before[e.index])
+    .sort((a, b) => a.index - b.index);
   if (stillAt.length > 0) {
     try {
       const moved = await moveReceivedFiles(
-        stillAt.map((i) => before[i]),
-        stillAt.map((i) => subdirs.get(i) ?? ''),
+        stillAt.map((e) => before[e.index]),
+        stillAt.map((e) => e.subdir),
       );
       if (moved.length === stillAt.length) {
-        stillAt.forEach((at, k) => {
-          after[at] = moved[k];
+        stillAt.forEach((e, k) => {
+          after[e.index] = moved[k];
         });
       }
     } catch {

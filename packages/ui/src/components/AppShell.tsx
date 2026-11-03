@@ -251,7 +251,7 @@ export function AppShell({
     if (threadId === undefined || saveFolder !== undefined || loadFolder === undefined) return undefined;
     let live = true;
     loadFolder().then(
-      (n) => { if (live) setFolderName(n ?? 'This app’s own storage'); },
+      (n) => { if (live) setFolderName(n ?? "the app's own storage"); },
       () => {},
     );
     return () => { live = false; };

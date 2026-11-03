@@ -123,6 +123,15 @@ describe('FolderSheet', () => {
     expect(p.onStop).toHaveBeenCalledWith(r);
   });
 
+  it('shows Stop once for a sent folder in the retry back-off', () => {
+    const paused = { direction: 'out' as const, state: 'pending' as const, transferState: 'paused' };
+    const r = row([kid('a.txt', paused)], { state: 'trying', direction: 'out' });
+    const p = mount(r);
+    expect(screen.getAllByText('Stop')).toHaveLength(1);
+    fireEvent.press(screen.getByTestId('folder-stop'));
+    expect(p.onStop).toHaveBeenCalledWith(r);
+  });
+
   it.each([
     ['sending', 'out'],
     ['done', 'out'],

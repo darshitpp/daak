@@ -46,7 +46,7 @@ function fileWord(i: ThreadItem): string | null {
 /**
  * The folder detail (design `#cd-folder-sheet`): the files as a tree, the
  * location help, and the file actions. Retry is for one sent file. Stop shows
- * once, at the bottom, for a sent folder that waits: a stop ends the whole send.
+ * once, at the bottom, for a sent folder that waits or tries again: a stop ends the whole send.
  */
 export function FolderSheet({
   row,
@@ -155,7 +155,7 @@ export function FolderSheet({
       onClose={onClose}
       actions={
         <>
-          {row.direction === 'out' && row.state === 'waiting' ? (
+          {row.direction === 'out' && (row.state === 'waiting' || row.state === 'trying') ? (
             <Btn label="Stop" variant="quiet" block onPress={() => onStop(row)} testID="folder-stop" />
           ) : null}
           <Btn label="Done" variant="quiet" block onPress={onClose} testID="folder-done" />

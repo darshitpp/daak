@@ -358,8 +358,9 @@ export function ThreadScreen({
         if (next.length === files.length) return;
         setFiles(next);
         toast.show(`${plural(next.length, 'file', 'files')} ready`);
-        // The macOS panel can also pick a folder.
-        void measure(picked.filter((p) => !files.includes(p)));
+        // The macOS panel can also pick a folder. A phone file picker cannot,
+        // so a phone makes no bridge call for each file.
+        if (!onPickFolder) void measure(picked.filter((p) => !files.includes(p)));
       })
       .catch(() => {});
   };
@@ -381,6 +382,12 @@ export function ThreadScreen({
         if (stale()) {
           discard(path);
           return;
+        }
+        // A copy that cannot be measured is not a usable folder. Plain-file
+        // staging would send a directory to `fileSizes`.
+        if (folderStats && !stats) {
+          discard(path);
+          throw new Error('E_COPY');
         }
         if (stats) setFolders((f) => ({ ...f, [path]: stats }));
         setFiles((f) => (f.includes(path) ? f : [...f, path]));
@@ -718,13 +725,14 @@ export function ThreadScreen({
               accessibilityRole="button"
               accessibilityLabel="Add files or folders"
               onPress={() => { Keyboard.dismiss(); setMenuOpen(true); }}
+              disabled={sending}
               testID="pick-files"
               style={({ pressed }) => [ui.btn, ui.btnQuiet, ui.addIcon, pressed ? ui.pressed : null]}
             >
               <PaperclipIcon />
             </Pressable>
           ) : onPickFiles ? (
-            <Btn label={pickLabel} variant="quiet" onPress={pick} testID="pick-files" />
+            <Btn label={pickLabel} variant="quiet" disabled={sending} onPress={pick} testID="pick-files" />
           ) : null}
           <TextInput
             value={text}

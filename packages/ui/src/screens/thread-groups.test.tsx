@@ -3,6 +3,7 @@ import { threadItem } from '../testing/threadFixtures';
 import {
   folderPlaces,
   folderState,
+  folderStateWord,
   folderTree,
   groupThread,
   isLibraryPath,
@@ -183,5 +184,14 @@ describe('savedLine', () => {
     expect(savedLine(null, 'Photos', 'Daak')).toBeNull();
     // A name that the host did not give makes no line.
     expect(savedLine('folder')).toBeNull();
+  });
+});
+
+describe('folderStateWord', () => {
+  it('says_how_many_files_of_a_received_folder_did_not_arrive', () => {
+    const kids = [child('a', { state: 'failed' }), child('b', { state: 'failed' }), child('c', { state: 'done' })];
+    const f = folderOf(groupThread(kids), 0);
+    expect(f.state).toBe('failed');
+    expect(folderStateWord(f)).toBe('2 of 3 did not arrive');
   });
 });

@@ -217,7 +217,11 @@ export async function failedSendNotice(engine: FailedSendEngine, transferId: str
   let name: string;
   if (items.length > 0 && groups.size === 1 && !groups.has(undefined)) name = [...groups][0] as string;
   else if (row.itemCount === 1 && items.length === 1) name = items[0].type === 'text' ? 'a note' : items[0].name ?? files(1);
-  else name = files(Math.max(row.itemCount, items.length));
+  else {
+    const count = Math.max(row.itemCount, items.length);
+    if (count === 0) return null;
+    name = files(count);
+  }
   return {
     transferId,
     peerDeviceId: row.peerDeviceId,

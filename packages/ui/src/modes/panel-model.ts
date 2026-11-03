@@ -132,7 +132,7 @@ export function panelFolder(items: ThreadItem[], t: Pick<TransferSummary, 'trans
     files: f.files,
     bytes: f.bytes,
     done: f.children.filter((c) => c.state === 'done').length,
-    places: folderPlaces(f.children, 0),
+    places: f.direction === 'out' ? null : folderPlaces(f.children, 0),
   };
 }
 

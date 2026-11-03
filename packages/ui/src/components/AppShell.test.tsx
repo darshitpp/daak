@@ -512,7 +512,7 @@ describe('AppShell folder places', () => {
   it('names the app storage when no folder is chosen', async () => {
     shell(engineWithFolder(), { downloadFolder: folderHost(null), library: 'Gallery', isMedia: (n) => n.endsWith('.jpg') });
     fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
-    expect(await screen.findByText('Saved to Gallery and This app’s own storage')).toBeTruthy();
+    expect(await screen.findByText("Saved to Gallery and the app's own storage")).toBeTruthy();
   });
 
   it('uses the save folder name that the host gives', async () => {

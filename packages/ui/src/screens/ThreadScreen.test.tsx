@@ -1111,6 +1111,81 @@ describe('ThreadScreen folder staging', () => {
     expect(screen.getByTestId('send')).toBeDisabled();
   });
 
+  it('treats a null stat for a copied folder as a copy error and discards the copy', async () => {
+    const host = phone({ folderStats: jest.fn(async () => null) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    expect(
+      await screen.findByText("Couldn't prepare this folder. Check that every file in it is on this device and try again."),
+    ).toBeTruthy();
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+    expect(screen.queryByTestId('remove-album')).toBeNull();
+    expect(screen.queryByText('Preparing…')).toBeNull();
+    expect(screen.getByTestId('send')).toBeDisabled();
+  });
+
+  it('does not measure the files that a phone picks', async () => {
+    const host = phone({ onPickFiles: jest.fn(async () => ['/c/a.pdf', '/c/b.pdf', '/c/c.pdf']) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-files'));
+    await screen.findByText('3 files ready');
+    await settle();
+    expect(host.folderStats).not.toHaveBeenCalled();
+  });
+
+  it('measures each path once when the host has no folder picker', async () => {
+    const folderStats = jest.fn(async () => null);
+    mount(fakeEngine([peer]), { onPickFiles: async () => ['/u/a.pdf', '/u/b'], folderStats });
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    await waitFor(() => expect(folderStats).toHaveBeenCalledTimes(2));
+  });
+
+  it('disables the add button while a send is in flight', async () => {
+    let done: (v: { transferId: string; queued: boolean }) => void = () => {};
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'send').mockImplementation(() => new Promise((r) => { done = r; }));
+    mount(engine, phone());
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(screen.getByTestId('pick-files')).toBeDisabled());
+    await act(async () => { done({ transferId: TID, queued: true }); });
+    await waitFor(() => expect(screen.getByTestId('pick-files')).not.toBeDisabled());
+  });
+
+  it('discards a copy that arrives after the screen unmounts', async () => {
+    let finish: (p: string | null) => void = () => {};
+    const host = phone({ onPickFolder: jest.fn(() => new Promise<string | null>((r) => { finish = r; })) });
+    const { unmount } = mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    await screen.findByText('Preparing…');
+    unmount();
+    await act(async () => { finish(COPY); });
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+  });
+
+  it('ignores a second Folder tap while a copy prepares', async () => {
+    let finish: (p: string | null) => void = () => {};
+    const host = phone({ onPickFolder: jest.fn(() => new Promise<string | null>((r) => { finish = r; })) });
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    await screen.findByText('Preparing…');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    expect(host.onPickFolder).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(COPY); });
+    expect(await screen.findByText('album · 12 files')).toBeTruthy();
+  });
+
   it('discards a copy that arrives after Cancel', async () => {
     let finish: (p: string | null) => void = () => {};
     const host = phone({ onPickFolder: jest.fn(() => new Promise<string | null>((r) => { finish = r; })) });

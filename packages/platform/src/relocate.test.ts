@@ -186,8 +186,8 @@ describe('planRelocation', () => {
       planRelocation(['/out/album/a.jpg', '/out/album/sub/b.mov'], ['/out/album'], true),
     ).toEqual({
       library: [
-        { index: 0, path: '/out/album/a.jpg', album: 'album' },
-        { index: 1, path: '/out/album/sub/b.mov', album: 'album / sub' },
+        { index: 0, path: '/out/album/a.jpg', album: 'album', subdir: 'album' },
+        { index: 1, path: '/out/album/sub/b.mov', album: 'album / sub', subdir: 'album/sub' },
       ],
       folder: [],
     });
@@ -201,7 +201,7 @@ describe('planRelocation', () => {
         true,
       ),
     ).toEqual({
-      library: [{ index: 0, path: '/out/album/a.jpg', album: 'album' }],
+      library: [{ index: 0, path: '/out/album/a.jpg', album: 'album', subdir: 'album' }],
       folder: [
         { index: 1, path: '/out/album/sub/notes.pdf', subdir: 'album/sub' },
         { index: 2, path: '/out/album/c.txt', subdir: 'album' },
@@ -235,7 +235,7 @@ describe('planRelocation', () => {
 
   it('a_loose_photo_keeps_todays_behaviour', async () => {
     expect(planRelocation(['/out/a.jpg', '/out/b.pdf'], [], true)).toEqual({
-      library: [{ index: 0, path: '/out/a.jpg', album: '' }],
+      library: [{ index: 0, path: '/out/a.jpg', album: '', subdir: '' }],
       folder: [{ index: 1, path: '/out/b.pdf', subdir: '' }],
     });
     // A loose file gets '' in the second, parallel array. The bridge always
@@ -265,8 +265,8 @@ describe('planRelocation', () => {
       ),
     ).toEqual({
       library: [
-        { index: 0, path: '/out/photos/a.jpg', album: 'photos' },
-        { index: 1, path: '/out/photos~1/a.jpg', album: 'photos~1' },
+        { index: 0, path: '/out/photos/a.jpg', album: 'photos', subdir: 'photos' },
+        { index: 1, path: '/out/photos~1/a.jpg', album: 'photos~1', subdir: 'photos~1' },
       ],
       folder: [{ index: 2, path: '/out/photos~1/s/b.pdf', subdir: 'photos~1/s' }],
     });

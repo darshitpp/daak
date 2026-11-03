@@ -273,6 +273,11 @@ describe('failedSendNotice', () => {
     expect((await failedSendNotice(engine, TID))?.title).toBe("Couldn't send a note");
   });
 
+  it('gives null when the row has 0 items and the page holds none', async () => {
+    const { engine } = fake('out', 0, []);
+    expect(await failedSendNotice(engine, TID)).toBeNull();
+  });
+
   it('uses the transfer item count when the page holds none of its items', async () => {
     const { engine } = fake('out', 4, []);
     expect((await failedSendNotice(engine, TID))?.title).toBe("Couldn't send 4 files");
