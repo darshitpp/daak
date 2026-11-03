@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildNotification, inboxActions } from '../js/actions';
-import type { InboxNotificationEntry, NotifyAction } from '../js/actions';
+import { buildFailedNotification, buildNotification, failedSendNotice, inboxActions, receivedText } from '../js/actions';
+import type { FailedSendEngine, InboxNotificationEntry, NotifyAction } from '../js/actions';
 
 // No `as any`. The engine's real InboxEntry has EIGHT required fields
 // (payloadId, transferId, peerDeviceId, kind, itemCount, summary, receivedAt,
@@ -140,5 +140,175 @@ describe('buildNotification', () => {
     const first = buildNotification(entry());
     first.actions.pop();
     expect(buildNotification(entry()).actions).toHaveLength(1);
+  });
+});
+
+// Task 12. The text of a received folder. The name and the count come from the
+// entry of the inbox.received event, from before the move.
+describe('receivedText', () => {
+  const folderEntry = (fields: Partial<InboxNotificationEntry> = {}): InboxNotificationEntry =>
+    entry({
+      itemCount: 12,
+      summary: '12 files',
+      groupRoots: ['/data/downloads/album'],
+      savedPaths: Array.from({ length: 12 }, (_, i) => `/data/downloads/album/sub/f${i}.jpg`),
+      ...fields,
+    });
+  const inLibrary = (p: string) => p.startsWith('photos:') || p.startsWith('content://media/');
+
+  it('names a received folder and counts its files', () => {
+    expect(receivedText(folderEntry())).toEqual({ title: 'Received a folder', body: 'album · 12 files' });
+  });
+
+  it('gives null for loose files, so the old text stays', () => {
+    expect(receivedText(entry({ savedPaths: ['/data/downloads/a.txt'] }))).toBeNull();
+    expect(receivedText(entry({ groupRoots: [], savedPaths: ['/data/downloads/a.txt'] }))).toBeNull();
+  });
+
+  it('gives one line for each folder of an entry with two groups', () => {
+    const two = folderEntry({
+      groupRoots: ['/data/downloads/album', '/data/downloads/photos~1'],
+      savedPaths: [
+        '/data/downloads/album/a.jpg',
+        '/data/downloads/album/b.pdf',
+        '/data/downloads/photos~1/c.jpg',
+      ],
+    });
+    expect(receivedText(two)).toEqual({ title: 'Received 2 folders', body: 'album · 2 files\nphotos~1 · 1 file' });
+  });
+
+  it('counts a root only on a whole path component', () => {
+    const near = folderEntry({
+      groupRoots: ['/data/downloads/photos'],
+      savedPaths: ['/data/downloads/photos/a.jpg', '/data/downloads/photos~1/b.jpg'],
+    });
+    expect(receivedText(near)).toEqual({ title: 'Received a folder', body: 'photos · 1 file\nand 1 other file' });
+  });
+
+  it('adds the places line for a mixed folder, from the paths after the move', () => {
+    const e = folderEntry({
+      itemCount: 3,
+      savedPaths: ['/data/downloads/album/a.jpg', '/data/downloads/album/b.pdf', '/data/downloads/album/c.mov'],
+    });
+    const moved = ['photos:ID1', '/Daak/album/b.pdf', 'photos:ID2'];
+    expect(receivedText(e, moved, { library: 'Photos', saveFolder: 'Daak', inLibrary })).toEqual({
+      title: 'Received a folder',
+      body: 'album · 3 files\nPhotos and videos: Photos. Other files: Daak.',
+    });
+  });
+
+  it('adds no places line when the whole folder went to one place', () => {
+    const e = folderEntry({ itemCount: 2, savedPaths: ['/data/downloads/album/a.jpg', '/data/downloads/album/b.jpg'] });
+    const moved = ['content://media/external/images/media/1', 'content://media/external/images/media/2'];
+    expect(receivedText(e, moved, { library: 'Gallery', saveFolder: 'Downloads', inLibrary })?.body).toBe('album · 2 files');
+  });
+});
+
+describe('buildNotification of a folder', () => {
+  it('uses the folder text on the Mac', () => {
+    const n = buildNotification(
+      entry({ itemCount: 2, groupRoots: ['/out/album'], savedPaths: ['/out/album/a.txt', '/out/album/b/c.txt'] }),
+    );
+    expect(n.title).toBe('Received a folder');
+    expect(n.body).toBe('album · 2 files');
+  });
+});
+
+// Task 12. The failed-send notification. The engine fires transfer.failed once
+// on a terminal failure. The names come from the items of that transfer.
+describe('failedSendNotice', () => {
+  const TID = '11'.repeat(16);
+  const PEER = 'aa'.repeat(16);
+  type Item = { transferId: string; type: 'text' | 'file'; name: string | null; group: { name: string } | null };
+  const fake = (direction: 'in' | 'out', itemCount: number, items: Item[]) => {
+    const calls = { transfers: 0, thread: [] as string[] };
+    const engine: FailedSendEngine = {
+      listTransfers: async () => {
+        calls.transfers += 1;
+        return [
+          { transferId: '22'.repeat(16), peerDeviceId: 'bb'.repeat(16), direction: 'out' as const, itemCount: 1 },
+          { transferId: TID, peerDeviceId: PEER, direction, itemCount },
+        ];
+      },
+      listThread: async (peer: string) => {
+        calls.thread.push(peer);
+        return {
+          items: [{ transferId: '33'.repeat(16), type: 'file' as const, name: 'other.txt', group: null }, ...items],
+        };
+      },
+    };
+    return { engine, calls };
+  };
+  const file = (name: string, group: string | null = null): Item => ({
+    transferId: TID,
+    type: 'file',
+    name,
+    group: group === null ? null : { name: group },
+  });
+
+  it('failed_send_of_a_folder_says_couldnt_send_album', async () => {
+    const { engine, calls } = fake('out', 3, [file('a.jpg', 'album'), file('b.jpg', 'album'), file('c.pdf', 'album')]);
+    expect(await failedSendNotice(engine, TID)).toEqual({
+      transferId: TID,
+      peerDeviceId: PEER,
+      title: "Couldn't send album",
+      body: 'Open Daak to try again.',
+    });
+    expect(calls.thread).toEqual([PEER]);
+  });
+
+  it('failed_send_of_one_file_uses_the_file_name', async () => {
+    const { engine } = fake('out', 1, [file('report.pdf')]);
+    expect((await failedSendNotice(engine, TID))?.title).toBe("Couldn't send report.pdf");
+  });
+
+  it('failed_send_of_three_loose_files_says_3_files', async () => {
+    const { engine } = fake('out', 3, [file('a.txt'), file('b.txt'), file('c.txt')]);
+    expect((await failedSendNotice(engine, TID))?.title).toBe("Couldn't send 3 files");
+  });
+
+  it('a failed note says a note', async () => {
+    const { engine } = fake('out', 1, [{ transferId: TID, type: 'text', name: null, group: null }]);
+    expect((await failedSendNotice(engine, TID))?.title).toBe("Couldn't send a note");
+  });
+
+  it('uses the transfer item count when the page holds none of its items', async () => {
+    const { engine } = fake('out', 4, []);
+    expect((await failedSendNotice(engine, TID))?.title).toBe("Couldn't send 4 files");
+  });
+
+  it('an_inbound_failure_posts_no_failed_send_notification', async () => {
+    const { engine, calls } = fake('in', 1, [file('report.pdf')]);
+    expect(await failedSendNotice(engine, TID)).toBeNull();
+    expect(calls.thread).toEqual([]);
+  });
+
+  it('a_zero_transfer_id_posts_nothing', async () => {
+    const { engine, calls } = fake('out', 1, [file('report.pdf')]);
+    expect(await failedSendNotice(engine, '0'.repeat(32))).toBeNull();
+    expect(calls.transfers).toBe(0);
+  });
+
+  it('gives null for a transfer that the engine does not list', async () => {
+    const { engine } = fake('out', 1, [file('report.pdf')]);
+    expect(await failedSendNotice(engine, '44'.repeat(16))).toBeNull();
+  });
+});
+
+describe('buildFailedNotification', () => {
+  it('builds a Mac notification with its own id and the Open action', () => {
+    const n = buildFailedNotification({
+      transferId: '11'.repeat(16),
+      peerDeviceId: 'aa'.repeat(16),
+      title: "Couldn't send album",
+      body: 'Open Daak to try again.',
+    });
+    expect(n).toEqual({
+      payloadId: `failed:${'11'.repeat(16)}`,
+      category: 'daak.inbox',
+      title: "Couldn't send album",
+      body: 'Open Daak to try again.',
+      actions: [{ id: 'open', label: 'Open' }],
+    });
   });
 });

@@ -27,10 +27,16 @@
 // transferId and receivedAt to prove a title pluralises. The engine is the
 // source of truth for the entry; this is the projection of it that the banner
 // needs, and a wider InboxEntry satisfies it for free.
+//
+// Task 12 adds 2 optional fields. `groupRoots` and `savedPaths` give the folder
+// name and the file count. They are optional, so an old engine entry and a
+// test fixture without them still fit.
 export interface InboxNotificationEntry {
   payloadId: string;
   itemCount: number;
   summary: string;
+  groupRoots?: string[];
+  savedPaths?: string[] | null;
 }
 
 export interface NotifyAction {
@@ -79,13 +85,145 @@ export function inboxActions(): NotifyAction[] {
 // The engine's InboxEntry has a REAL itemCount -- the plan's `as any` fixture
 // was hiding a field that exists, and `unit` below is the only reason this
 // function needs a number at all.
+// A folder entry uses the folder text (receivedText). A loose entry keeps the
+// old text.
 export function buildNotification(entry: InboxNotificationEntry): DesktopNotification {
   const unit = entry.itemCount === 1 ? 'item' : 'items';
+  const folder = receivedText(entry);
   return {
     payloadId: entry.payloadId,
     category: 'daak.inbox',
-    title: `Received ${entry.itemCount} ${unit}`,
-    body: entry.summary,
+    title: folder?.title ?? `Received ${entry.itemCount} ${unit}`,
+    body: folder?.body ?? entry.summary,
+    actions: inboxActions(),
+  };
+}
+
+/** `1 file`, `12 files`. */
+function files(n: number): string {
+  return `${n} ${n === 1 ? 'file' : 'files'}`;
+}
+
+/**
+ * The folders of a received entry. Each folder has its name (the last
+ * component of the root) and the indexes of the `savedPaths` below the root.
+ *
+ * Call this with the entry of the `inbox.received` event, from BEFORE the move.
+ * After a move to Photos or Gallery a path is not below its root any more. The
+ * move keeps the order and the length of `savedPaths`, so an index also points
+ * at the path after the move.
+ *
+ * A root matches only on a whole component. The longest root wins.
+ */
+export function receivedFolders(entry: InboxNotificationEntry): { name: string; indexes: number[] }[] {
+  const roots = (entry.groupRoots ?? []).map((r) => r.replace(/\/+$/, '')).filter((r) => r !== '');
+  const folders = roots.map((r) => ({ name: r.slice(r.lastIndexOf('/') + 1), indexes: [] as number[] }));
+  (entry.savedPaths ?? []).forEach((path, i) => {
+    let best = -1;
+    roots.forEach((root, k) => {
+      if (path.startsWith(root + '/') && (best < 0 || root.length > roots[best].length)) best = k;
+    });
+    if (best >= 0) folders[best].indexes.push(i);
+  });
+  return folders.filter((f) => f.indexes.length > 0);
+}
+
+/** The words for the places of a mixed folder. The host knows them. */
+export interface ReceivedPlaces {
+  /** `Photos` on iOS, `Gallery` on Android. */
+  library?: string;
+  /** The folder name that Settings shows. */
+  saveFolder?: string;
+  /** The rule of `isLibraryPath` in packages/ui. The host passes it in. */
+  inLibrary: (path: string) => boolean;
+}
+
+/**
+ * The title and body of a received folder, or null for loose files.
+ *
+ * `entry` is the event entry from before the move. `moved` is the result of the
+ * move, in the same order. A folder with some files in the library and some
+ * not adds the line `Photos and videos: {library}. Other files: {saveFolder}.`
+ */
+export function receivedText(
+  entry: InboxNotificationEntry,
+  moved?: readonly string[] | null,
+  places?: ReceivedPlaces,
+): { title: string; body: string } | null {
+  const folders = receivedFolders(entry);
+  if (folders.length === 0) return null;
+  const lines = folders.map((f) => `${f.name} · ${files(f.indexes.length)}`);
+  const inFolders = folders.reduce((n, f) => n + f.indexes.length, 0);
+  const loose = (entry.savedPaths?.length ?? 0) - inFolders;
+  if (loose > 0) lines.push(`and ${loose} other ${loose === 1 ? 'file' : 'files'}`);
+  const mixed =
+    moved != null &&
+    places !== undefined &&
+    folders.some((f) => {
+      const inLib = f.indexes.filter((i) => places.inLibrary(moved[i] ?? '')).length;
+      return inLib > 0 && inLib < f.indexes.length;
+    });
+  if (mixed && places?.library && places.saveFolder) {
+    lines.push(`Photos and videos: ${places.library}. Other files: ${places.saveFolder}.`);
+  }
+  return {
+    title: folders.length === 1 ? 'Received a folder' : `Received ${folders.length} folders`,
+    body: lines.join('\n'),
+  };
+}
+
+/**
+ * The 2 engine reads that `failedSendNotice` makes. A structural subset, for
+ * the reason the top of this file gives: this module imports nothing. Both are
+ * reads. Nothing here sends (R33).
+ */
+export interface FailedSendEngine {
+  listTransfers(): Promise<{ transferId: string; peerDeviceId: string; direction: 'in' | 'out'; itemCount: number }[]>;
+  listThread(peerDeviceId: string): Promise<{
+    items: { transferId: string; type: 'text' | 'file'; name: string | null; group?: { name: string } | null }[];
+  }>;
+}
+
+export interface FailedSendNotice {
+  transferId: string;
+  peerDeviceId: string;
+  title: string;
+  body: string;
+}
+
+/**
+ * The notification for a send that ended in a failure, or null when nothing
+ * must post.
+ *
+ * Call it on `transfer.failed`. The engine sends that event once, at the end,
+ * and never on a retry back-off. An all-zero id is an inbound failure, and an
+ * inbound row is not a send, so both give null. `{name}` is the folder name,
+ * the file name of one file, or `{N} files`.
+ */
+export async function failedSendNotice(engine: FailedSendEngine, transferId: string): Promise<FailedSendNotice | null> {
+  if (/^0*$/.test(transferId)) return null;
+  const row = (await engine.listTransfers()).find((t) => t.transferId === transferId);
+  if (row === undefined || row.direction !== 'out') return null;
+  const items = (await engine.listThread(row.peerDeviceId)).items.filter((i) => i.transferId === transferId);
+  const groups = new Set(items.map((i) => i.group?.name));
+  let name: string;
+  if (items.length > 0 && groups.size === 1 && !groups.has(undefined)) name = [...groups][0] as string;
+  else if (row.itemCount === 1 && items.length === 1) name = items[0].type === 'text' ? 'a note' : items[0].name ?? files(1);
+  else name = files(Math.max(row.itemCount, items.length));
+  return { transferId, peerDeviceId: row.peerDeviceId, title: `Couldn't send ${name}`, body: 'Open Daak to try again.' };
+}
+
+/**
+ * The Mac form of a failed-send notification. Its own id, so it does not
+ * replace a received banner. The same category and the same Open action as a
+ * received banner, so a click opens Daak in the same way.
+ */
+export function buildFailedNotification(notice: FailedSendNotice): DesktopNotification {
+  return {
+    payloadId: `failed:${notice.transferId}`,
+    category: 'daak.inbox',
+    title: notice.title,
+    body: notice.body,
     actions: inboxActions(),
   };
 }

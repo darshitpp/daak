@@ -24,6 +24,7 @@ import {
   DAK_RECEIVED_CATEGORY,
   handleNotificationAction,
   initNotifications,
+  notifyFailedSend,
   notifyReceived,
   onNotificationAction,
 } from './notify';
@@ -60,6 +61,18 @@ describe('notifyReceived', () => {
       'p1',
       'Daak',
       'movie.mov + 1 more',
+      DAK_RECEIVED_CATEGORY,
+      JSON.stringify(entry),
+    );
+  });
+
+  // Task 12: the host gives the folder text. The payload stays the entry.
+  it('posts the text that the host gives for a folder', async () => {
+    await notifyReceived(entry, { title: 'Received a folder', body: 'album · 12 files' });
+    expect(native.post).toHaveBeenCalledWith(
+      'p1',
+      'Received a folder',
+      'album · 12 files',
       DAK_RECEIVED_CATEGORY,
       JSON.stringify(entry),
     );
@@ -267,5 +280,34 @@ describe('onNotificationAction', () => {
         h,
       ),
     ).not.toThrow();
+  });
+});
+
+describe('notifyFailedSend', () => {
+  const notice = {
+    transferId: '11'.repeat(16),
+    peerDeviceId: 'aa'.repeat(16),
+    title: "Couldn't send album",
+    body: 'Open Daak to try again.',
+  };
+
+  // The same category and the same post as a received banner, so the same OS
+  // rules apply. The payload names the device, so a tap opens its thread.
+  it('posts with its own id and a payload that names the device', async () => {
+    await notifyFailedSend(notice);
+    expect(native.post).toHaveBeenCalledWith(
+      `failed:${'11'.repeat(16)}`,
+      "Couldn't send album",
+      'Open Daak to try again.',
+      DAK_RECEIVED_CATEGORY,
+      JSON.stringify({ transferId: '11'.repeat(16), peerDeviceId: 'aa'.repeat(16) }),
+    );
+  });
+
+  it('does not throw when the native post rejects', async () => {
+    native.post.mockRejectedValueOnce(new Error('denied'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(notifyFailedSend(notice)).resolves.toBeUndefined();
+    warn.mockRestore();
   });
 });

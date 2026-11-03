@@ -1,11 +1,13 @@
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import {
   consumeIntentSends,
   consumePendingShare,
   createEngine,
+  downloadFolderName,
   initBackgroundSync,
   handleNotificationAction,
   initNotifications,
+  notifyFailedSend,
   notifyReceived,
   onNotificationAction,
   presentShare,
@@ -19,6 +21,12 @@ import {
 } from '@daak/platform';
 import type { DaakEngine, InboxEntry } from '@daak/core';
 import type { InboundShareItem } from '@daak/platform';
+// A deep import: actions.ts imports nothing, so it is safe on mobile. The
+// package barrel is the TurboModule and is not needed here.
+import { failedSendNotice, receivedFolders, receivedText } from '@daak/rn-notify/js/actions';
+import type { ReceivedPlaces } from '@daak/rn-notify/js/actions';
+import { isLibraryPath } from '@daak/ui';
+import { libraryOf, photosHost } from './photosHost';
 
 export const engine: DaakEngine = createEngine();
 
@@ -143,7 +151,50 @@ async function notifyAfterRelocate(engine: DaakEngine, entry: InboxEntry): Promi
     ...entry,
     groupRoots: entry.groupRoots ?? [],
   });
-  await notifyReceived(moved ? { ...entry, savedPaths: moved } : entry);
+  // Task 12: the folder name and the file count come from `entry`, from before
+  // the move. After a move to Photos or Gallery a path is not below its root.
+  // The places line reads the paths after the move.
+  const places = receivedFolders(entry).length > 0 ? await receivedPlaces() : undefined;
+  const text = receivedText(entry, moved ?? entry.savedPaths, places);
+  await notifyReceived(moved ? { ...entry, savedPaths: moved } : entry, text);
+}
+
+/**
+ * The words of the places line of a mixed folder. They are the words that the
+ * folder sheet shows (apps/mobile/src/App.tsx gives the same values to
+ * AppShell). Never throws: a missing name only removes the places line.
+ */
+async function receivedPlaces(): Promise<ReceivedPlaces> {
+  let saveFolder: string | undefined = 'Daak';
+  if (Platform.OS !== 'ios') {
+    try {
+      saveFolder = (await downloadFolderName()) ?? 'This app’s own storage';
+    } catch {
+      saveFolder = undefined;
+    }
+  }
+  return { library: libraryOf(photosHost), saveFolder, inLibrary: isLibraryPath };
+}
+
+// The transfer ids that have a failed-send banner. One send posts once, also
+// when the event comes again.
+const failedNotified = new Set<string>();
+
+/**
+ * Posts the banner for a send that ended in a failure. The engine sends
+ * `transfer.failed` once, at the end, and never on a retry back-off.
+ * `failedSendNotice` ignores an inbound failure. Never throws, because it runs
+ * inside the ONE engine event handler.
+ */
+async function notifyFailedOnce(engine: DaakEngine, transferId: string): Promise<void> {
+  if (failedNotified.has(transferId)) return;
+  failedNotified.add(transferId);
+  try {
+    const notice = await failedSendNotice(engine, transferId);
+    if (notice !== null) await notifyFailedSend(notice);
+  } catch {
+    // The banner is lost. The thread still shows the failed send.
+  }
 }
 
 export async function startEngine(): Promise<void> {
@@ -246,6 +297,8 @@ export async function startEngine(): Promise<void> {
         void stopTransferForeground();
       }
     }
+    // Task 12: the failed-send banner, on the ONE subscription.
+    if (e.type === 'transfer.failed') void notifyFailedOnce(engine, e.transferId);
   });
   // R25: the ONE real send call site. ShareTargetActivity and the Siri intent
   // both stage into share-inbox/intent-sends/ and launch/foreground the app,

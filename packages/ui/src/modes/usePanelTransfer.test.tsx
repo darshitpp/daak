@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, TransferSummary } from '@daak/core';
 import { fakeEngine } from '../testing/fakeEngine';
+import { threadItem, threadPage } from '../testing/threadFixtures';
 import { PANEL_POLL_MS, usePanelTransfer } from './usePanelTransfer';
 
 const TID = 'tt'.repeat(16);
@@ -219,5 +220,86 @@ describe('usePanelTransfer', () => {
     act(() => result.current.begin({ transferId: TID, peerDeviceId: PEER, label: 'a.pdf' }));
     unmount();
     expect(cancel).not.toHaveBeenCalled();
+  });
+});
+
+// Task 12. A folder is one row in the panel. The name and the counts come from
+// the items of the transfer (`group`), from `engine.listThread`.
+describe('usePanelTransfer folders', () => {
+  const MB34 = 34 * 1024 * 1024;
+  const folderItems = (transferId: string, direction: 'in' | 'out', done: number) =>
+    Array.from({ length: 12 }, (_, i) =>
+      threadItem({
+        transferId,
+        itemIndex: i,
+        direction,
+        type: 'file',
+        name: `f${i}.jpg`,
+        text: null,
+        size: 1,
+        state: i < done ? 'done' : 'pending',
+        destPath: i < done && direction === 'in' ? `/Users/me/Downloads/album/f${i}.jpg` : null,
+        transferState: done === 12 ? 'done' : 'active',
+        group: { name: 'album', rel: `f${i}.jpg`, files: 12, bytes: MB34 },
+      }),
+    );
+
+  it('reads the name and the done count of a running folder send', async () => {
+    const engine = fakeEngine();
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([row({ kind: 'batch', itemCount: 12 })]);
+    const thread = jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(TID, 'out', 4)));
+    const { result } = renderHook(() => usePanelTransfer(engine));
+    await flush();
+    await flush();
+    expect(thread).toHaveBeenCalledWith(PEER);
+    expect(result.current.folder).toMatchObject({ name: 'album', files: 12, done: 4, bytes: MB34, direction: 'out' });
+  });
+
+  it('gives no folder for a send of loose files', async () => {
+    const engine = fakeEngine();
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([row({ kind: 'batch', itemCount: 2 })]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(
+      threadPage([
+        threadItem({ transferId: TID, direction: 'out', type: 'file', name: 'a.txt', text: null }),
+        threadItem({ transferId: TID, itemIndex: 1, direction: 'out', type: 'file', name: 'b.txt', text: null }),
+      ]),
+    );
+    const { result } = renderHook(() => usePanelTransfer(engine));
+    await flush();
+    await flush();
+    expect(result.current.folder).toBeNull();
+  });
+
+  it('reads the newest finished folder as the recent row', async () => {
+    const engine = fakeEngine();
+    const IN = 'ii'.repeat(16);
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([
+      row({ transferId: 'oo'.repeat(16), state: 'done', updatedAt: 3 }),
+      row({ transferId: IN, direction: 'in', kind: 'batch', state: 'done', itemCount: 12, updatedAt: 9 }),
+    ]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(IN, 'in', 12)));
+    const { result } = renderHook(() => usePanelTransfer(engine));
+    await flush();
+    await flush();
+    expect(result.current.recent).toMatchObject({
+      transferId: IN,
+      name: 'album',
+      files: 12,
+      bytes: MB34,
+      direction: 'in',
+      places: 'folder',
+    });
+  });
+
+  it('gives no recent row when the newest finished transfer is not a folder', async () => {
+    const engine = fakeEngine();
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([row({ state: 'done' })]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(
+      threadPage([threadItem({ transferId: TID, direction: 'out', type: 'file', name: 'a.txt', text: null })]),
+    );
+    const { result } = renderHook(() => usePanelTransfer(engine));
+    await flush();
+    await flush();
+    expect(result.current.recent).toBeNull();
   });
 });

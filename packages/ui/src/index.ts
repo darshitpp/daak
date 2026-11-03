@@ -40,6 +40,8 @@ export { fakeEngine } from './testing/fakeEngine';
 
 export { Sheet, SheetProvider } from './components/Sheet';
 export { Bubble } from './components/Bubble';
+// The library path rule. The mobile host reads it for the notification of a mixed folder.
+export { isLibraryPath } from './screens/thread-groups';
 export { ToastProvider, useToast } from './components/Toast';
 export { threadItem, threadPage } from './testing/threadFixtures';
 

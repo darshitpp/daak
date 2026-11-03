@@ -120,6 +120,8 @@ export function DaakPopoverShell({ engine, runtime }: {
           engine={engine}
           runtime={runtime}
           onPickFiles={desktopPickFiles}
+          // Task 12: the recent folder row says `Saved to {name}`.
+          downloadFolder={DOWNLOAD_FOLDER}
           alert={blockers.alert}
           alertRouteToken={blockers.alertRouteToken}
           settingsRouteToken={blockers.settingsRouteToken}

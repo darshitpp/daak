@@ -1,5 +1,6 @@
 import {
   createEngine,
+  notifyFailedSend,
   notifyReceived,
   relocateReceivedFiles,
   routeInboxEntry,
@@ -29,6 +30,11 @@ jest.mock('@daak/platform', () => {
     // Task 10: startEngine also books the first background slot.
     initBackgroundSync: jest.fn(async () => {}),
     notifyReceived: jest.fn(async () => {}),
+    // Task 12: the failed-send banner and the save folder name of a mixed folder.
+    notifyFailedSend: jest.fn(async () => {}),
+    downloadFolderName: jest.fn(async () => 'Downloads'),
+    startTransferForeground: jest.fn(async () => {}),
+    stopTransferForeground: jest.fn(async () => {}),
     routeInboxEntry: jest.fn(async () => {}),
     // R42p: the move runs on the same inbox.received branch. Undefined here
     // would throw before the router under test ever ran.
@@ -138,7 +144,8 @@ describe('startEngine pairing.done subscription', () => {
     // is what the app hands it and not a bare import inside receive.ts.
     expect(routed).toHaveBeenCalledWith(entry, expect.objectContaining({ clipboard: expect.anything() }));
     expect(notified).toHaveBeenCalledTimes(1);
-    expect(notified).toHaveBeenCalledWith(entry);
+    // A text entry has no folder, so the host gives no folder text.
+    expect(notified).toHaveBeenCalledWith(entry, null);
   });
 
   // The banner is a SNAPSHOT: its payload JSON is baked into the notification's
@@ -171,10 +178,13 @@ describe('startEngine pairing.done subscription', () => {
 
     // An entry from an old engine has no groupRoots: the files are loose.
     expect(moved).toHaveBeenCalledWith(engine, { ...entry, groupRoots: [] });
-    expect(notified).toHaveBeenCalledWith({
-      ...entry,
-      savedPaths: ['content://tree/new.jpg'],
-    });
+    expect(notified).toHaveBeenCalledWith(
+      {
+        ...entry,
+        savedPaths: ['content://tree/new.jpg'],
+      },
+      null,
+    );
     // The move must run BEFORE the post, or the banner snapshots a path the
     // move is about to delete.
     expect(moved.mock.invocationCallOrder[0]).toBeLessThan(notified.mock.invocationCallOrder[0]);
@@ -202,5 +212,143 @@ describe('startEngine pairing.done subscription', () => {
     await Promise.resolve();
 
     expect(moved).toHaveBeenCalledWith(engine, entry);
+  });
+
+  // Task 12. The name and the count come from the event entry, from before the
+  // move. The places line comes from the paths after the move. Jest runs as iOS,
+  // so the library is Photos and the save folder is Daak.
+  it('a_mixed_folder_names_the_places_after_the_move', async () => {
+    const engine = createEngine();
+    const handlers = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+    const moved = jest.mocked(relocateReceivedFiles);
+    const notified = jest.mocked(notifyReceived);
+    moved.mockClear();
+    notified.mockClear();
+    const after = ['photos:ID1', '/Daak/album/b.pdf', 'photos:ID2'];
+    moved.mockResolvedValueOnce(after);
+    const entry: InboxEntry = {
+      payloadId: 'p4',
+      transferId: 't4',
+      peerDeviceId: 'd1',
+      kind: 'batch',
+      itemCount: 3,
+      summary: '3 files',
+      receivedAt: 1,
+      savedPaths: ['/app/downloads/album/a.jpg', '/app/downloads/album/b.pdf', '/app/downloads/album/sub/c.mov'],
+      groupRoots: ['/app/downloads/album'],
+    };
+    for (const handler of handlers) handler({ type: 'inbox.received', payload: entry });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+
+    expect(notified).toHaveBeenCalledWith(
+      { ...entry, savedPaths: after },
+      { title: 'Received a folder', body: 'album · 3 files\nPhotos and videos: Photos. Other files: Daak.' },
+    );
+    expect(moved.mock.invocationCallOrder[0]).toBeLessThan(notified.mock.invocationCallOrder[0]);
+  });
+});
+
+describe('startEngine failed-send notification', () => {
+  const PEER = 'aa'.repeat(16);
+  const settle = async () => {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  };
+  const setup = async (transferId: string, direction: 'in' | 'out' = 'out') => {
+    const engine = createEngine();
+    const handlers = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+    await startEngine();
+    const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([
+      {
+        transferId,
+        peerDeviceId: PEER,
+        direction,
+        kind: 'batch',
+        state: 'failed',
+        bytesDone: 0,
+        bytesTotal: 10,
+        itemCount: 2,
+        updatedAt: 1,
+      },
+    ]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue({
+      items: ['a.jpg', 'b.jpg'].map((name, i) => ({
+        transferId,
+        itemIndex: i,
+        direction,
+        type: 'file' as const,
+        name,
+        size: 5,
+        text: null,
+        state: 'failed' as const,
+        destPath: null,
+        at: 1,
+        transferState: 'failed',
+        error: null,
+        group: { name: 'album', rel: name, files: 2, bytes: 10 },
+      })),
+      olderCursor: null,
+    });
+    // The engine is one shared instance, so a spy keeps the calls of an earlier test.
+    list.mockClear();
+    const posted = jest.mocked(notifyFailedSend);
+    posted.mockClear();
+    const fire = (e: DaakEvent) => {
+      for (const handler of handlers) handler(e);
+    };
+    return { list, posted, fire };
+  };
+
+  it('posts the folder name for a failed folder send, from the one subscription', async () => {
+    const tid = '51'.repeat(16);
+    const { posted, fire } = await setup(tid);
+    fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
+    await settle();
+    expect(posted).toHaveBeenCalledTimes(1);
+    expect(posted).toHaveBeenCalledWith({
+      transferId: tid,
+      peerDeviceId: PEER,
+      title: "Couldn't send album",
+      body: 'Open Daak to try again.',
+    });
+  });
+
+  it('a_failed_send_posts_once_even_when_the_event_repeats', async () => {
+    const tid = '52'.repeat(16);
+    const { posted, fire } = await setup(tid);
+    fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
+    fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
+    await settle();
+    fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
+    await settle();
+    expect(posted).toHaveBeenCalledTimes(1);
+  });
+
+  // A retry back-off sends no transfer.failed. It sends a queue count and
+  // progress, and neither may post a failed-send banner.
+  it('a_retry_back_off_posts_nothing', async () => {
+    const tid = '53'.repeat(16);
+    const { list, posted, fire } = await setup(tid);
+    fire({ type: 'outbox.queued', deviceId: PEER, queued: 1 });
+    fire({ type: 'transfer.progress', transferId: tid, bytesDone: 0, bytesTotal: 10 });
+    fire({ type: 'transfer.item', transferId: tid, itemIndex: 0, state: 'failed' });
+    await settle();
+    expect(posted).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('posts nothing for the all-zero id of an inbound failure', async () => {
+    const { list, posted, fire } = await setup('0'.repeat(32));
+    fire({ type: 'transfer.failed', transferId: '0'.repeat(32), error: 'bad frame' });
+    await settle();
+    expect(posted).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('posts nothing for a failed inbound transfer row', async () => {
+    const tid = '54'.repeat(16);
+    const { posted, fire } = await setup(tid, 'in');
+    fire({ type: 'transfer.failed', transferId: tid, error: 'gone' });
+    await settle();
+    expect(posted).not.toHaveBeenCalled();
   });
 });

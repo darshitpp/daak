@@ -8,8 +8,8 @@
 // mobile-reachable and a re-export is an EAGER require.
 import { NativeEventEmitter } from 'react-native';
 import NativeDaakSystemNotify from './NativeDaakSystemNotify';
-import { buildNotification } from './actions';
-import type { DesktopNotification, InboxNotificationEntry, NotifyAction } from './actions';
+import { buildFailedNotification, buildNotification } from './actions';
+import type { DesktopNotification, FailedSendNotice, InboxNotificationEntry, NotifyAction } from './actions';
 
 const EVENT = 'DaakSystemNotifyAction';
 
@@ -20,6 +20,12 @@ const EVENT = 'DaakSystemNotifyAction';
 export function notifyInbox(entry: InboxNotificationEntry): Promise<void> {
   const notification: DesktopNotification = buildNotification(entry);
   return NativeDaakSystemNotify.notify(JSON.stringify(notification));
+}
+
+// Task 12: the banner of a send that ended in a failure. Its own id, so it does
+// not replace a received banner.
+export function notifyFailedSend(notice: FailedSendNotice): Promise<void> {
+  return NativeDaakSystemNotify.notify(JSON.stringify(buildFailedNotification(notice)));
 }
 
 // LAZY on purpose, and this is the plan's first real bug. The plan builds
@@ -43,5 +49,5 @@ export function onNotifyAction(
   return () => subscription.remove();
 }
 
-export { buildNotification, inboxActions } from './actions';
-export type { DesktopNotification, InboxNotificationEntry, NotifyAction } from './actions';
+export { buildFailedNotification, buildNotification, inboxActions } from './actions';
+export type { DesktopNotification, FailedSendNotice, InboxNotificationEntry, NotifyAction } from './actions';

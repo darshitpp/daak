@@ -111,6 +111,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             alert={alert}
             alertRouteToken={alertRouteToken}
             deviceNoun={deviceNoun}
+            saveFolderName={downloadFolder?.load}
           />
         : <Dashboard
             state={state}

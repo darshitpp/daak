@@ -36,6 +36,13 @@ function entry(fields: Partial<InboxEntry> = {}): InboxEntry {
   };
 }
 
+// The 2 list reads that the failed-send notice makes. These tests send no
+// transfer.failed, so the lists stay empty.
+const NO_ROWS = {
+  listTransfers: async () => [],
+  listThread: async () => ({ items: [] }),
+};
+
 describe('planNotifyAction', () => {
   it('maps open to the dashboard', () => {
     expect(planNotifyAction('open')).toBe('open-dashboard');
@@ -99,6 +106,7 @@ describe('notifyInboxEntry', () => {
     const posted: InboxEntry[] = [];
     let handler: ((e: DaakEvent) => void) | undefined;
     const engine: NotifyEngine = {
+      ...NO_ROWS,
       on(cb) {
         handler = cb;
         return () => {};
@@ -133,6 +141,7 @@ describe('notifyInboxEntry', () => {
   it('survives a post that rejects', async () => {
     let handler: ((e: DaakEvent) => void) | undefined;
     const engine: NotifyEngine = {
+      ...NO_ROWS,
       on(cb) {
         handler = cb;
         return () => {};
@@ -152,6 +161,7 @@ describe('notifyInboxEntry preference', () => {
   function fakeEngine() {
     let handler: ((event: DaakEvent) => void) | undefined;
     const engine: NotifyEngine = {
+      ...NO_ROWS,
       on(cb) {
         handler = cb;
         return () => {};
@@ -208,5 +218,51 @@ describe('notifyInboxEntry preference', () => {
     emit(entry());
     await flush();
     expect(posts).toEqual(['p1']);
+  });
+});
+
+// Task 12. A send that ends in a failure posts one banner on the Mac.
+describe('notifyInboxEntry failed send', () => {
+  const TID = '61'.repeat(16);
+  const PEER = 'aa'.repeat(16);
+  function failingEngine(direction: 'in' | 'out') {
+    let handler: ((event: DaakEvent) => void) | undefined;
+    const engine: NotifyEngine = {
+      on(cb) {
+        handler = cb;
+        return () => {};
+      },
+      listTransfers: async () => [{ transferId: TID, peerDeviceId: PEER, direction, itemCount: 1 }],
+      listThread: async () => ({ items: [{ transferId: TID, type: 'file' as const, name: 'report.pdf', group: null }] }),
+    };
+    return { engine, emit: (e: DaakEvent) => handler?.(e) };
+  }
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('posts once for a failed send, also when the event repeats', async () => {
+    const { engine, emit } = failingEngine('out');
+    const failed: string[] = [];
+    notifyInboxEntry(engine, { post: async () => {}, postFailed: async (n) => void failed.push(n.title) });
+    emit({ type: 'transfer.failed', transferId: TID, error: 'gone' });
+    emit({ type: 'transfer.failed', transferId: TID, error: 'gone' });
+    await flush();
+    expect(failed).toEqual(["Couldn't send report.pdf"]);
+  });
+
+  it('posts nothing for an inbound failure or a zero id', async () => {
+    const { engine, emit } = failingEngine('in');
+    const failed: string[] = [];
+    notifyInboxEntry(engine, { post: async () => {}, postFailed: async (n) => void failed.push(n.title) });
+    emit({ type: 'transfer.failed', transferId: TID, error: 'gone' });
+    emit({ type: 'transfer.failed', transferId: '0'.repeat(32), error: 'bad frame' });
+    await flush();
+    expect(failed).toEqual([]);
+  });
+
+  it('survives a failed-send post that rejects', async () => {
+    const { engine, emit } = failingEngine('out');
+    notifyInboxEntry(engine, { post: async () => {}, postFailed: () => Promise.reject(new Error('no centre')) });
+    expect(() => emit({ type: 'transfer.failed', transferId: TID, error: 'gone' })).not.toThrow();
+    await flush();
   });
 });
