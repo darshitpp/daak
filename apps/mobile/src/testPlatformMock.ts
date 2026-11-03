@@ -64,8 +64,11 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     chooseDownloadFolder: jest.fn(async () => null),
     downloadFolderName: jest.fn(async () => null),
     clearDownloadFolder: jest.fn(async () => undefined),
-    moveReceivedFiles: jest.fn(async (paths: string[]) => paths),
-    saveToLibrary: jest.fn(async (paths: string[]) => paths),
+    // The second argument is parallel to `paths`: the subfolder in the save
+    // folder, and the album. A mock that ignores it answers the input.
+    moveReceivedFiles: jest.fn(async (paths: string[], _subdirs?: string[]) => paths),
+    saveToLibrary: jest.fn(async (paths: string[], _albums?: string[]) => paths),
+    planRelocation: jest.fn(() => ({ library: [], folder: [] })),
     requestPhotosAccess: jest.fn(async () => false),
     photosAccessStatus: jest.fn(async () => 'unavailable'),
     relocateReceivedFiles: jest.fn(async () => undefined),

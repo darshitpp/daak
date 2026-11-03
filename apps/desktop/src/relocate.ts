@@ -19,6 +19,11 @@ export function relocateInboxFiles(engine: DaakEngine): () => void {
     if (event.type !== 'inbox.received') return;
     // relocateReceivedFiles never throws: it runs on an event handler, where an
     // unhandled rejection takes the subscription and every later event with it.
-    void relocateReceivedFiles(engine, event.payload);
+    // The event entry holds the folder roots from before the move. An old
+    // engine sends no roots, so its files are loose.
+    void relocateReceivedFiles(engine, {
+      ...event.payload,
+      groupRoots: event.payload.groupRoots ?? [],
+    });
   });
 }

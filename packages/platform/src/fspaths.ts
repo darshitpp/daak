@@ -156,14 +156,33 @@ export async function clearDownloadFolder(): Promise<void> {
   return NativeDaakFsPaths.clearDownloadFolder();
 }
 
-export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
-  return NativeDaakFsPaths.moveReceivedFiles(paths);
+// Task 11 adds the second, parallel argument to the native spec. Until then
+// the native type has one argument. The facade sends the second argument only
+// when it holds a value, so a call for loose files is the same as before.
+type ParallelCall = (paths: string[], extra?: string[]) => Promise<string[]>;
+
+function withExtra(call: ParallelCall, paths: string[], extra?: string[]): Promise<string[]> {
+  return extra && extra.some((e) => e !== '') ? call(paths, extra) : call(paths);
+}
+
+/**
+ * `subdirs[i]` is the folder inside the save folder for `paths[i]`, for example
+ * `album/sub`. A shorter array, or `''`, means the top of the save folder. A
+ * file that is already at its place comes back with its own path.
+ */
+export async function moveReceivedFiles(paths: string[], subdirs?: string[]): Promise<string[]> {
+  return withExtra(NativeDaakFsPaths.moveReceivedFiles as ParallelCall, paths, subdirs);
 }
 
 export type PhotosAccess = 'granted' | 'denied' | 'undetermined' | 'unavailable';
 
-export async function saveToLibrary(paths: string[]): Promise<string[]> {
-  return NativeDaakFsPaths.saveToLibrary(paths);
+/**
+ * `albums[i]` is the album (iOS) or the folder below `Pictures/Daak` (Android)
+ * for `paths[i]`, for example `album / sub`. A shorter array, or `''`, means no
+ * album, as for a loose file.
+ */
+export async function saveToLibrary(paths: string[], albums?: string[]): Promise<string[]> {
+  return withExtra(NativeDaakFsPaths.saveToLibrary as ParallelCall, paths, albums);
 }
 
 export async function requestPhotosAccess(): Promise<boolean> {
@@ -196,6 +215,62 @@ export function isMedia(path: string): boolean {
   return dot >= 0 && MEDIA_EXT.has(path.slice(dot + 1).toLowerCase());
 }
 
+export type RelocationPlan = {
+  library: { index: number; path: string; album: string }[];
+  folder: { index: number; path: string; subdir: string }[];
+};
+
+// A path that is already in Photos (`photos:<id>`) or in Gallery or a SAF
+// folder (`content://`) moved at an earlier event. It does not move again.
+function alreadyMoved(path: string): boolean {
+  return path.startsWith('photos:') || path.startsWith('content://');
+}
+
+// The folder of `path` from the parent of its group root, for example
+// `album/sub`. `''` for a path under no root. The longest root wins, and a root
+// matches only on a whole path component, so `/out/photos` does not match
+// `/out/photos~1/a.jpg`.
+function subdirOf(path: string, roots: string[]): string {
+  let best = '';
+  for (const raw of roots) {
+    const root = raw.replace(/\/+$/, '');
+    if (root.length > best.length && path.startsWith(`${root}/`)) best = root;
+  }
+  if (best === '') return '';
+  const name = best.slice(best.lastIndexOf('/') + 1);
+  const dirs = path.slice(best.length + 1).split('/').slice(0, -1);
+  return [name, ...dirs].join('/');
+}
+
+/**
+ * Where each received file goes. `index` is the position in `savedPaths`.
+ *
+ * - A media file (by extension) goes to `library` when `photosOn` is true. Its
+ *   `album` is the folder path joined with ` / ` (spec C8).
+ * - Every other file goes to `folder`. Its `subdir` keeps the folder structure
+ *   inside the save folder.
+ * - A loose file has `album` and `subdir` as `''`.
+ * - A path that starts with `photos:` or `content://` is in no list. It moved
+ *   at an earlier `inbox.received` event of the same payload.
+ */
+export function planRelocation(
+  savedPaths: string[],
+  groupRoots: string[],
+  photosOn: boolean,
+): RelocationPlan {
+  const plan: RelocationPlan = { library: [], folder: [] };
+  savedPaths.forEach((path, index) => {
+    if (alreadyMoved(path)) return;
+    const subdir = subdirOf(path, groupRoots);
+    if (photosOn && isMedia(path)) {
+      plan.library.push({ index, path, album: subdir.split('/').join(' / ') });
+    } else {
+      plan.folder.push({ index, path, subdir });
+    }
+  });
+  return plan;
+}
+
 /**
  * R42p: put a received payload's files where the user asked for them, and tell
  * the engine where they went.
@@ -211,29 +286,43 @@ export function isMedia(path: string): boolean {
  * for nothing is a row rewritten on every arrival.
  *
  * Media files go to the OS media library first (`saveToLibrary`). Each file
- * that the library did not take then goes to the chosen folder.
+ * that the library did not take then goes to the chosen folder, inside its
+ * group folder. The native side decides if the library is on: a target with
+ * no routing answers each original path, so the fallback move takes the file.
+ *
+ * A repaired folder sends a second `inbox.received` for the same payload. A
+ * path that moved to the library is skipped (`planRelocation`). A path that is
+ * already in the save folder goes to the native move, which answers its own
+ * path. The same path is "no move", so the row is not rewritten for it.
+ *
+ * Each native answer is used only when its length is correct, because
+ * `replaceInboxPaths` pairs the old and new lists by index.
  *
  * RETURNS the locations the move produced, or null when nothing moved. The
  * caller needs them because a notification is a SNAPSHOT: its payload JSON is
  * baked into the notification's extras at post time, so a banner posted before
- * the move carries paths the move then DELETES.
+ * the move carries paths the move then DELETES. The caller keeps the event
+ * entry, so the name and the count stay readable from it.
  */
 export async function relocateReceivedFiles(
   engine: { replaceInboxPaths(payloadId: string, paths: string[]): Promise<void> },
-  payload: { payloadId: string; savedPaths: string[] | null },
+  payload: { payloadId: string; savedPaths: string[] | null; groupRoots: string[] },
 ): Promise<string[] | null> {
   const before = payload.savedPaths;
   if (!before || before.length === 0) return null;
   const after = [...before];
+  const plan = planRelocation(before, payload.groupRoots, true);
 
   // Step 1: the media library. A failure leaves the paths as they are.
-  const mediaAt = before.flatMap((p, i) => (isMedia(p) ? [i] : []));
-  if (mediaAt.length > 0) {
+  if (plan.library.length > 0) {
     try {
-      const saved = await saveToLibrary(mediaAt.map((i) => before[i]));
-      if (saved.length === mediaAt.length) {
-        mediaAt.forEach((at, k) => {
-          after[at] = saved[k];
+      const saved = await saveToLibrary(
+        plan.library.map((e) => e.path),
+        plan.library.map((e) => e.album),
+      );
+      if (saved.length === plan.library.length) {
+        plan.library.forEach((e, k) => {
+          after[e.index] = saved[k];
         });
       }
     } catch {
@@ -241,11 +330,22 @@ export async function relocateReceivedFiles(
     }
   }
 
-  // Step 2: the chosen folder, for every path that is still the original.
-  const stillAt = before.flatMap((p, i) => (after[i] === p ? [i] : []));
+  // Step 2: the chosen folder, for each planned file that is still at its
+  // original path. A media file that the library did not take keeps its
+  // folder structure: its subdir comes from the plan with no library.
+  const subdirs = new Map(
+    planRelocation(before, payload.groupRoots, false).folder.map((e) => [e.index, e.subdir]),
+  );
+  const stillAt = [...plan.library, ...plan.folder]
+    .map((e) => e.index)
+    .filter((i) => after[i] === before[i])
+    .sort((a, b) => a - b);
   if (stillAt.length > 0) {
     try {
-      const moved = await moveReceivedFiles(stillAt.map((i) => after[i]));
+      const moved = await moveReceivedFiles(
+        stillAt.map((i) => before[i]),
+        stillAt.map((i) => subdirs.get(i) ?? ''),
+      );
       if (moved.length === stillAt.length) {
         stillAt.forEach((at, k) => {
           after[at] = moved[k];

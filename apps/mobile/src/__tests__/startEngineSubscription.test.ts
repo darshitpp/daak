@@ -169,7 +169,8 @@ describe('startEngine pairing.done subscription', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(moved).toHaveBeenCalledWith(engine, entry);
+    // An entry from an old engine has no groupRoots: the files are loose.
+    expect(moved).toHaveBeenCalledWith(engine, { ...entry, groupRoots: [] });
     expect(notified).toHaveBeenCalledWith({
       ...entry,
       savedPaths: ['content://tree/new.jpg'],
@@ -177,5 +178,29 @@ describe('startEngine pairing.done subscription', () => {
     // The move must run BEFORE the post, or the banner snapshots a path the
     // move is about to delete.
     expect(moved.mock.invocationCallOrder[0]).toBeLessThan(notified.mock.invocationCallOrder[0]);
+  });
+
+  // Task 10: the folder roots come from the event entry, from before the move.
+  it('passes the folder roots of the event entry to the move', async () => {
+    const engine = createEngine();
+    const handlers = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+    const moved = jest.mocked(relocateReceivedFiles);
+    moved.mockClear();
+    const entry: InboxEntry = {
+      payloadId: 'p3',
+      transferId: 't3',
+      peerDeviceId: 'd1',
+      kind: 'batch',
+      itemCount: 1,
+      summary: 'album',
+      receivedAt: 1,
+      savedPaths: ['/app/downloads/album/a.jpg'],
+      groupRoots: ['/app/downloads/album'],
+    };
+    for (const handler of handlers) handler({ type: 'inbox.received', payload: entry });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(moved).toHaveBeenCalledWith(engine, entry);
   });
 });

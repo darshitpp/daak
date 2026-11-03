@@ -137,7 +137,12 @@ export function startEngineOnce(): Promise<void> {
  * settles, if the delay is ever felt.
  */
 async function notifyAfterRelocate(engine: DaakEngine, entry: InboxEntry): Promise<void> {
-  const moved = await relocateReceivedFiles(engine, entry);
+  // The event entry holds the folder roots from before the move. An old
+  // engine sends no roots, so its files are loose.
+  const moved = await relocateReceivedFiles(engine, {
+    ...entry,
+    groupRoots: entry.groupRoots ?? [],
+  });
   await notifyReceived(moved ? { ...entry, savedPaths: moved } : entry);
 }
 
