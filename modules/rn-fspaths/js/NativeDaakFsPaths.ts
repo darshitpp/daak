@@ -36,16 +36,14 @@ export interface Spec extends TurboModule {
    * The file count and total bytes of a folder tree. Symlinks are skipped.
    * Resolves `null` when the path is not a readable folder.
    *
-   * The next three methods are optional until the iOS (Task 7) and Android
-   * (Task 8) bodies land. The Android codegen makes a required method abstract,
-   * so a required method with no Kotlin body breaks the build. The facade
-   * absorbs an absent method.
+   * This method and the next two are required. iOS, Android, and macOS
+   * implement all three.
    */
-  folderStats?(path: string): Promise<{ files: number; bytes: number } | null>;
+  folderStats(path: string): Promise<{ files: number; bytes: number } | null>;
   /** Delete the private copy that `pickFolder` made. A no-op on macOS. */
-  discardPickedCopy?(path: string): Promise<void>;
+  discardPickedCopy(path: string): Promise<void>;
   /** Delete every private copy that an earlier run left. A no-op on macOS. */
-  sweepPickedCopies?(): Promise<void>;
+  sweepPickedCopies(): Promise<void>;
   /**
    * R42p: ask the OS for a folder to keep received files in, and REMEMBER it.
    * Resolves the folder's display name, or `null` when the user cancelled.

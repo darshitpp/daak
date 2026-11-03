@@ -23,7 +23,8 @@ import {
 } from './fspaths';
 
 const native = vi.mocked(NativeDaakFsPaths);
-// The folder methods are optional in the Spec and plain mocks at run time.
+// The folder methods are plain mocks at run time. A test removes one, because
+// an old native build can lack it.
 const folderMocks = NativeDaakFsPaths as unknown as Record<
   'folderStats' | 'discardPickedCopy' | 'sweepPickedCopies',
   ReturnType<typeof vi.fn>

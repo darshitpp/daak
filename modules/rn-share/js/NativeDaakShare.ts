@@ -7,13 +7,13 @@ export interface Spec extends TurboModule {
   /**
    * Ask the user for ONE folder. Resolves the folder's path, or `null` when the
    * user cancels. Rejects with message `NO_SPACE:<needed bytes>` when the
-   * private copy does not fit, or `EMPTY` when the folder holds no file.
+   * private copy does not fit, `EMPTY` when the folder holds no file, or
+   * `NOT_DOWNLOADED` (iOS only) when an iCloud Drive file is not on the device.
    *
-   * Optional until the iOS (Task 7) and Android (Task 8) bodies land. The
-   * Android codegen makes a required method abstract, so a required method
-   * with no Kotlin body breaks the build. The facade rejects when it is absent.
+   * Required: iOS and Android implement it. macOS does not register this
+   * module (it uses DaakSystemShare), so the facade still checks for it.
    */
-  pickFolder?(): Promise<string | null>;
+  pickFolder(): Promise<string | null>;
   consumePendingInbox(): Promise<string>;
   /** Drains ONLY `share-inbox/intent-sends/`. Never touches `batches/`. */
   consumeIntentSends(): Promise<string>;

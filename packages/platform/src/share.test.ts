@@ -15,8 +15,8 @@ import DaakShare from '@daak/rn-share';
 import { consumePendingInbox, pickFiles, pickFolder, presentShare } from './share';
 
 const native = vi.mocked(DaakShare);
-// The optional folder method is a plain mock at run time. This view gives the
-// test the mock API without a non-null assertion on each line.
+// The folder method is a plain mock at run time. This view gives the test the
+// mock API. macOS does not register this module, so a test still removes it.
 const folderMock = native as unknown as { pickFolder: ReturnType<typeof vi.fn> };
 
 describe('share facade', () => {

@@ -1028,3 +1028,151 @@ describe('iOS folder pick, copy, and stats', () => {
     expect(sweep).toMatch(/removeItem\(at: slot\)/);
   });
 });
+
+// Folder send on Android (Task 8). SAF gives a content:// tree, not a path, and
+// the engine reads with std::fs. So pickFolder copies the tree into the app
+// cache, the same as iOS. No JVM test source set exists, so these pins hold the
+// parts that fail in silence: a copy that loads a whole file into memory, a
+// display name that escapes the slot, and a delete outside the cache.
+describe('Android folder pick, copy, and stats', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+  const share = strip(
+    read(repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/DaakShareModule.kt'),
+  );
+  const fs = strip(
+    read(
+      repo +
+        'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+    ),
+  );
+  const shareSpec = read(repo + 'modules/rn-share/js/NativeDaakShare.ts');
+  const fsSpec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  // From the function name to the next member at the same indent.
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest
+      .slice(1)
+      .search(/\n  (@ReactMethod\n  )?(override |private )?(inline )?fun |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  // A required Spec method is abstract in the generated Java spec. A Kotlin
+  // module without the override then fails the Gradle build.
+  it('makes the four folder methods required in both Specs', () => {
+    expect(shareSpec).toMatch(/^ {2}pickFolder\(\): Promise<string \| null>;/m);
+    expect(fsSpec).toMatch(/^ {2}folderStats\(path: string\)/m);
+    expect(fsSpec).toMatch(/^ {2}discardPickedCopy\(path: string\): Promise<void>;/m);
+    expect(fsSpec).toMatch(/^ {2}sweepPickedCopies\(\): Promise<void>;/m);
+    expect(shareSpec + fsSpec).not.toMatch(/(pickFolder|folderStats|PickedCopy|PickedCopies)\?\(/);
+  });
+
+  it.each([
+    ['rn-share', shareSpec, share],
+    ['rn-fspaths', fsSpec, fs],
+  ])('%s: the Kotlin module overrides every Spec method', (_name, spec, kt) => {
+    const methods = [...spec.matchAll(/^ {2}([a-zA-Z]\w*)\??\([^)]*\)\s*:/gm)].map((m) => m[1]);
+    expect(methods.length).toBeGreaterThan(3);
+    for (const m of methods) expect(kt).toMatch(new RegExp(`override fun ${m}\\(`));
+  });
+
+  it('opens ACTION_OPEN_DOCUMENT_TREE with its own request code', () => {
+    const pick = body(share, 'override fun pickFolder(promise: Promise)');
+    expect(pick).toContain('Intent.ACTION_OPEN_DOCUMENT_TREE');
+    expect(pick).toContain('PICK_FOLDER');
+    expect(share).toMatch(/PICK_FOLDER = \d+/);
+  });
+
+  it('resolves null on cancel and copies off the main thread', () => {
+    const result = body(share, 'override fun onActivityResult(');
+    expect(result).toContain('PICK_FOLDER');
+    expect(result).toMatch(/resolve\(null\)/);
+    expect(result).toMatch(/thread\([^)]*\) \{[\s\S]*copyPickedFolder\(/);
+  });
+
+  it('copies into <cacheDir>/daak-send/<uuid>/<folder name>, file by file, with no file in memory', () => {
+    const copy = body(share, 'private fun copyPickedFolder(');
+    expect(copy).toContain('ctx.cacheDir');
+    expect(copy).toContain('"daak-send"');
+    expect(copy).toContain('UUID.randomUUID()');
+    expect(copy).toContain('openInputStream(');
+    expect(copy).toContain('copyTo(');
+    expect(share).not.toMatch(/readBytes\(\)|readText\(\)/);
+  });
+
+  it('walks the tree with DocumentsContract and refuses a name that leaves the slot', () => {
+    const list = body(share, 'private fun listTree(');
+    expect(list).toContain('DocumentsContract.buildChildDocumentsUriUsingTree(');
+    expect(list).toContain('Document.MIME_TYPE_DIR');
+    expect(list).toContain('safeName(');
+    const safe = body(share, 'private fun safeName(');
+    expect(safe).toContain('"."');
+    expect(safe).toContain('".."');
+    expect(safe).toContain("'/'");
+  });
+
+  it('lists, then checks EMPTY, then checks the space, and only then writes', () => {
+    const copy = body(share, 'private fun copyPickedFolder(');
+    const list = copy.indexOf('listTree(');
+    const empty = copy.indexOf('FolderPickError("EMPTY"');
+    const space = copy.indexOf('StatFs(');
+    const write = copy.indexOf('mkdirs()');
+    expect(list).toBeGreaterThan(-1);
+    expect(empty).toBeGreaterThan(list);
+    expect(space).toBeGreaterThan(empty);
+    expect(write).toBeGreaterThan(space);
+    expect(copy).toContain('availableBytes');
+    expect(copy).toMatch(/\* 1\.1/);
+    expect(copy).toContain('"NO_SPACE:$needed"');
+  });
+
+  it('rejects with the codes the facade reads', () => {
+    expect(share).toMatch(/reject\(e\.code, e\.message\)/);
+    expect(share).toMatch(/FolderPickError\("NO_SPACE"/);
+    expect(share).toMatch(/FolderPickError\("EMPTY", "EMPTY"\)/);
+    expect(share).toMatch(/reject\("E_COPY"/);
+  });
+
+  it('deletes the partial copy on any failure', () => {
+    const copy = body(share, 'private fun copyPickedFolder(');
+    expect(copy).toMatch(/catch \(t: Throwable\) \{\s*slot\.deleteRecursively\(\)\s*throw t/);
+  });
+
+  it('folderStats walks off the main thread, skips symlinks, and answers null for an unreadable tree', () => {
+    const stats = body(fs, 'override fun folderStats(');
+    expect(stats).toMatch(/thread\(/);
+    expect(stats).toContain('Files.isSymbolicLink(');
+    expect(stats).toContain('resolve(null)');
+    expect(stats).toContain('listFiles()');
+    expect(stats).toContain('putDouble("files"');
+    expect(stats).toContain('putDouble("bytes"');
+  });
+
+  it('discardPickedCopy canonicalises BEFORE a component check under daak-send, and refuses the rest', () => {
+    const discard = body(fs, 'override fun discardPickedCopy(');
+    const canon = discard.indexOf('canonicalFile');
+    const check = discard.indexOf('.startsWith(root)');
+    expect(canon).toBeGreaterThan(-1);
+    expect(check).toBeGreaterThan(canon);
+    // Path.startsWith compares whole components: daak-sendX is not under daak-send.
+    expect(discard).toContain('toPath()');
+    expect(discard).toMatch(/reject\("E_NOT_PICKED_COPY"/);
+    expect(fs).toContain('"daak-send"');
+  });
+
+  it('sweepPickedCopies keeps a slot that a pick makes during the sweep', () => {
+    const sweep = body(fs, 'override fun sweepPickedCopies(');
+    const started = sweep.indexOf('val started = System.currentTimeMillis()');
+    const worker = sweep.indexOf('thread(');
+    expect(started).toBeGreaterThan(-1);
+    expect(worker).toBeGreaterThan(started);
+    expect(sweep).toMatch(/lastModified\(\) >= started\) continue/);
+    expect(sweep).toContain('pickedCopiesRoot()');
+    expect(sweep).toContain('deleteRecursively()');
+  });
+});

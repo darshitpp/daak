@@ -10,6 +10,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactMethod
@@ -18,6 +19,8 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.WritableNativeArray
 import com.facebook.react.module.annotations.ReactModule
 import java.io.File
+import java.nio.file.Files
+import kotlin.concurrent.thread
 
 @ReactModule(name = DaakFsPathsModule.NAME)
 class DaakFsPathsModule(reactContext: ReactApplicationContext) :
@@ -163,6 +166,113 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    */
   @ReactMethod
   override fun openFile(path: String, promise: Promise) = reveal(path, promise)
+
+  /**
+   * The file count and total bytes of a folder tree. Hidden files count. A
+   * symlink is skipped. Resolves null when the root is not a folder, the root
+   * is a symlink, or a folder in the tree cannot be listed.
+   */
+  @ReactMethod
+  override fun folderStats(path: String, promise: Promise) {
+    thread(name = "daak-folder-stats") {
+      try {
+        val root = File(path)
+        if (!root.isDirectory || Files.isSymbolicLink(root.toPath())) {
+          promise.resolve(null)
+          return@thread
+        }
+        var files = 0L
+        var bytes = 0L
+        val todo = mutableListOf(root)
+        while (todo.isNotEmpty()) {
+          val children = todo.removeAt(todo.lastIndex).listFiles()
+          if (children == null) {
+            promise.resolve(null)
+            return@thread
+          }
+          for (child in children) {
+            if (Files.isSymbolicLink(child.toPath())) continue
+            if (child.isDirectory) {
+              todo.add(child)
+            } else if (child.isFile) {
+              files += 1
+              bytes += child.length()
+            }
+          }
+        }
+        promise.resolve(Arguments.createMap().apply {
+          putDouble("files", files.toDouble())
+          putDouble("bytes", bytes.toDouble())
+        })
+      } catch (t: Throwable) {
+        promise.reject("E_FSPATHS", t)
+      }
+    }
+  }
+
+  /**
+   * `<cacheDir>/daak-send`, the parent of every copy that
+   * DaakShareModule.pickFolder makes. Keep this path equal to the one in
+   * DaakShareModule.copyPickedFolder.
+   */
+  private fun pickedCopiesRoot() = File(reactApplicationContext.cacheDir, "daak-send")
+
+  /**
+   * Delete one copy that pickFolder made: the whole `<uuid>` slot that holds
+   * `path`. Rejects a path that is not below `<cacheDir>/daak-send` after the
+   * symlinks and the `..` parts are resolved.
+   */
+  @ReactMethod
+  override fun discardPickedCopy(path: String, promise: Promise) {
+    thread(name = "daak-discard-copy") {
+      try {
+        val rootDir = pickedCopiesRoot().apply { mkdirs() }
+        // canonicalFile resolves the symlinks and the `..` parts. Path.startsWith
+        // then compares whole components, so `daak-sendX` is not under `daak-send`.
+        val root = rootDir.canonicalFile.toPath()
+        val target = File(path).canonicalFile.toPath()
+        if (!target.startsWith(root) || target == root) {
+          promise.reject("E_NOT_PICKED_COPY", "refused: $path is not a copy under daak-send")
+          return@thread
+        }
+        val slot = root.resolve(root.relativize(target).getName(0)).toFile()
+        // A copy that is already gone is the wanted result.
+        if (!slot.exists() || slot.deleteRecursively()) {
+          promise.resolve(null)
+        } else {
+          promise.reject("E_DISCARD", "the copy could not be deleted")
+        }
+      } catch (t: Throwable) {
+        promise.reject("E_DISCARD", t)
+      }
+    }
+  }
+
+  /**
+   * Delete every copy under `<cacheDir>/daak-send` that an earlier run left.
+   * A slot made after this sweep started belongs to a pick that runs now, so
+   * the sweep keeps it. The kernel writes file times from a coarse clock that
+   * can be some milliseconds behind currentTimeMillis, so the start time is 1 s
+   * early. An earlier run stopped more than 1 s before this start.
+   */
+  @ReactMethod
+  override fun sweepPickedCopies(promise: Promise) {
+    val started = System.currentTimeMillis() - 1_000
+    thread(name = "daak-sweep-copies") {
+      // An uncaught throw on this thread stops the app, so catch everything.
+      try {
+        for (slot in pickedCopiesRoot().listFiles() ?: emptyArray()) {
+          if (slot.lastModified() >= started) continue
+          if (!slot.deleteRecursively()) {
+            android.util.Log.w("DaakFsPaths", "an old folder copy could not be deleted: ${slot.name}")
+          }
+        }
+        promise.resolve(null)
+      } catch (t: Throwable) {
+        promise.reject("E_SWEEP", t)
+      }
+    }
+  }
 
   private inline fun resolve(promise: Promise, block: () -> Any?) {
     try { promise.resolve(block()) } catch (t: Throwable) { promise.reject("E_FSPATHS", t) }
