@@ -62,6 +62,9 @@ export function AppShell({
   deviceNoun,
   windowChrome,
   keyboardAvoiding,
+  library,
+  saveFolder,
+  isMedia,
 }: {
   background?: React.ReactNode;
   pair?: React.ReactNode;
@@ -111,6 +114,12 @@ export function AppShell({
   windowChrome?: { version?: string };
   /** Lift the composer above the keyboard. The iOS host sets it. */
   keyboardAvoiding?: boolean;
+  /** The media library for the folder sheet. Absent when the host saves no media there. */
+  library?: 'Photos' | 'Gallery';
+  /** The save folder name for the folder sheet. Absent: the name that the download folder row shows. */
+  saveFolder?: string;
+  /** True for a file name with a media extension. The host owns the list. */
+  isMedia?: (name: string) => boolean;
 }) {
   const [root, setRoot] = useState<Tab>('devices');
   const [stack, setStack] = useState<Route[]>([]);
@@ -221,6 +230,22 @@ export function AppShell({
   const held = top !== undefined && top.name === 'held' ? top : undefined;
   const shown = held !== undefined ? stack[stack.length - 2] : top;
 
+  // The folder sheet names the save folder with the words of the download
+  // folder row. Read it each time a thread opens, so a change in Settings shows.
+  const threadId = shown !== undefined && shown.name === 'thread' ? shown.id : undefined;
+  const loadFolder = downloadFolder?.load;
+  const [folderName, setFolderName] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (threadId === undefined || saveFolder !== undefined || loadFolder === undefined) return undefined;
+    let live = true;
+    loadFolder().then(
+      (n) => { if (live) setFolderName(n ?? 'This app’s own storage'); },
+      () => {},
+    );
+    return () => { live = false; };
+    // The host makes a new downloadFolder object on each render. The thread id is the trigger.
+  }, [threadId, saveFolder]);
+
   let screen: React.ReactNode;
   if (shown !== undefined && shown.name === 'thread') {
     screen = (
@@ -235,6 +260,9 @@ export function AppShell({
         initialFiles={shown.files}
         deviceNoun={deviceNoun}
         keyboardAvoiding={keyboardAvoiding}
+        library={library}
+        saveFolder={saveFolder ?? folderName}
+        isMedia={isMedia}
       />
     );
   } else if (shown !== undefined) {

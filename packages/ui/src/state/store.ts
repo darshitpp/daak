@@ -179,7 +179,11 @@ export function reduceUiState(state: UiState, event: UiAction): UiState {
         ),
       };
     case 'inbox.received':
-      return { ...state, inbox: [event.payload, ...state.inbox] };
+      // A repaired folder sends this event again for the same payload. The new
+      // entry replaces the old entry in its place.
+      return state.inbox.some((e) => e.payloadId === event.payload.payloadId)
+        ? { ...state, inbox: state.inbox.map((e) => (e.payloadId === event.payload.payloadId ? event.payload : e)) }
+        : { ...state, inbox: [event.payload, ...state.inbox] };
     case 'peer.incompatible': {
       const peer: IncompatiblePeer = {
         peerDeviceId: event.peerDeviceId,

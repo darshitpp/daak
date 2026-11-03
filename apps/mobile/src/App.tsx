@@ -11,11 +11,12 @@ import {
   type SettingsHost,
   useBlockers,
 } from '@daak/ui';
-import { askForPhotosIfUndetermined, photosHost } from './photosHost';
+import { askForPhotosIfUndetermined, libraryOf, photosHost } from './photosHost';
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
   downloadFolderName,
+  isMedia,
   appInfo,
   copyToClipboard,
   loadNotifyPrefs,
@@ -429,6 +430,12 @@ export default function App() {
           onCheckConnection={blockers.onCheckConnection}
           downloadFolder={downloadFolder}
           photos={photosHost}
+          // The folder sheet: where received media and other files went.
+          // iOS keeps files in the app folder that the Files app shows as "Daak".
+          // Android names the folder that Settings shows.
+          library={libraryOf(photosHost)}
+          saveFolder={Platform.OS === 'ios' ? 'Daak' : undefined}
+          isMedia={isMedia}
           initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
           // ?? '' and not `link.text`: a send link with NO text is an
           // instruction to send nothing, and undefined here would leave the

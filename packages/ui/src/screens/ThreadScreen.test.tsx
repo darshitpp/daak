@@ -850,3 +850,94 @@ describe('ThreadScreen', () => {
   });
 });
 
+
+describe('ThreadScreen folders', () => {
+  const FOLDER = 'ee'.repeat(16);
+  const kid = (rel: string, p: Partial<Parameters<typeof threadItem>[0]> = {}) =>
+    threadItem({
+      transferId: FOLDER,
+      itemIndex: rel.length,
+      type: 'file',
+      text: null,
+      name: rel.split('/').pop() ?? rel,
+      size: 1000,
+      destPath: `/d/album/${rel}`,
+      group: { name: 'album', rel, files: 2, bytes: 2000 },
+      ...p,
+    });
+
+  it('renders the items of one folder as one folder bubble and no file bubble', async () => {
+    const engine = fakeEngine([peer]);
+    const a = kid('a.jpg', { itemIndex: 0 });
+    const b = kid('sub/b.pdf', { itemIndex: 1 });
+    const loose = threadItem({ transferId: 'cc'.repeat(16), type: 'file', text: null, name: 'loose.pdf', size: 10, destPath: '/d/loose.pdf' });
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([a, b, loose]));
+    mount(engine);
+    expect(await screen.findByTestId(`bubble-folder-${FOLDER}:album`)).toBeTruthy();
+    expect(screen.queryByTestId(`bubble-${FOLDER}:0`)).toBeNull();
+    expect(screen.queryByTestId(`bubble-${FOLDER}:1`)).toBeNull();
+    // A loose file keeps its own bubble.
+    expect(screen.getByTestId(`bubble-${'cc'.repeat(16)}:0`)).toBeTruthy();
+  });
+
+  it('opens the folder sheet and shows where the files went', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      kid('a.jpg', { itemIndex: 0, destPath: 'photos:1' }),
+      kid('b.pdf', { itemIndex: 1 }),
+    ]));
+    mount(engine, { library: 'Photos', saveFolder: 'Daak', isMedia: (p: string) => p.endsWith('.jpg') });
+    expect(await screen.findByText('Saved to Photos and Daak')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Open album'));
+    expect(screen.getByText('Photos and videos are in Photos. Other files are in Daak / album.')).toBeTruthy();
+  });
+
+  it('says the library save failed when media stayed in the save folder', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([kid('a.jpg', { itemIndex: 0 }), kid('b.pdf', { itemIndex: 1 })]));
+    mount(engine, { library: 'Gallery', saveFolder: 'Downloads', isMedia: (p: string) => p.endsWith('.jpg') });
+    fireEvent.press(await screen.findByLabelText('Open album'));
+    expect(screen.getByText("Couldn't save to Gallery. All files are in Downloads / album.")).toBeTruthy();
+  });
+
+  it('has no library place when the host has no library', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([kid('a.jpg', { itemIndex: 0 }), kid('b.pdf', { itemIndex: 1 })]));
+    mount(engine, { saveFolder: 'Downloads / Daak', isMedia: (p: string) => p.endsWith('.jpg') });
+    expect(await screen.findByText('Saved to Downloads / Daak')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Open album'));
+    expect(screen.queryByTestId('folder-banner')).toBeNull();
+  });
+
+  it('retries one failed file of a sent folder with engine.retry', async () => {
+    const engine = fakeEngine([peer]);
+    const out = { direction: 'out' as const, transferState: 'done' };
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      kid('a.txt', { ...out, itemIndex: 0 }),
+      kid('b.txt', { ...out, itemIndex: 1, state: 'failed' }),
+    ]));
+    const retry = jest.spyOn(engine, 'retry').mockResolvedValue();
+    mount(engine);
+    expect(await screen.findByText("Couldn't send 1 of 2")).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Open album'));
+    fireEvent.press(screen.getByLabelText('Retry sending b.txt'));
+    await waitFor(() => expect(retry).toHaveBeenCalledWith(FOLDER));
+  });
+
+  it('stops a waiting folder after the confirm sheet', async () => {
+    const engine = fakeEngine([peer]);
+    const waiting = { direction: 'out' as const, state: 'pending' as const, transferState: 'queued' };
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
+      kid('a.txt', { ...waiting, itemIndex: 0 }),
+      kid('b.txt', { ...waiting, itemIndex: 1 }),
+    ]));
+    const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
+    mount(engine);
+    fireEvent.press(await screen.findByLabelText('Open album'));
+    fireEvent.press(screen.getByTestId('folder-stop'));
+    expect(screen.getByText('Stop sending?')).toBeTruthy();
+    expect(cancel).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByTestId('confirm-stop'));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(FOLDER));
+  });
+});

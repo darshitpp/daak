@@ -11,9 +11,11 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import type { DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
+import type { DaakEvent, DeviceInfo, ThreadItem, TransferSummary } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { Bubble } from '../components/Bubble';
+import { FolderBubble } from '../components/FolderBubble';
+import { FolderSheet } from '../components/FolderSheet';
 import { Sheet } from '../components/Sheet';
 import { useToast } from '../components/Toast';
 import { Btn, Empty, Note, ProgressBar, Status, deviceLabel, presenceOf, type DeviceNoun } from '../components/ds';
@@ -21,6 +23,7 @@ import type { InboxActions } from '../inbox-actions';
 import { colors, control, ui } from '../theme';
 import { humanBytes } from './quarantine-facts';
 import { EMPTY_THREAD, itemKey, mergeThread, prependOlder, type ThreadView } from './thread-merge';
+import { folderPlaces, groupThread, savedLine, type FolderRow } from './thread-groups';
 
 const PAGE = 50;
 // More staged files than this fold into one summary chip. The composer must keep a fixed height.
@@ -81,6 +84,9 @@ export function ThreadScreen({
   initialFiles = [],
   deviceNoun = 'phone',
   keyboardAvoiding = false,
+  library,
+  saveFolder,
+  isMedia,
 }: {
   peerDeviceId: string;
   onBack: () => void;
@@ -91,6 +97,12 @@ export function ThreadScreen({
   initialFiles?: string[];
   deviceNoun?: DeviceNoun;
   keyboardAvoiding?: boolean;
+  /** The media library of this device. Absent when the host saves no media there. */
+  library?: 'Photos' | 'Gallery';
+  /** The save folder name, as Settings shows it. */
+  saveFolder?: string;
+  /** True for a file name with a media extension. The host owns the list. */
+  isMedia?: (name: string) => boolean;
 }) {
   const engine = useEngine();
   const toast = useToast();
@@ -108,6 +120,7 @@ export function ThreadScreen({
   const [stopFor, setStopFor] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [sizes, setSizes] = useState<Record<string, number | null>>({});
+  const [folderKey, setFolderKey] = useState<string | null>(null);
 
   const alive = useRef(true);
   const seq = useRef(0);
@@ -379,6 +392,29 @@ export function ThreadScreen({
   );
 
   const active = summaries.filter((s) => s.direction === 'out' && s.state === 'active');
+
+  // The thread item verbs. A bubble and a row of the folder sheet share them.
+  const preview = actions?.open
+    ? (i: ThreadItem) => {
+        const open = actions.open;
+        // Ruling: a Preview that no app can open is a toast.
+        const noApp = () => toast.show('This device cannot open files.');
+        if (open && i.destPath !== null) {
+          void open(i.destPath).then((ok) => { if (!ok) noApp(); }, noApp);
+        }
+      }
+    : undefined;
+  const share = actions?.share
+    ? (i: ThreadItem) => { if (i.destPath !== null) actions.share?.([i.destPath]); }
+    : undefined;
+  const canShare = (i: ThreadItem): boolean => i.destPath === null || (actions?.canShare?.(i.destPath) ?? true);
+  const openHeld = onOpenHeld ? (i: ThreadItem) => onOpenHeld({ transferId: i.transferId, itemIndex: i.itemIndex }) : undefined;
+
+  const rows = groupThread(thread.items);
+  // The host has no library (macOS, or Android 9 and older), so no media went there.
+  const placesOf = (r: FolderRow) =>
+    folderPlaces(r.children, library === undefined || isMedia === undefined ? 0 : r.children.filter((c) => isMedia(c.name ?? '')).length);
+  const openFolder = folderKey === null ? undefined : rows.find((r): r is FolderRow => r.kind === 'folder' && r.key === folderKey);
   const offline = device != null && device.presence === 'offline';
 
   return (
@@ -404,7 +440,20 @@ export function ThreadScreen({
         {device !== undefined && thread.items.length === 0 && loadError === '' ? (
           <Empty title="Nothing here yet" body="Send the first file or note with the buttons below. It travels straight to this device over your Wi-Fi." />
         ) : null}
-        {thread.items.map((it, idx) => (
+        {rows.map((row, idx) => {
+          if (row.kind === 'folder') {
+            return (
+              <FolderBubble
+                key={`folder:${row.key}`}
+                row={row}
+                savedLine={savedLine(placesOf(row), library, saveFolder)}
+                onOpen={(r) => { Keyboard.dismiss(); setFolderKey(r.key); }}
+              />
+            );
+          }
+          const it = row.item;
+          const next = rows[idx + 1];
+          return (
           <React.Fragment key={itemKey(it)}>
           <Bubble
             item={it}
@@ -430,33 +479,20 @@ export function ThreadScreen({
                   }
                 : undefined
             }
-            onPreview={
-              actions?.open
-                ? (i) => {
-                    const open = actions.open;
-                    // Ruling: a Preview that no app can open is a toast.
-                    const noApp = () => toast.show('This device cannot open files.');
-                    if (open && i.destPath !== null) {
-                      void open(i.destPath).then((ok) => { if (!ok) noApp(); }, noApp);
-                    }
-                  }
-                : undefined
-            }
-            onShare={
-              actions?.share && (it.destPath === null || (actions.canShare?.(it.destPath) ?? true))
-                ? (i) => i.destPath !== null && actions.share?.([i.destPath])
-                : undefined
-            }
-            onOpenHeld={onOpenHeld ? (i) => onOpenHeld({ transferId: i.transferId, itemIndex: i.itemIndex }) : undefined}
+            onPreview={preview}
+            onShare={share && canShare(it) ? share : undefined}
+            onOpenHeld={openHeld}
             onRetry={(i) => void retry(i.transferId)}
             onStop={(i) => void stopWaiting(i.transferId)}
           />
-          {/* The engine cut the item list of this send. Say so once, after its last kept item. */}
-          {it.truncated === true && thread.items[idx + 1]?.transferId !== it.transferId ? (
+          {/* The engine cut the item list of this send. Say so once, after its
+              last kept item. A folder sheet says it for its own files. */}
+          {it.truncated === true && (next?.kind === 'folder' ? next.transferId : next?.item.transferId) !== it.transferId ? (
             <Text style={ui.hint}>Some items of this send are not shown.</Text>
           ) : null}
           </React.Fragment>
-        ))}
+          );
+        })}
       </ScrollView>
 
       {active.map((s) => {
@@ -571,6 +607,27 @@ export function ThreadScreen({
           </View>
         </ScrollView>
       </Sheet>
+
+      {openFolder !== undefined ? (
+        <FolderSheet
+          row={openFolder}
+          open
+          onClose={() => setFolderKey(null)}
+          onRetry={(i) => void retry(i.transferId)}
+          onStop={(r) => {
+            // One sheet shows at a time. The confirm sheet replaces the folder sheet.
+            setFolderKey(null);
+            setStopFor(r.transferId);
+          }}
+          onPreview={preview}
+          onShare={share}
+          canShare={canShare}
+          onOpenHeld={openHeld}
+          places={placesOf(openFolder)}
+          library={library}
+          saveFolder={saveFolder}
+        />
+      ) : null}
 
       <Sheet
         open={stopFor !== null}

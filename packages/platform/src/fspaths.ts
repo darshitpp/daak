@@ -191,7 +191,7 @@ const MEDIA_EXT = new Set([
   'jpg', 'jpeg', 'png', 'heic', 'gif', 'webp', 'mp4', 'mov', 'm4v', '3gp', 'mkv',
 ]);
 
-function isMedia(path: string): boolean {
+export function isMedia(path: string): boolean {
   const dot = path.lastIndexOf('.');
   return dot >= 0 && MEDIA_EXT.has(path.slice(dot + 1).toLowerCase());
 }

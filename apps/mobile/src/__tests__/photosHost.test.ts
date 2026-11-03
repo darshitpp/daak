@@ -70,3 +70,13 @@ describe('photosHost by platform', () => {
     await expect(ask()).resolves.toBeUndefined();
   });
 });
+
+describe('libraryOf', () => {
+  // The folder sheet names the media library with one word.
+  it('names Photos on iOS, Gallery on Android, and nothing with no host', () => {
+    const { libraryOf } = require('../photosHost') as typeof import('../photosHost');
+    expect(libraryOf({ destination: 'Photos app' })).toBe('Photos');
+    expect(libraryOf({ destination: 'Gallery' })).toBe('Gallery');
+    expect(libraryOf(undefined)).toBeUndefined();
+  });
+});

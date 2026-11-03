@@ -65,6 +65,7 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     requestPhotosAccess: jest.fn(async () => false),
     photosAccessStatus: jest.fn(async () => 'unavailable'),
     relocateReceivedFiles: jest.fn(async () => undefined),
+    isMedia: jest.fn(() => false),
     // Task 2 of the design-conformance P2 plan: the notification preference.
     // It defaults ON, which is the real default.
     loadNotifyPrefs: jest.fn(async () => ({ arrival: true })),
