@@ -1175,6 +1175,72 @@ describe('ThreadScreen folder staging', () => {
     expect(screen.getByTestId('pick-files')).toBeTruthy();
   });
 
+  // Review Focus 1: the macOS folderStats gives 0 files for an empty folder. The engine
+  // skips or refuses it, so the composer refuses it first, with its name.
+  it('does not stage an empty folder beside a loose file and says why', async () => {
+    mount(fakeEngine([peer]), {
+      onPickFiles: async () => ['/Users/d/empty', '/Users/d/a.pdf'],
+      folderStats: async (p: string) => (p === '/Users/d/empty' ? { files: 0, bytes: 0 } : null),
+      pickLabel: 'Add files or folders',
+    });
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(await screen.findByText('"empty" has no files to send.')).toBeTruthy();
+    expect(screen.queryByTestId('remove-empty')).toBeNull();
+    expect(screen.getByText('a.pdf')).toBeTruthy();
+  });
+
+  it('stages nothing for an empty folder alone and keeps Send disabled', async () => {
+    mount(fakeEngine([peer]), {
+      onPickFiles: async () => ['/Users/d/empty'],
+      folderStats: async () => ({ files: 0, bytes: 0 }),
+      pickLabel: 'Add files or folders',
+    });
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(await screen.findByText('"empty" has no files to send.')).toBeTruthy();
+    expect(screen.queryByTestId('remove-empty')).toBeNull();
+    expect(screen.getByTestId('send')).toBeDisabled();
+  });
+
+  // The send reads the copy. Back during the send must not delete it.
+  it('keeps the copy of a pending send at unmount and discards it after the send', async () => {
+    const host = phone();
+    const engine = fakeEngine([peer]);
+    let finish: () => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(
+      () => new Promise((r) => { finish = () => r({ transferId: TID, queued: true }); }),
+    );
+    const { unmount } = mount(engine, host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalled());
+    unmount();
+    expect(host.discardPickedCopy).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+    expect(host.discardPickedCopy).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards the copy of a send that fails after unmount', async () => {
+    const host = phone();
+    const engine = fakeEngine([peer]);
+    let fail: () => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(
+      () => new Promise((_r, j) => { fail = () => j(new Error('no')); }),
+    );
+    const { unmount } = mount(engine, host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalled());
+    unmount();
+    expect(host.discardPickedCopy).not.toHaveBeenCalled();
+    await act(async () => { fail(); });
+    await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
+  });
+
   // macOS: the one panel picks files and folders. A folder there is the user's
   // own folder, not a copy, so the composer never discards it.
   it('shows a folder from the macOS panel as a folder chip and never discards it', async () => {

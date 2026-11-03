@@ -163,6 +163,8 @@ export function ThreadScreen({
   const copies = useRef<Set<string>>(new Set());
   // A new folder pick or a Cancel makes the earlier pick stale.
   const prepSeq = useRef(0);
+  // The copies that a pending send reads. The unmount must not delete them.
+  const inFlight = useRef<Set<string>>(new Set());
 
   const alive = useRef(true);
   const seq = useRef(0);
@@ -231,7 +233,7 @@ export function ThreadScreen({
   const discardRef = useRef(discard);
   discardRef.current = discard;
   useEffect(() => () => {
-    for (const p of [...copies.current]) discardRef.current(p);
+    for (const p of [...copies.current]) if (!inFlight.current.has(p)) discardRef.current(p);
   }, []);
 
   const loadOlder = async () => {
@@ -317,8 +319,18 @@ export function ThreadScreen({
     const got = await Promise.all(paths.map((p) => folderStats(p).catch(() => null)));
     if (!alive.current) return;
     const found: Record<string, { files: number; bytes: number }> = {};
-    paths.forEach((p, i) => { const g = got[i]; if (g) found[p] = g; });
+    const empty: string[] = [];
+    paths.forEach((p, i) => {
+      const g = got[i];
+      if (g && g.files === 0) empty.push(p);
+      else if (g) found[p] = g;
+    });
     if (Object.keys(found).length > 0) setFolders((f) => ({ ...f, ...found }));
+    // The engine skips or refuses an empty folder. Refuse it here, with its name.
+    if (empty.length > 0) {
+      setFiles((f) => f.filter((x) => !empty.includes(x)));
+      setPickError(`"${base(empty[empty.length - 1])}" has no files to send.`);
+    }
   };
 
   const remove = (p: string) => {
@@ -400,7 +412,15 @@ export function ThreadScreen({
       // part leaves the composer as soon as the engine accepts it, so a failed
       // note does not send the files again.
       if (files.length > 0) {
-        await engine.send({ peerDeviceId, files });
+        const sent = files.filter((p) => copies.current.has(p));
+        sent.forEach((p) => inFlight.current.add(p));
+        try {
+          await engine.send({ peerDeviceId, files });
+        } finally {
+          sent.forEach((p) => inFlight.current.delete(p));
+          // A closed screen cannot show the chip again, so its copies go now.
+          if (!alive.current) sent.forEach(discard);
+        }
         // The engine staged the files before it resolved, so the copies can go.
         files.forEach(discard);
         setFiles([]);
