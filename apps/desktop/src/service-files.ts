@@ -54,14 +54,17 @@ export function consumeServiceFiles(): void {
 }
 
 // A rejection from engine.send propagates. The store stays unchanged then, so
-// the user can pick another device.
+// the user can pick another device. The handle cancels the queued transfer.
+// A newer delivery can arrive during the send. The store keeps it.
 export async function sendServiceFiles(
   engine: DaakEngine,
   device: DeviceInfo,
   share: { files: string[] },
-): Promise<void> {
-  await engine.send({ peerDeviceId: device.deviceId, files: share.files });
-  consumeServiceFiles();
+): Promise<{ cancel: () => Promise<void> }> {
+  const started = getServiceFiles();
+  const { transferId } = await engine.send({ peerDeviceId: device.deviceId, files: share.files });
+  if (getServiceFiles() === started) consumeServiceFiles();
+  return { cancel: () => engine.cancel(transferId) };
 }
 
 export function subscribeServiceFiles(listener: () => void): () => void {

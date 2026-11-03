@@ -98,7 +98,7 @@ export function AppShell({
   /** A new value shows the share again, even when the files are the same. */
   initialShareToken?: number;
   /** The desktop sends the files at once. Mobile sets none and keeps the composer seed. */
-  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<void>;
+  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<{ cancel: () => Promise<void> } | void>;
   /** The host drops its copy of the share. */
   onCancelShare?: () => void;
   pairBundle?: string;
@@ -127,6 +127,8 @@ export function AppShell({
 
   const toast = useToast();
   const sending = useRef(false);
+  // Cancel sets this flag while a send runs. The send reads it when it ends.
+  const cancelRequested = useRef(false);
   // The latest share. A send in flight compares it to the share that it sent.
   const shareRef = useRef<Share | null>(null);
   shareRef.current = share;
@@ -137,13 +139,27 @@ export function AppShell({
     const files = share?.files;
     if (onShareSend !== undefined && files !== undefined && files.length > 0) {
       sending.current = true;
+      cancelRequested.current = false;
+      let handle: { cancel: () => Promise<void> } | void;
       try {
-        await onShareSend(d, { files, text: share?.text });
+        handle = await onShareSend(d, { files, text: share?.text });
       } catch (e) {
-        toast.show(e instanceof Error ? e.message : String(e));
+        // The user cancelled. A failed send is the expected result then.
+        if (!cancelRequested.current) toast.show(e instanceof Error ? e.message : String(e));
         return;
       } finally {
         sending.current = false;
+      }
+      if (cancelRequested.current) {
+        // Cancel ends the send. Do not open the thread. Do not touch a newer share.
+        if (handle) {
+          try {
+            await handle.cancel();
+          } catch (e) {
+            toast.show(`Could not cancel: ${e instanceof Error ? e.message : String(e)}. The send may still finish.`);
+          }
+        }
+        return;
       }
       // A newer share arrived during the send. Keep it pending. Do not open the thread.
       if (shareRef.current !== sent) return;
@@ -156,6 +172,7 @@ export function AppShell({
   };
 
   const cancelShare = () => {
+    if (sending.current) cancelRequested.current = true;
     setShare(null);
     onCancelShare?.();
   };

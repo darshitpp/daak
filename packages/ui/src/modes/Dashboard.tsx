@@ -54,7 +54,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   /** A share from the OS. It routes to Devices, which asks for a device. */
   initialFiles?: string[];
   initialShareToken?: number;
-  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<void>;
+  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<{ cancel: () => Promise<void> } | void>;
   onCancelShare?: () => void;
 }) {
   void state;

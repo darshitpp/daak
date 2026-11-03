@@ -213,6 +213,72 @@ describe('AppShell pending share actions', () => {
     await act(async () => {});
   });
 
+  const deferred = () => {
+    let resolve: (v?: { cancel: () => Promise<void> }) => void = () => {};
+    let reject: (e: Error) => void = () => {};
+    const promise = new Promise<{ cancel: () => Promise<void> } | void>((a, b) => { resolve = a; reject = b; });
+    return { promise, resolve, reject };
+  };
+
+  it('Cancel during a pending send calls the returned cancel and does not open the thread', async () => {
+    const d = deferred();
+    const cancel = jest.fn().mockResolvedValue(undefined);
+    const onCancelShare = jest.fn();
+    shell(fakeEngine([peer]), { initialFiles: files, onShareSend: () => d.promise, onCancelShare });
+    fireEvent.press(await peerRow());
+    fireEvent.press(screen.getByTestId('cancel-share'));
+    expect(onCancelShare).toHaveBeenCalledTimes(1);
+    await act(async () => d.resolve({ cancel }));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('thread-back')).toBeNull();
+    expect(screen.queryByTestId('pending-share')).toBeNull();
+  });
+
+  it('Cancel during a pending send and then a rejected send shows no error', async () => {
+    const d = deferred();
+    render(
+      <EngineProvider engine={fakeEngine([peer])}>
+        <ToastProvider>
+          <AppShell initialFiles={files} onShareSend={() => d.promise} />
+        </ToastProvider>
+      </EngineProvider>,
+    );
+    fireEvent.press(await peerRow());
+    fireEvent.press(screen.getByTestId('cancel-share'));
+    await act(async () => d.reject(new Error('send aborted')));
+    expect(screen.queryByText(/send aborted/)).toBeNull();
+    expect(screen.queryByTestId('thread-back')).toBeNull();
+  });
+
+  it('a failed cancel shows an error that says the send may still finish', async () => {
+    const d = deferred();
+    render(
+      <EngineProvider engine={fakeEngine([peer])}>
+        <ToastProvider>
+          <AppShell initialFiles={files} onShareSend={() => d.promise} />
+        </ToastProvider>
+      </EngineProvider>,
+    );
+    fireEvent.press(await peerRow());
+    fireEvent.press(screen.getByTestId('cancel-share'));
+    await act(async () => d.resolve({ cancel: () => Promise.reject(new Error('no route')) }));
+    expect(await screen.findByText(/Could not cancel: no route/)).toBeTruthy();
+    expect(screen.queryByTestId('thread-back')).toBeNull();
+  });
+
+  it('Cancel during a pending send keeps a newer share pending', async () => {
+    const d = deferred();
+    const cancel = jest.fn().mockResolvedValue(undefined);
+    const onShareSend = () => d.promise;
+    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
+    fireEvent.press(await peerRow());
+    fireEvent.press(screen.getByTestId('cancel-share'));
+    again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend });
+    await act(async () => d.resolve({ cancel }));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('pending-share')).toBeTruthy();
+  });
+
   it('a share delivered during a pending send stays pending after the send finishes', async () => {
     let release: () => void = () => {};
     const onShareSend = jest.fn().mockImplementation(() => new Promise<void>((r) => { release = r; }));

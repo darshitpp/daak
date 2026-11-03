@@ -175,6 +175,30 @@ describe('sendServiceFiles', () => {
     expect(getServiceFiles()).toBeNull();
   });
 
+  it('sendServiceFiles returns a handle whose cancel calls engine.cancel with the transfer id', async () => {
+    setServiceFiles(['/tmp/a.txt']);
+    const cancel = vi.fn(() => Promise.resolve());
+    const send = vi.fn(() => Promise.resolve({ transferId: 'tid-1', queued: false }));
+    const engine = { send, cancel } as unknown as DaakEngine;
+    const handle = await sendServiceFiles(engine, device, { files: ['/tmp/a.txt'] });
+    expect(cancel).not.toHaveBeenCalled();
+    await handle.cancel();
+    expect(cancel).toHaveBeenCalledWith('tid-1');
+  });
+
+  it('sendServiceFiles keeps a newer delivery in the store', async () => {
+    setServiceFiles(['/tmp/a.txt']);
+    let release: (v: { transferId: string; queued: boolean }) => void = () => {};
+    const send = vi.fn(() => new Promise<{ transferId: string; queued: boolean }>((r) => { release = r; }));
+    const engine = { send } as unknown as DaakEngine;
+    const done = sendServiceFiles(engine, device, { files: ['/tmp/a.txt'] });
+    setServiceFiles(['/tmp/b.txt']);
+    const newer = getServiceFiles();
+    release({ transferId: 't', queued: false });
+    await done;
+    expect(Object.is(getServiceFiles(), newer)).toBe(true);
+  });
+
   it('leaves the store unchanged when engine.send rejects', async () => {
     setServiceFiles(['/tmp/a.txt']);
     const before = getServiceFiles();

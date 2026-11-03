@@ -77,7 +77,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   /** Dashboard mode only. A share from the OS. */
   initialFiles?: string[];
   initialShareToken?: number;
-  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<void>;
+  onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<{ cancel: () => Promise<void> } | void>;
   onCancelShare?: () => void;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
