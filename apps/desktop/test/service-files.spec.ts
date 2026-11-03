@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DaakEngine, DeviceInfo } from '@daak/core/src/engine/types';
-import { NativeModules } from 'react-native';
+import { NativeEventEmitter, NativeModules } from 'react-native';
 import { getDirectSharePeer, setDirectSharePeer } from '../src/direct-share';
 import {
   consumeServiceFiles,
@@ -149,6 +149,13 @@ describe('pullServiceFiles', () => {
     expect(getServiceFiles()).toBeNull();
   });
 
+  it('resolves and keeps the files when openDashboard rejects', async () => {
+    stubPending(['/tmp/a.txt']);
+    stubWindowHost(() => Promise.reject(new Error('E_OPEN')));
+    await expect(pullServiceFiles()).resolves.toBeUndefined();
+    expect(getServiceFiles()?.files).toEqual(['/tmp/a.txt']);
+  });
+
   it('resolves when the native call rejects', async () => {
     mods.DaakSystemShare = { takePendingFiles: vi.fn(() => Promise.reject(new Error('E_X'))) };
     await expect(pullServiceFiles()).resolves.toBeUndefined();
@@ -189,5 +196,80 @@ describe('onServiceFiles', () => {
     }).not.toThrow();
     expect(() => off!()).not.toThrow();
     expect(() => onServiceFiles()()).not.toThrow();
+  });
+});
+
+// The shared stub emitter cannot fire events. This block replaces addListener on
+// the stub class for each test and restores it after.
+describe('onServiceFiles with the native module present', () => {
+  const proto = NativeEventEmitter.prototype;
+  const original = proto.addListener;
+  let handlers: Array<() => void>;
+  let names: string[];
+  let remove: ReturnType<typeof vi.fn>;
+  let pending: string[][];
+  let take: ReturnType<typeof vi.fn>;
+
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  beforeEach(() => {
+    consumeServiceFiles();
+    handlers = [];
+    names = [];
+    remove = vi.fn();
+    pending = [];
+    proto.addListener = function (event: string, cb: (e: unknown) => void) {
+      names.push(event);
+      handlers.push(() => cb(undefined));
+      return { remove: remove as () => void } as never;
+    };
+    take = vi.fn(() => Promise.resolve(pending.shift() ?? []));
+    mods.DaakSystemShare = { takePendingFiles: take };
+    stubWindowHost(() => Promise.resolve());
+  });
+
+  afterEach(() => {
+    proto.addListener = original;
+    delete mods.DaakSystemShare;
+    delete mods.DaakWindowHost;
+  });
+
+  it('pulls once and listens for DaakServiceFilesPending', async () => {
+    onServiceFiles();
+    await flush();
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(names).toEqual(['DaakServiceFilesPending']);
+  });
+
+  it('pulls again when the event fires', async () => {
+    onServiceFiles();
+    await flush();
+    handlers[0]();
+    await flush();
+    expect(take).toHaveBeenCalledTimes(2);
+  });
+
+  it('the returned function removes the subscription', () => {
+    const off = onServiceFiles();
+    off();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('two events with different paths leave the newest paths and a higher token', async () => {
+    onServiceFiles();
+    await flush();
+    pending.push(['/tmp/a.txt']);
+    handlers[0]();
+    await flush();
+    const first = getServiceFiles()!;
+    pending.push(['/tmp/b.txt']);
+    handlers[0]();
+    await flush();
+    const second = getServiceFiles()!;
+    expect(first.files).toEqual(['/tmp/a.txt']);
+    expect(second.files).toEqual(['/tmp/b.txt']);
+    expect(second.token).toBeGreaterThan(first.token);
   });
 });

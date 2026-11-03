@@ -74,7 +74,8 @@ export function subscribeServiceFiles(listener: () => void): () => void {
 // Take the pending paths from native code. Set the store first, then open the
 // window, so the dashboard never paints a frame without the files. A missing
 // module, a native rejection, a non-array result, and an empty list all mean
-// "nothing pending".
+// "nothing pending". This function always resolves. When openDashboard rejects,
+// the store keeps the files, and the user opens the window by hand.
 export async function pullServiceFiles(): Promise<void> {
   const native = nativeModule();
   if (!native) return;
@@ -86,7 +87,11 @@ export async function pullServiceFiles(): Promise<void> {
   }
   if (!Array.isArray(result) || result.length === 0) return;
   setServiceFiles(result as string[]);
-  await openDashboard();
+  try {
+    await openDashboard();
+  } catch {
+    // The files stay in the store. A rejection here has no action for the user.
+  }
 }
 
 // Pull once, then listen for later deliveries. Return a function that removes
