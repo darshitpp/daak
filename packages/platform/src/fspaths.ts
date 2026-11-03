@@ -292,3 +292,38 @@ export async function fileSizes(paths: string[]): Promise<(number | null)[]> {
     return paths.map(() => null);
   }
 }
+
+/**
+ * The file count and total bytes of a folder tree. Resolves `null` when the
+ * native call rejects or is absent, so the review sheet shows a name and no
+ * total instead of an error.
+ */
+export async function folderStats(path: string): Promise<{ files: number; bytes: number } | null> {
+  try {
+    return (await NativeDaakFsPaths.folderStats?.(path)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete the private copy that `pickFolder` made. Never rejects: it is cleanup
+ * and runs from a handler that must not die. A copy that stays is removed by
+ * `sweepPickedCopies` at the next start.
+ */
+export async function discardPickedCopy(path: string): Promise<void> {
+  try {
+    await NativeDaakFsPaths.discardPickedCopy?.(path);
+  } catch {
+    // The sweep at the next start removes the copy.
+  }
+}
+
+/** Delete every private copy that an earlier run left. Never rejects. */
+export async function sweepPickedCopies(): Promise<void> {
+  try {
+    await NativeDaakFsPaths.sweepPickedCopies?.();
+  } catch {
+    // Nothing to do. The next start tries again.
+  }
+}

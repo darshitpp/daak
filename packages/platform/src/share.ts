@@ -24,6 +24,29 @@ export async function pickFiles(multiple = true): Promise<string[]> {
   return NativeDaakShare.pickDocuments(multiple);
 }
 
+/**
+ * Ask the user for one folder. Resolves the folder path, or `null` on cancel.
+ * Rejects with an `Error` whose message is `NO_SPACE:<needed bytes>` or
+ * `EMPTY`. The bridge can deliver `undefined` for a cancel, so `?? null`
+ * absorbs it here. Any other native error passes through unchanged.
+ */
+export async function pickFolder(): Promise<string | null> {
+  if (typeof NativeDaakShare.pickFolder !== 'function') {
+    throw new Error('pickFolder is not available on this platform');
+  }
+  try {
+    return (await NativeDaakShare.pickFolder()) ?? null;
+  } catch (e) {
+    const err = e as { code?: unknown; message?: unknown };
+    const message = typeof err.message === 'string' ? err.message : '';
+    if (err.code === 'NO_SPACE' && !message.startsWith('NO_SPACE:')) {
+      throw new Error(`NO_SPACE:${message}`);
+    }
+    if (err.code === 'EMPTY' && message !== 'EMPTY') throw new Error('EMPTY');
+    throw e;
+  }
+}
+
 /** Raw JSON array of staged inbound items; `inbound.ts` (Task 5) parses it. */
 export async function consumePendingInbox(): Promise<string> {
   return NativeDaakShare.consumePendingInbox();

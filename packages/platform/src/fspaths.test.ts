@@ -6,13 +6,28 @@ vi.mock('@daak/rn-fspaths', () => ({
     downloadFolderName: vi.fn(async () => null),
     openFile: vi.fn(),
     fileSizes: vi.fn(),
+    folderStats: vi.fn(),
+    discardPickedCopy: vi.fn(),
+    sweepPickedCopies: vi.fn(),
   },
 }));
 
 import NativeDaakFsPaths from '@daak/rn-fspaths';
-import { chooseDownloadFolder, fileSizes, openFile } from './fspaths';
+import {
+  chooseDownloadFolder,
+  discardPickedCopy,
+  fileSizes,
+  folderStats,
+  openFile,
+  sweepPickedCopies,
+} from './fspaths';
 
 const native = vi.mocked(NativeDaakFsPaths);
+// The folder methods are optional in the Spec and plain mocks at run time.
+const folderMocks = NativeDaakFsPaths as unknown as Record<
+  'folderStats' | 'discardPickedCopy' | 'sweepPickedCopies',
+  ReturnType<typeof vi.fn>
+>;
 
 describe('fspaths facade', () => {
   // A CANCELLED picker resolves `nil` natively, and the bridge delivers
@@ -52,5 +67,41 @@ describe('fspaths facade', () => {
   it('fileSizes gives null for every path when the native call rejects', async () => {
     native.fileSizes.mockRejectedValue(new Error('E_FSPATHS'));
     await expect(fileSizes(['/a', '/b'])).resolves.toEqual([null, null]);
+  });
+});
+
+describe('folder picker facade', () => {
+  it('folderStats forwards the path and returns the counts', async () => {
+    folderMocks.folderStats.mockResolvedValueOnce({ files: 3, bytes: 99 });
+    await expect(folderStats('/d')).resolves.toEqual({ files: 3, bytes: 99 });
+    expect(folderMocks.folderStats).toHaveBeenCalledWith('/d');
+  });
+
+  it('folderStats returns null when the native call rejects', async () => {
+    folderMocks.folderStats.mockRejectedValueOnce(new Error('boom'));
+    await expect(folderStats('/d')).resolves.toBeNull();
+  });
+
+  it('folderStats returns null when the native call is missing', async () => {
+    const saved = folderMocks.folderStats;
+    (native as { folderStats?: unknown }).folderStats = undefined;
+    await expect(folderStats('/d')).resolves.toBeNull();
+    (native as { folderStats?: unknown }).folderStats = saved;
+  });
+
+  it('discardPickedCopy forwards the path and never rejects', async () => {
+    folderMocks.discardPickedCopy.mockResolvedValueOnce(undefined);
+    await discardPickedCopy('/c');
+    expect(folderMocks.discardPickedCopy).toHaveBeenCalledWith('/c');
+    folderMocks.discardPickedCopy.mockRejectedValueOnce(new Error('boom'));
+    await expect(discardPickedCopy('/c')).resolves.toBeUndefined();
+  });
+
+  it('sweepPickedCopies calls native and never rejects', async () => {
+    folderMocks.sweepPickedCopies.mockResolvedValueOnce(undefined);
+    await sweepPickedCopies();
+    expect(folderMocks.sweepPickedCopies).toHaveBeenCalledTimes(1);
+    folderMocks.sweepPickedCopies.mockRejectedValueOnce(new Error('boom'));
+    await expect(sweepPickedCopies()).resolves.toBeUndefined();
   });
 });

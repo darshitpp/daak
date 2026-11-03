@@ -4,6 +4,7 @@ vi.mock('@daak/rn-share', () => ({
   default: {
     present: vi.fn(async () => {}),
     pickDocuments: vi.fn(async () => ['/tmp/a.pdf']),
+    pickFolder: vi.fn(async () => '/tmp/dir'),
     consumePendingInbox: vi.fn(async () => '[]'),
     addListener: () => {},
     removeListeners: () => {},
@@ -11,9 +12,12 @@ vi.mock('@daak/rn-share', () => ({
 }));
 
 import DaakShare from '@daak/rn-share';
-import { consumePendingInbox, pickFiles, presentShare } from './share';
+import { consumePendingInbox, pickFiles, pickFolder, presentShare } from './share';
 
 const native = vi.mocked(DaakShare);
+// The optional folder method is a plain mock at run time. This view gives the
+// test the mock API without a non-null assertion on each line.
+const folderMock = native as unknown as { pickFolder: ReturnType<typeof vi.fn> };
 
 describe('share facade', () => {
   it('forwards text and urls to the native presenter', async () => {
@@ -65,5 +69,37 @@ describe('share facade', () => {
     native.present.mockClear();
     await presentShare({ text: 'hello', urls: ['photos:ABC'] });
     expect(native.present).toHaveBeenCalledWith('hello', [], '');
+  });
+});
+
+describe('pickFolder', () => {
+  it('resolves the chosen folder path', async () => {
+    await expect(pickFolder()).resolves.toBe('/tmp/dir');
+  });
+
+  it('resolves null when the user cancels, even if the bridge gives undefined', async () => {
+    folderMock.pickFolder.mockResolvedValueOnce(undefined as unknown as null);
+    await expect(pickFolder()).resolves.toBeNull();
+  });
+
+  it('keeps the NO_SPACE message with the needed bytes', async () => {
+    folderMock.pickFolder.mockRejectedValueOnce(new Error('NO_SPACE:123'));
+    await expect(pickFolder()).rejects.toThrow(new Error('NO_SPACE:123'));
+  });
+
+  it('builds the message from the native error code', async () => {
+    folderMock.pickFolder.mockRejectedValueOnce(
+      Object.assign(new Error('123'), { code: 'NO_SPACE' }),
+    );
+    await expect(pickFolder()).rejects.toThrow('NO_SPACE:123');
+    folderMock.pickFolder.mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'EMPTY' }));
+    await expect(pickFolder()).rejects.toThrow(/^EMPTY$/);
+  });
+
+  it('fails loudly when the platform has no native pickFolder', async () => {
+    const saved = native.pickFolder;
+    (native as { pickFolder?: unknown }).pickFolder = undefined;
+    await expect(pickFolder()).rejects.toThrow(/pickFolder/);
+    (native as { pickFolder?: unknown }).pickFolder = saved;
   });
 });

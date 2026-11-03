@@ -111,6 +111,48 @@ class DaakFsPaths: NSObject {
     resolve(sizes)
   }
 
+  /// The file count and total bytes under a folder. A symlink is skipped, so a
+  /// link cannot pull in a tree outside the folder or loop forever. `NSNull`
+  /// marks a path that is not a readable folder.
+  @objc func folderStats(_ path: String,
+                         resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let root = URL(fileURLWithPath: path)
+      let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+      let values = try? root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+      guard values?.isDirectory == true, values?.isSymbolicLink != true,
+            let walker = FileManager.default.enumerator(
+              at: root, includingPropertiesForKeys: keys, options: [])
+      else {
+        resolve(NSNull())
+        return
+      }
+      var files = 0
+      var bytes = 0
+      for case let url as URL in walker {
+        guard let v = try? url.resourceValues(forKeys: Set(keys)),
+              v.isSymbolicLink != true, v.isRegularFile == true else { continue }
+        files += 1
+        bytes += v.fileSize ?? 0
+      }
+      resolve(["files": files, "bytes": bytes])
+    }
+  }
+
+  /// No copy exists on macOS: the engine reads the chosen folder in place.
+  @objc func discardPickedCopy(_ path: String,
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    resolve(NSNull())
+  }
+
+  /// No copy exists on macOS, so there is nothing to sweep.
+  @objc func sweepPickedCopies(_ resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    resolve(NSNull())
+  }
+
   /// Ask for a folder and REMEMBER it.
   ///
   /// A sandboxed app cannot keep a path to a folder it does not own: the path
