@@ -69,13 +69,14 @@ impl Db {
         };
         let mut all = crate::engine::parse_json_string_array(&row.saved_paths);
         let before = all.len();
-        all.extend(
-            paths
-                .iter()
-                .filter(|p| !all.contains(p))
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
+        // One set lookup for each new path keeps the merge linear. A path
+        // that the new list names 2 times goes in once.
+        let mut known: std::collections::HashSet<String> = all.iter().cloned().collect();
+        for p in paths {
+            if known.insert(p.clone()) {
+                all.push(p.clone());
+            }
+        }
         if all.len() == before {
             return Ok(None);
         }
@@ -522,6 +523,81 @@ mod tests {
             .unwrap();
         assert_eq!(merged.saved_paths, json_of(&["photos:ABC", "/b"]));
         assert_eq!(db.list_inbox().unwrap()[0], merged);
+    }
+
+    // Pin: a small input with no duplicate inside the new list. A known path
+    // is skipped. Each new path keeps its order and goes after the old paths.
+    #[test]
+    fn merge_inbox_paths_matches_the_old_order_and_duplicate_semantics_on_a_small_input() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a", "/c"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/d".into(), "/a".into(), "/b".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["/a", "/c", "/d", "/b"]));
+        assert_eq!(db.list_inbox().unwrap()[0], merged);
+    }
+
+    // The new list can name one path 2 times. The row must list it once.
+    #[test]
+    fn merge_inbox_paths_adds_a_duplicate_inside_the_new_list_once() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/b".into(), "/b".into(), "/a".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["/a", "/b"]));
+    }
+
+    // A fixed time limit fails on a busy host. So this test compares 2 sizes
+    // on the same host. The large run has 8 times more paths. A linear merge
+    // takes about 8 times longer. A quadratic merge takes about 64 times
+    // longer. Each size uses the best of 3 runs. Each run uses a new row.
+    #[test]
+    fn merge_inbox_paths_is_linear_in_the_path_count() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut next_id = 1u8;
+        let mut best = |n: u32| {
+            let old: Vec<String> = (0..n).map(|i| format!("/old/f{i}.bin")).collect();
+            let new: Vec<String> = (0..n).map(|i| format!("/new/f{i}.bin")).collect();
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..3 {
+                let id = next_id;
+                next_id += 1;
+                db.add_inbox(&InboxRow {
+                    saved_paths: crate::engine::json_string_array(&old),
+                    ..row(id, 100)
+                })
+                .unwrap();
+                let start = std::time::Instant::now();
+                let merged = db.merge_inbox_paths(&[id; 16], &new).unwrap().unwrap();
+                best = best.min(start.elapsed());
+                let all = crate::engine::parse_json_string_array(&merged.saved_paths);
+                assert_eq!(all.len(), 2 * n as usize);
+                assert_eq!(all[n as usize], new[0]);
+            }
+            best
+        };
+        let small = best(2048);
+        let large = best(16384);
+        assert!(
+            large < small * 40,
+            "merge_inbox_paths is not linear: 2048 paths took {small:?}, 16384 paths took {large:?}"
+        );
+        assert!(large < std::time::Duration::from_secs(30));
     }
 
     // A list of the wrong length cannot be paired with the old list by index.
