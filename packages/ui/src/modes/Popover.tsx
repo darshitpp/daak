@@ -31,6 +31,7 @@ import {
   tail,
   type PanelFolder,
 } from './panel-model';
+import { formatEta, formatSpeed, useTransferSpeed } from '../state/speed';
 import { useHeldBack } from './useHeldBack';
 import { usePanelTransfer } from './usePanelTransfer';
 
@@ -214,6 +215,24 @@ export function Popover({
         ? ({ kind: 'running', waiting: false, done: 0, total: 0 } as const)
         : sendViewOf(transfer.row, peerOf(transfer.send.peerDeviceId));
 
+  // The speed hook runs once, before any branch. The panel gets bytes from the
+  // 700 ms poll, not from events. A waiting transfer has no speed.
+  const running = view !== null && view.kind === 'running';
+  const speed = useTransferSpeed(
+    transfer.send?.transferId ?? '',
+    running ? view.done : 0,
+    running ? view.total : 0,
+    running && !view.waiting,
+  );
+  // The short form has no words "about" and "left". It must fit 320 px.
+  const left = speed.etaSeconds === null ? null : formatEta(speed.etaSeconds);
+  const speedLine =
+    speed.text === null
+      ? null
+      : left === null
+        ? formatSpeed(speed.bytesPerSec)
+        : `${formatSpeed(speed.bytesPerSec)} · ${left.replace(/^about /, '').replace(/ left$/, '')}`;
+
   const conn =
     connection.wifi === 'connected'
       ? { tone: 'ok' as const, label: 'On this network' }
@@ -258,6 +277,9 @@ export function Popover({
             <Text style={ui.hint}>Sending over your Wi-Fi</Text>
             {pct === null ? null : <Text style={ui.progN}>{pct + '%'}</Text>}
           </View>
+          {speedLine === null ? null : (
+            <Text style={ui.hint} numberOfLines={1} testID="popover-speed">{speedLine}</Text>
+          )}
           <Btn variant="ghost" block testID="popover-stop" label="Stop sending" onPress={stop} />
           {resultNote}
         </View>

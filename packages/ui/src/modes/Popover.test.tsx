@@ -380,6 +380,65 @@ describe('the sending pane', () => {
   });
 });
 
+// Task 6. The panel reads the transfer every 700 ms. It has no progress event.
+describe('the panel speed', () => {
+  const MIB = 1024 * 1024;
+  afterEach(() => jest.useRealTimers());
+
+  async function pollFor(engine: DaakEngine, rows: (n: number) => TransferSummary[], polls: number) {
+    let n = 0;
+    jest.spyOn(engine, 'listTransfers').mockImplementation(async () => rows(n));
+    mount(engine, [pixel]);
+    await settle();
+    for (let i = 0; i < polls; i++) {
+      n = i + 1;
+      await act(async () => {
+        jest.advanceTimersByTime(700);
+      });
+    }
+  }
+
+  it('popover_shows_short_speed_at_700ms_poll', async () => {
+    jest.useFakeTimers();
+    const { engine } = spyEngine([pixel]);
+    await pollFor(
+      engine,
+      (n) => [summary({ bytesDone: n * 7 * MIB, bytesTotal: 4000 * MIB })],
+      5,
+    );
+    expect(screen.getByText('Sending to Pixel 9')).toBeTruthy();
+    const speed = screen.getByTestId('popover-speed');
+    const text = String(speed.props.children);
+    expect(text).toMatch(/^10\.0 MiB\/s · \d+ min$/);
+    expect(text).not.toMatch(/left|about/);
+  });
+
+  it('popover_shows_no_speed_for_a_waiting_done_or_failed_transfer', async () => {
+    for (const state of ['queued', 'done', 'failed'] as const) {
+      jest.useFakeTimers();
+      // A queued row with an offline peer is the waiting view.
+      const peerOff = state === 'queued' ? tablet : pixel;
+      const { engine } = spyEngine([peerOff]);
+      let n = 0;
+      jest.spyOn(engine, 'listTransfers').mockImplementation(async () => [
+        summary({ peerDeviceId: peerOff.deviceId, state, bytesDone: n * 7 * MIB, bytesTotal: 400 * MIB }),
+      ]);
+      const view = mount(engine, [peerOff]);
+      await settle();
+      for (let i = 0; i < 5; i++) {
+        n = i + 1;
+        await act(async () => {
+          jest.advanceTimersByTime(700);
+        });
+      }
+      expect(screen.queryByTestId('popover-speed')).toBeNull();
+      expect(screen.queryByText(/MiB\/s/)).toBeNull();
+      view.unmount();
+      jest.useRealTimers();
+    }
+  });
+});
+
 // Review Focus 5. Closing the panel must not stop a running transfer.
 describe('closing the panel during a transfer', () => {
   it('does not cancel on unmount', async () => {

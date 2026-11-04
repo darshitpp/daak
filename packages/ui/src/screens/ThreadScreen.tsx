@@ -22,6 +22,7 @@ import { Btn, Empty, Note, ProgressBar, Status, deviceLabel, presenceOf, type De
 import type { InboxActions } from '../inbox-actions';
 import { colors, control, ui } from '../theme';
 import { humanBytes } from './quarantine-facts';
+import { useTransferSpeed } from '../state/speed';
 import { EMPTY_THREAD, itemKey, mergeThread, prependOlder, type ThreadView } from './thread-merge';
 import { folderPlaces, groupThread, savedLine, type FolderRow } from './thread-groups';
 
@@ -81,6 +82,47 @@ function ComposerWrap({ avoid, children }: { avoid: boolean; children: React.Rea
 
 // A failure that needs the user to act. A success is a toast, not a result.
 type Result = { title: string; body: string; retry?: boolean } | null;
+
+/**
+ * The card of one running send. It is a component because the speed hook must
+ * not run inside `active.map`. Every transfer in `active` is running.
+ */
+function ActiveSendCard({
+  s,
+  live,
+  name,
+  onStop,
+}: {
+  s: TransferSummary;
+  live: { done: number; total: number } | undefined;
+  name: string;
+  onStop: () => void;
+}) {
+  const done = live?.done ?? s.bytesDone;
+  const total = live?.total ?? s.bytesTotal;
+  const known = done > 0 && total > 0;
+  const pct = known ? Math.floor((done / total) * 100) : 0;
+  const { text: speed } = useTransferSpeed(s.transferId, done, total, true);
+  return (
+    <View style={[ui.card, { marginHorizontal: 12, marginBottom: 8 }]} testID={`thread-active-${s.transferId}`}>
+      <Text style={ui.h3}>{`Sending to ${name}`}</Text>
+      <Text style={ui.hint}>
+        {[plural(s.itemCount, 'item', 'items'), humanBytes(total)].filter(Boolean).join(' · ')}
+      </Text>
+      <ProgressBar pct={pct} />
+      <View style={ui.progMeta}>
+        <Text style={[ui.hint, { flexShrink: 1 }]}>Sending over your Wi-Fi</Text>
+        <View style={{ flexDirection: 'row', gap: 8, flexShrink: 1 }}>
+          {speed === null ? null : (
+            <Text style={ui.hint} numberOfLines={1} testID={`thread-speed-${s.transferId}`}>{speed}</Text>
+          )}
+          {known ? <Text style={ui.progN}>{pct + '%'}</Text> : null}
+        </View>
+      </View>
+      <Btn label="Stop sending" variant="danger" block testID={`thread-stop-${s.transferId}`} onPress={onStop} />
+    </View>
+  );
+}
 
 /**
  * The conversation with one paired device (design: `contact-detail`). It
@@ -647,33 +689,15 @@ export function ThreadScreen({
         })}
       </ScrollView>
 
-      {active.map((s) => {
-        const live = progress[s.transferId];
-        const done = live?.done ?? s.bytesDone;
-        const total = live?.total ?? s.bytesTotal;
-        const known = done > 0 && total > 0;
-        const pct = known ? Math.floor((done / total) * 100) : 0;
-        return (
-          <View key={s.transferId} style={[ui.card, { marginHorizontal: 12, marginBottom: 8 }]} testID={`thread-active-${s.transferId}`}>
-            <Text style={ui.h3}>{`Sending to ${name}`}</Text>
-            <Text style={ui.hint}>
-              {[plural(s.itemCount, 'item', 'items'), humanBytes(total)].filter(Boolean).join(' · ')}
-            </Text>
-            <ProgressBar pct={pct} />
-            <View style={ui.progMeta}>
-              <Text style={ui.hint}>Sending over your Wi-Fi</Text>
-              {known ? <Text style={ui.progN}>{pct + '%'}</Text> : null}
-            </View>
-            <Btn
-              label="Stop sending"
-              variant="danger"
-              block
-              testID={`thread-stop-${s.transferId}`}
-              onPress={() => setStopFor(s.transferId)}
-            />
-          </View>
-        );
-      })}
+      {active.map((s) => (
+        <ActiveSendCard
+          key={s.transferId}
+          s={s}
+          live={progress[s.transferId]}
+          name={name}
+          onStop={() => setStopFor(s.transferId)}
+        />
+      ))}
 
       {result ? (
         <View style={{ paddingHorizontal: 12, gap: 8 }}>
