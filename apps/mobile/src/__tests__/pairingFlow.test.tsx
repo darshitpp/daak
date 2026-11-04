@@ -324,12 +324,19 @@ describe('the pairing flow uses the words of the design', () => {
   });
 
   it('shows "Making your code…" while the bundle is fetched', async () => {
-    mockedBundle.mockReturnValueOnce(new Promise(() => {}));
-    await renderFlow();
-    await fireEventAsync.press(screen.getByText('Show my code'));
-    expect(await screen.findByText('Making your code…')).toBeTruthy();
-    expect(screen.getByText('Show this to the other device')).toBeTruthy();
-    expect(screen.queryByLabelText('pairing-qr')).toBeNull();
+    // withDeadline starts a 10 s timer for a bundle that never arrives. Fake
+    // timers keep that timer from outliving the test and the Jest worker.
+    jest.useFakeTimers();
+    try {
+      mockedBundle.mockReturnValueOnce(new Promise(() => {}));
+      await renderFlow();
+      await fireEventAsync.press(screen.getByText('Show my code'));
+      expect(await screen.findByText('Making your code…')).toBeTruthy();
+      expect(screen.getByText('Show this to the other device')).toBeTruthy();
+      expect(screen.queryByLabelText('pairing-qr')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   // Review Focus 3. The host reads the number out loud. A leading zero counts.
