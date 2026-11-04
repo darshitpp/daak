@@ -8,6 +8,7 @@ use crate::error::{CoreError, Result};
 use crate::framing::RecordType;
 use crate::manifest::{clamp_chunk_size, Manifest, CHUNK_SIZE_DEFAULT};
 use crate::net::{FrameTransport, CONTROL_STREAM};
+use crate::transfer::receiver::RESUME_MSG_MAX;
 use crate::transfer::scheduler::{interleave, ScheduledItem};
 
 pub fn encode_chunk_body(item_index: u32, chunk_index: u64, data: &[u8]) -> Vec<u8> {
@@ -150,13 +151,22 @@ async fn await_resume<T: FrameTransport>(
         };
         match frame {
             Some(f) if f.kind == RecordType::Nack => {
-                let msg = ResumeMsg::from_cbor(&f.body)?;
+                // F1: a body above the limit is not decoded. A legitimate
+                // receiver never sends one. The sender then sends every chunk.
+                if f.body.len() > RESUME_MSG_MAX {
+                    tracing::info!("resume message too large; the sender sends every chunk");
+                    return Ok(Resume::Ranges(Vec::new()));
+                }
+                let Ok(msg) = ResumeMsg::from_cbor(&f.body) else {
+                    tracing::info!("resume message not valid; the sender sends every chunk");
+                    return Ok(Resume::Ranges(Vec::new()));
+                };
                 if msg.transfer_id != manifest.payload_id {
                     return Err(CoreError::Protocol(
                         "resume message for a different transfer".into(),
                     ));
                 }
-                return Ok(Resume::Ranges(msg.ranges));
+                return Ok(Resume::Ranges(clean_ranges(manifest, msg.ranges)));
             }
             Some(f) if f.kind == RecordType::Ack => {
                 if let Some(verdict) = ack_verdict(manifest, &AckMsg::from_cbor(&f.body)?) {
@@ -171,6 +181,42 @@ async fn await_resume<T: FrameTransport>(
             }
         }
     }
+}
+
+/// The most ranges that one item can have in a valid list.
+const MAX_RANGES_PER_ITEM: usize = 1024;
+
+/// Check and merge the ranges of a resume message. The result is empty when
+/// the list is not valid. An empty list means "send every chunk". An item
+/// list is not valid when it has more than 1024 ranges. A range is not valid
+/// when it is empty, reversed, or past the chunk count of its item. For a
+/// valid list, each item list is sorted and merged once.
+fn clean_ranges(m: &Manifest, ranges: Vec<Vec<(u64, u64)>>) -> Vec<Vec<(u64, u64)>> {
+    let mut cleaned = Vec::with_capacity(ranges.len());
+    for (index, mut list) in ranges.into_iter().enumerate() {
+        let chunk_count = m
+            .items
+            .get(index)
+            .and_then(|item| item.chunk_count)
+            .unwrap_or(0);
+        let valid = list.len() <= MAX_RANGES_PER_ITEM
+            && list
+                .iter()
+                .all(|&(start, end)| start < end && end <= chunk_count);
+        if !valid {
+            return Vec::new();
+        }
+        list.sort_unstable();
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(list.len());
+        for (start, end) in list {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        cleaned.push(merged);
+    }
+    cleaned
 }
 
 /// The bytes that the receiver already holds: for each binary item with a
@@ -228,6 +274,8 @@ async fn stream_and_await_ack<T: FrameTransport>(
     ranges: &[Vec<(u64, u64)>],
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
+    // F1: every caller gets cleaned ranges, also a caller of `send_transfer`.
+    let ranges = &clean_ranges(manifest, ranges.to_vec());
     let mut scheduled = Vec::with_capacity(manifest.items.len());
     // F2: the sender holds no file handle between chunks. This local list keeps,
     // for each item index, the path, the chunk size, and the file identity.
@@ -377,7 +425,7 @@ fn chunk_in_ranges(ranges: &[Vec<(u64, u64)>], item_index: u32, chunk_index: u64
 mod tests {
     use super::*;
     use crate::framing::RecordType;
-    use crate::manifest::{DeviceRef, Item, PayloadKind};
+    use crate::manifest::{DeviceRef, Item, PayloadKind, CHUNK_SIZE_MIN};
     use crate::net::secure::{MemConn, SecureConnection};
     use crate::net::tcp;
 
@@ -430,6 +478,157 @@ mod tests {
         let r = send_transfer(&mut mine, &manifest, &[Some(path)], &[], |_| {}).await;
         peer.await.unwrap();
         (r, manifest)
+    }
+
+    /// The result of a send against a peer that answers with one resume body.
+    struct ResumeRun {
+        result: Result<()>,
+        /// The chunk indexes that the peer got, in order.
+        chunks: Vec<u64>,
+        /// The `on_progress` values, in order.
+        progress: Vec<u64>,
+        /// The item size in bytes.
+        size: u64,
+    }
+
+    const RESUME_CHUNKS: u64 = 100;
+
+    /// Send one item of 100 chunks. The peer sends `body` as the resume frame,
+    /// then a final ack, then counts every chunk until the sender closes.
+    async fn send_with_resume_body(
+        body: impl FnOnce([u8; 16]) -> Vec<u8> + Send + 'static,
+    ) -> ResumeRun {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.bin");
+        let size = RESUME_CHUNKS * CHUNK_SIZE_MIN as u64;
+        std::fs::write(&p, vec![3u8; size as usize]).unwrap();
+        let item = Item::from_file(0, &p, CHUNK_SIZE_MIN).unwrap();
+        assert_eq!(item.chunk_count, Some(RESUME_CHUNKS));
+        let manifest = Manifest::new(PayloadKind::Media, sender(), vec![item]);
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let id = manifest.payload_id;
+        let peer = tokio::spawn(async move {
+            let first = theirs.recv().await.unwrap().unwrap();
+            assert_eq!(first.kind, RecordType::Manifest);
+            theirs
+                .send(CONTROL_STREAM, RecordType::Nack, Bytes::from(body(id)))
+                .await
+                .unwrap();
+            let ack = AckMsg {
+                transfer_id: id,
+                item_index: 0,
+                complete: true,
+                hash_ok: true,
+            };
+            theirs
+                .send(
+                    CONTROL_STREAM,
+                    RecordType::Ack,
+                    Bytes::from(ack.to_cbor().unwrap()),
+                )
+                .await
+                .unwrap();
+            let mut chunks = Vec::new();
+            while let Ok(Some(f)) = theirs.recv().await {
+                if f.kind == RecordType::Chunk {
+                    chunks.push(decode_chunk_body(&f.body).unwrap().1);
+                }
+            }
+            chunks
+        });
+        let mut progress = Vec::new();
+        let result = send_transfer_resuming(
+            &mut mine,
+            &manifest,
+            &[Some(p)],
+            Some(Duration::from_secs(30)),
+            |n| progress.push(n),
+        )
+        .await;
+        drop(mine);
+        let chunks = peer.await.unwrap();
+        ResumeRun {
+            result,
+            chunks,
+            progress,
+            size,
+        }
+    }
+
+    fn resume_cbor(id: [u8; 16], ranges: Vec<Vec<(u64, u64)>>) -> Vec<u8> {
+        ResumeMsg {
+            transfer_id: id,
+            ranges,
+        }
+        .to_cbor()
+        .unwrap()
+    }
+
+    fn all_chunks() -> Vec<u64> {
+        (0..RESUME_CHUNKS).collect()
+    }
+
+    /// A resume body over `RESUME_MSG_MAX` is not decoded. This body is valid
+    /// CBOR for another transfer. A decode would fail the send.
+    #[tokio::test]
+    async fn a_resume_body_over_64_kib_gives_a_full_send_and_is_not_decoded() {
+        let run = send_with_resume_body(|_| {
+            let ranges = vec![vec![(0, 1)]; 1];
+            let mut body = resume_cbor([9u8; 16], ranges);
+            body.resize(crate::transfer::receiver::RESUME_MSG_MAX + 1, 0);
+            body
+        })
+        .await;
+        run.result.unwrap();
+        assert_eq!(run.chunks, all_chunks());
+    }
+
+    #[tokio::test]
+    async fn a_resume_body_that_is_not_cbor_gives_a_full_send() {
+        let run = send_with_resume_body(|_| vec![0xff; 40]).await;
+        run.result.unwrap();
+        assert_eq!(run.chunks, all_chunks());
+    }
+
+    #[tokio::test]
+    async fn a_list_with_more_than_1024_ranges_for_one_item_gives_a_full_send() {
+        let run = send_with_resume_body(|id| resume_cbor(id, vec![vec![(0, 1); 1025]])).await;
+        run.result.unwrap();
+        assert_eq!(run.chunks, all_chunks());
+        assert!(run.progress.iter().all(|n| *n <= CHUNK_SIZE_MIN as u64));
+    }
+
+    #[tokio::test]
+    async fn an_empty_reversed_or_late_range_gives_a_full_send() {
+        for bad in [(5, 5), (7, 3), (90, 101)] {
+            let run =
+                send_with_resume_body(move |id| resume_cbor(id, vec![vec![(0, 2), bad]])).await;
+            run.result.unwrap();
+            assert_eq!(run.chunks, all_chunks(), "range {bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_thousand_overlapping_ranges_for_an_item_of_100_chunks_send_the_right_chunks_and_count_bytes_once(
+    ) {
+        // The union of the ranges is chunks 0 to 49.
+        let ranges: Vec<(u64, u64)> = (0..1000u64).map(|k| (k % 41, k % 41 + 10)).collect();
+        let run = send_with_resume_body(move |id| resume_cbor(id, vec![ranges])).await;
+        run.result.unwrap();
+        assert_eq!(run.chunks, (0..50).collect::<Vec<u64>>());
+        assert_eq!(
+            run.progress.first().copied(),
+            Some(run.size - 50 * CHUNK_SIZE_MIN as u64),
+            "the held bytes count each chunk once"
+        );
+    }
+
+    /// Pin: a resume message for another transfer still gives an error.
+    #[tokio::test]
+    async fn a_transfer_id_mismatch_still_returns_an_error() {
+        let run = send_with_resume_body(|_| resume_cbor([9u8; 16], vec![])).await;
+        assert!(matches!(run.result, Err(CoreError::Protocol(_))));
     }
 
     #[test]

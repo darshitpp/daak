@@ -617,7 +617,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
 /// while it streams. A message larger than both socket buffers then blocks
 /// both sides, and no frame deadline ends it. A message at or below this size
 /// fits in the socket buffers.
-const RESUME_MSG_MAX: usize = 64 * 1024;
+pub(crate) const RESUME_MSG_MAX: usize = 64 * 1024;
 
 /// The encoded `ResumeMsg`, or `None` when it is larger than `limit`. With
 /// `None`, the receiver sends no message. A version 101 sender then waits for
