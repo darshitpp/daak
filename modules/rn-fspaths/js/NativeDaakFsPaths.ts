@@ -63,9 +63,11 @@ export interface Spec extends TurboModule {
    *
    * `subdirs[i]` is the folder below the remembered folder for `paths[i]`, for
    * example `album/sub`. `''` is the top of the folder. The array has one entry
-   * for each path. A file that is already in `<folder>/<subdir>` answers its own
+   * for each path. A file that is already in the save folder answers its own
    * path and does not move. After the move, the empty folders that the engine
    * made below its output directory are removed.
+   * The first name is the root. A root gets a free name (`album-1`), but a
+   * subdir that starts with `/` names a root that the native move uses as is.
    */
   moveReceivedFiles(paths: string[], subdirs: string[]): Promise<string[]>;
   /**

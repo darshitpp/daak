@@ -239,8 +239,10 @@ class DaakFsPaths: NSObject {
   /// free name in the folder (`album`, `album-1`, ...), so a moved folder never
   /// merges into a folder that exists. A subdir that starts with `/` names a
   /// root that the payload already uses, and that root is used as it is.
-  /// A file that is already in the folder answers its own path and does not
-  /// move, so a second call moves nothing twice. After the move, the empty
+  /// A file that is already below the folder answers its own path and does
+  /// not move, so a second call moves nothing twice. One exception: when the
+  /// engine output folder is below the save folder (and is not the save
+  /// folder), a file in the output folder moves. After the move, the empty
   /// folders that the engine made below its output directory are removed.
   @objc func moveReceivedFiles(_ paths: [String],
                                subdirs: [String],
@@ -278,10 +280,13 @@ class DaakFsPaths: NSObject {
     var out: [String] = []
     for (i, path) in paths.enumerated() {
       let src = URL(fileURLWithPath: path)
-      // The file is already in the save folder: an earlier event moved it. The
-      // save folder can hold the engine output folder, so that folder does not count.
+      // The file is already in the save folder: an earlier event moved it. A
+      // save folder above the engine output folder (the app Documents, the home
+      // folder) holds new files too, so a file in the output folder does not
+      // count there. A save folder that is the output folder, or is below it,
+      // keeps each file below it in place, as before.
       let srcAt = norm(src)
-      if srcAt.hasPrefix(folderAt) && !srcAt.hasPrefix(outAt) {
+      if srcAt.hasPrefix(folderAt) && (!srcAt.hasPrefix(outAt) || folderAt.hasPrefix(outAt)) {
         out.append(path)
         continue
       }

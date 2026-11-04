@@ -533,16 +533,30 @@ describe('a moved folder takes a dash suffix in the save folder', () => {
     });
   });
 
-  it('the_exact_name_wins_over_a_suffixed_name', () => {
-    // The payload has the folders `album` and `album-1`. A placed root with
-    // the exact name can only belong to `album`.
+  it('an_exact_name_and_a_suffixed_name_give_a_new_folder', () => {
+    // Fix round 1: two candidates match `album`. The exact name does not win,
+    // because another group can own it. The retry gets a new folder.
     expect(
       planRelocation(
         ['/save/album/a.pdf', '/save/album-1/b.pdf', '/out/album/c.pdf'],
         ['/save/album', '/save/album-1', '/out/album'],
         false,
       ).folder[2],
-    ).toEqual({ index: 2, path: '/out/album/c.pdf', subdir: '/album' });
+    ).toEqual({ index: 2, path: '/out/album/c.pdf', subdir: 'album' });
+  });
+
+  it('a_retry_of_folder_album_1_does_not_merge_into_the_folder_of_album', () => {
+    // A repeat send of 2 folders named `album`: the groups are `album` (A) and
+    // `album-1` (B). The save folder held `album`, so A moved to `album-1` and
+    // B moved to `album-1-1`. A file of B failed and now arrives again. The
+    // name `album-1` is the folder of A, so B must not join it.
+    expect(
+      planRelocation(
+        ['/save/album-1/a.pdf', '/save/album-1-1/b.pdf', '/out/album-1/c.pdf'],
+        ['/save/album-1', '/save/album-1-1', '/out/album-1'],
+        false,
+      ).folder[2],
+    ).toEqual({ index: 2, path: '/out/album-1/c.pdf', subdir: 'album-1' });
   });
 
   it('an_unclear_root_sends_the_plain_name', () => {

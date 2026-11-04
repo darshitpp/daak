@@ -301,9 +301,11 @@ function placesOf(savedPaths: string[], groupRoots: string[]): Place[] {
  * Only a folder in another parent counts. The engine puts every group root in
  * one output folder, so a root in the same parent is an engine root.
  *
- * The exact name wins: no other group of the payload can get it. When two
- * suffixed names match, the answer is null, so the native move makes a new
- * folder. A new folder is safer than a merge into the wrong folder.
+ * Only exactly one match counts. The exact name does not win, because
+ * another group can own it: groups `album` and `album-1` can move to
+ * `album-1` and `album-1-1`. When two names match, the answer is null, so the
+ * native move makes a new folder. A new folder is safer than a merge into the
+ * wrong folder.
  */
 function placedRoot(root: string, places: Place[]): string | null {
   if (root === '') return null;
@@ -316,7 +318,6 @@ function placedRoot(root: string, places: Place[]): string | null {
       .filter((p) => p.parent !== parent && (p.leaf === leaf || suffixed.test(p.leaf)))
       .map((p) => p.leaf),
   );
-  if (names.has(leaf)) return leaf;
   return names.size === 1 ? [...names][0] : null;
 }
 
