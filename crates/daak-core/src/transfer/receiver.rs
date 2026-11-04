@@ -27,7 +27,8 @@ const MAX_PATH_COMPONENTS: usize = 64;
 const MAX_PATH_LEN: usize = 4096;
 /// The cap on the bytes of every attrs["path"] in one manifest together. The
 /// receiver stores the paths in the destination list and in the item rows.
-/// 65 536 items with a 256-byte path stay below it.
+/// A total at or below the cap passes. 65 536 items with a 256-byte path give
+/// a total equal to the cap, so they pass.
 const MAX_TOTAL_PATH_BYTES: usize = 16 * 1024 * 1024;
 
 /// D23: holds the discard directory a duplicate delivery writes into, and
@@ -481,34 +482,27 @@ fn relative_dest(root: &Path, path: &Path) -> Result<String> {
 /// settled item needs nothing, because the platform can move its file. Any
 /// failed check starts the whole payload fresh.
 fn stored_dests(
-    db: &Db,
+    bytes: Option<Vec<u8>>,
     manifest: &Manifest,
     root: &Path,
     settled: &HashSet<u32>,
     recreate: &HashSet<u32>,
-) -> Result<Option<Vec<PathBuf>>> {
-    let Some(bytes) = db.get_setting(&dest_key(&manifest.payload_id))? else {
-        return Ok(None);
-    };
-    let Ok(list) = ciborium::from_reader::<Vec<String>, _>(bytes.as_slice()) else {
-        return Ok(None);
-    };
+) -> Option<Vec<PathBuf>> {
+    let list = ciborium::from_reader::<Vec<String>, _>(bytes?.as_slice()).ok()?;
     if list.len() != manifest.binary_items().count() {
-        return Ok(None);
+        return None;
     }
     let mut out = Vec::with_capacity(list.len());
     for (item, rel) in manifest.binary_items().zip(&list) {
-        let Ok(parts) = safe_components(rel, item.index) else {
-            return Ok(None);
-        };
+        let parts = safe_components(rel, item.index).ok()?;
         // The sanitised form must be the stored text. Then the text holds no
         // traversal, no absolute path, and no reserved name.
         if parts.is_empty() || parts.join("/") != *rel {
-            return Ok(None);
+            return None;
         }
         let path = parts.iter().fold(root.to_path_buf(), |p, c| p.join(c));
         if !path.starts_with(root) {
-            return Ok(None);
+            return None;
         }
         let parent = path.parent().unwrap_or(root);
         let usable = if settled.contains(&item.index) {
@@ -520,11 +514,11 @@ fn stored_dests(
                 && std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file())
         };
         if !usable {
-            return Ok(None);
+            return None;
         }
         out.push(path);
     }
-    Ok(Some(out))
+    Some(out)
 }
 
 /// The destination that the allocation chose for item `index`.
@@ -734,6 +728,24 @@ async fn receive_with_resume_limit<T: FrameTransport>(
             prior_done = false;
         }
     }
+    // F4: the stored destinations, read once here. After a receive that ran
+    // to its end, the list is deleted from the db BEFORE this attempt writes
+    // the `active` row. A crash or a failed allocation then leaves no list.
+    // The next attempt sees `active`, not `done`, so without this delete it
+    // would treat a file of the user at a stored path as a partial. This
+    // attempt uses the list from memory and writes it again after its
+    // creates.
+    let stored_list: Option<Vec<u8>> = match db.filter(|_| !dedupe) {
+        Some(db) => {
+            let key = dest_key(&manifest.payload_id);
+            let bytes = db.get_setting(&key)?;
+            if prior_done && bytes.is_some() {
+                db.delete_setting(&key)?;
+            }
+            bytes
+        }
+        None => None,
+    };
     // A duplicate settles nothing. It writes every chunk into the discard
     // directory, as before, so an old sender that sends all chunks completes.
     let settled: HashSet<u32> = if dedupe {
@@ -855,10 +867,8 @@ async fn receive_with_resume_limit<T: FrameTransport>(
     // resume reuses them, so a partial file does not take a suffix. With no
     // usable list, every open item gets a new file.
     let store = db.filter(|_| !dedupe);
-    let stored = match store {
-        Some(db) => stored_dests(db, &manifest, &dest_root, &settled, &recreate)?,
-        None => None,
-    };
+    let stored =
+        store.and_then(|_| stored_dests(stored_list, &manifest, &dest_root, &settled, &recreate));
     let mut list: Vec<String> = Vec::new();
     // Every path that this attempt creates. An error below removes them.
     let mut created: Vec<PathBuf> = Vec::new();
@@ -922,8 +932,11 @@ async fn receive_with_resume_limit<T: FrameTransport>(
             list.push(relative_dest(&dest_root, &entry)?);
             dests[item.index as usize] = dest;
         }
-        // One write after every create. A crash before it leaves no list, and
-        // the next attempt starts the payload fresh.
+        // One write after every create. A crash before it leaves the list of
+        // an interrupted receive as it was: each path in it is still a
+        // partial of this payload. After a receive that ran to its end, the
+        // list is already deleted (see `stored_list`), so a crash leaves no
+        // list, and the next attempt starts the payload fresh.
         if let Some(db) = store {
             let mut bytes = Vec::new();
             ciborium::into_writer(&list, &mut bytes)

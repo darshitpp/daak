@@ -963,3 +963,90 @@ async fn a_deleted_held_item_never_writes_into_a_user_file_at_its_stored_path() 
         file_bytes(2)
     );
 }
+
+/// A delivery that fails before its first chunk: the peer sends the manifest
+/// only. The receive must return an error.
+async fn failed_delivery(manifest: &Manifest, dst: &Path, db: &daak_core::store::Db) {
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let peer = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        conn.send(
+            CONTROL_STREAM,
+            RecordType::Manifest,
+            Bytes::from(m.to_cbor().unwrap()),
+        )
+        .await
+        .unwrap();
+        // Hold the connection until the receiver closes it.
+        while let Ok(Some(_)) = conn.recv().await {}
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    let r = tokio::time::timeout(
+        Duration::from_secs(10),
+        receive_transfer(&mut conn, dst, |_| {}, Some(db), |_| {}),
+    )
+    .await
+    .expect("the failed delivery hung");
+    drop(conn);
+    peer.await.unwrap();
+    assert!(r.is_err(), "the allocation must fail, got {r:?}");
+}
+
+/// F4: after a receive that ran to its end, a failed delivery must not leave
+/// the old list behind. Else the next delivery sees an `active` row, takes a
+/// file of the user at a stored path as a partial, and writes into it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_delivery_after_a_done_receive_never_lets_a_later_delivery_write_into_a_user_file()
+{
+    use std::os::unix::fs::PermissionsExt;
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+
+    // (1) The receive ends `done` with a.bin and b.bin held.
+    let bad_dir = tempfile::tempdir().unwrap();
+    let mut bad_paths = paths.clone();
+    for (i, seed) in [(0usize, 1u8), (1, 2)] {
+        let mut wrong = file_bytes(seed);
+        wrong[5] ^= 0xff;
+        let bad = bad_dir.path().join(format!("bad{i}"));
+        std::fs::write(&bad, &wrong).unwrap();
+        bad_paths[i] = Some(bad);
+    }
+    let (_, r, _) = resumed_pass(&manifest, &bad_paths, dst.path(), &db).await;
+    assert!(
+        matches!(r, Err(daak_core::CoreError::Quarantined { .. })),
+        "got {r:?}"
+    );
+
+    // (2) The user deletes the held copy of a.bin and puts a file of their
+    // own at its stored path.
+    db.delete_item(&manifest.payload_id, 0).unwrap();
+    let user = dst.path().join("album/a.bin");
+    std::fs::write(&user, b"the user copy").unwrap();
+
+    // (3) A delivery fails in the allocation: the folder is read-only.
+    let album = dst.path().join("album");
+    std::fs::set_permissions(&album, std::fs::Permissions::from_mode(0o555)).unwrap();
+    failed_delivery(&manifest, dst.path(), &db).await;
+    std::fs::set_permissions(&album, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // (4) A good delivery follows.
+    let (_, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    assert_eq!(std::fs::read(&user).unwrap(), b"the user copy");
+    let row = db.get_item(&manifest.payload_id, 0).unwrap().unwrap();
+    assert_eq!(row.state, "done");
+    let landed = PathBuf::from(row.dest_path.unwrap());
+    assert_ne!(landed, user, "the item takes a new name");
+    assert_eq!(std::fs::read(&landed).unwrap(), file_bytes(1));
+    let row = db.get_item(&manifest.payload_id, 1).unwrap().unwrap();
+    assert_eq!(row.state, "done");
+    assert_eq!(
+        std::fs::read(row.dest_path.unwrap()).unwrap(),
+        file_bytes(2)
+    );
+}
