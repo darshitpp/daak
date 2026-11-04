@@ -1,4 +1,5 @@
-//! Helpers for the resume tests (`folder_resume.rs` and `folder_retry.rs`).
+//! Helpers for the resume tests (`folder_resume.rs` and `folder_retry.rs`) and
+//! the open file limit tests (`open_files_limit.rs`).
 //! Each test binary uses a different subset, so unused items are allowed.
 #![allow(dead_code)]
 
@@ -8,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use daak_core::control::ResumeMsg;
+use daak_core::control::{AckMsg, ResumeMsg};
 use daak_core::framing::{Frame, RecordType};
 use daak_core::manifest::{from_picked_paths, DeviceRef, Manifest, CHUNK_SIZE_MIN};
 use daak_core::net::{tcp, FrameTransport};
@@ -133,6 +134,114 @@ pub async fn read_resume<T: FrameTransport>(conn: &mut T) -> ResumeMsg {
         if f.kind == RecordType::Nack {
             return ResumeMsg::from_cbor(&f.body).unwrap();
         }
+    }
+}
+
+/// The environment variable that tells a test that it runs in the child.
+pub const CHILD_GUARD: &str = "DAAK_TEST_IN_CHILD";
+
+/// True when this process is the child that `run_in_child_with_nofile` started.
+pub fn in_child() -> bool {
+    std::env::var_os(CHILD_GUARD).is_some()
+}
+
+/// Run the test `test_name` again in a child process with a soft limit of
+/// `limit` open files. The child runs the real test body. This process
+/// asserts that the child exits zero.
+pub fn run_in_child_with_nofile(limit: u32, test_name: &str) {
+    let exe = std::env::current_exe().unwrap();
+    let script = format!("ulimit -n {limit} && exec \"$0\" --exact {test_name} --test-threads=1");
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .arg(exe)
+        .env(CHILD_GUARD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "the child failed at {limit} open files\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran no test\nstdout:\n{stdout}"
+    );
+}
+
+/// The version 100 receiver shape: the sender waits for no resume frame and
+/// sends every chunk at once.
+pub async fn send_without_resume_frame<T: FrameTransport>(
+    conn: &mut T,
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+    on_progress: impl FnMut(u64),
+) -> daak_core::Result<()> {
+    send_transfer_resuming(conn, manifest, paths, None, on_progress).await
+}
+
+/// A receiver with no socket. It keeps every chunk that the sender sends.
+/// After each chunk it calls `after_chunk` with the item and chunk index.
+/// Each `recv` returns a final good ack for the last manifest.
+pub struct Sink {
+    pub payload_id: [u8; 16],
+    pub chunks: Vec<(u32, u64, Vec<u8>)>,
+    pub after_chunk: Box<dyn FnMut(u32, u64) + Send>,
+}
+
+impl Sink {
+    pub fn new() -> Self {
+        Self::with_hook(|_, _| {})
+    }
+
+    pub fn with_hook(hook: impl FnMut(u32, u64) + Send + 'static) -> Self {
+        Self {
+            payload_id: [0u8; 16],
+            chunks: Vec::new(),
+            after_chunk: Box::new(hook),
+        }
+    }
+
+    /// The bytes on the wire for one item, in chunk order.
+    pub fn item_bytes(&self, item: u32) -> Vec<u8> {
+        let mut parts: Vec<_> = self.chunks.iter().filter(|c| c.0 == item).collect();
+        parts.sort_by_key(|c| c.1);
+        parts.iter().flat_map(|c| c.2.iter().copied()).collect()
+    }
+}
+
+impl FrameTransport for Sink {
+    async fn send(
+        &mut self,
+        _stream_id: u32,
+        kind: RecordType,
+        body: Bytes,
+    ) -> daak_core::Result<()> {
+        match kind {
+            RecordType::Manifest => self.payload_id = Manifest::from_cbor(&body)?.payload_id,
+            RecordType::Chunk => {
+                let (item, chunk, data) = decode_chunk_body(&body)?;
+                self.chunks.push((item, chunk, data.to_vec()));
+                (self.after_chunk)(item, chunk);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn recv(&mut self) -> daak_core::Result<Option<Frame>> {
+        let ack = AckMsg {
+            transfer_id: self.payload_id,
+            item_index: 0,
+            complete: true,
+            hash_ok: true,
+        };
+        Ok(Some(Frame::new(
+            daak_core::net::CONTROL_STREAM,
+            RecordType::Ack,
+            Bytes::from(ack.to_cbor()?),
+        )))
     }
 }
 

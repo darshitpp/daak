@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
 
-use crate::chunk::ChunkReader;
 use crate::control::{AckMsg, ResumeMsg};
 use crate::error::{CoreError, Result};
 use crate::framing::RecordType;
-use crate::manifest::{Manifest, CHUNK_SIZE_DEFAULT};
+use crate::manifest::{clamp_chunk_size, Manifest, CHUNK_SIZE_DEFAULT};
 use crate::net::{FrameTransport, CONTROL_STREAM};
 use crate::transfer::scheduler::{interleave, ScheduledItem};
 
@@ -231,10 +229,9 @@ async fn stream_and_await_ack<T: FrameTransport>(
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
     let mut scheduled = Vec::with_capacity(manifest.items.len());
-    // ponytail: one open reader per binary item for the whole transfer (mirrors the
-    // receiver's all-files-open pattern). A folder of many hundreds of items can
-    // hit the per-process fd limit; switch to lazy open/close per item if batches grow.
-    let mut readers: HashMap<u32, ChunkReader> = HashMap::new();
+    // F2: the sender holds no file handle between chunks. This local list keeps,
+    // for each item index, the path, the chunk size, and the file identity.
+    let mut files: Vec<Option<(PathBuf, u64, FileId)>> = vec![None; manifest.items.len()];
     for item in &manifest.items {
         if !item.is_binary() {
             continue;
@@ -243,11 +240,18 @@ async fn stream_and_await_ack<T: FrameTransport>(
             .get(item.index as usize)
             .and_then(|p| p.clone())
             .ok_or_else(|| CoreError::Transfer(format!("missing path for item {}", item.index)))?;
-        let chunk_size = item.chunk_size.unwrap_or(CHUNK_SIZE_DEFAULT);
+        let chunk_size = clamp_chunk_size(item.chunk_size.unwrap_or(CHUNK_SIZE_DEFAULT));
         let chunk_count = item.chunk_count.ok_or_else(|| {
             CoreError::Transfer(format!("item {} missing chunk_count", item.index))
         })?;
-        readers.insert(item.index, ChunkReader::open(&path, chunk_size).await?);
+        let slot = files.get_mut(item.index as usize).ok_or_else(|| {
+            CoreError::Transfer(format!("item index {} is out of range", item.index))
+        })?;
+        // A picked path can be a symlink to a file. Resolve it once here. Each
+        // chunk opens the resolved path with `O_NOFOLLOW`, so a later swap fails.
+        let path = tokio::fs::canonicalize(&path).await?;
+        let id = file_id(&tokio::fs::symlink_metadata(&path).await?);
+        *slot = Some((path.clone(), chunk_size as u64, id));
         scheduled.push(ScheduledItem {
             index: item.index,
             path,
@@ -262,15 +266,19 @@ async fn stream_and_await_ack<T: FrameTransport>(
         if !chunk_in_ranges(ranges, item_index, chunk_index) {
             continue;
         }
-        let reader = readers
-            .get_mut(&item_index)
-            .ok_or_else(|| CoreError::Transfer(format!("no reader for item {item_index}")))?;
-        let chunk = reader.read_chunk_at(chunk_index).await?.ok_or_else(|| {
-            CoreError::Transfer(format!("chunk {chunk_index} missing for item {item_index}"))
-        })?;
-        let body = encode_chunk_body(item_index, chunk_index, &chunk.data);
-        on_progress(chunk.data.len() as u64);
-        sent += chunk.data.len() as u64;
+        let (path, chunk_size, want) = files
+            .get(item_index as usize)
+            .cloned()
+            .flatten()
+            .ok_or_else(|| CoreError::Transfer(format!("no source for item {item_index}")))?;
+        let data = tokio::task::spawn_blocking(move || {
+            read_chunk_checked(&path, chunk_size, chunk_index, want)
+        })
+        .await
+        .map_err(|e| CoreError::Transfer(format!("chunk read task failed: {e}")))??;
+        let body = encode_chunk_body(item_index, chunk_index, &data);
+        on_progress(data.len() as u64);
+        sent += data.len() as u64;
         conn.send(
             crate::session::item_stream(item_index),
             RecordType::Chunk,
@@ -297,6 +305,57 @@ async fn stream_and_await_ack<T: FrameTransport>(
             }
         }
     }
+}
+
+/// The size of a source file and, on unix, its device and inode.
+type FileId = (u64, Option<(u64, u64)>);
+
+fn file_id(meta: &std::fs::Metadata) -> FileId {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (meta.len(), Some((meta.dev(), meta.ino())))
+    }
+    #[cfg(not(unix))]
+    {
+        (meta.len(), None)
+    }
+}
+
+/// Read chunk `index` of the source file at `path`, then close the file.
+///
+/// On unix the open uses `O_NOFOLLOW`, so a symlink at the last component
+/// fails. The size, device, and inode of the open handle must equal `want`.
+/// A different value fails the transfer. The error text holds no file name.
+fn read_chunk_checked(
+    path: &Path,
+    chunk_size: u64,
+    index: u64,
+    want: (u64, Option<(u64, u64)>),
+) -> Result<Vec<u8>> {
+    use std::io::{Read, Seek};
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path)?;
+    if file_id(&file.metadata()?) != want {
+        return Err(CoreError::Transfer(
+            "the source file changed during the send".into(),
+        ));
+    }
+    let offset = chunk_size
+        .checked_mul(index)
+        .filter(|offset| *offset < want.0)
+        .ok_or_else(|| CoreError::Transfer(format!("chunk {index} missing")))?;
+    let len = (want.0 - offset).min(chunk_size);
+    file.seek(std::io::SeekFrom::Start(offset))?;
+    let mut data = vec![0u8; len as usize];
+    file.read_exact(&mut data)?;
+    Ok(data)
 }
 
 /// True when the chunk is in scope for this transfer. An empty top-level
@@ -387,6 +446,28 @@ mod tests {
         assert!(!chunk_in_ranges(&[vec![(2, 5)]], 0, 1));
         // Item without an entry => send all.
         assert!(chunk_in_ranges(&[vec![(2, 5)]], 1, 7));
+    }
+
+    /// F2: each read gives one chunk at most, and the last chunk is short.
+    /// This test replaces the tests of the deleted `ChunkReader`.
+    #[test]
+    fn read_chunk_checked_gives_one_chunk_and_a_short_last_chunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f.bin");
+        let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&p, &bytes).unwrap();
+        let want = file_id(&std::fs::metadata(&p).unwrap());
+        let chunk = 64 * 1024u64;
+        let c0 = read_chunk_checked(&p, chunk, 0, want).unwrap();
+        let c1 = read_chunk_checked(&p, chunk, 1, want).unwrap();
+        assert_eq!(c0, bytes[..chunk as usize]);
+        assert_eq!(c1, bytes[chunk as usize..]);
+        assert!(read_chunk_checked(&p, chunk, 2, want).is_err());
+        let other = (want.0 + 1, want.1);
+        assert!(matches!(
+            read_chunk_checked(&p, chunk, 0, other),
+            Err(CoreError::Transfer(_))
+        ));
     }
 
     #[tokio::test]
