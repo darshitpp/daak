@@ -38,6 +38,9 @@ const summary = (p: Partial<TransferSummary> = {}): TransferSummary => ({
 });
 
 describe('ThreadScreen', () => {
+  // A load that is still pending when a test ends must finish inside act.
+  afterEach(async () => { await settle(0); });
+
   // Review Focus 1.
   it('shows the empty state and keeps the composer when the thread has no items', async () => {
     mount(fakeEngine([peer]));
@@ -899,6 +902,8 @@ describe('ThreadScreen', () => {
 
 
 describe('ThreadScreen folders', () => {
+  afterEach(async () => { await settle(0); });
+
   const FOLDER = 'ee'.repeat(16);
   const kid = (rel: string, p: Partial<Parameters<typeof threadItem>[0]> = {}) =>
     threadItem({
@@ -991,6 +996,8 @@ describe('ThreadScreen folders', () => {
 
 // Task 9, frames F3 and F4: stage a folder in the composer.
 describe('ThreadScreen folder staging', () => {
+  afterEach(async () => { await settle(0); });
+
   const COPY = '/data/cache/daak-send/U1/album';
   const STATS = { files: 12, bytes: 34 * 1024 * 1024 };
   const flat = (s: unknown) => StyleSheet.flatten(s as StyleProp<ViewStyle>) ?? {};
