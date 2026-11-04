@@ -1,0 +1,1 @@
+Send and receive whole folders. The speed of a transfer shows on screen. Sending is faster when the disk or the CPU limits it. Settings has a Report an issue button that copies the recent log. The log stays in memory.
