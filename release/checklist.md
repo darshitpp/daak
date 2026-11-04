@@ -1,25 +1,28 @@
 # Daak release verification matrix
 
-This file records the release checks for version 0.1.4, build number 5.
-The Android APKs came from a GitHub Actions run, built on Linux and signed in the environment `release`. The tag `v0.1.4` is commit 53c4939, which adds only the hash file.
-The SHA-256 values are in `release/sha256-0.1.4.txt`.
-The Android rows below still list the 0.1.3 host checks. Only the Store channels section is updated for 0.1.4.
+This file records the release checks for version 0.1.5, build number 6.
+The Android APKs came from a GitHub Actions run on commit 2b45c8f, built on Linux and signed in the environment `release`. The tag `v0.1.5` is commit 3b49bac, which adds only the hash file.
+The SHA-256 values are in `release/sha256-0.1.5.txt`.
+The release checks for 0.1.5 were run on 2026-11-05 on the published assets. The "Checks that a human must run by hand" section still lists results for earlier versions.
 The results for earlier versions are in the Git history of this file.
 
 ## Checks that ran on the build host
 
 | Target | Artifact | Check | Result |
 | --- | --- | --- | --- |
-| Gates | the workspace | `cargo fmt --check` and `cargo clippy -D warnings` exit zero. `cargo test --workspace` passes 605 tests. `pnpm -r typecheck`, `pnpm -r test`, and `proto/codegen.sh` pass, and `proto/gen` is unchanged. | PASS. The 2 tests `a_stored_base_name_resolves_to_a_prefixed_name_and_self_profile_reports_it` and `the_stored_name_is_the_base_name_and_not_the_resolved_name` were skipped. They fail on this host, because it does not deliver the mDNS collision that they need. They fail the same way on the base commit |
-| Android | each APK | The package is `dev.darshit.daak` and `versionName` is `0.1.3`. | PASS |
-| Android | `daak-0.1.3-arm64-v8a.apk` | `versionCode` is `42`. | PASS |
-| Android | `daak-0.1.3-armeabi-v7a.apk` | `versionCode` is `41`. | PASS |
-| Android | `daak-0.1.3-universal.apk` | `versionCode` is `40`. | PASS |
-| Android | each APK | The signer fingerprint is `0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5`. | PASS. All three APKs print it |
-| Android | each APK | The SHA-256 values are in `release/sha256-0.1.3.txt`. | PASS |
-| macOS | `Daak-0.1.3.dmg` | The build and the hash step of `release.sh` finished. | PASS. NOT checked again: `codesign`, `spctl`, and the launch |
-| iOS | `Daak-0.1.3.ipa` | The build and the hash step of `release.sh` finished. | PASS. NOT checked again: the unsigned state and the contents |
-| GitHub | the 5 Release assets | `v0.1.3` is public and is `Latest`. The notes list the changes for each OS. | PASS |
+| Gates | the workspace | The gates ran on the pull request #19 (commit `1847fb1` on `main`). `cargo fmt --check` and `cargo clippy -D warnings` exit zero. `cargo test --workspace` passes 72 test targets. `pnpm -r typecheck` and `pnpm -r test` pass. | PASS for those. NOT run for the release: stage 4 of `release.sh` was skipped (`--from 5`), so `proto/codegen.sh` did not run. The release commits add only the version stamp, the notes, the changelogs, and the hash file |
+| Gates | `display_name_persist` | The 2 tests `a_stored_base_name_resolves_to_a_prefixed_name_and_self_profile_reports_it` and `the_stored_name_is_the_base_name_and_not_the_resolved_name` fail with "the squatter did not force a collision". | FAIL on this host, also from the maintainer terminal. They fail the same way on the base commit `2c40672`, so the release does not cause them. They need the engine to see the mDNS announcement of a second advertiser on the same host. The cause is not found |
+| Android | each APK | The package is `dev.darshit.daak` and `versionName` is `0.1.5`. | PASS. Checked with `aapt2` on the downloaded Release assets |
+| Android | `daak-0.1.5-arm64-v8a.apk` | `versionCode` is `62`. | PASS |
+| Android | `daak-0.1.5-armeabi-v7a.apk` | `versionCode` is `61`. | PASS |
+| Android | `daak-0.1.5-universal.apk` | `versionCode` is `60`. | PASS |
+| Android | each APK | The signer fingerprint is `0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5`. | PASS. `apksigner verify` prints it for all three APKs |
+| Android | each APK | The SHA-256 values are in `release/sha256-0.1.5.txt`. | PASS. The values of the downloaded Release assets equal the file |
+| macOS | `Daak-0.1.5.dmg` | `CFBundleShortVersionString` is `0.1.5` and `CFBundleVersion` is `6`. The binary has `x86_64` and `arm64` code. | PASS |
+| macOS | `Daak-0.1.5.dmg` | `codesign --verify --deep --strict` passes. The team id is `J6NNRLDUG4`. | PASS. `spctl` rejects the app as expected, because it is not notarized. NOT checked: the launch, the Gatekeeper prompt, onboarding, and pairing |
+| iOS | `Daak-0.1.5.ipa` | The bundle id is `dev.darshit.daak`, the version is `0.1.5`, and the build is `6`. | PASS |
+| iOS | `Daak-0.1.5.ipa` | The package is unsigned. It has no `_CodeSignature` and no `embedded.mobileprovision`. | PASS |
+| GitHub | the 5 Release assets | `v0.1.5` is public and is the latest Release. The notes list the changes for each OS. | PASS. The 3 APKs, the `.dmg`, and the `.ipa` are attached |
 
 ## Checks that a human must run by hand
 
@@ -35,6 +38,8 @@ The results for earlier versions are in the Git history of this file.
 
 | Channel | Check | Result |
 | --- | --- | --- |
+| F-Droid | The F-Droid bot adds the build entries for 0.1.5 (`versionCode` 61 and 62). | PENDING. On 2026-11-05 the upstream recipe still has `CurrentVersion: 0.1.4`. The recipe has `AutoUpdateMode: Version`, so the bot adds the entries. The release assets that `binary:` compares exist. NOT run: `fdroid checkupdates` |
+| Homebrew | The cask `darshitpp/homebrew-tap` has version `0.1.5` and the SHA-256 of the `.dmg`. | PASS. The cask commit is `5309a93`. NOT run: `brew upgrade --cask darshitpp/tap/daak` to 0.1.5 |
 | F-Droid | The F-Droid CI build of the merge request makes the APK for each entry. | PASS. Pipeline 2951570539 built `dev.darshit.daak:51` and `:52` from commit 53c4939 (0.1.4) |
 | F-Droid | CI on the merge request passes. | PASS. All 9 jobs of pipeline 2951668838 succeeded, including `fdroid rewritemeta`, `fdroid lint`, and `fdroid build` |
 | F-Droid | `fdroid build` with `binary:` passes, and the signer is allowed. | PASS. The log prints "compared built binary to supplied reference binary successfully" and "supplied reference binary has allowed signer" for both entries. The signer is `0d825cdc0069c9176bc9232f4be5a5266d51888f54c8fc2ff123c5b41f8f9df5` |
