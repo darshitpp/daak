@@ -52,6 +52,22 @@ export interface DesktopNotification {
   actions: NotifyAction[];
 }
 
+/**
+ * Clean text that a paired peer chose, for a notification title or body.
+ *
+ * It removes control, format, line separator, and paragraph separator
+ * characters (`\p{Cc}`, `\p{Cf}`, `\p{Zl}`, `\p{Zp}`). That gives one line with
+ * no bidi or zero-width trick. U+061C is in `\p{Cf}`. Then it cuts to 60 code
+ * points and adds `…` when it cut. It never splits a surrogate pair.
+ *
+ * Text with nothing left gives `''`. A caller that shows a name must choose its
+ * own words for that case.
+ */
+export function safeName(text: string): string {
+  const points = [...text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')];
+  return points.length > 60 ? points.slice(0, 60).join('') + '\u2026' : points.join('');
+}
+
 export function inboxActions(): NotifyAction[] {
   // R37, applied to desktop the way packages/platform/src/notify.ts:10-18
   // applies it to mobile, and with the same precedent in
@@ -94,7 +110,7 @@ export function buildNotification(entry: InboxNotificationEntry): DesktopNotific
     payloadId: entry.payloadId,
     category: 'daak.inbox',
     title: folder?.title ?? `Received ${entry.itemCount} ${unit}`,
-    body: folder?.body ?? entry.summary,
+    body: folder?.body ?? safeName(entry.summary),
     actions: inboxActions(),
   };
 }
@@ -117,7 +133,7 @@ function files(n: number): string {
  */
 export function receivedFolders(entry: InboxNotificationEntry): { name: string; indexes: number[] }[] {
   const roots = (entry.groupRoots ?? []).map((r) => r.replace(/\/+$/, '')).filter((r) => r !== '');
-  const folders = roots.map((r) => ({ name: r.slice(r.lastIndexOf('/') + 1), indexes: [] as number[] }));
+  const folders = roots.map((r) => ({ name: safeName(r.slice(r.lastIndexOf('/') + 1)) || 'folder', indexes: [] as number[] }));
   (entry.savedPaths ?? []).forEach((path, i) => {
     let best = -1;
     roots.forEach((root, k) => {
@@ -226,7 +242,7 @@ export async function failedSendNotice(engine: FailedSendEngine, transferId: str
     transferId,
     peerDeviceId: row.peerDeviceId,
     updatedAt: row.updatedAt,
-    title: `Couldn't send ${name}`,
+    title: `Couldn't send ${safeName(name) || 'a file'}`,
     body: 'Open Daak to try again.',
   };
 }

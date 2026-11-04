@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildFailedNotification, buildNotification, failedSendNotice, inboxActions, receivedText } from '../js/actions';
+import {
+  buildFailedNotification,
+  buildNotification,
+  failedSendNotice,
+  inboxActions,
+  receivedText,
+  safeName,
+} from '../js/actions';
 import type { FailedSendEngine, InboxNotificationEntry, NotifyAction } from '../js/actions';
 
 // No `as any`. The engine's real InboxEntry has EIGHT required fields
@@ -317,5 +324,65 @@ describe('buildFailedNotification', () => {
       body: 'Open Daak to try again.',
       actions: [{ id: 'open', label: 'Open' }],
     });
+  });
+});
+
+describe('safeName', () => {
+  it('safeName_gives_one_clean_line_for_newline_bidi_zero_width_and_line_separator', () => {
+    expect(safeName('al\nbum\u202E\u200B\u2028x\u2029y\r\u061Cz')).toBe('albumxyz');
+  });
+
+  it('safeName_cuts_200_characters_to_60_code_points', () => {
+    const out = safeName('a'.repeat(200));
+    expect(out).toBe('a'.repeat(60) + '\u2026');
+    expect([...out].length).toBe(61);
+  });
+
+  it('safeName_does_not_split_a_surrogate_pair', () => {
+    const out = safeName('a'.repeat(59) + '\u{1F600}' + 'b'.repeat(20));
+    expect(out).toBe('a'.repeat(59) + '\u{1F600}\u2026');
+    expect(out.charCodeAt(out.length - 3)).toBe(0xd83d);
+    expect(out.charCodeAt(out.length - 2)).toBe(0xde00);
+  });
+
+  it('Pin: normal names come out unchanged', () => {
+    for (const name of ['album', 'photo 1.jpg', '\u00DCn\u00EFcode', 'a'.repeat(60), '\u{1F600}'.repeat(60)]) {
+      expect(safeName(name)).toBe(name);
+    }
+  });
+
+  it('gives an empty string when nothing is left after cleaning', () => {
+    expect(safeName('\n\u200B\u202E')).toBe('');
+  });
+});
+
+describe('notification text uses safeName', () => {
+  const evil = 'x\nFAKE\u202E\u200B';
+  it('a_received_folder_notification_uses_safeName_for_the_folder_name_the_file_name_the_device_name_and_the_summary', () => {
+    const folder = buildNotification({
+      payloadId: 'p1',
+      itemCount: 1,
+      summary: evil,
+      groupRoots: ['/data/' + evil],
+      savedPaths: ['/data/' + evil + '/a.jpg'],
+    });
+    expect(folder.body).toBe('xFAKE \u00B7 1 file');
+    const loose = buildNotification({ payloadId: 'p2', itemCount: 1, summary: evil });
+    expect(loose.body).toBe('xFAKE');
+    // A name that is long is cut in the body too.
+    const long = buildNotification({ payloadId: 'p3', itemCount: 1, summary: 'n'.repeat(200) });
+    expect(long.body).toBe('n'.repeat(60) + '\u2026');
+  });
+
+  it('failedSendNotice_uses_safeName_for_name_and_group_name', async () => {
+    const TID = '11'.repeat(16);
+    const mk = (items: { name: string | null; group: { name: string } | null }[], count: number): FailedSendEngine => ({
+      listTransfers: async () => [{ transferId: TID, peerDeviceId: 'aa'.repeat(16), direction: 'out', itemCount: count, updatedAt: 1 }],
+      listThread: async () => ({ items: items.map((i) => ({ transferId: TID, type: 'file' as const, ...i })) }),
+    });
+    const one = await failedSendNotice(mk([{ name: evil, group: null }], 1), TID);
+    expect(one?.title).toBe("Couldn't send xFAKE");
+    const grp = await failedSendNotice(mk([{ name: 'a', group: { name: evil } }], 1), TID);
+    expect(grp?.title).toBe("Couldn't send xFAKE");
   });
 });

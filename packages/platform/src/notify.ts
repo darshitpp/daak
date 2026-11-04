@@ -3,6 +3,7 @@ import NativeDaakNotify from '@daak/rn-notify';
 import type { InboxEntry } from '@daak/core';
 // Deep import of a file that imports nothing. The package barrel holds the
 // mobile TurboModule, and this file already reaches it through the line above.
+import { safeName } from '@daak/rn-notify/js/actions';
 import type { FailedSendNotice } from '@daak/rn-notify/js/actions';
 import { loadNotifyPrefs } from './notify-prefs';
 
@@ -102,7 +103,7 @@ export async function notifyReceived(
   await NativeDaakNotify.post(
     entry.payloadId,
     text?.title ?? 'Daak',
-    text?.body ?? entry.summary,
+    text?.body ?? safeName(entry.summary),
     DAK_RECEIVED_CATEGORY,
     JSON.stringify(entry),
   ).catch((err: unknown) => {
