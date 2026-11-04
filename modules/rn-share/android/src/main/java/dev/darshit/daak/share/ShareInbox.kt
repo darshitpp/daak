@@ -78,7 +78,7 @@ object ShareInbox {
       ctx.contentResolver
         .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null }
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
       null
     }
   }

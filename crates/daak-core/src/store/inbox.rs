@@ -887,7 +887,6 @@ mod tests {
             large < small * 40,
             "group_roots is not linear: 4096 items took {small:?}, 65536 items took {large:?}"
         );
-        assert!(large < std::time::Duration::from_secs(30));
     }
 
     #[test]

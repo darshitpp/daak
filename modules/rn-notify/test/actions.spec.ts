@@ -174,20 +174,20 @@ describe('receivedText', () => {
 
   it('gives one line for each folder of an entry with two groups', () => {
     const two = folderEntry({
-      groupRoots: ['/data/downloads/album', '/data/downloads/photos~1'],
+      groupRoots: ['/data/downloads/album', '/data/downloads/photos-1'],
       savedPaths: [
         '/data/downloads/album/a.jpg',
         '/data/downloads/album/b.pdf',
-        '/data/downloads/photos~1/c.jpg',
+        '/data/downloads/photos-1/c.jpg',
       ],
     });
-    expect(receivedText(two)).toEqual({ title: 'Received 2 folders', body: 'album · 2 files\nphotos~1 · 1 file' });
+    expect(receivedText(two)).toEqual({ title: 'Received 2 folders', body: 'album · 2 files\nphotos-1 · 1 file' });
   });
 
   it('counts a root only on a whole path component', () => {
     const near = folderEntry({
       groupRoots: ['/data/downloads/photos'],
-      savedPaths: ['/data/downloads/photos/a.jpg', '/data/downloads/photos~1/b.jpg'],
+      savedPaths: ['/data/downloads/photos/a.jpg', '/data/downloads/photos-1/b.jpg'],
     });
     expect(receivedText(near)).toEqual({ title: 'Received a folder', body: 'photos · 1 file\nand 1 other file' });
   });

@@ -204,7 +204,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
           putDouble("files", files.toDouble())
           putDouble("bytes", bytes.toDouble())
         })
-      } catch (t: Throwable) {
+      } catch (_: Throwable) {
         promise.reject("E_FSPATHS", "the file operation did not complete")
       }
     }
@@ -242,7 +242,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         } else {
           promise.reject("E_DISCARD", "the copy could not be deleted")
         }
-      } catch (t: Throwable) {
+      } catch (_: Throwable) {
         promise.reject("E_DISCARD", "the copy could not be deleted")
       }
     }
@@ -264,18 +264,18 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         for (slot in pickedCopiesRoot().listFiles() ?: emptyArray()) {
           if (slot.lastModified() >= started) continue
           if (!slot.deleteRecursively()) {
-            android.util.Log.w("DaakFsPaths", "E_SWEEP: an old folder copy could not be deleted")
+            android.util.Log.w("DaakFsPaths", "sweep: an old folder copy could not be deleted")
           }
         }
         promise.resolve(null)
-      } catch (t: Throwable) {
+      } catch (_: Throwable) {
         promise.reject("E_SWEEP", "the old copies could not be deleted")
       }
     }
   }
 
   private inline fun resolve(promise: Promise, block: () -> Any?) {
-    try { promise.resolve(block()) } catch (t: Throwable) { promise.reject("E_FSPATHS", "the file operation did not complete") }
+    try { promise.resolve(block()) } catch (_: Throwable) { promise.reject("E_FSPATHS", "the file operation did not complete") }
   }
 
   private fun prefs(): SharedPreferences =
@@ -327,7 +327,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
       val name = tree.lastPathSegment?.substringAfterLast('/')
       prefs().edit().putString(KEY_TREE, tree.toString()).putString(KEY_NAME, name).apply()
       promise.resolve(name)
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
       promise.reject("E_TREE", "could not keep that folder")
     }
   }
@@ -403,7 +403,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         } ?: return@mapIndexed path
         src.delete()
         dest.toString()
-      } catch (t: Throwable) {
+      } catch (_: Throwable) {
         path
       }
     }
@@ -433,7 +433,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     // always equals the input count.
     val input = (0 until paths.size()).map { paths.getString(it) ?: "" }
     val out = input.mapIndexed { i, path ->
-      try { saveOne(path, parallelAt(albums, i)) } catch (t: Throwable) { path }
+      try { saveOne(path, parallelAt(albums, i)) } catch (_: Throwable) { path }
     }
     // Best effort. A throw here must not reject the promise: the files already
     // moved, and JavaScript must still get the new paths.
@@ -610,7 +610,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
         android.util.Log.w("DaakFsPaths", "saved item but could not delete source")
       }
       uri.toString()
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
       try { resolver.delete(uri, null, null) } catch (_: Throwable) {}
       path
     }

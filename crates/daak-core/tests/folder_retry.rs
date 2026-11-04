@@ -568,6 +568,8 @@ async fn staging_survives_deletion_of_the_source() {
     p.b.shutdown().await.unwrap();
 }
 
+/// Pin: this test passes on the old code. It guards the retry of a folder and
+/// of a loose file.
 #[tokio::test]
 async fn the_outbox_retry_resumes_for_a_folder_and_for_a_loose_file() {
     let p = pair().await;

@@ -1163,6 +1163,7 @@ async fn engine(
     (std::sync::Arc::new(e), db)
 }
 
+/// Pin: this test passes on the old code.
 /// The first delivery writes the inbox row. A second delivery of the same
 /// payload id is then a duplicate, even with a changed manifest. The
 /// duplicate goes to the discard directory and changes no stored state.

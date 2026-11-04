@@ -77,7 +77,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     // a @ReactMethod stops a release app, so the call rejects the promise.
     try {
       activity.startActivity(Intent.createChooser(intent, "Share via"))
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
       return promise.reject("E_SHARE", "the share sheet did not open")
     }
     // Resolves when the OS chooser is up, not when a peer accepted anything.
@@ -105,7 +105,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     folderPromise = promise
     try {
       activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER)
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
       // A device with no documents app throws ActivityNotFoundException.
       folderPromise = null
       promise.reject("E_PICK", "the folder picker did not open")
@@ -131,7 +131,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       promise.resolve(null)
     } catch (cnf: ClassNotFoundException) {
       promise.resolve(null)
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
       promise.reject("E_SHORTCUTS", "the share shortcuts did not update")
     }
   }

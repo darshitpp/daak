@@ -579,9 +579,10 @@ async fn note_found(
 /// accept loop hands it to `handle_inbound`. R42d.
 pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
 
-/// The protocol version that each peer announced over mDNS. The send path
-/// reads it: a peer of version 101 or more gets the resume wait. A peer that
-/// never announced has no entry, and the sender then sends every chunk.
+/// The protocol version that each trusted peer announced over mDNS. An
+/// untrusted or revoked peer has no entry, and the sender then sends every
+/// chunk. The send path reads it: a peer of version 101 or more gets the
+/// resume wait.
 pub(crate) type PeerVersions = Arc<std::sync::Mutex<HashMap<[u8; 16], u16>>>;
 
 /// Record the version from an mDNS announce. The announce is not
@@ -1889,8 +1890,9 @@ impl Engine {
         Ok(())
     }
 
-    /// Record the protocol version of a peer, as an mDNS announce does. An
-    /// integration test has no mDNS, so it calls this.
+    /// Record the protocol version of a peer with no trust check. An
+    /// integration test has no mDNS, so it calls this. `note_announce`
+    /// applies the trust gate.
     #[doc(hidden)]
     pub fn note_peer_version(&self, peer: [u8; 16], version: u16) {
         if let Ok(mut versions) = self.peer_versions.lock() {

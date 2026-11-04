@@ -65,7 +65,7 @@ pub async fn send_transfer<T: FrameTransport>(
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
     // Per-item half-open chunk ranges; &[] or a missing entry = all chunks, a
-    // present-but-empty entry = none (R-T7-4).
+    // present-but-empty entry = none (R-T7-4). An invalid list gives a full send.
     ranges: &[Vec<(u64, u64)>],
     on_progress: impl FnMut(u64),
 ) -> Result<()> {
@@ -631,6 +631,37 @@ mod tests {
         assert!(matches!(run.result, Err(CoreError::Protocol(_))));
     }
 
+    /// Pin: an item list with no range stays in the result. It means "send
+    /// nothing for this item".
+    #[test]
+    fn clean_ranges_keeps_an_empty_item_list_as_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.bin");
+        std::fs::write(&p, vec![5u8; 2_000]).unwrap();
+        let item = Item::from_file(0, &p, 64 * 1024).unwrap();
+        assert!(item.chunk_count.unwrap_or(0) > 0);
+        let manifest = Manifest::new(PayloadKind::Media, sender(), vec![item]);
+        assert_eq!(
+            clean_ranges(&manifest, vec![vec![]]),
+            vec![Vec::<(u64, u64)>::new()]
+        );
+    }
+
+    /// Pin: two ranges that touch at one chunk index merge into one range.
+    #[test]
+    fn clean_ranges_merges_adjacent_half_open_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.bin");
+        std::fs::write(&p, vec![5u8; 2_000]).unwrap();
+        let mut item = Item::from_file(0, &p, 64 * 1024).unwrap();
+        item.chunk_count = Some(9);
+        let manifest = Manifest::new(PayloadKind::Media, sender(), vec![item]);
+        assert_eq!(
+            clean_ranges(&manifest, vec![vec![(0, 5), (5, 9)]]),
+            vec![vec![(0, 9)]]
+        );
+    }
+
     #[test]
     fn chunk_in_ranges_sends_all_when_empty_or_matches() {
         // Empty top-level ranges => every chunk in scope.
@@ -648,7 +679,7 @@ mod tests {
     }
 
     /// F2: each read gives one chunk at most, and the last chunk is short.
-    /// This test replaces the tests of the deleted `ChunkReader`.
+    /// This test replaces the tests of the old chunk reader.
     #[test]
     fn read_chunk_checked_gives_one_chunk_and_a_short_last_chunk() {
         let dir = tempfile::tempdir().unwrap();

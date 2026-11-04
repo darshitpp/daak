@@ -9,12 +9,15 @@ import { describe, expect, it } from 'vitest';
 
 const MODULES = join(__dirname, '..', '..');
 const ROOTS = [join(MODULES, 'rn-share'), join(MODULES, 'rn-fspaths')];
-const SOURCE = /\.(swift|kt|mm|m)$/;
+const SOURCE = /\.(swift|kt|mm|m|h|java)$/;
 const SKIP_DIRS = new Set(['build', 'node_modules', '.gradle']);
 
 // The calls that make a reject message, a log line, or a message that JavaScript reads.
 // FolderPickError (Kotlin) holds a message that a later reject sends to JavaScript.
-const CALL = /(?<![A-Za-z_])(reject|NSLog|Log\.[wedi]|os_log|FolderPickError)\(/g;
+// A log call of the single-message kind (SINGLE_MESSAGE) takes the message as its first argument.
+const CALL =
+  /(?<![A-Za-z_])(reject|NSLog|Log\.(?:[vwedi]|wtf)|os_log|print|debugPrint|RCTLog(?:Warn|Error|Info)|[Ll]ogger\.(?:trace|debug|info|notice|warning|error|fault|log)|FolderPickError)\(/g;
+const SINGLE_MESSAGE = /^(NSLog|os_log|print|debugPrint|RCTLog\w+|[Ll]ogger\.\w+)$/;
 
 // The only interpolations that a message can hold. Each one is a number, a Bool,
 // an error domain, an error code, or an exception class name.
@@ -125,16 +128,17 @@ function problems(line: string): string[] {
       continue;
     }
     if (ALLOWED_LINES.has(trimmed.replace(/^return /, ''))) continue;
-    // NSLog and os_log get one message. The other calls get a code or a tag first.
-    const messages = name === 'NSLog' || name === 'os_log' ? args : args.slice(1, 2);
-    const extra = name === 'NSLog' || name === 'os_log' ? args.slice(1) : args.slice(2);
+    // A log call of the single-message kind gets one message. The other calls get a code or a tag first.
+    const single = SINGLE_MESSAGE.test(name);
+    const messages = single ? args : args.slice(1, 2);
+    const extra = single ? args.slice(1) : args.slice(2);
     for (const message of messages) {
       if (!isLiteral(message)) {
         found.push(`${name}: the message is not a fixed string: ${message}`);
         continue;
       }
       // JavaScript can show a reject message. A message with a slash can be a path.
-      if (name !== 'NSLog' && name !== 'os_log' && message.includes('/')) {
+      if (!single && message.includes('/')) {
         found.push(`${name}: the message holds a slash: ${message}`);
       }
       for (const expr of interpolations(message)) {
@@ -182,6 +186,14 @@ describe('native error text and logs', () => {
     expect(problems('reject(@"E_BAD_DEVICES", error.localizedDescription ?: @"bad", error);').length).toBeGreaterThan(0);
     expect(problems('reject("E_X", "/var/mobile/a.txt", nil)')).toHaveLength(1);
     expect(problems('reject("NO_SPACE", "NO_SPACE:\\(needed)", nil)')).toEqual([]);
+    expect(problems('android.util.Log.v("DaakFsPaths", "source: ${src.name}")')).toHaveLength(1);
+    expect(problems('android.util.Log.wtf("DaakFsPaths", "failed", it)')).toHaveLength(1);
+    expect(problems('print("moved \\(url.path)")')).toHaveLength(1);
+    expect(problems('debugPrint("moved \\(url.path)")')).toHaveLength(1);
+    expect(problems('logger.error("moved \\(url.path)")')).toHaveLength(1);
+    expect(problems('RCTLogWarn(@"moved %@", path);').length).toBeGreaterThan(0);
+    expect(problems('RCTLogError(@"bad", error);').length).toBeGreaterThan(0);
+    expect(problems('RCTLogInfo(@"moved %@", path);').length).toBeGreaterThan(0);
     expect(problems('NSLog("Daak: E_X (\\((error as NSError).domain) \\((error as NSError).code))")')).toEqual([]);
   });
 });
