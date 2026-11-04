@@ -282,6 +282,9 @@ async fn stream_and_await_ack<T: FrameTransport>(
 
 /// `stream_and_await_ack` with a test hook. The reader task calls
 /// `read_hook` before each chunk read.
+///
+/// If the caller drops the returned future, the reader task is not aborted.
+/// It ends after at most one more read, because the channel is closed.
 pub(crate) async fn stream_and_await_ack_with<T: FrameTransport>(
     conn: &mut T,
     manifest: &Manifest,
@@ -1165,7 +1168,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sender_reader_runs_at_most_read_ahead_plus_2() {
+    async fn sender_reader_stops_at_read_ahead_plus_2() {
         let src = source(&[10]);
         let count = Arc::new(AtomicUsize::new(0));
         let (mine, theirs) = SecureConnection::<MemConn>::test_pair();
@@ -1282,6 +1285,8 @@ mod tests {
         drop(conn);
         r.unwrap();
         assert_eq!(peer.await.unwrap().len(), CHUNKS as usize);
+        // This formula assumes that the hook sleep and the send delay are
+        // the same step (`STEP`). Change both together.
         let sequential = (*slept.lock().unwrap() * 2).max(STEP * 2 * CHUNKS as u32);
         eprintln!("sender_overlap: loop {elapsed:?}, sequential {sequential:?}");
         assert!(

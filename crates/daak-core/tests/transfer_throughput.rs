@@ -95,7 +95,7 @@ async fn run(total_mib: u64, files: u32) -> (f64, f64) {
 async fn throughput_report() {
     let (rate, secs) = run(64, 8).await;
     println!("throughput_report: {rate:.2} MiB/s in {secs:.2} s (64 MiB, 8 files, loopback, encryption included)");
-    assert!(rate >= 1.0, "rate {rate:.1} MiB/s is below 1 MiB/s");
+    assert!(rate >= 1.0, "rate {rate:.2} MiB/s is below 1 MiB/s");
 }
 
 /// 512 MiB in 64 files. It runs only when `DAAK_PERF=1`.

@@ -72,6 +72,27 @@ describe('useTransferSpeed', () => {
     expect(hook.result.current.text).not.toBeNull();
   });
 
+  it('warm_up_ends_after_1000ms_of_samples', () => {
+    const { hook } = setup();
+    for (let i = 1; i <= 9; i += 1) step(hook, 100, i * MIB);
+    expect(hook.result.current.text).toBeNull();
+    step(hook, 100, 10 * MIB);
+    expect(hook.result.current.text).not.toBeNull();
+  });
+
+  it('stall_hides_speed_at_3000ms_and_not_at_2900ms', () => {
+    const { hook } = setup();
+    for (let i = 1; i <= 20; i += 1) step(hook, 100, i * MIB);
+    act(() => {
+      jest.advanceTimersByTime(2900);
+    });
+    expect(hook.result.current.text).not.toBeNull();
+    act(() => {
+      jest.advanceTimersByTime(100);
+    });
+    expect(hook.result.current.text).toBeNull();
+  });
+
   it('ignores_close_samples', () => {
     const { hook } = setup();
     for (let i = 1; i <= 20; i += 1) step(hook, 100, i * MIB);
@@ -168,6 +189,8 @@ describe('formatSpeed', () => {
     expect(formatSpeed(12.3 * MIB)).toBe('12.3 MiB/s');
     expect(formatSpeed(2.5 * 1024 * MIB)).toBe('2.5 GiB/s');
     expect(formatSpeed(0)).toBe('0.0 KiB/s');
+    expect(formatSpeed(NaN)).toBe('0.0 KiB/s');
+    expect(formatSpeed(Infinity)).toBe('0.0 KiB/s');
     expect(formatSpeed(10 * MIB)).not.toContain('MB/s ');
   });
 });
@@ -183,5 +206,7 @@ describe('formatEta', () => {
     expect(formatEta(150)).toBe('about 3 min left');
     expect(formatEta(7200)).toBe('about 2 h left');
     expect(formatEta(100 * 3600)).toBeNull();
+    expect(formatEta(99.6 * 3600)).toBeNull();
+    expect(formatEta(99.4 * 3600)).toBe('about 99 h left');
   });
 });

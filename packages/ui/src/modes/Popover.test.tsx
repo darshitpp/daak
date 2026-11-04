@@ -413,6 +413,31 @@ describe('the panel speed', () => {
     expect(text).not.toMatch(/left|about/);
   });
 
+  it('popover_drops_the_speed_when_a_running_transfer_finishes', async () => {
+    jest.useFakeTimers();
+    const { engine } = spyEngine([pixel]);
+    let n = 0;
+    let state: TransferSummary['state'] = 'active';
+    jest.spyOn(engine, 'listTransfers').mockImplementation(async () => [
+      summary({ state, bytesDone: n * 7 * MIB, bytesTotal: 4000 * MIB }),
+    ]);
+    await mount(engine, [pixel]);
+    await settle();
+    for (let i = 0; i < 5; i++) {
+      n = i + 1;
+      await act(async () => {
+        jest.advanceTimersByTime(700);
+      });
+    }
+    expect(screen.getByTestId('popover-speed')).toBeTruthy();
+    state = 'done';
+    await act(async () => {
+      jest.advanceTimersByTime(700);
+    });
+    expect(screen.getByTestId('popover-done')).toBeTruthy();
+    expect(screen.queryByTestId('popover-speed')).toBeNull();
+  });
+
   it('popover_shows_no_speed_for_a_waiting_done_or_failed_transfer', async () => {
     for (const state of ['queued', 'done', 'failed'] as const) {
       jest.useFakeTimers();
@@ -423,14 +448,27 @@ describe('the panel speed', () => {
       jest.spyOn(engine, 'listTransfers').mockImplementation(async () => [
         summary({ peerDeviceId: peerOff.deviceId, state, bytesDone: n * 7 * MIB, bytesTotal: 400 * MIB }),
       ]);
+      const rows = jest.spyOn(engine, 'listTransfers');
+      // A row that exists at mount is adopted at once for an offline peer only.
+      // A done or failed row shows after a send, so send a note first.
+      const live = rows.getMockImplementation()!;
+      if (state !== 'queued') rows.mockResolvedValue([]);
       const view = await mount(engine, [peerOff]);
       await settle();
+      if (state !== 'queued') {
+        await open(peerOff);
+        await fireEventAsync.changeText(screen.getByPlaceholderText('Or type a note'), 'hi');
+        rows.mockImplementation(live);
+        await fireEventAsync.press(screen.getByTestId('popover-send'));
+      }
       for (let i = 0; i < 5; i++) {
         n = i + 1;
         await act(async () => {
           jest.advanceTimersByTime(700);
         });
       }
+      // The pane for this state must be on screen, or the checks below prove nothing.
+      expect(screen.getByTestId('popover-' + (state === 'queued' ? 'waiting' : state))).toBeTruthy();
       expect(screen.queryByTestId('popover-speed')).toBeNull();
       expect(screen.queryByText(/MiB\/s/)).toBeNull();
       await view.unmountAsync();

@@ -11,7 +11,8 @@ const MIB = KIB * 1024;
 const GIB = MIB * 1024;
 
 /** Format a rate with 1 digit after the point. Example: `12.3 MiB/s`. */
-export function formatSpeed(bytesPerSec: number): string {
+export function formatSpeed(rawBytesPerSec: number): string {
+  const bytesPerSec = Number.isFinite(rawBytesPerSec) ? rawBytesPerSec : 0;
   if (bytesPerSec >= GIB) return `${(bytesPerSec / GIB).toFixed(1)} GiB/s`;
   if (bytesPerSec >= MIB) return `${(bytesPerSec / MIB).toFixed(1)} MiB/s`;
   return `${(bytesPerSec / KIB).toFixed(1)} KiB/s`;
@@ -22,7 +23,7 @@ export function formatEta(secondsLeft: number): string | null {
   let s = Math.max(0, Math.round(secondsLeft));
   if (s > 30 && s < 60) s = Math.round(s / 5) * 5;
   if (s < 60) return `${s} s left`;
-  if (secondsLeft >= 100 * 3600) return null;
+  if (Math.round(secondsLeft / 3600) >= 100) return null;
   const min = Math.round(s / 60);
   if (min < 60) return `about ${min} min left`;
   return `about ${Math.round(s / 3600)} h left`;
@@ -38,7 +39,7 @@ export function shortSpeedText(bytesPerSec: number, etaSeconds: number | null): 
   return `${formatSpeed(bytesPerSec)} · ${left.replace(/^about /, '').replace(/ left$/, '')}`;
 }
 
-type Window = {
+type Samples = {
   lastT: number;
   lastBytes: number;
   warmStart: number;
@@ -64,7 +65,7 @@ export function useTransferSpeed(
   bytesTotal: number,
   active: boolean,
 ): Shown {
-  const win = useRef<Window | null>(null);
+  const win = useRef<Samples | null>(null);
   const total = useRef(bytesTotal);
   total.current = bytesTotal;
   // The three fields live in one state value. They never disagree.

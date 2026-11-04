@@ -116,7 +116,6 @@ impl<T: FrameTransport + Send> FrameTransport for TestTransport<T> {
     }
 }
 
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::net::secure::{MemConn, SecureConnection};
