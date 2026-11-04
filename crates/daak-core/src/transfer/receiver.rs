@@ -1,5 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use bytes::Bytes;
 
 use crate::chunk::ChunkBitmap;
 use crate::control::{AckMsg, ResumeMsg};
@@ -378,6 +382,21 @@ fn check_real_dir_chain(root: &Path, parent: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `write_chunk_with` with a no-op hook and no cancel. The receive loop
+/// calls `write_chunk_with`, so only the tests use this function.
+#[cfg(test)]
+async fn write_chunk(root: &Path, path: &Path, offset: u64, data: Bytes) -> Result<()> {
+    write_chunk_with(
+        root,
+        path,
+        offset,
+        data,
+        || {},
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+}
+
 /// Write one chunk into the item file at `path`. F2: the receiver keeps no
 /// handle for each item. Each chunk opens the file, seeks, writes, flushes,
 /// and closes it, in one blocking task.
@@ -385,10 +404,31 @@ fn check_real_dir_chain(root: &Path, parent: &Path) -> Result<()> {
 /// The open does not create the file. A missing file is an error, and the
 /// transfer can resume. On unix `O_NOFOLLOW` refuses a symlink at the last
 /// component.
-async fn write_chunk(root: &Path, path: &Path, offset: u64, data: &[u8]) -> Result<()> {
+///
+/// The test hook runs in the async part, before `spawn_blocking`. When
+/// `cancel` is set, the write does not start. The blocking part tests
+/// `cancel` again before `check_real_dir_chain`, before `open`, and before
+/// `write_all`. After `write_all` starts, the write runs to its end.
+async fn write_chunk_with(
+    root: &Path,
+    path: &Path,
+    offset: u64,
+    data: Bytes,
+    hook: impl Fn() + Send + Sync + 'static,
+    cancel: Arc<AtomicBool>,
+) -> Result<()> {
     use std::io::{Seek, Write};
-    let (root, path, data) = (root.to_path_buf(), path.to_path_buf(), data.to_vec());
+    hook();
+    let cancelled = || CoreError::Transfer("chunk write cancelled".into());
+    if cancel.load(Ordering::SeqCst) {
+        return Err(cancelled());
+    }
+    let (root, path) = (root.to_path_buf(), path.to_path_buf());
     tokio::task::spawn_blocking(move || -> Result<()> {
+        let stop = || cancel.load(Ordering::SeqCst);
+        if stop() {
+            return Err(cancelled());
+        }
         if let Some(parent) = path.parent() {
             check_real_dir_chain(&root, parent)?;
         }
@@ -399,14 +439,99 @@ async fn write_chunk(root: &Path, path: &Path, offset: u64, data: &[u8]) -> Resu
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NOFOLLOW);
         }
+        if stop() {
+            return Err(cancelled());
+        }
         let mut file = options.open(&path)?;
         file.seek(std::io::SeekFrom::Start(offset))?;
+        if stop() {
+            return Err(cancelled());
+        }
         file.write_all(&data)?;
         file.flush()?;
         Ok(())
     })
     .await
     .map_err(|e| CoreError::Transfer(format!("chunk write task failed: {e}")))?
+}
+
+/// The chunk of a write, for the state update after the write.
+#[derive(Clone, Copy)]
+struct ChunkRef {
+    item_index: u32,
+    chunk_index: u64,
+    len: u64,
+}
+
+/// The one pending chunk write of a receive. On drop, the guard sets the
+/// cancel flag and aborts the write task. So after a dropped receive no write
+/// starts. A write whose blocking part already runs can finish.
+struct WriteGuard {
+    pending: Option<(tokio::task::JoinHandle<Result<()>>, ChunkRef)>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl WriteGuard {
+    /// Wait for the pending write. Return its chunk and its result. The write
+    /// stays in the guard while the receive waits, so a drop at that point
+    /// still cancels it.
+    async fn finish(&mut self) -> Option<(ChunkRef, Result<()>)> {
+        let (handle, _) = self.pending.as_mut()?;
+        let written = match handle.await {
+            Ok(r) => r,
+            Err(e) => Err(CoreError::Transfer(format!("chunk write task failed: {e}"))),
+        };
+        let (_, done) = self.pending.take()?;
+        Some((done, written))
+    }
+}
+
+impl Drop for WriteGuard {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        if let Some((handle, _)) = &self.pending {
+            handle.abort();
+        }
+    }
+}
+
+/// The state update for a chunk whose write completed. It reports the
+/// progress, sets the bit, and saves the bitmap at `BITMAP_PERSIST_INTERVAL`.
+/// `store` is the Db. It is `None` without a Db and for a duplicate delivery.
+fn apply_chunk(
+    done: ChunkRef,
+    bitmaps: &mut [Option<ChunkBitmap>],
+    store: Option<&Db>,
+    payload_id: &[u8; 16],
+    received_any: &mut bool,
+    chunks_since_persist: &mut u64,
+    progress: &mut impl FnMut(u64, bool),
+) -> Result<()> {
+    let ChunkRef {
+        item_index,
+        chunk_index,
+        len,
+    } = done;
+    let bitmap = bitmaps
+        .get_mut(item_index as usize)
+        .and_then(Option::as_mut)
+        .ok_or_else(|| CoreError::Protocol(format!("chunk for non-binary item {item_index}")))?;
+    progress(len, bitmap.is_set(chunk_index));
+    if !bitmap.set(chunk_index) {
+        return Err(CoreError::Protocol(format!(
+            "chunk index {chunk_index} out of range for item {item_index}"
+        )));
+    }
+    if let Some(db) = store {
+        *received_any = true;
+        *chunks_since_persist += 1;
+        if *chunks_since_persist >= BITMAP_PERSIST_INTERVAL {
+            // R-T7-5: keyed by manifest.payload_id (see the interrupt arm).
+            db.save_bitmap(payload_id, item_index, bitmap)?;
+            *chunks_since_persist = 0;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
@@ -617,6 +742,7 @@ pub async fn receive_transfer_from<T: FrameTransport>(
         db,
         on_item,
         RESUME_MSG_MAX,
+        Arc::new(|| {}),
     )
     .await
 }
@@ -636,8 +762,10 @@ fn resume_frame(msg: &ResumeMsg, limit: usize) -> Result<Option<Vec<u8>>> {
     Ok((bytes.len() <= limit).then_some(bytes))
 }
 
-/// `receive_transfer_from` with the `ResumeMsg` size limit as a parameter, so
-/// a test can use a small limit.
+/// `receive_transfer_from` with the `ResumeMsg` size limit and the write hook
+/// as parameters, so a test can use a small limit and a slow write. The hook
+/// runs before each chunk write (see `write_chunk_with`).
+#[allow(clippy::too_many_arguments)]
 async fn receive_with_resume_limit<T: FrameTransport>(
     conn: &mut T,
     expected_sender: Option<[u8; 16]>,
@@ -646,6 +774,7 @@ async fn receive_with_resume_limit<T: FrameTransport>(
     db: Option<&Db>,
     mut on_item: impl FnMut(EngineEvent),
     resume_limit: usize,
+    write_hook: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<Manifest> {
     let manifest = loop {
         match conn.recv().await? {
@@ -999,116 +1128,181 @@ async fn receive_with_resume_limit<T: FrameTransport>(
             .filter_map(|i| i.size)
             .sum::<u64>();
 
-    let all_received = |bitmaps: &[Option<ChunkBitmap>]| {
-        bitmaps
-            .iter()
-            .all(|b| b.as_ref().map(|b| b.is_complete()).unwrap_or(true))
-    };
-
+    // The chunks that are still missing: the unset bits of every binary item
+    // that is not settled. The loop ends when this is 0. A frame counts only
+    // when its bit is unset after the drain of the pending write, so a
+    // duplicate never counts. The loop then needs no `recv` after the frame
+    // of the last missing chunk.
+    let mut remaining: u64 = bitmaps
+        .iter()
+        .flatten()
+        .map(|b| b.len() - b.count_ones())
+        .sum();
     let mut received_any = false;
     // ponytail: one counter shared across all items; an item completed well
     // before a later hard-kill persists only on graceful early-close. Re-fetch is
     // idempotent and the per-item BLAKE2b hash is the final authority, so this is
     // an efficiency ceiling, not a correctness gap.
     let mut chunks_since_persist: u64 = 0;
-
-    while !all_received(&bitmaps) {
-        // With a Db, a reset connection is an interrupt, the same as a close.
-        // The bitmap is saved in both cases, so the next connection resumes.
-        let frame = match conn.recv().await {
-            Ok(Some(f)) => f,
-            Ok(None) | Err(CoreError::Io(_)) if db.is_some() => {
-                // `received_any` stays false for a duplicate, so a duplicate
-                // saves no bitmap.
-                if let Some(db) = db.filter(|_| received_any) {
-                    for (i, bm) in bitmaps.iter().enumerate() {
-                        if let Some(bm) = bm {
-                            // R-T7-5: keyed by manifest.payload_id, never a
-                            // transfer id -- the resuming peer must find these.
-                            db.save_bitmap(&manifest.payload_id, i as u32, bm)?;
-                        }
-                    }
-                }
-                return Err(CoreError::TransferInterrupted);
-            }
-            Ok(None) => return Err(CoreError::Protocol("closed mid-transfer".into())),
-            Err(e) => return Err(e),
-        };
-        if frame.kind != RecordType::Chunk {
-            continue;
-        }
-        let (item_index, chunk_index, data) = decode_chunk_body(&frame.body)?;
-        // A version 100 sender sends every chunk, also for a settled item.
-        // The receiver ignores those chunks.
-        if is_settled(item_index) {
-            continue;
-        }
-        let idx = item_index as usize;
-        let chunk_size = manifest
-            .items
-            .get(idx)
-            .and_then(|i| i.chunk_size)
-            .ok_or_else(|| CoreError::Protocol(format!("chunk for unknown item {item_index}")))?;
-        let chunk_count = manifest.items[idx]
-            .chunk_count
-            .ok_or_else(|| CoreError::Protocol(format!("item {item_index} missing chunk_count")))?;
-        if chunk_index >= chunk_count {
-            return Err(CoreError::Protocol(format!(
-                "chunk index {chunk_index} out of range for item {item_index}"
-            )));
-        }
-        let offset = (chunk_size as u64)
-            .checked_mul(chunk_index)
-            .ok_or_else(|| {
-                CoreError::Protocol(format!("chunk index {chunk_index} overflows file offset"))
-            })?;
-        let end = offset.checked_add(data.len() as u64).ok_or_else(|| {
-            CoreError::Protocol(format!("chunk for item {item_index} overflows file size"))
-        })?;
-        // A chunk longer than the chunk size overwrites its neighbours. A chunk
-        // that ends past the declared size grows the file. Both use disk that
-        // the manifest did not announce.
-        if data.len() as u64 > chunk_size as u64
-            || manifest.items[idx].size.is_some_and(|sz| end > sz)
-        {
-            return Err(CoreError::Protocol(format!(
-                "chunk {chunk_index} of item {item_index} exceeds the declared size"
-            )));
-        }
-
-        let path = dests
-            .get(idx)
-            .and_then(|d| d.as_deref())
-            .ok_or_else(|| CoreError::Protocol(format!("chunk for unknown item {item_index}")))?;
-        write_chunk(&dest_root, path, offset, &data).await?;
-        let bitmap = bitmaps[idx].as_mut().ok_or_else(|| {
-            CoreError::Protocol(format!("chunk for non-binary item {item_index}"))
-        })?;
+    let payload_id = manifest.payload_id;
+    let mut progress = |len: u64, already_held: bool| {
         // T5: a chunk whose bit is already set re-writes bytes the receiver
-        // already HOLDS. The engine seeded the bar with those bytes, so crediting
-        // them again would count them twice and reach 100% before the last byte.
-        let already_held = bitmap.is_set(chunk_index);
+        // already HOLDS. The engine seeded the bar with those bytes, so
+        // crediting them again would count them twice.
         on_progress(
-            manifest.payload_id,
-            data.len() as u64,
+            payload_id,
+            len,
             bytes_total,
             bytes_held,
             !dedupe && !already_held,
-        );
-        if !bitmap.set(chunk_index) {
-            return Err(CoreError::Protocol(format!(
-                "chunk index {chunk_index} out of range for item {item_index}"
-            )));
-        }
-        if let Some(db) = db.filter(|_| !dedupe) {
-            received_any = true;
-            chunks_since_persist += 1;
-            if chunks_since_persist >= BITMAP_PERSIST_INTERVAL {
-                // R-T7-5: keyed by manifest.payload_id (see above).
-                db.save_bitmap(&manifest.payload_id, item_index, bitmap)?;
-                chunks_since_persist = 0;
+        )
+    };
+    // One chunk write runs while the loop reads the next frame. Its state
+    // update runs only after the write completes, in frame order.
+    let mut writes = WriteGuard {
+        pending: None,
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+
+    let looped: Result<()> = async {
+        while remaining > 0 {
+            // With a Db, a reset connection is an interrupt, the same as a
+            // close. The bitmap is saved in both cases, so the next
+            // connection resumes.
+            let frame = match conn.recv().await {
+                Ok(Some(f)) => f,
+                Ok(None) | Err(CoreError::Io(_)) if db.is_some() => {
+                    // First apply the pending write. Then the saved bitmap
+                    // holds each finished write, and `received_any` is true
+                    // when that write is the first.
+                    if let Some((done, written)) = writes.finish().await {
+                        written?;
+                        apply_chunk(
+                            done,
+                            &mut bitmaps,
+                            store,
+                            &payload_id,
+                            &mut received_any,
+                            &mut chunks_since_persist,
+                            &mut progress,
+                        )?;
+                    }
+                    // `received_any` stays false for a duplicate, so a
+                    // duplicate saves no bitmap.
+                    if let Some(db) = db.filter(|_| received_any) {
+                        for (i, bm) in bitmaps.iter().enumerate() {
+                            if let Some(bm) = bm {
+                                // R-T7-5: keyed by manifest.payload_id, never a
+                                // transfer id -- the resuming peer must find these.
+                                db.save_bitmap(&payload_id, i as u32, bm)?;
+                            }
+                        }
+                    }
+                    return Err(CoreError::TransferInterrupted);
+                }
+                Ok(None) => return Err(CoreError::Protocol("closed mid-transfer".into())),
+                Err(e) => return Err(e),
+            };
+            if frame.kind != RecordType::Chunk {
+                continue;
             }
+            let (item_index, chunk_index, data) = decode_chunk_body(&frame.body)?;
+            // A version 100 sender sends every chunk, also for a settled item.
+            // The receiver ignores those chunks.
+            if is_settled(item_index) {
+                continue;
+            }
+            let idx = item_index as usize;
+            let chunk_size = manifest
+                .items
+                .get(idx)
+                .and_then(|i| i.chunk_size)
+                .ok_or_else(|| {
+                    CoreError::Protocol(format!("chunk for unknown item {item_index}"))
+                })?;
+            let chunk_count = manifest.items[idx].chunk_count.ok_or_else(|| {
+                CoreError::Protocol(format!("item {item_index} missing chunk_count"))
+            })?;
+            if chunk_index >= chunk_count {
+                return Err(CoreError::Protocol(format!(
+                    "chunk index {chunk_index} out of range for item {item_index}"
+                )));
+            }
+            let offset = (chunk_size as u64)
+                .checked_mul(chunk_index)
+                .ok_or_else(|| {
+                    CoreError::Protocol(format!("chunk index {chunk_index} overflows file offset"))
+                })?;
+            let end = offset.checked_add(data.len() as u64).ok_or_else(|| {
+                CoreError::Protocol(format!("chunk for item {item_index} overflows file size"))
+            })?;
+            // A chunk longer than the chunk size overwrites its neighbours. A
+            // chunk that ends past the declared size grows the file. Both use
+            // disk that the manifest did not announce.
+            if data.len() as u64 > chunk_size as u64
+                || manifest.items[idx].size.is_some_and(|sz| end > sz)
+            {
+                return Err(CoreError::Protocol(format!(
+                    "chunk {chunk_index} of item {item_index} exceeds the declared size"
+                )));
+            }
+            let path = dests.get(idx).and_then(|d| d.as_deref()).ok_or_else(|| {
+                CoreError::Protocol(format!("chunk for unknown item {item_index}"))
+            })?;
+
+            // First, wait for the pending write and apply it.
+            if let Some((done, written)) = writes.finish().await {
+                written?;
+                apply_chunk(
+                    done,
+                    &mut bitmaps,
+                    store,
+                    &payload_id,
+                    &mut received_any,
+                    &mut chunks_since_persist,
+                    &mut progress,
+                )?;
+            }
+            // Then count the chunk, if its bit is still unset.
+            let bitmap = bitmaps[idx].as_ref().ok_or_else(|| {
+                CoreError::Protocol(format!("chunk for non-binary item {item_index}"))
+            })?;
+            remaining -= u64::from(!bitmap.is_set(chunk_index));
+            // Then start its write. The loop reads the next frame while the
+            // write runs.
+            let len = data.len() as u64;
+            let (root, path) = (dest_root.clone(), path.to_path_buf());
+            let (hook, cancel) = (write_hook.clone(), writes.cancel.clone());
+            let handle = tokio::spawn(async move {
+                write_chunk_with(&root, &path, offset, data, move || hook(), cancel).await
+            });
+            writes.pending = Some((
+                handle,
+                ChunkRef {
+                    item_index,
+                    chunk_index,
+                    len,
+                },
+            ));
         }
+        Ok(())
+    }
+    .await;
+    // Finish the pending write once. After an error, wait for it but do not
+    // apply it: the receive returns the loop error.
+    let last = writes.finish().await;
+    looped?;
+    if let Some((done, written)) = last {
+        written?;
+        apply_chunk(
+            done,
+            &mut bitmaps,
+            store,
+            &payload_id,
+            &mut received_any,
+            &mut chunks_since_persist,
+            &mut progress,
+        )?;
     }
 
     // R-T7-3/R-T7-5: the receive is done, so no NACK can follow. Drop the resume
@@ -1388,7 +1582,16 @@ mod tests {
         let out = dir.path().join("out");
         let received = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            receive_with_resume_limit(&mut rx, None, &out, |_, _, _, _, _| {}, None, |_| {}, limit),
+            receive_with_resume_limit(
+                &mut rx,
+                None,
+                &out,
+                |_, _, _, _, _| {},
+                None,
+                |_| {},
+                limit,
+                Arc::new(|| {}),
+            ),
         )
         .await
         .expect("the receive must not hang");
@@ -3095,11 +3298,19 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("sub/gone.bin");
         std::fs::create_dir(root.path().join("sub")).unwrap();
-        assert!(write_chunk(root.path(), &path, 0, b"data").await.is_err());
+        assert!(
+            write_chunk(root.path(), &path, 0, Bytes::from_static(b"data"))
+                .await
+                .is_err()
+        );
         assert!(!path.exists());
         // A missing directory is an error too. The write creates no directory.
         let deep = root.path().join("missing/gone.bin");
-        assert!(write_chunk(root.path(), &deep, 0, b"data").await.is_err());
+        assert!(
+            write_chunk(root.path(), &deep, 0, Bytes::from_static(b"data"))
+                .await
+                .is_err()
+        );
         assert!(!root.path().join("missing").exists());
     }
 
@@ -3115,12 +3326,16 @@ mod tests {
 
         let link = root.path().join("link.bin");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(write_chunk(root.path(), &link, 0, b"evil").await.is_err());
+        assert!(
+            write_chunk(root.path(), &link, 0, Bytes::from_static(b"evil"))
+                .await
+                .is_err()
+        );
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
 
         std::os::unix::fs::symlink(outside.path(), root.path().join("dir")).unwrap();
         let through = root.path().join("dir/target.bin");
-        let err = write_chunk(root.path(), &through, 0, b"evil")
+        let err = write_chunk(root.path(), &through, 0, Bytes::from_static(b"evil"))
             .await
             .unwrap_err();
         assert!(
@@ -3140,7 +3355,11 @@ mod tests {
         let path = root.path().join("ro.bin");
         std::fs::write(&path, b"old").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
-        assert!(write_chunk(root.path(), &path, 0, b"new").await.is_err());
+        assert!(
+            write_chunk(root.path(), &path, 0, Bytes::from_static(b"new"))
+                .await
+                .is_err()
+        );
         assert_eq!(std::fs::read(&path).unwrap(), b"old");
     }
 
@@ -3603,5 +3822,579 @@ mod tests {
         let items = vec![Item::from_file(0, &path, 64 * 1024).unwrap(), second];
         let manifest = Manifest::new(PayloadKind::Media, dev(), items);
         validate_manifest(&manifest).unwrap();
+    }
+
+    // Receiver pipeline tests. A test peer sends hand-built chunk frames, so
+    // the test controls the order, the duplicates, and the close. The write
+    // hook is a parameter of the receive, so parallel tests do not disturb
+    // each other.
+
+    use crate::transfer::test_transport::TestTransport;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const CS: usize = CHUNK_SIZE_MIN as usize;
+
+    /// Make the source file `f<index>.bin` with `chunks` chunks of
+    /// `CHUNK_SIZE_MIN`. The last chunk is 7 bytes short. Each chunk holds
+    /// other bytes. Return the item and the bytes of each chunk.
+    fn chunked(dir: &Path, index: u32, chunks: u64) -> (Item, Vec<Vec<u8>>) {
+        let p = dir.join(format!("f{index}.bin"));
+        let size = chunks as usize * CS - 7;
+        let bytes: Vec<u8> = (0..size)
+            .map(|i| ((i / CS) * 31 + i % 251 + index as usize) as u8)
+            .collect();
+        std::fs::write(&p, &bytes).unwrap();
+        let item = Item::from_file(index, &p, CHUNK_SIZE_MIN).unwrap();
+        assert_eq!(item.chunk_count, Some(chunks));
+        (item, bytes.chunks(CS).map(<[u8]>::to_vec).collect())
+    }
+
+    /// One step of a test peer.
+    enum Step {
+        /// Send a chunk frame `(item, chunk, bytes)`.
+        Chunk(u32, u64, Vec<u8>),
+        /// Run a blocking closure on the blocking pool.
+        Run(Box<dyn FnOnce() + Send>),
+    }
+
+    /// A peer that sends the manifest and waits for the resume frame. Then
+    /// the receiver has made its files. Then the peer runs `steps`. With
+    /// `close`, the peer drops its end after the steps. Else it reads until
+    /// the ack or a close.
+    fn spawn_steps<T: FrameTransport + Send + 'static>(
+        mut theirs: T,
+        m: Manifest,
+        steps: Vec<Step>,
+        close: bool,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            theirs
+                .send(
+                    CONTROL_STREAM,
+                    RecordType::Manifest,
+                    Bytes::from(m.to_cbor().unwrap()),
+                )
+                .await
+                .unwrap();
+            while let Ok(Some(f)) = theirs.recv().await {
+                if f.kind == RecordType::Nack {
+                    break;
+                }
+            }
+            for step in steps {
+                match step {
+                    Step::Chunk(item, chunk, data) => {
+                        let body = Bytes::from(encode_chunk_body(item, chunk, &data));
+                        if theirs.send(100, RecordType::Chunk, body).await.is_err() {
+                            return;
+                        }
+                    }
+                    Step::Run(f) => tokio::task::spawn_blocking(f).await.unwrap(),
+                }
+            }
+            if close {
+                return;
+            }
+            while let Ok(Some(f)) = theirs.recv().await {
+                if f.kind == RecordType::Ack {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// Every chunk of item `index` in order.
+    fn all_chunks(index: u32, parts: &[Vec<u8>]) -> Vec<Step> {
+        parts
+            .iter()
+            .enumerate()
+            .map(|(k, p)| Step::Chunk(index, k as u64, p.clone()))
+            .collect()
+    }
+
+    /// Receive with a write hook. Return the result and the `credited` flag
+    /// of each progress call.
+    async fn receive_hooked<T: FrameTransport>(
+        conn: &mut T,
+        out: &Path,
+        db: Option<&Db>,
+        hook: impl Fn() + Send + Sync + 'static,
+    ) -> (Result<Manifest>, Vec<bool>) {
+        let mut credited = Vec::new();
+        let hook: Arc<dyn Fn() + Send + Sync> = Arc::new(hook);
+        let r = receive_with_resume_limit(
+            conn,
+            None,
+            out,
+            |_, _, _, _, ok| credited.push(ok),
+            db,
+            |_| {},
+            RESUME_MSG_MAX,
+            hook,
+        )
+        .await;
+        (r, credited)
+    }
+
+    fn sleep_hook(ms: u64) -> impl Fn() + Send + Sync + 'static {
+        move || std::thread::sleep(Duration::from_millis(ms))
+    }
+
+    fn test_db() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db
+    }
+
+    /// The bytes of chunk `k` in the file at `path`, or `None` when the file
+    /// is shorter.
+    fn chunk_on_disk(path: &Path, k: usize, len: usize) -> Option<Vec<u8>> {
+        let bytes = std::fs::read(path).ok()?;
+        bytes.get(k * CS..k * CS + len).map(<[u8]>::to_vec)
+    }
+
+    /// A chunk write error fails the receive with the same error as before.
+    /// The bitmap does not hold the failed chunk.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn receiver_write_error_keeps_bitmap_clean() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, 3);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = test_db();
+        let target = dst.path().join("f0.bin");
+        let gone = target.clone();
+        let steps = vec![
+            Step::Chunk(0, 0, parts[0].clone()),
+            // Wait until chunk 0 is on disk. Then delete the file.
+            Step::Run(Box::new(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while std::fs::metadata(&gone).map(|m| m.len()).unwrap_or(0) < CS as u64 {
+                    assert!(std::time::Instant::now() < deadline, "chunk 0 not written");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                std::fs::remove_file(&gone).unwrap();
+            })),
+            Step::Chunk(0, 1, parts[1].clone()),
+        ];
+        let (mut mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), steps, true);
+        let (r, _) = receive_hooked(&mut mine, dst.path(), Some(&db), || {}).await;
+        peer.await.unwrap();
+        let err = r.expect_err("a missing file must fail the receive");
+        assert!(
+            matches!(&err, CoreError::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+            "got {err:?}"
+        );
+        assert!(!err.to_string().contains("f0"), "the error names the file");
+        let bm = db.load_bitmap(&m.payload_id, 0, 3).unwrap();
+        assert!(!bm.is_set(1), "the bitmap must not hold the failed chunk");
+        assert!(!target.exists(), "the write must not re-create the file");
+    }
+
+    /// A close after chunk 2 saves a bitmap that holds only the chunks whose
+    /// writes finished. Each set bit names bytes that are on disk.
+    #[tokio::test]
+    async fn interrupt_saves_only_written_chunks() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, 5);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = test_db();
+        let steps = all_chunks(0, &parts[..3]);
+        let (mut mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), steps, true);
+        let (r, _) = receive_hooked(&mut mine, dst.path(), Some(&db), sleep_hook(30)).await;
+        peer.await.unwrap();
+        assert!(
+            matches!(r, Err(CoreError::TransferInterrupted)),
+            "got {r:?}"
+        );
+        let bm = db.load_bitmap(&m.payload_id, 0, 5).unwrap();
+        let set: Vec<u64> = (0..5).filter(|k| bm.is_set(*k)).collect();
+        assert_eq!(
+            set,
+            vec![0, 1, 2],
+            "the saved bitmap holds every finished write"
+        );
+        let target = dst.path().join("f0.bin");
+        for k in set {
+            let k = k as usize;
+            assert_eq!(
+                chunk_on_disk(&target, k, parts[k].len()).as_deref(),
+                Some(&parts[k][..]),
+                "bit {k} is set, so its bytes must be on disk"
+            );
+        }
+    }
+
+    /// A receive error that is not an interrupt (here: a failed `recv`, as a
+    /// decrypt error gives) waits for the pending write and saves no bitmap.
+    #[tokio::test]
+    async fn decrypt_error_saves_no_bitmap() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, 5);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = test_db();
+        let steps = all_chunks(0, &parts[..2]);
+        let (mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), steps, false);
+        // The manifest and 2 chunks arrive. The next `recv` fails.
+        let mut conn = TestTransport::new(mine).fail_recv_after(3);
+        let (r, _) = receive_hooked(&mut conn, dst.path(), Some(&db), sleep_hook(50)).await;
+        // Read the file before anything else runs: the write of chunk 1 must
+        // be finished at the return.
+        let target = dst.path().join("f0.bin");
+        assert_eq!(
+            chunk_on_disk(&target, 1, parts[1].len()).as_deref(),
+            Some(&parts[1][..]),
+            "the receive waits for the pending write"
+        );
+        match r {
+            Err(CoreError::Protocol(text)) => assert_eq!(text, "test transport: recv failed"),
+            other => panic!("got {other:?}"),
+        }
+        let bm = db.load_bitmap(&m.payload_id, 0, 5).unwrap();
+        assert_eq!(bm.count_ones(), 0, "a non-interrupt error saves no bitmap");
+        drop(conn);
+        peer.await.unwrap();
+    }
+
+    /// When the last chunk is the pending write, the receive ends without a
+    /// second `recv`.
+    #[tokio::test]
+    async fn receiver_ends_without_extra_recv() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, 3);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let (mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), all_chunks(0, &parts), false);
+        // The manifest and 3 chunks arrive. A fourth `recv` fails.
+        let mut conn = TestTransport::new(mine).fail_recv_after(4);
+        let (r, _) = receive_hooked(&mut conn, dst.path(), None, sleep_hook(30)).await;
+        r.unwrap();
+        drop(conn);
+        peer.await.unwrap();
+        assert_eq!(
+            std::fs::read(dst.path().join("f0.bin")).unwrap(),
+            parts.concat()
+        );
+    }
+
+    /// A duplicate of the last chunk with other bytes arrives right after
+    /// that chunk, while its write is pending. The receive accepts it, and
+    /// the hash pass quarantines the item. Nothing crashes.
+    #[tokio::test]
+    async fn duplicate_after_last_chunk_is_quarantined() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, 3);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = test_db();
+        let other: Vec<u8> = parts[2].iter().map(|b| b ^ 0xff).collect();
+        let steps = vec![
+            Step::Chunk(0, 0, parts[0].clone()),
+            Step::Chunk(0, 2, parts[2].clone()),
+            Step::Chunk(0, 2, other),
+            Step::Chunk(0, 1, parts[1].clone()),
+        ];
+        let (mut mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), steps, false);
+        let (r, credited) = receive_hooked(&mut mine, dst.path(), Some(&db), sleep_hook(20)).await;
+        r.unwrap();
+        peer.await.unwrap();
+        assert_eq!(credited, vec![true, true, false, true]);
+        let row = db.get_item(&m.payload_id, 0).unwrap().unwrap();
+        assert_eq!(row.state, "quarantined");
+    }
+
+    /// A duplicate chunk, a settled item, and the `dedupe` path behave as
+    /// before the pipeline.
+    #[tokio::test]
+    async fn receiver_edge_cases_unchanged() {
+        // A duplicate chunk with the same bytes is written again and is not
+        // credited again.
+        {
+            let src = tempfile::tempdir().unwrap();
+            let dst = tempfile::tempdir().unwrap();
+            let (item, parts) = chunked(src.path(), 0, 3);
+            let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+            let db = test_db();
+            let mut steps = vec![Step::Chunk(0, 0, parts[0].clone())];
+            steps.extend(all_chunks(0, &parts));
+            let (mut mine, theirs) = MemConn::pair();
+            let peer = spawn_steps(theirs, m.clone(), steps, false);
+            let (r, credited) =
+                receive_hooked(&mut mine, dst.path(), Some(&db), sleep_hook(5)).await;
+            r.unwrap();
+            peer.await.unwrap();
+            assert_eq!(credited, vec![true, false, true, true]);
+            let row = db.get_item(&m.payload_id, 0).unwrap().unwrap();
+            assert_eq!(row.state, "done");
+            assert_eq!(
+                std::fs::read(dst.path().join("f0.bin")).unwrap(),
+                parts.concat()
+            );
+        }
+
+        // A settled item gets no write. Its chunks are ignored.
+        {
+            let src = tempfile::tempdir().unwrap();
+            let dst = tempfile::tempdir().unwrap();
+            let (item0, parts0) = chunked(src.path(), 0, 3);
+            let (item1, parts1) = chunked(src.path(), 1, 2);
+            let m = Manifest::new(PayloadKind::Media, dev(), vec![item0, item1]);
+            let db = test_db();
+            db.upsert_transfer(&TransferRow {
+                transfer_id: m.payload_id,
+                payload_id: m.payload_id,
+                peer_device_id: m.sender.device_id,
+                direction: "in".into(),
+                kind: "media".into(),
+                state: "active".into(),
+                bytes_total: 0,
+                bytes_done: 0,
+                item_count: 2,
+                created_at: 1,
+                updated_at: 1,
+                manifest: m.to_cbor().unwrap(),
+                error: None,
+            })
+            .unwrap();
+            db.upsert_item(&ItemRow {
+                transfer_id: m.payload_id,
+                item_index: 0,
+                item_type: "document".into(),
+                name: None,
+                mime: None,
+                size: m.items[0].size,
+                hash: m.items[0].hash,
+                dest_path: None,
+                state: "done".into(),
+            })
+            .unwrap();
+            let mut steps = all_chunks(0, &parts0);
+            steps.extend(all_chunks(1, &parts1));
+            let (mut mine, theirs) = MemConn::pair();
+            let peer = spawn_steps(theirs, m.clone(), steps, false);
+            let (r, credited) =
+                receive_hooked(&mut mine, dst.path(), Some(&db), sleep_hook(5)).await;
+            r.unwrap();
+            peer.await.unwrap();
+            assert_eq!(credited, vec![true, true], "only item 1 is credited");
+            assert!(
+                !dst.path().join("f0.bin").exists(),
+                "a settled item gets no file"
+            );
+            assert_eq!(
+                std::fs::read(dst.path().join("f1.bin")).unwrap(),
+                parts1.concat()
+            );
+            let row = db.get_item(&m.payload_id, 0).unwrap().unwrap();
+            assert_eq!(row.state, "done");
+        }
+
+        // A duplicate delivery writes into the discard directory only.
+        {
+            let src = tempfile::tempdir().unwrap();
+            let dst = tempfile::tempdir().unwrap();
+            let (item, parts) = chunked(src.path(), 0, 2);
+            let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+            let db = test_db();
+            db.add_inbox(&crate::store::inbox::InboxRow {
+                id: m.payload_id,
+                transfer_id: m.payload_id,
+                peer_device_id: m.sender.device_id,
+                kind: "media".into(),
+                item_count: 1,
+                summary: "1 file(s)".into(),
+                received_at: 1,
+                saved_paths: "[]".into(),
+                group_roots: Vec::new(),
+            })
+            .unwrap();
+            let real = dst.path().join("f0.bin");
+            std::fs::write(&real, b"first copy stays").unwrap();
+            let (mut mine, theirs) = MemConn::pair();
+            let peer = spawn_steps(theirs, m.clone(), all_chunks(0, &parts), false);
+            let (r, credited) =
+                receive_hooked(&mut mine, dst.path(), Some(&db), sleep_hook(5)).await;
+            r.unwrap();
+            peer.await.unwrap();
+            assert_eq!(credited, vec![false, false]);
+            assert_eq!(std::fs::read(&real).unwrap(), b"first copy stays");
+            assert!(!dst.path().join("dedupe-discard").exists());
+        }
+    }
+
+    /// Poll `run` until `calls` reaches `n`. Panic when `run` ends first.
+    async fn poll_until<F: std::future::Future<Output = (Result<Manifest>, Vec<bool>)>>(
+        run: std::pin::Pin<&mut F>,
+        calls: &AtomicUsize,
+        n: usize,
+    ) {
+        let mut run = run;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while calls.load(Ordering::SeqCst) < n {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the hook did not run"
+            );
+            tokio::select! {
+                r = &mut run => panic!("the receive must not end, got {:?}", r.0),
+                _ = tokio::time::sleep(Duration::from_millis(2)) => {}
+            }
+        }
+    }
+
+    /// A drop of the receive future while the hook of a write runs, before
+    /// `spawn_blocking`, means that the write never happens.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_before_start_writes_nothing() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, 3);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = test_db();
+        let (mut mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), all_chunks(0, &parts[..1]), false);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook = {
+            let calls = calls.clone();
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        };
+        {
+            let run = receive_hooked(&mut mine, dst.path(), Some(&db), hook);
+            tokio::pin!(run);
+            poll_until(run.as_mut(), &calls, 1).await;
+        }
+        // The hook still sleeps. Wait for it and for a write, if one starts.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let target = dst.path().join("f0.bin");
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().len(),
+            0,
+            "no write may start after the drop"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        drop(mine);
+        peer.await.unwrap();
+    }
+
+    /// A drop during a started write lets that write finish. It sets no bit,
+    /// no later write starts, and a resume completes the file.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_during_write_is_safe() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, 3);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let db = test_db();
+        let (mut mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), all_chunks(0, &parts[..2]), false);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook = {
+            let calls = calls.clone();
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        {
+            let run = receive_hooked(&mut mine, dst.path(), Some(&db), hook);
+            tokio::pin!(run);
+            // The hook of chunk 1 ran, so its write is started.
+            poll_until(run.as_mut(), &calls, 2).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "no write starts after the drop"
+        );
+        let target = dst.path().join("f0.bin");
+        assert_eq!(
+            chunk_on_disk(&target, 0, CS).as_deref(),
+            Some(&parts[0][..])
+        );
+        let len = std::fs::metadata(&target).unwrap().len();
+        assert!(
+            len == CS as u64 || chunk_on_disk(&target, 1, CS).as_deref() == Some(&parts[1][..]),
+            "the late write is absent or complete, len {len}"
+        );
+        let bm = db.load_bitmap(&m.payload_id, 0, 3).unwrap();
+        assert!(!bm.is_set(1), "the dropped receive sets no bit");
+        drop(mine);
+        peer.await.unwrap();
+
+        // A second receive of the payload completes the file.
+        let (mut mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), all_chunks(0, &parts), false);
+        let (r, _) = receive_hooked(&mut mine, dst.path(), Some(&db), || {}).await;
+        r.unwrap();
+        peer.await.unwrap();
+        let row = db.get_item(&m.payload_id, 0).unwrap().unwrap();
+        assert_eq!(row.state, "done");
+        assert_eq!(std::fs::read(&target).unwrap(), parts.concat());
+    }
+
+    /// A pending write overlaps the next `recv`. Each `recv` waits 20 ms and
+    /// each write waits 20 ms. A plain `MemConn` pair: no Noise layer, so the
+    /// debug build cost of the encrypt and the decrypt does not count.
+    ///
+    /// The time ends at the last progress call, which is the end of the
+    /// receive loop. On macOS a sleep of 20 ms lasts up to 25 ms. So the
+    /// sequential time is 2 x the measured sum of the hook sleeps, and not
+    /// the nominal 40 x 40 ms.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn receiver_overlap() {
+        const CHUNKS: u64 = 40;
+        const STEP: Duration = Duration::from_millis(20);
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let (item, parts) = chunked(src.path(), 0, CHUNKS);
+        let m = Manifest::new(PayloadKind::Media, dev(), vec![item]);
+        let (mine, theirs) = MemConn::pair();
+        let peer = spawn_steps(theirs, m.clone(), all_chunks(0, &parts), false);
+        let mut conn = TestTransport::new(mine).with_recv_delay(STEP);
+        let slept = Arc::new(std::sync::Mutex::new(Duration::ZERO));
+        let hook = {
+            let slept = slept.clone();
+            move || {
+                let t = std::time::Instant::now();
+                std::thread::sleep(STEP);
+                *slept.lock().unwrap() += t.elapsed();
+            }
+        };
+        let start = std::time::Instant::now();
+        let mut last = start;
+        let r = receive_with_resume_limit(
+            &mut conn,
+            None,
+            dst.path(),
+            |_, _, _, _, _| last = std::time::Instant::now(),
+            None,
+            |_| {},
+            RESUME_MSG_MAX,
+            Arc::new(hook),
+        )
+        .await;
+        let elapsed = last - start;
+        r.unwrap();
+        drop(conn);
+        peer.await.unwrap();
+        let sequential = (*slept.lock().unwrap() * 2).max(STEP * 2 * CHUNKS as u32);
+        eprintln!("receiver_overlap: loop {elapsed:?}, sequential {sequential:?}");
+        assert!(
+            elapsed < sequential * 3 / 4,
+            "took {elapsed:?}; a sequential run takes about {sequential:?}"
+        );
     }
 }
