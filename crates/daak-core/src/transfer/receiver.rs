@@ -27,8 +27,10 @@ const MAX_PATH_COMPONENTS: usize = 64;
 const MAX_PATH_LEN: usize = 4096;
 /// The cap on the bytes of every attrs["path"] in one manifest together. The
 /// receiver stores the paths in the destination list and in the item rows.
-/// A total at or below the cap passes. 65 536 items with a 256-byte path give
-/// a total equal to the cap, so they pass.
+/// A total at or below the cap of 16 MiB passes this check. The frame cap
+/// `DEFAULT_MAX_FRAME` (4 MiB, `framing.rs`) is lower, and it refuses a
+/// larger manifest first. So one manifest holds fewer than 16 384 paths of
+/// 256 bytes. This check stays as a second guard.
 const MAX_TOTAL_PATH_BYTES: usize = 16 * 1024 * 1024;
 
 /// D23: holds the discard directory a duplicate delivery writes into, and
@@ -106,10 +108,17 @@ fn extension_for_mime(mime: &str) -> Option<&'static str> {
 
 /// Names the receiver owns inside out_dir. `quarantine` holds items whose hash
 /// failed; `staging` is the OUTBOUND staging root engine.rs creates there, with
-/// live staged files for sends in flight. A peer naming either as a file would
+/// live staged files for sends in flight. `dedupe-discard` holds a duplicate
+/// delivery, and `DiscardGuard` removes it. A peer naming one of them would
 /// break the directory it is about to use.
+///
+/// The compare ignores ASCII case. APFS and NTFS ignore case by default, so
+/// `Quarantine` opens the `quarantine` directory there.
 fn is_reserved(name: &str) -> bool {
-    matches!(name, "." | ".." | "quarantine" | "staging")
+    matches!(name, "." | "..")
+        || ["quarantine", "staging", "dedupe-discard"]
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved))
 }
 
 fn item_output_path(out_dir: &Path, item: &Item) -> Result<PathBuf> {
@@ -3214,6 +3223,59 @@ mod tests {
         let mut item = peer_item(0, "x");
         item.name = Some("staging".into());
         assert_ne!(item_output_path(out, &item).unwrap(), out.join("staging"));
+    }
+
+    /// True when a component of `dest` below `out` equals a reserved name in
+    /// any case.
+    fn names_a_reserved_root(out: &Path, dest: &Path) -> bool {
+        dest.strip_prefix(out).unwrap().components().any(|c| {
+            let c = c.as_os_str().to_str().unwrap();
+            ["quarantine", "staging", "dedupe-discard"]
+                .iter()
+                .any(|r| c.eq_ignore_ascii_case(r))
+        })
+    }
+
+    /// The receiver writes a duplicate delivery into `dedupe-discard`.
+    /// `DiscardGuard` removes that directory later. A peer must not name it.
+    #[test]
+    fn a_peer_folder_named_dedupe_discard_is_remapped_like_the_other_reserved_names() {
+        let out = Path::new("/tmp/out");
+        let hex = hex::encode([7u8; 16]);
+        let rel = format!("dedupe-discard/{hex}/live.bin");
+        let dest = item_destination(out, &peer_item(0, &rel)).unwrap();
+        assert!(!names_a_reserved_root(out, &dest), "got {dest:?}");
+        let dest = item_destination(out, &peer_item(0, "sub/dedupe-discard")).unwrap();
+        assert!(!names_a_reserved_root(out, &dest), "got {dest:?}");
+        let mut item = peer_item(0, "x");
+        item.name = Some("dedupe-discard".into());
+        let dest = item_output_path(out, &item).unwrap();
+        assert!(!names_a_reserved_root(out, &dest), "got {dest:?}");
+    }
+
+    /// APFS and NTFS ignore case by default. So `Quarantine` opens the
+    /// `quarantine` directory there. The receiver remaps a reserved name in
+    /// any case.
+    #[test]
+    fn a_reserved_name_in_any_case_is_remapped() {
+        let out = Path::new("/tmp/out");
+        for name in [
+            "Quarantine",
+            "QUARANTINE",
+            "Staging",
+            "STAGING",
+            "Dedupe-Discard",
+            "DEDUPE-DISCARD",
+        ] {
+            let dest = item_destination(out, &peer_item(0, &format!("{name}/a.bin"))).unwrap();
+            assert!(!names_a_reserved_root(out, &dest), "{name}: got {dest:?}");
+            let dest = item_destination(out, &peer_item(0, &format!("sub/{name}"))).unwrap();
+            assert!(!names_a_reserved_root(out, &dest), "{name}: got {dest:?}");
+            let mut item = peer_item(0, "x");
+            item.name = Some(name.into());
+            let dest = item_output_path(out, &item).unwrap();
+            assert!(!names_a_reserved_root(out, &dest), "{name}: got {dest:?}");
+        }
     }
 
     #[tokio::test]

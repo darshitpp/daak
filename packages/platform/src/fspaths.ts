@@ -175,8 +175,17 @@ function parallel(paths: string[], extra?: string[]): string[] {
  * uses. The native move uses that root as it is, so a retry joins it.
  */
 export async function moveReceivedFiles(paths: string[], subdirs?: string[]): Promise<string[]> {
-  return NativeDaakFsPaths.moveReceivedFiles(paths, parallel(paths, subdirs));
+  const run = moveQueue.then(() => NativeDaakFsPaths.moveReceivedFiles(paths, parallel(paths, subdirs)));
+  // The next move waits for this move to settle. A failed move does not stop
+  // the next move. The caller of this move still gets its own error.
+  moveQueue = run.catch(() => undefined);
+  return run;
 }
+
+// The native move checks for a free root name, then creates it. Two calls at
+// the same time can pick the same root and merge two folders. So one call
+// runs at a time.
+let moveQueue: Promise<unknown> = Promise.resolve();
 
 export type PhotosAccess = 'granted' | 'denied' | 'undetermined' | 'unavailable';
 

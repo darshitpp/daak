@@ -299,6 +299,14 @@ async fn stream_and_await_ack<T: FrameTransport>(
         // chunk opens the resolved path with `O_NOFOLLOW`, so a later swap fails.
         let path = tokio::fs::canonicalize(&path).await?;
         let id = file_id(&tokio::fs::symlink_metadata(&path).await?);
+        // The manifest holds the size at build time. A file that grew since
+        // then sends bytes past that size in its last chunk. So the size now
+        // must equal the manifest size before the first chunk goes out.
+        if item.size != Some(id.0) {
+            return Err(CoreError::Transfer(
+                "the source file changed during the send".into(),
+            ));
+        }
         *slot = Some((path.clone(), chunk_size as u64, id));
         scheduled.push(ScheduledItem {
             index: item.index,
@@ -698,6 +706,82 @@ mod tests {
             read_chunk_checked(&p, chunk, 0, other),
             Err(CoreError::Transfer(_))
         ));
+    }
+
+    /// The source file grows after the manifest is built. The sender must
+    /// fail before the first chunk. Otherwise the last chunk carries bytes past
+    /// the manifest size to the peer.
+    #[tokio::test]
+    async fn a_source_file_that_changed_size_after_the_manifest_fails_before_any_chunk_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.bin");
+        std::fs::write(&p, vec![5u8; 100_000]).unwrap();
+        let item = Item::from_file(0, &p, 64 * 1024).unwrap();
+        let chunk_count = item.chunk_count.unwrap() as usize;
+        let manifest = Manifest::new(PayloadKind::Media, sender(), vec![item]);
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+            f.write_all(&[9u8; 10_000]).unwrap();
+        }
+
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = tokio::spawn(async move {
+            let mut chunks = 0usize;
+            while let Ok(Some(f)) = theirs.recv().await {
+                if f.kind == RecordType::Chunk {
+                    chunks += 1;
+                    if chunks == chunk_count {
+                        break;
+                    }
+                }
+            }
+            chunks
+        });
+        let r = send_transfer(&mut mine, &manifest, &[Some(p)], &[], |_| {}).await;
+        drop(mine);
+        let chunks = peer.await.unwrap();
+        assert_eq!(chunks, 0, "no chunk may go out");
+        match r {
+            Err(CoreError::Transfer(text)) => {
+                assert_eq!(text, "the source file changed during the send")
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    /// A zero-byte file has the size 0 in the manifest and on disk. It sends.
+    #[tokio::test]
+    async fn a_zero_byte_file_still_sends() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("empty.bin");
+        std::fs::write(&p, b"").unwrap();
+        let item = Item::from_file(0, &p, 64 * 1024).unwrap();
+        let manifest = Manifest::new(PayloadKind::Media, sender(), vec![item]);
+        let (mut mine, mut theirs) = SecureConnection::<MemConn>::test_pair();
+        let id = manifest.payload_id;
+        let peer = tokio::spawn(async move {
+            let first = theirs.recv().await.unwrap().unwrap();
+            assert_eq!(first.kind, RecordType::Manifest);
+            let ack = AckMsg {
+                transfer_id: id,
+                item_index: 0,
+                complete: true,
+                hash_ok: true,
+            };
+            theirs
+                .send(
+                    CONTROL_STREAM,
+                    RecordType::Ack,
+                    Bytes::from(ack.to_cbor().unwrap()),
+                )
+                .await
+                .unwrap();
+        });
+        send_transfer(&mut mine, &manifest, &[Some(p)], &[], |_| {})
+            .await
+            .unwrap();
+        peer.await.unwrap();
     }
 
     #[tokio::test]

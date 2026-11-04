@@ -608,3 +608,51 @@ describe('the facade pads the parallel array', () => {
     ]);
   });
 });
+
+// Two events can start two moves at the same time. The native move checks for
+// a free root name, then creates it. That pair is not atomic across calls, so
+// two calls can pick the same root. The facade runs one move after the other.
+describe('the facade runs one move at a time', () => {
+  function deferred() {
+    let resolve!: (v: string[]) => void;
+    let reject!: (e: Error) => void;
+    const promise = new Promise<string[]>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it('two_moves_at_the_same_time_run_one_after_the_other', async () => {
+    const order: string[] = [];
+    const first = deferred();
+    moveReceivedFiles.mockImplementation(async (paths) => {
+      const name = paths[0];
+      order.push(`start ${name}`);
+      const out = name === '/a.pdf' ? await first.promise : paths;
+      order.push(`end ${name}`);
+      return out;
+    });
+    const a = facadeMove(['/a.pdf'], ['album']);
+    const b = facadeMove(['/b.pdf'], ['album']);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['start /a.pdf']);
+    first.resolve(['/moved/a.pdf']);
+    await expect(a).resolves.toEqual(['/moved/a.pdf']);
+    await expect(b).resolves.toEqual(['/b.pdf']);
+    expect(order).toEqual(['start /a.pdf', 'end /a.pdf', 'start /b.pdf', 'end /b.pdf']);
+  });
+
+  it('a_failed_move_does_not_block_the_next_move', async () => {
+    const first = deferred();
+    moveReceivedFiles.mockImplementation(async (paths) =>
+      paths[0] === '/a.pdf' ? first.promise : ['/moved/b.pdf'],
+    );
+    const a = facadeMove(['/a.pdf']);
+    const b = facadeMove(['/b.pdf']);
+    first.reject(new Error('no such folder'));
+    await expect(a).rejects.toThrow('no such folder');
+    await expect(b).resolves.toEqual(['/moved/b.pdf']);
+    expect(moveReceivedFiles).toHaveBeenCalledTimes(2);
+  });
+});

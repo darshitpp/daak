@@ -369,7 +369,7 @@ fn item_rel(item: &Item) -> Result<&str> {
 /// it, so the whole folder lands under one top folder on the receiver.
 ///
 /// A `\` becomes `_`, because the receiver splits a path on `\` as well as on
-/// `/`. A reserved name (`quarantine`, `staging`) gets `-1`. The receiver
+/// `/`. A reserved name (`is_reserved` in `receiver.rs`) gets `-1`. The receiver
 /// remaps a reserved component to `item_{index}` for each child. That remap
 /// splits the folder across `item_5/`, `item_6/`, and more. This function
 /// claims the name in `dests` through `unique_destination`. A loose file or an
@@ -432,7 +432,7 @@ fn unique_name(used: &mut HashSet<String>, name: &str) -> String {
 
 /// Reserve the DESTINATION an item resolves to, keyed on the SANITISED path:
 /// that is the file the receiver will really open, and a reserved component
-/// (`. .. quarantine staging`) becomes `item_{index}` there, so `quarantine`
+/// (`is_reserved` in `receiver.rs`) becomes `item_{index}` there, so `quarantine`
 /// and `item_1` are distinct strings and ONE destination.
 ///
 /// A cap error stops the search and PROPAGATES. A `-N` suffix never removes a
