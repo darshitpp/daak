@@ -329,7 +329,15 @@ describe('buildFailedNotification', () => {
 
 describe('safeName', () => {
   it('safeName_gives_one_clean_line_for_newline_bidi_zero_width_and_line_separator', () => {
-    expect(safeName('al\nbum\u202E\u200B\u2028x\u2029y\r\u061Cz')).toBe('albumxyz');
+    const out = safeName('al\nbum\u202E\u200B\u2028x\u2029y\r\u061Cz');
+    expect(out).toBe('al bum x y z');
+    expect(out).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+  });
+
+  it('safeName_keeps_the_words_of_a_note_apart', () => {
+    expect(safeName('a\nb')).toBe('a b');
+    expect(safeName('a\r\n\r\n\tb')).toBe('a b');
+    expect(safeName('\n a\u0085b \n')).toBe('a b');
   });
 
   it('safeName_cuts_200_characters_to_60_code_points', () => {
@@ -366,9 +374,9 @@ describe('notification text uses safeName', () => {
       groupRoots: ['/data/' + evil],
       savedPaths: ['/data/' + evil + '/a.jpg'],
     });
-    expect(folder.body).toBe('xFAKE \u00B7 1 file');
+    expect(folder.body).toBe('x FAKE \u00B7 1 file');
     const loose = buildNotification({ payloadId: 'p2', itemCount: 1, summary: evil });
-    expect(loose.body).toBe('xFAKE');
+    expect(loose.body).toBe('x FAKE');
     // A name that is long is cut in the body too.
     const long = buildNotification({ payloadId: 'p3', itemCount: 1, summary: 'n'.repeat(200) });
     expect(long.body).toBe('n'.repeat(60) + '\u2026');
@@ -381,8 +389,8 @@ describe('notification text uses safeName', () => {
       listThread: async () => ({ items: items.map((i) => ({ transferId: TID, type: 'file' as const, ...i })) }),
     });
     const one = await failedSendNotice(mk([{ name: evil, group: null }], 1), TID);
-    expect(one?.title).toBe("Couldn't send xFAKE");
+    expect(one?.title).toBe("Couldn't send x FAKE");
     const grp = await failedSendNotice(mk([{ name: 'a', group: { name: evil } }], 1), TID);
-    expect(grp?.title).toBe("Couldn't send xFAKE");
+    expect(grp?.title).toBe("Couldn't send x FAKE");
   });
 });

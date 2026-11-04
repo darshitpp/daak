@@ -80,6 +80,11 @@ describe('notifyReceived', () => {
     );
   });
 
+  it('cleans the summary of a peer in the fallback body', async () => {
+    await notifyReceived({ ...entry, summary: 'a\nb\u202E\u200B' });
+    expect(native.post).toHaveBeenCalledWith('p1', 'Daak', 'a b', DAK_RECEIVED_CATEGORY, expect.any(String));
+  });
+
   it('posts nothing when the arrival preference is off', async () => {
     prefs.mockResolvedValue({ arrival: false });
     await notifyReceived(entry);

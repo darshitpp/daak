@@ -55,16 +55,23 @@ export interface DesktopNotification {
 /**
  * Clean text that a paired peer chose, for a notification title or body.
  *
- * It removes control, format, line separator, and paragraph separator
- * characters (`\p{Cc}`, `\p{Cf}`, `\p{Zl}`, `\p{Zp}`). That gives one line with
- * no bidi or zero-width trick. U+061C is in `\p{Cf}`. Then it cuts to 60 code
+ * It turns each run of line breaks and tabs (`\n`, `\r`, `\t`, U+0085, U+2028,
+ * U+2029) into 1 space, so the words of a note stay apart. Then it removes the
+ * other control, format, line separator, and paragraph separator characters
+ * (`\p{Cc}`, `\p{Cf}`, `\p{Zl}`, `\p{Zp}`). It trims the ends. That gives one
+ * line with no bidi or zero-width trick. U+061C is in `\p{Cf}`. Then it cuts to 60 code
  * points and adds `…` when it cut. It never splits a surrogate pair.
  *
  * Text with nothing left gives `''`. A caller that shows a name must choose its
  * own words for that case.
  */
 export function safeName(text: string): string {
-  const points = [...text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')];
+  const points = [
+    ...text
+      .replace(/[\n\r\t\u0085\u2028\u2029]+/g, ' ')
+      .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')
+      .trim(),
+  ];
   return points.length > 60 ? points.slice(0, 60).join('') + '\u2026' : points.join('');
 }
 
