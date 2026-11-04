@@ -3458,7 +3458,8 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
         // brief's "cancelled"; do not "fix" it back.
         db.set_transfer_state(&transfer_id, "canceled")?;
         // F4: a cancel ends the payload, so its stored receive destinations
-        // go.
+        // go. Only an outbound id can match here, because cancel reads the
+        // outbox. An inbound list with the same payload id is rare.
         db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
     } else {
         // The row was already done (delivered) or awaiting_ack. Cancel did

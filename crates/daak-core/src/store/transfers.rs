@@ -68,8 +68,6 @@ pub(crate) fn insert_transfer(c: &rusqlite::Connection, t: &TransferRow) -> Resu
     Ok(())
 }
 
-/// The statements of `Db::fresh_start`. It takes the connection, because the
-/// `Db` lock is not reentrant.
 /// The `settings` key that holds the receive destinations of a payload: a
 /// CBOR list of paths relative to the receive root, one for each binary item,
 /// in item order. F4: a resume reuses the list, so a partial file does not
@@ -78,6 +76,8 @@ pub(crate) fn dest_key(payload_id: &[u8; 16]) -> String {
     format!("dest:{}", hex::encode(payload_id))
 }
 
+/// The statements of `Db::fresh_start`. It takes the connection, because the
+/// `Db` lock is not reentrant.
 fn fresh_start_in(
     c: &rusqlite::Connection,
     transfer_id: &[u8; 16],

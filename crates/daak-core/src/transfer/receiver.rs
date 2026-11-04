@@ -25,6 +25,10 @@ const BITMAP_PERSIST_INTERVAL: u64 = 256;
 /// classic PATH_MAX.
 const MAX_PATH_COMPONENTS: usize = 64;
 const MAX_PATH_LEN: usize = 4096;
+/// The cap on the bytes of every attrs["path"] in one manifest together. The
+/// receiver stores the paths in the destination list and in the item rows.
+/// 65 536 items with a 256-byte path stay below it.
+const MAX_TOTAL_PATH_BYTES: usize = 16 * 1024 * 1024;
 
 /// D23: holds the discard directory a duplicate delivery writes into, and
 /// removes it on Drop. Drop runs on the success return and on every error
@@ -202,6 +206,9 @@ const SUFFIX_MAX: u32 = 10_000;
 /// The key only selects the first suffix to try. The file system decides
 /// what is free.
 ///
+/// `created` gets each path that this call creates, so a failed receive can
+/// remove what it made.
+///
 /// The error text names the item index only. A path holds a user file name.
 fn create_free(
     parent: &Path,
@@ -209,6 +216,7 @@ fn create_free(
     is_dir: bool,
     next: &mut HashMap<String, u32>,
     index: u32,
+    created: &mut Vec<PathBuf>,
 ) -> Result<PathBuf> {
     let make = |path: &Path| {
         if is_dir {
@@ -224,7 +232,10 @@ fn create_free(
     };
     let plain = parent.join(name);
     match make(&plain) {
-        Ok(()) => return Ok(plain),
+        Ok(()) => {
+            created.push(plain.clone());
+            return Ok(plain);
+        }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
@@ -235,7 +246,10 @@ fn create_free(
         let candidate = parent.join(crate::manifest::suffixed(name, *n, is_dir));
         *n += 1;
         match make(&candidate) {
-            Ok(()) => return Ok(candidate),
+            Ok(()) => {
+                created.push(candidate.clone());
+                return Ok(candidate);
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e.into()),
         }
@@ -255,12 +269,13 @@ fn create_free(
 /// Later items of the group read the real directory from `dirs`.
 ///
 /// The file is created empty and closed. An empty item gets no chunk, so the
-/// verify step needs the file.
+/// verify step needs the file. `created` gets each new folder and the file.
 fn allocate_destination(
     root: &Path,
     item: &Item,
     dirs: &mut HashMap<PathBuf, PathBuf>,
     next: &mut HashMap<String, u32>,
+    created: &mut Vec<PathBuf>,
 ) -> Result<PathBuf> {
     let logical = item_destination(root, item)?;
     let rel = logical.strip_prefix(root).map_err(|_| {
@@ -286,13 +301,30 @@ fn allocate_destination(
         parent = match dirs.get(&key) {
             Some(real) => real.clone(),
             None => {
-                let real = create_free(&parent, folder, true, next, item.index)?;
+                let real = create_free(&parent, folder, true, next, item.index, created)?;
                 dirs.insert(key.clone(), real.clone());
                 real
             }
         };
     }
-    create_free(&parent, leaf, false, next, item.index)
+    create_free(&parent, leaf, false, next, item.index, created)
+}
+
+/// Remove the paths that this receive created, newest first, so a file goes
+/// before its folder. F4: a failed allocation leaves no folder behind. Then
+/// a retry does not make `album-1`, `album-2`, and more. Each path is one
+/// that this receive created, so the removal cannot touch a user file.
+fn remove_created(created: &[PathBuf]) {
+    for path in created.iter().rev() {
+        let removed = match std::fs::symlink_metadata(path) {
+            Ok(m) if m.is_dir() => std::fs::remove_dir(path),
+            Ok(_) => std::fs::remove_file(path),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = removed {
+            tracing::warn!(error = %e, "a created destination was not removed");
+        }
+    }
 }
 
 /// Check the directory chain from `root` to `parent`. Create nothing. F2: the
@@ -383,6 +415,21 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
             )));
         }
     }
+    // The sum of the path lengths is capped, so one manifest cannot hold
+    // 65 536 paths of 4 096 bytes. The message holds no name.
+    let path_bytes: usize = manifest
+        .items
+        .iter()
+        .filter_map(|i| match i.attrs.get("path") {
+            Some(ciborium::value::Value::Text(p)) => Some(p.len()),
+            _ => None,
+        })
+        .sum();
+    if path_bytes > MAX_TOTAL_PATH_BYTES {
+        return Err(CoreError::Protocol(format!(
+            "manifest paths hold {path_bytes} bytes, above the cap {MAX_TOTAL_PATH_BYTES}"
+        )));
+    }
     // F7: a group item must carry a path that starts with its group. The
     // notification and the move step read the root folder from the path, not
     // from the group value. A mismatch makes them name the wrong folder. An
@@ -430,7 +477,7 @@ fn relative_dest(root: &Path, path: &Path) -> Result<String> {
 /// `None` when the payload starts fresh. F4: the list is a hint from this
 /// device. Each path runs through `safe_components` again and must stay under
 /// `root`. The file of an open item must still exist as a regular file. A
-/// redo item needs only its folder, because the quarantine moved its file. A
+/// `recreate` item needs only its folder, because it gets a new file. A
 /// settled item needs nothing, because the platform can move its file. Any
 /// failed check starts the whole payload fresh.
 fn stored_dests(
@@ -438,7 +485,7 @@ fn stored_dests(
     manifest: &Manifest,
     root: &Path,
     settled: &HashSet<u32>,
-    redo: &HashSet<u32>,
+    recreate: &HashSet<u32>,
 ) -> Result<Option<Vec<PathBuf>>> {
     let Some(bytes) = db.get_setting(&dest_key(&manifest.payload_id))? else {
         return Ok(None);
@@ -466,7 +513,7 @@ fn stored_dests(
         let parent = path.parent().unwrap_or(root);
         let usable = if settled.contains(&item.index) {
             true
-        } else if redo.contains(&item.index) {
+        } else if recreate.contains(&item.index) {
             check_real_dir_chain(root, parent).is_ok()
         } else {
             check_real_dir_chain(root, parent).is_ok()
@@ -665,8 +712,14 @@ async fn receive_with_resume_limit<T: FrameTransport>(
     // the same id keeps its state.
     let kind = format!("{:?}", manifest.kind).to_lowercase();
     let encoded = manifest.to_cbor()?;
+    // An earlier receive of this payload that ran to its end. Then a file at
+    // a stored path is not a partial of this payload.
+    let mut prior_done = false;
     if let Some(db) = db.filter(|_| !dedupe) {
         let stored = db.get_transfer(&manifest.payload_id)?;
+        prior_done = stored
+            .as_ref()
+            .is_some_and(|t| t.direction == "in" && t.state == "done");
         if stored.is_some_and(|t| t.direction == "in" && t.manifest != encoded) {
             db.fresh_start(
                 &manifest.payload_id,
@@ -678,6 +731,7 @@ async fn receive_with_resume_limit<T: FrameTransport>(
             )?;
             earlier.clear();
             redo.clear();
+            prior_done = false;
         }
     }
     // A duplicate settles nothing. It writes every chunk into the discard
@@ -783,66 +837,104 @@ async fn receive_with_resume_limit<T: FrameTransport>(
         bitmaps.push(None);
     }
 
+    // F4: the items that get a NEW file, also when a stored path exists: a
+    // redo item, and every open item after a receive that ran to its end. An
+    // open item there has no row, because the user deleted its held copy. A
+    // file at its stored path is then not a partial of this payload, so the
+    // receiver must not write into it.
+    let recreate: HashSet<u32> = if prior_done {
+        manifest
+            .binary_items()
+            .map(|i| i.index)
+            .filter(|i| !is_settled(*i))
+            .collect()
+    } else {
+        redo.clone()
+    };
     // F4: the destinations that an earlier attempt of this payload chose. A
     // resume reuses them, so a partial file does not take a suffix. With no
     // usable list, every open item gets a new file.
     let store = db.filter(|_| !dedupe);
     let stored = match store {
-        Some(db) => stored_dests(db, &manifest, &dest_root, &settled, &redo)?,
+        Some(db) => stored_dests(db, &manifest, &dest_root, &settled, &recreate)?,
         None => None,
     };
     let mut list: Vec<String> = Vec::new();
-    for (k, item) in manifest.binary_items().enumerate() {
-        let chunk_count = item.chunk_count.unwrap_or(0);
-        let reused = stored.as_ref().map(|s| &s[k]);
-        let dest = if is_settled(item.index) {
-            // A settled item keeps its file and gets no chunk.
-            None
-        } else if let Some(path) = reused.filter(|_| !redo.contains(&item.index)) {
-            // B1/R-T7-5: the file holds the chunks of the earlier attempt,
-            // and the stored bitmap names them. The bitmap is a HINT. The
-            // per-item hash at the end decides done or quarantined.
-            let db = store.expect("a stored list needs a db");
-            bitmaps[item.index as usize] =
-                Some(db.load_bitmap(&manifest.payload_id, item.index, chunk_count)?);
-            Some(path.clone())
-        } else {
-            let path = match reused {
-                // A redo item: the quarantine moved its file away. The file
-                // is created again at its stored path.
-                Some(path) => {
-                    let parent = path.parent().unwrap_or(&dest_root);
-                    let leaf = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    create_free(parent, &leaf, false, &mut next_suffix, item.index)?
+    // Every path that this attempt creates. An error below removes them.
+    let mut created: Vec<PathBuf> = Vec::new();
+    let allocated = (|| -> Result<()> {
+        for (k, item) in manifest.binary_items().enumerate() {
+            let chunk_count = item.chunk_count.unwrap_or(0);
+            let reused = stored.as_ref().map(|s| &s[k]);
+            let dest = if is_settled(item.index) {
+                // A settled item keeps its file and gets no chunk.
+                None
+            } else if let Some(path) = reused.filter(|_| !recreate.contains(&item.index)) {
+                // B1/R-T7-5: the file holds the chunks of the earlier attempt,
+                // and the stored bitmap names them. The bitmap is a HINT. The
+                // per-item hash at the end decides done or quarantined.
+                let db = store.expect("a stored list needs a db");
+                bitmaps[item.index as usize] =
+                    Some(db.load_bitmap(&manifest.payload_id, item.index, chunk_count)?);
+                Some(path.clone())
+            } else {
+                let path = match reused {
+                    // A new file at the stored path. A redo item: the
+                    // quarantine moved its file away. A file that is there
+                    // now is not ours, so the item takes a suffix.
+                    Some(path) => {
+                        let parent = path.parent().unwrap_or(&dest_root);
+                        let leaf = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        create_free(
+                            parent,
+                            &leaf,
+                            false,
+                            &mut next_suffix,
+                            item.index,
+                            &mut created,
+                        )?
+                    }
+                    // B1: a folder's children arrive in subdirectories that
+                    // do not exist yet. The allocation creates them and the
+                    // file.
+                    None => allocate_destination(
+                        &dest_root,
+                        item,
+                        &mut dirs,
+                        &mut next_suffix,
+                        &mut created,
+                    )?,
+                };
+                // A new empty file holds no chunk, so a stored bitmap goes.
+                if let Some(db) = store {
+                    db.clear_bitmap(&manifest.payload_id, item.index)?;
                 }
-                // B1: a folder's children arrive in subdirectories that do
-                // not exist yet. The allocation creates them and the file.
-                None => allocate_destination(&dest_root, item, &mut dirs, &mut next_suffix)?,
+                bitmaps[item.index as usize] = Some(ChunkBitmap::new(chunk_count));
+                Some(path)
             };
-            // A new empty file holds no chunk, so a stored bitmap goes.
-            if let Some(db) = store {
-                db.clear_bitmap(&manifest.payload_id, item.index)?;
-            }
-            bitmaps[item.index as usize] = Some(ChunkBitmap::new(chunk_count));
-            Some(path)
-        };
-        let entry = match (&dest, reused) {
-            (Some(path), _) | (None, Some(path)) => path.clone(),
-            (None, None) => item_destination(&dest_root, item)?,
-        };
-        list.push(relative_dest(&dest_root, &entry)?);
-        dests[item.index as usize] = dest;
-    }
-    // One write after every create. A crash before it leaves no list, and the
-    // next attempt starts the payload fresh.
-    if let Some(db) = store {
-        let mut bytes = Vec::new();
-        ciborium::into_writer(&list, &mut bytes)
-            .map_err(|e| CoreError::Cbor(format!("destination list: {e}")))?;
-        db.set_setting(&dest_key(&manifest.payload_id), &bytes)?;
+            let entry = match (&dest, reused) {
+                (Some(path), _) | (None, Some(path)) => path.clone(),
+                (None, None) => item_destination(&dest_root, item)?,
+            };
+            list.push(relative_dest(&dest_root, &entry)?);
+            dests[item.index as usize] = dest;
+        }
+        // One write after every create. A crash before it leaves no list, and
+        // the next attempt starts the payload fresh.
+        if let Some(db) = store {
+            let mut bytes = Vec::new();
+            ciborium::into_writer(&list, &mut bytes)
+                .map_err(|e| CoreError::Cbor(format!("destination list: {e}")))?;
+            db.set_setting(&dest_key(&manifest.payload_id), &bytes)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = allocated {
+        remove_created(&created);
+        return Err(e);
     }
 
     // Version 101: tell the sender which chunks this receiver still needs. A
@@ -2932,7 +3024,7 @@ mod tests {
         let started = std::time::Instant::now();
         let res = (0..n).try_for_each(|i| {
             item.index = i;
-            allocate_destination(dir.path(), &item, &mut dirs, &mut next).map(drop)
+            allocate_destination(dir.path(), &item, &mut dirs, &mut next, &mut Vec::new()).map(drop)
         });
         (started.elapsed(), res, dir)
     }
@@ -3028,6 +3120,67 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
         assert!(write_chunk(root.path(), &path, 0, b"new").await.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"old");
+    }
+
+    /// F4: an allocation error that is not `AlreadyExists` fails the receive.
+    /// The receive removes the folders and files that it created, so a retry
+    /// does not make `album-1`, `album-2`, and more. The existing folder stays.
+    #[tokio::test]
+    async fn a_failed_allocation_removes_what_it_created_so_a_retry_makes_no_new_suffix() {
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dst.path().join("album")).unwrap();
+        std::fs::write(dst.path().join("album/keep.txt"), b"keep").unwrap();
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        // A name of 300 bytes: every file system here refuses it with an
+        // error that is not `AlreadyExists`.
+        let long = format!("album/{}.txt", "x".repeat(300));
+        for _ in 0..2 {
+            let res = deliver(
+                dst.path(),
+                &[
+                    ("a.txt", Some("album/a.txt"), b"A"),
+                    ("b.txt", Some("album/sub/b.txt"), b"B"),
+                    ("c.txt", Some(&long), b"C"),
+                ],
+                Some(&db),
+            )
+            .await;
+            assert!(res.is_err(), "the long name must fail, got {res:?}");
+        }
+        assert_eq!(
+            files_below(dst.path()),
+            vec![(PathBuf::from("album/keep.txt"), b"keep".to_vec())]
+        );
+        let top: Vec<_> = std::fs::read_dir(dst.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(top, vec![std::ffi::OsString::from("album")], "no album-1");
+    }
+
+    /// The bytes of every attrs["path"] in one manifest are capped at 16 MiB.
+    /// The error names no path. 65 536 items with a path of 100 bytes pass.
+    #[test]
+    fn the_total_path_bytes_of_one_manifest_are_capped() {
+        let fill = |i: u32, len: usize| {
+            let head = format!("p/{i}-");
+            format!("{head}{}", "x".repeat(len - head.len()))
+        };
+        let ok: Vec<Item> = (0..65_536u32)
+            .map(|i| peer_item(i, &fill(i, 100)))
+            .collect();
+        validate_manifest(&batch(ok)).unwrap();
+
+        let big: Vec<Item> = (0..4_200u32)
+            .map(|i| peer_item(i, &fill(i, 4_000)))
+            .collect();
+        let err = validate_manifest(&batch(big)).unwrap_err();
+        assert!(matches!(err, CoreError::Protocol(_)), "got {err:?}");
+        assert!(
+            !err.to_string().contains("xxx"),
+            "the error names a path: {err}"
+        );
     }
 
     /// F3b: `staging` is the reserved outbound staging ROOT inside out_dir

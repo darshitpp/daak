@@ -889,7 +889,9 @@ async fn a_fresh_start_a_completed_receive_a_cancel_and_a_delete_history_each_de
         "fresh start"
     );
 
-    // A cancel of the transfer with this id.
+    // A cancel of the transfer with this id. The test seeds the list by
+    // hand, because a cancel reads an outbound row, and a receive writes the
+    // list of an inbound row.
     let db3 = db();
     let stage = tempfile::tempdir().unwrap();
     let staging = daak_core::staging::Staging::new(stage.path().to_path_buf());
@@ -903,5 +905,61 @@ async fn a_fresh_start_a_completed_receive_a_cancel_and_a_delete_history_each_de
             .unwrap()
             .is_none(),
         "cancel"
+    );
+}
+
+/// F4: two items are held, and the user deletes one held copy. Its row goes,
+/// and the list stays. A file of the user then sits at the stored path. The
+/// next delivery must not write into it: the item takes a suffix.
+#[tokio::test]
+async fn a_deleted_held_item_never_writes_into_a_user_file_at_its_stored_path() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+
+    // Pass 1: a.bin and b.bin are wrong, so both are held.
+    let bad_dir = tempfile::tempdir().unwrap();
+    let mut bad_paths = paths.clone();
+    for (i, seed) in [(0usize, 1u8), (1, 2)] {
+        let mut wrong = file_bytes(seed);
+        wrong[5] ^= 0xff;
+        let bad = bad_dir.path().join(format!("bad{i}"));
+        std::fs::write(&bad, &wrong).unwrap();
+        bad_paths[i] = Some(bad);
+    }
+    let (_, r, _) = resumed_pass(&manifest, &bad_paths, dst.path(), &db).await;
+    assert!(
+        matches!(r, Err(daak_core::CoreError::Quarantined { .. })),
+        "got {r:?}"
+    );
+    assert!(db.get_setting(&list_key(&manifest)).unwrap().is_some());
+
+    // The user deletes the held copy of a.bin. Then the user puts a file of
+    // their own at album/a.bin.
+    db.delete_item(&manifest.payload_id, 0).unwrap();
+    let user = dst.path().join("album/a.bin");
+    assert!(!user.exists(), "the quarantine moved the held copy");
+    std::fs::write(&user, b"the user copy").unwrap();
+
+    // Pass 2: the good bytes.
+    let (_, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    assert_eq!(std::fs::read(&user).unwrap(), b"the user copy");
+    let row = db.get_item(&manifest.payload_id, 0).unwrap().unwrap();
+    assert_eq!(row.state, "done");
+    let landed = PathBuf::from(row.dest_path.unwrap());
+    assert_eq!(landed, dst.path().join("album/a-1.bin"));
+    assert_eq!(std::fs::read(&landed).unwrap(), file_bytes(1));
+    let row = db.get_item(&manifest.payload_id, 1).unwrap().unwrap();
+    assert_eq!(row.state, "done");
+    assert_eq!(
+        row.dest_path.as_deref(),
+        dst.path().join("album/b.bin").to_str(),
+        "the held item lands at its stored path"
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("album/b.bin")).unwrap(),
+        file_bytes(2)
     );
 }

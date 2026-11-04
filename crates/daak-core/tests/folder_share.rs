@@ -936,9 +936,9 @@ async fn a_mixed_text_and_folder_share_is_received_end_to_end() {
 /// Before the group name, the loose item resolved to out_dir/x.bin and the
 /// folder child also resolved to out_dir/x.bin. The receiver interleaved their
 /// chunks, and the hash check failed. Now the folder child carries
-/// `album/x.bin`, so the two land in different files. The receiver keeps its
-/// duplicate-destination rejection as a backstop against a hand-built or
-/// hostile manifest.
+/// `album/x.bin`, so the two land in different files. A hand-built or hostile
+/// manifest can still name one destination twice. The receiver then gives the
+/// second item a `-N` suffix. It does not refuse the manifest.
 #[tokio::test]
 async fn a_loose_file_naming_a_folder_child_does_not_collide_on_the_receiver() {
     let src = tempfile::tempdir().unwrap();
