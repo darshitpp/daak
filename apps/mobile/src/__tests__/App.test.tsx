@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, render, renderAsync, screen, waitFor, fireEventAsync } from '@testing-library/react-native';
 import { mockPlatformHost } from '../testPlatformMock';
 import App from '../App';
 
@@ -64,7 +64,7 @@ describe('App', () => {
   // synchronous assertion here races it and sees the loading view. The shell
   // assertion itself is unchanged; what it waits for is the keystore.
   it('boots and renders the tab shell', async () => {
-    render(<App />);
+    await renderAsync(<App />);
     await waitFor(() => expect(screen.getByTestId('tab-devices')).toBeTruthy());
     expect(screen.getByTestId('tab-settings')).toBeTruthy();
     for (const gone of ['tab-send', 'tab-inbox', 'tab-transfers']) expect(screen.queryByTestId(gone)).toBeNull();
@@ -80,9 +80,9 @@ describe('App', () => {
     expect(drainInbound).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves the engine untouched on mount', () => {
+  it('leaves the engine untouched on mount', async () => {
     const send = jest.spyOn(engine, 'send');
-    render(<App />);
+    await renderAsync(<App />);
     expect(send).not.toHaveBeenCalled();
     expect(sendIntentItems).not.toHaveBeenCalled();
   });
@@ -96,7 +96,7 @@ describe('App', () => {
   // Same reason: the start is gated on the durable read, not on mount. The
   // owner still may not start the engine TWICE, and that is what this claims.
   it('starts the engine once through the idempotent owner', async () => {
-    render(<App />);
+    await renderAsync(<App />);
     await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
   });
 
@@ -112,7 +112,7 @@ describe('App', () => {
   // would call setDisplayName with that value and fail this assertion.
   it('does not replay the onboarding name on a returning launch', async () => {
     const rename = jest.spyOn(engine, 'setDisplayName');
-    render(<App />);
+    await renderAsync(<App />);
     await waitFor(() => expect(startEngineOnce).toHaveBeenCalledTimes(1));
     // One more tick, so a rename fired AFTER the start had settled would still
     // be caught. The replay was chained onto the start promise.
@@ -128,7 +128,7 @@ describe('App', () => {
   // making it diagnosable in the field.
   it('says so out loud when the engine refuses to start', async () => {
     startEngineOnce.mockRejectedValueOnce(new Error('keystore rejected the key'));
-    render(<App />);
+    await renderAsync(<App />);
     await waitFor(() => expect(warn).toHaveBeenCalled());
     expect(String(warn.mock.calls[0][0])).toContain('start');
     // The log line is not the report: the user has to see it too, because
@@ -156,12 +156,12 @@ describe('App', () => {
         { kind: 'intent-send', deviceId: 'aa', text: 'sent already' },
       ]),
     );
-    render(<App />);
+    await renderAsync(<App />);
     expect(await screen.findByText('Pick a device for what you shared')).toBeTruthy();
-    fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
+    await fireEventAsync.press(await screen.findByTestId('open-' + pixel.deviceId));
     expect(await screen.findByDisplayValue('from the share sheet')).toBeTruthy();
     expect(screen.getByText('photo.png')).toBeTruthy();
-    fireEvent.press(await screen.findByTestId('send'));
+    await fireEventAsync.press(await screen.findByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(send).toHaveBeenNthCalledWith(1, { peerDeviceId: pixel.deviceId, files: ['/Documents/photo.png'] });
     expect(send).toHaveBeenNthCalledWith(2, { peerDeviceId: pixel.deviceId, text: 'from the share sheet' });
@@ -184,11 +184,11 @@ describe('App', () => {
         return () => {};
       },
     );
-    render(<App />);
+    await renderAsync(<App />);
     await act(async () => {});
 
     // Away from Devices, so arriving is the assertion.
-    fireEvent.press(screen.getByTestId('tab-settings'));
+    await fireEventAsync.press(screen.getByTestId('tab-settings'));
     expect(await screen.findByTestId('save-name')).toBeTruthy();
 
     expect(open).toBeDefined();
@@ -213,7 +213,7 @@ describe('App', () => {
     platform.photosAccessStatus.mockResolvedValue('undetermined');
     platform.requestPhotosAccess.mockClear();
     try {
-      render(<App />);
+      await renderAsync(<App />);
       await waitFor(() => expect(platform.requestPhotosAccess).toHaveBeenCalledTimes(1));
       await act(async () => {});
       expect(platform.requestPhotosAccess).toHaveBeenCalledTimes(1);
@@ -230,7 +230,7 @@ describe('App', () => {
     platform.requestPhotosAccess.mockClear();
     // The restore runs even when an assertion fails, so later tests keep the defaults.
     try {
-      render(<App />);
+      await renderAsync(<App />);
       await act(async () => {});
       await act(async () => {});
       expect(platform.requestPhotosAccess).not.toHaveBeenCalled();

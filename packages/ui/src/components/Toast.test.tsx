@@ -84,6 +84,13 @@ describe('Toast', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
+  it('starts no timer when show runs after the provider unmounted', () => {
+    const { unmount } = render(<ToastProvider><Capture /></ToastProvider>);
+    unmount();
+    show('Late');
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
   it('gives a no-op show outside a provider and does not throw', () => {
     render(<Capture />);
     expect(() => ping('Copied')).not.toThrow();

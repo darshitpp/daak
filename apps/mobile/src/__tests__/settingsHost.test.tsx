@@ -1,6 +1,6 @@
 import React from 'react';
 import { Linking } from 'react-native';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { renderAsync, screen, waitFor, fireEventAsync } from '@testing-library/react-native';
 import { mockPlatformHost } from '../testPlatformMock';
 
 // The version is fake on purpose: a test that reads it proves the value came
@@ -37,8 +37,8 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 const openSettings = async () => {
-  render(<App />);
-  fireEvent.press(await screen.findByTestId('tab-settings'));
+  await renderAsync(<App />);
+  await fireEventAsync.press(await screen.findByTestId('tab-settings'));
 };
 
 it('shows the version that the platform module reports', async () => {
@@ -57,7 +57,7 @@ it('shows no version row when the platform module rejects', async () => {
 
 it('saves the arrival switch through the platform preference store', async () => {
   await openSettings();
-  fireEvent.press(await screen.findByLabelText('Tell me when a file arrives'));
+  await fireEventAsync.press(await screen.findByLabelText('Tell me when a file arrives'));
   await waitFor(() => expect(saveNotifyPrefs).toHaveBeenCalledWith({ arrival: false }));
   expect(screen.queryByText('Play a sound too')).toBeNull();
 });
@@ -68,7 +68,7 @@ it('copies the app version line and the debug bundle through copyToClipboard whe
   jest.mocked(copyToClipboard).mockResolvedValueOnce(true);
   jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
   await openSettings();
-  fireEvent.press(await screen.findByTestId('report-issue'));
+  await fireEventAsync.press(await screen.findByTestId('report-issue'));
   await waitFor(() =>
     expect(copyToClipboard).toHaveBeenCalledWith('```text\napp: 0.0.0-test (build 1)\nBUNDLE TEXT\n```'),
   );
@@ -84,8 +84,8 @@ it('says the phone in the arrival hint', async () => {
 it('revokes a pairing exactly once', async () => {
   const revoke = jest.spyOn(engine, 'revokePairing').mockResolvedValue(undefined);
   await openSettings();
-  fireEvent.press(await screen.findByTestId('remove-' + paired.deviceId));
-  fireEvent.press(screen.getByTestId('confirm-remove'));
+  await fireEventAsync.press(await screen.findByTestId('remove-' + paired.deviceId));
+  await fireEventAsync.press(screen.getByTestId('confirm-remove'));
   await waitFor(() => expect(revoke).toHaveBeenCalledTimes(1));
   await new Promise((r) => setTimeout(r, 50));
   expect(revoke).toHaveBeenCalledTimes(1);
@@ -101,7 +101,7 @@ it('opens system settings when the stored OS answer is off', async () => {
       "If notifications for Daak are blocked in your system settings, this switch can't turn alerts on. Allow notifications for Daak there, then try again.",
     ),
   ).toBeTruthy();
-  fireEvent.press(screen.getByLabelText('Tell me when a file arrives'));
+  await fireEventAsync.press(screen.getByLabelText('Tell me when a file arrives'));
   expect(open).toHaveBeenCalledTimes(1);
 });
 
