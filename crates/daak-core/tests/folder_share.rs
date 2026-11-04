@@ -160,9 +160,9 @@ fn a_directory_becomes_one_item_per_file_with_relative_paths() {
             Some(&ciborium::value::Value::Text("album".into()))
         );
     }
-    // Names are unique within the share: staging is a flat namespace keyed by
-    // name, so two "index.html" in different folders would otherwise stage
-    // onto each other and ship one file's bytes under the other's hash.
+    // Item names stay unique in one manifest. An old version 100 receiver
+    // refuses a manifest with a duplicate name. Staging uses `item_<index>`,
+    // so staging does not depend on the names.
     let mut names: Vec<&str> = items.iter().map(|i| i.name.as_deref().unwrap()).collect();
     let total = names.len();
     names.sort_unstable();
@@ -492,10 +492,10 @@ fn a_folder_share_never_puts_an_absolute_path_on_the_wire() {
     }
 }
 
-/// F2: the used-name set is per-from_folder, so two picked folders each
-/// holding notes.txt collide. Staging is flat per payload, so that hard-links
-/// one item's staged file over another and the sender streams wrong bytes
-/// against the wrong hash. Uniqueness must be per MANIFEST.
+/// F2: two picked folders that each hold notes.txt give two items. Item
+/// names stay unique in one MANIFEST, because an old version 100 receiver
+/// refuses a duplicate name. Staging uses `item_<index>`, so staging does
+/// not depend on the names.
 #[test]
 fn two_folders_with_the_same_basename_produce_unique_manifest_names() {
     let dir = tempfile::tempdir().unwrap();

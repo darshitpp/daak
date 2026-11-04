@@ -70,6 +70,14 @@ pub(crate) fn insert_transfer(c: &rusqlite::Connection, t: &TransferRow) -> Resu
 
 /// The statements of `Db::fresh_start`. It takes the connection, because the
 /// `Db` lock is not reentrant.
+/// The `settings` key that holds the receive destinations of a payload: a
+/// CBOR list of paths relative to the receive root, one for each binary item,
+/// in item order. F4: a resume reuses the list, so a partial file does not
+/// take a suffix.
+pub(crate) fn dest_key(payload_id: &[u8; 16]) -> String {
+    format!("dest:{}", hex::encode(payload_id))
+}
+
 fn fresh_start_in(
     c: &rusqlite::Connection,
     transfer_id: &[u8; 16],
@@ -88,6 +96,11 @@ fn fresh_start_in(
     tx.execute(
         "DELETE FROM transfer_items WHERE transfer_id = ?1",
         rusqlite::params![&transfer_id[..]],
+    )?;
+    // The stored destinations belong to the old manifest.
+    tx.execute(
+        "DELETE FROM settings WHERE key = ?1",
+        rusqlite::params![dest_key(payload_id)],
     )?;
     tx.execute(
         "UPDATE transfers SET manifest = ?2, peer_device_id = ?3, kind = ?4, item_count = ?5
@@ -110,8 +123,9 @@ impl Db {
     }
 
     /// Forget the receive state of a known payload whose manifest changed.
-    /// One transaction deletes every bitmap and every item row. It also
-    /// stores the new manifest, peer, kind, and item count. Files on disk stay.
+    /// One transaction deletes every bitmap, every item row, and the stored
+    /// destinations. It also stores the new manifest, peer, kind, and item
+    /// count. Files on disk stay.
     pub fn fresh_start(
         &self,
         transfer_id: &[u8; 16],

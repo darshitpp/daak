@@ -403,9 +403,10 @@ async fn retry_resends_a_file_that_failed_its_hash() {
     assert!(slot.exists(), "B holds the bad copy at {slot:?}");
     assert_eq!(inbox_paths(&p.b_db, &id).len(), 2, "a.bin and c.bin only");
 
-    // Repair the staged copy, then retry.
+    // Repair the staged copy, then retry. Staging names each copy
+    // `item_<index>`, and b.bin is item 1.
     let staged_dir = p.a_out.path().join("staging").join(hex::encode(id));
-    std::fs::write(staged_dir.join("b.bin"), file_bytes(2)).unwrap();
+    std::fs::write(staged_dir.join("item_1"), file_bytes(2)).unwrap();
     p.proxy.lock().unwrap().a_to_b = 0;
     p.a.retry(id).unwrap();
     let events = b_done(&mut rx, id).await;
@@ -628,6 +629,80 @@ async fn the_outbox_retry_resumes_for_a_folder_and_for_a_loose_file() {
         (missing..missing + SLACK).contains(&after),
         "the loose file retry sends only chunks 2 and 3, got {after}"
     );
+    p.a.shutdown().await.unwrap();
+    p.b.shutdown().await.unwrap();
+}
+
+/// F4: B already has a folder `album`. The received folder takes `album-1`.
+/// Every report names `album-1`: the item events, the inbox paths, the group
+/// roots, and the thread items. The old folder stays as it is.
+#[tokio::test]
+async fn a_folder_received_into_an_out_dir_that_has_album_reports_album_dash_1_everywhere() {
+    let p = pair().await;
+    let old = p.b_out.path().join("album");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("keep.txt"), b"keep").unwrap();
+    let src = tempfile::tempdir().unwrap();
+    let (manifest, sources) = mixed_folder(src.path(), [0u8; 16]);
+    let mut rx = p.b.events();
+    let id =
+        p.a.enqueue_outbox_send(p.b_id, manifest, sources)
+            .await
+            .unwrap();
+    let events = b_done(&mut rx, id).await;
+
+    let root = p.b_out.path().join("album-1");
+    let root_text = root.to_string_lossy().to_string();
+    let item_paths: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::TransferItem {
+                transfer_id,
+                dest_path,
+                ..
+            } if *transfer_id == id => dest_path.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(item_paths.len(), 3, "{item_paths:?}");
+    for path in &item_paths {
+        assert!(Path::new(path).starts_with(&root), "item event: {path}");
+    }
+    let told: Vec<&InboxRow> = events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::InboxReceived(r) if r.id == id => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told.len(), 1, "one event");
+    assert_eq!(told[0].group_roots, vec![root_text.clone()]);
+    let saved = inbox_paths(&p.b_db, &id);
+    assert_eq!(saved.len(), 3, "{saved:?}");
+    for path in &saved {
+        assert!(Path::new(path).starts_with(&root), "saved path: {path}");
+    }
+    let listed = p.b.list_inbox().unwrap();
+    let row = listed.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(row.group_roots, vec![root_text]);
+
+    let a_id = p.a.pairing_bundle().await.identity.device_id;
+    let page = p.b.list_thread(a_id, 50, None).unwrap();
+    let thread_paths: Vec<&String> = page
+        .items
+        .iter()
+        .filter(|i| i.transfer_id == id)
+        .filter_map(|i| i.dest_path.as_ref())
+        .collect();
+    assert_eq!(thread_paths.len(), 3, "{thread_paths:?}");
+    for path in thread_paths {
+        assert!(Path::new(path).starts_with(&root), "thread item: {path}");
+    }
+    for name in ["a.bin", "b.bin", "c.bin"] {
+        assert_eq!(std::fs::read(root.join(name)).unwrap(), expected(name));
+    }
+    assert_eq!(std::fs::read(old.join("keep.txt")).unwrap(), b"keep");
+    assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1, "no merge");
     p.a.shutdown().await.unwrap();
     p.b.shutdown().await.unwrap();
 }

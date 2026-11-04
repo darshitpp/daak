@@ -2671,6 +2671,12 @@ impl Engine {
         }
         let items = self.db.list_items(transfer_id)?;
         let held = items.iter().filter(|i| i.state == "quarantined").count();
+        // F4: with no held item left, no retry follows. The stored receive
+        // destinations go.
+        if held == 0 {
+            self.db
+                .delete_setting(&crate::store::transfers::dest_key(transfer_id))?;
+        }
         let error = (held > 0).then(|| format!("{held} item(s) quarantined after hash mismatch"));
         self.db
             .update_transfer_summary(transfer_id, items.len() as u32, error.as_deref())
@@ -3451,6 +3457,9 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
         // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
         // brief's "cancelled"; do not "fix" it back.
         db.set_transfer_state(&transfer_id, "canceled")?;
+        // F4: a cancel ends the payload, so its stored receive destinations
+        // go.
+        db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
     } else {
         // The row was already done (delivered) or awaiting_ack. Cancel did
         // not win, so the outbox is the authority and the staged copy is
@@ -5104,6 +5113,8 @@ mod tests {
     /// F4: names are case sensitive. Two names that differ only by case
     /// collide on a case-insensitive file system. Staging must keep both
     /// files, and the drain must send the bytes of each item.
+    /// On a case-sensitive file system this test also passes on the base
+    /// commit, because the two names do not collide there.
     #[tokio::test]
     async fn staging_two_files_whose_names_differ_only_by_case_keeps_both_and_the_outbox_drain_sends_each_correct_bytes(
     ) {

@@ -194,7 +194,13 @@ async fn delete_removes_the_held_file_and_its_row() {
         .error
         .is_some());
 
+    // F4: a receive with a held item keeps its destination list, so a
+    // retry lands at the same path. The delete of the last held item ends
+    // the payload, so the list goes.
+    let key = format!("dest:{}", hex::encode(payload_id));
+    assert!(b_db.get_setting(&key).unwrap().is_some(), "the list stays");
     b.delete_quarantined_item(payload_id, 0).unwrap();
+    assert!(b_db.get_setting(&key).unwrap().is_none(), "the list goes");
     assert!(
         !std::path::Path::new(&held).exists(),
         "held file must be gone"

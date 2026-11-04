@@ -405,15 +405,51 @@ async fn a_resend_with_a_changed_manifest_and_the_same_payload_id_hashes_every_i
             "item {i} crosses the wire in full"
         );
     }
-    // Task 3b moves the new file to a name with a suffix. Task 3b updates
-    // this assertion.
+    // The folder `album` exists from pass 1, so the whole group takes the
+    // suffix. The first copy stays as it is.
     assert_eq!(
-        std::fs::read(dst.path().join("album/b.bin")).unwrap(),
+        std::fs::read(dst.path().join("album-1/b.bin")).unwrap(),
         changed_b(),
         "the changed file has the new bytes"
     );
+    assert_eq!(
+        std::fs::read(dst.path().join("album/b.bin")).unwrap(),
+        file_bytes(2),
+        "the first copy is not overwritten"
+    );
     let row = db.get_transfer(&manifest.payload_id).unwrap().unwrap();
     assert_eq!(row.manifest, changed.to_cbor().unwrap());
+}
+
+/// A fresh start after a changed manifest gives each item a new empty file.
+/// A shorter new file keeps no tail bytes of the old file. The first copy
+/// stays as it is.
+#[tokio::test]
+async fn a_resend_with_a_shorter_changed_file_keeps_no_old_tail_bytes_and_keeps_the_first_copy() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    let (_, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+
+    let short = file_bytes(9)[..CHUNK + 10].to_vec();
+    assert!(short.len() < FILE_LEN);
+    std::fs::write(src.path().join("album/b.bin"), &short).unwrap();
+    let (changed, new_paths) = rebuilt(src.path(), &manifest);
+    let (_, r, _) = resumed_pass(&changed, &new_paths, dst.path(), &db).await;
+    r.unwrap();
+
+    let row = db.get_item(&manifest.payload_id, 1).unwrap().unwrap();
+    assert_eq!(row.state, "done", "the hash of the short file matches");
+    let landed = PathBuf::from(row.dest_path.unwrap());
+    assert_eq!(std::fs::read(&landed).unwrap(), short, "no old tail bytes");
+    assert_ne!(landed, dst.path().join("album/b.bin"));
+    assert_eq!(
+        std::fs::read(dst.path().join("album/b.bin")).unwrap(),
+        file_bytes(2),
+        "the first copy is not overwritten"
+    );
 }
 
 #[tokio::test]
@@ -483,8 +519,9 @@ async fn an_interrupted_receive_with_bitmaps_and_no_rows_starts_fresh_when_the_m
             "item {i} crosses the wire in full"
         );
     }
+    // Pass 1 made the folder `album`, so the fresh start takes `album-1`.
     assert_eq!(
-        std::fs::read(dst.path().join("album/b.bin")).unwrap(),
+        std::fs::read(dst.path().join("album-1/b.bin")).unwrap(),
         changed_b()
     );
 }
@@ -599,5 +636,272 @@ async fn a_peer_that_reuses_the_payload_id_of_an_outbound_transfer_leaves_that_t
     assert!(
         db.load_bitmap(&id, 7, 4).unwrap().is_set(0),
         "the bitmap stays"
+    );
+}
+
+/// One interrupted receive: files 1 and 3 in full, then chunks 0 and 1 of
+/// file 2. Then the connection drops.
+async fn interrupted_pass(
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+    dst: &Path,
+    db: &daak_core::store::Db,
+) {
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let p = paths.to_vec();
+    let dropper = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        conn.send(
+            CONTROL_STREAM,
+            RecordType::Manifest,
+            Bytes::from(m.to_cbor().unwrap()),
+        )
+        .await
+        .unwrap();
+        let _ = read_resume(&mut conn).await;
+        for item in [0u32, 2] {
+            let bytes = std::fs::read(p[item as usize].as_ref().unwrap()).unwrap();
+            for c in 0..4 {
+                send_chunk(&mut conn, item, c, &bytes).await;
+            }
+        }
+        let b = std::fs::read(p[1].as_ref().unwrap()).unwrap();
+        send_chunk(&mut conn, 1, 0, &b).await;
+        send_chunk(&mut conn, 1, 1, &b).await;
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    let first = tokio::time::timeout(
+        Duration::from_secs(10),
+        receive_transfer(&mut conn, dst, |_| {}, Some(db), |_| {}),
+    )
+    .await
+    .expect("the interrupted pass hung");
+    dropper.await.unwrap();
+    assert!(
+        matches!(first, Err(daak_core::CoreError::TransferInterrupted)),
+        "a drop is an interrupt, got {first:?}"
+    );
+}
+
+fn list_key(manifest: &Manifest) -> String {
+    format!("dest:{}", hex::encode(manifest.payload_id))
+}
+
+/// Every item row is `done`, and each row path holds the right bytes.
+fn assert_all_done(db: &daak_core::store::Db, manifest: &Manifest) {
+    for (i, seed) in [(0u32, 1u8), (1, 2), (2, 3)] {
+        let row = db.get_item(&manifest.payload_id, i).unwrap().unwrap();
+        assert_eq!(row.state, "done", "item {i}");
+        assert_eq!(
+            std::fs::read(row.dest_path.unwrap()).unwrap(),
+            file_bytes(seed),
+            "item {i}"
+        );
+    }
+}
+
+/// F4: the first attempt chooses `album-1`, because `album` exists. The
+/// resume reuses those paths. A partial file does not take a suffix, and only
+/// the missing chunks cross the wire.
+#[tokio::test]
+async fn a_resume_keeps_the_destinations_chosen_by_the_first_attempt() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dst.path().join("album")).unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    interrupted_pass(&manifest, &paths, dst.path(), &db).await;
+    assert!(db.get_setting(&list_key(&manifest)).unwrap().is_some());
+
+    let (sent, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    assert_eq!(sent.get(&0).copied().unwrap_or(0), 0, "file 1 adds 0 bytes");
+    assert_eq!(sent.get(&2).copied().unwrap_or(0), 0, "file 3 adds 0 bytes");
+    assert_eq!(
+        sent.get(&1).copied().unwrap_or(0),
+        (FILE_LEN - 2 * CHUNK) as u64,
+        "file 2 adds only its missing chunks"
+    );
+    for (i, (name, seed)) in [("a.bin", 1u8), ("b.bin", 2), ("c.bin", 3)]
+        .iter()
+        .enumerate()
+    {
+        let path = dst.path().join("album-1").join(name);
+        assert_eq!(std::fs::read(&path).unwrap(), file_bytes(*seed));
+        let row = db
+            .get_item(&manifest.payload_id, i as u32)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.dest_path.as_deref(), path.to_str());
+    }
+    assert!(!dst.path().join("album-2").exists(), "no second suffix");
+    assert!(
+        !dst.path().join("album-1/b-1.bin").exists(),
+        "no file suffix"
+    );
+    assert_eq!(
+        std::fs::read_dir(dst.path().join("album")).unwrap().count(),
+        0
+    );
+}
+
+/// F4: an older receiver stored bitmaps and no list, or a crash came before
+/// the list write. A partial file can then hold bytes that the bitmap does not
+/// describe. The payload starts fresh: new files, every chunk, no quarantine.
+#[tokio::test]
+async fn bitmaps_with_no_stored_list_and_partial_files_give_correct_bytes_and_no_quarantine() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    interrupted_pass(&manifest, &paths, dst.path(), &db).await;
+    db.delete_setting(&list_key(&manifest)).unwrap();
+    // The bitmap of file 2 names chunks 0 and 1. The partial file does not
+    // hold them.
+    assert!(db
+        .load_bitmap(&manifest.payload_id, 1, 4)
+        .unwrap()
+        .is_set(0));
+    std::fs::write(dst.path().join("album/b.bin"), vec![0u8; 2 * CHUNK]).unwrap();
+
+    let (sent, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    for i in 0..3u32 {
+        assert_eq!(
+            sent.get(&i).copied().unwrap_or(0),
+            FILE_LEN as u64,
+            "item {i} crosses the wire in full"
+        );
+    }
+    assert_all_done(&db, &manifest);
+    assert!(!dst.path().join("quarantine").exists(), "no quarantine");
+}
+
+/// F4: the stored list is a hint. A path that leaves dest_root is ignored,
+/// and the payload starts fresh. Nothing is written outside dest_root.
+#[tokio::test]
+async fn a_stored_path_that_escapes_dest_root_is_ignored_and_the_payload_starts_fresh() {
+    for bad in ["../evil/b.bin", "/tmp/b.bin", "album/../../evil/b.bin"] {
+        let base = tempfile::tempdir().unwrap();
+        let dst = base.path().join("out");
+        std::fs::create_dir(&dst).unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let (manifest, paths) = folder(src.path());
+        let db = db();
+        interrupted_pass(&manifest, &paths, &dst, &db).await;
+        // A file outside dest_root that the bad list names.
+        std::fs::create_dir(base.path().join("evil")).unwrap();
+        std::fs::write(base.path().join("evil/b.bin"), b"outside").unwrap();
+        let list = vec![
+            "album/a.bin".to_string(),
+            bad.to_string(),
+            "album/c.bin".to_string(),
+        ];
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&list, &mut bytes).unwrap();
+        db.set_setting(&list_key(&manifest), &bytes).unwrap();
+
+        let (sent, r, _) = resumed_pass(&manifest, &paths, &dst, &db).await;
+        r.unwrap();
+        for i in 0..3u32 {
+            assert_eq!(
+                sent.get(&i).copied().unwrap_or(0),
+                FILE_LEN as u64,
+                "{bad}: item {i} crosses the wire in full"
+            );
+        }
+        assert_all_done(&db, &manifest);
+        for i in 0..3u32 {
+            let row = db.get_item(&manifest.payload_id, i).unwrap().unwrap();
+            assert!(
+                Path::new(&row.dest_path.unwrap()).starts_with(&dst),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(base.path().join("evil/b.bin")).unwrap(),
+            b"outside",
+            "{bad}"
+        );
+    }
+}
+
+/// F4: a listed file of an open item is gone. The payload starts fresh, so
+/// no item hashes a file that holds only part of its chunks.
+#[tokio::test]
+async fn a_listed_file_that_is_gone_starts_the_payload_fresh() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    interrupted_pass(&manifest, &paths, dst.path(), &db).await;
+    std::fs::remove_file(dst.path().join("album/b.bin")).unwrap();
+
+    let (sent, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    for i in 0..3u32 {
+        assert_eq!(
+            sent.get(&i).copied().unwrap_or(0),
+            FILE_LEN as u64,
+            "item {i} crosses the wire in full"
+        );
+    }
+    assert_all_done(&db, &manifest);
+    assert!(!dst.path().join("quarantine").exists(), "no quarantine");
+}
+
+/// F4: the list lives only while a receive can resume. A fresh start, a
+/// completed receive, and a cancel each delete it. The quarantine test file
+/// checks the delete of the last held item.
+#[tokio::test]
+async fn a_fresh_start_a_completed_receive_a_cancel_and_a_delete_history_each_delete_the_list() {
+    let src = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+
+    // A completed receive.
+    let dst = tempfile::tempdir().unwrap();
+    let db1 = db();
+    interrupted_pass(&manifest, &paths, dst.path(), &db1).await;
+    assert!(db1.get_setting(&list_key(&manifest)).unwrap().is_some());
+    let (_, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db1).await;
+    r.unwrap();
+    assert!(
+        db1.get_setting(&list_key(&manifest)).unwrap().is_none(),
+        "completed"
+    );
+
+    // A fresh start.
+    let dst = tempfile::tempdir().unwrap();
+    let db2 = db();
+    interrupted_pass(&manifest, &paths, dst.path(), &db2).await;
+    db2.fresh_start(
+        &manifest.payload_id,
+        &manifest.payload_id,
+        &manifest.sender.device_id,
+        "batch",
+        3,
+        &manifest.to_cbor().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        db2.get_setting(&list_key(&manifest)).unwrap().is_none(),
+        "fresh start"
+    );
+
+    // A cancel of the transfer with this id.
+    let db3 = db();
+    let stage = tempfile::tempdir().unwrap();
+    let staging = daak_core::staging::Staging::new(stage.path().to_path_buf());
+    let text = Manifest::text("cancel me");
+    let id = daak_core::outbox::enqueue(&db3, &staging, &[3u8; 16], &text, &[]).unwrap();
+    db3.set_setting(&format!("dest:{}", hex::encode(id)), b"\x80")
+        .unwrap();
+    daak_core::engine::cancel_with(&db3, &staging, id).unwrap();
+    assert!(
+        db3.get_setting(&format!("dest:{}", hex::encode(id)))
+            .unwrap()
+            .is_none(),
+        "cancel"
     );
 }

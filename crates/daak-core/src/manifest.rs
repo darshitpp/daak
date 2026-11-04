@@ -932,9 +932,8 @@ mod tests {
             total,
             "destinations must be distinct, got {dests:?}"
         );
-        // The proof that the fix is at the right layer: the receiver's
-        // duplicate-destination backstop must not fire on anything the
-        // builder produces.
+        // The builder gives distinct destinations, so the receiver gives no
+        // suffix in a normal send. The receiver accepts the manifest.
         crate::transfer::receiver::validate_manifest(manifest)
             .expect("the receiver must accept a manifest from_picked_paths built");
     }
@@ -1179,10 +1178,12 @@ mod tests {
     }
 
     /// Names compare as exact bytes. `A.txt` and `a.txt` are two names, so
-    /// neither name gets a suffix. The receiver handles a case collision.
+    /// neither name gets a suffix. The two files are in two folders, so they
+    /// do not collide on the receiver. When two names collide on a
+    /// case-insensitive receiver, the receiver gives one of them a suffix.
     #[test]
     #[allow(non_snake_case)]
-    fn a_and_A_in_one_folder_stay_two_distinct_names_with_no_suffix() {
+    fn a_and_A_in_two_folders_stay_two_distinct_names_with_no_suffix() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("share");
         std::fs::create_dir_all(root.join("x")).unwrap();
@@ -1433,11 +1434,11 @@ mod tests {
         assert!(err.to_string().contains("nothing to send"), "got {err}");
     }
 
-    /// The receiver's backstop: a HAND-BUILT manifest claiming one destination
-    /// twice is still refused, so a hostile or buggy peer cannot interleave
-    /// chunks either. The builder tests above must not weaken it.
+    /// A HAND-BUILT manifest that claims one destination twice is accepted.
+    /// The receiver gives the second item a new file with a suffix, so the
+    /// two items never share a file.
     #[test]
-    fn a_hand_built_colliding_manifest_is_still_refused() {
+    fn a_hand_built_colliding_manifest_is_accepted_by_the_receiver() {
         let dir = tempfile::tempdir().unwrap();
         let flat = dir.path().join("x.bin");
         std::fs::write(&flat, b"loose").unwrap();
@@ -1453,7 +1454,7 @@ mod tests {
             ],
         )
         .unwrap();
-        assert!(crate::transfer::receiver::validate_manifest(&manifest).is_err());
+        crate::transfer::receiver::validate_manifest(&manifest).unwrap();
     }
 
     fn map_get<'a>(value: &'a ciborium::value::Value, key: &str) -> &'a ciborium::value::Value {
