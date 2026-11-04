@@ -443,9 +443,11 @@ describe('relocateReceivedFiles with a folder', () => {
       }),
     ).resolves.toEqual([...moved, '/save/album/new.pdf']);
     expect(saveToLibrary).not.toHaveBeenCalled();
+    // Task 12b: `/save/album` is the root of the earlier files, so both files
+    // name it with a leading `/`. The new file joins it.
     expect(moveReceivedFiles).toHaveBeenCalledWith(
       ['/save/album/old.pdf', '/out/album/new.pdf'],
-      ['album', 'album'],
+      ['/album', '/album'],
     );
     expect(engine.calls).toEqual([{ payloadId: 'p', paths: [...moved, '/save/album/new.pdf'] }]);
 
@@ -461,6 +463,118 @@ describe('relocateReceivedFiles with a folder', () => {
     ).resolves.toBeNull();
     expect(saveToLibrary).not.toHaveBeenCalled();
     expect(again.calls).toHaveLength(0);
+  });
+});
+
+// Task 12b (F4): the native move gives a moved folder the first free name in
+// the save folder (`album`, `album-1`, ...). A plain subdir asks for that
+// choice. A subdir that starts with `/` names a root that the payload already
+// uses, so a retry joins the earlier files and does not make a new folder.
+describe('a moved folder takes a dash suffix in the save folder', () => {
+  const tree = 'content://com.android.externalstorage.documents/tree/primary%3ADownload%2FDaak';
+  const treeDoc = (rel: string) =>
+    `${tree}/document/${encodeURIComponent(`primary:Download/Daak/${rel}`)}`;
+
+  /**
+   * Pin: a first move sends the plain root names, as before. The native move
+   * chooses the free name. A loose file keeps `''`. A nested folder keeps its
+   * structure.
+   */
+  it('a_first_move_sends_the_plain_root_names', async () => {
+    moveReceivedFiles.mockImplementation(async (paths) => paths);
+    await relocateReceivedFiles(engineSpy(), {
+      payloadId: 'p',
+      savedPaths: ['/out/album/a.pdf', '/out/album/x/y/b.pdf', '/out/album-1/c.pdf', '/out/d.pdf'],
+      groupRoots: ['/out/album', '/out/album-1'],
+    });
+    expect(moveReceivedFiles).toHaveBeenCalledWith(
+      ['/out/album/a.pdf', '/out/album/x/y/b.pdf', '/out/album-1/c.pdf', '/out/d.pdf'],
+      ['album', 'album/x/y', 'album-1', ''],
+    );
+  });
+
+  it('a_retry_sends_the_remaining_files_to_the_root_that_the_earlier_files_use', async () => {
+    // The first move put the folder `album` at `/save/album-1`. A repaired file
+    // arrives at `/out/album/sub/b.pdf`. It must join `album-1`.
+    moveReceivedFiles.mockImplementation(async (paths) =>
+      paths.map((p) => p.replace('/out/album/', '/save/album-1/')),
+    );
+    const engine = engineSpy();
+    await expect(
+      relocateReceivedFiles(engine, {
+        payloadId: 'p',
+        savedPaths: ['/save/album-1/a.pdf', '/out/album/sub/b.pdf'],
+        groupRoots: ['/save/album-1', '/out/album'],
+      }),
+    ).resolves.toEqual(['/save/album-1/a.pdf', '/save/album-1/sub/b.pdf']);
+    expect(moveReceivedFiles).toHaveBeenCalledWith(
+      ['/save/album-1/a.pdf', '/out/album/sub/b.pdf'],
+      ['album-1', '/album-1/sub'],
+    );
+  });
+
+  it('a_retry_on_android_reads_the_root_from_the_saf_tree_uri', () => {
+    // Android records a moved file as a SAF document URI. The path below the
+    // tree gives the root that the earlier files use.
+    expect(
+      planRelocation([treeDoc('album-2/a.pdf'), '/out/album/b.pdf'], ['/out/album'], true),
+    ).toEqual({
+      library: [],
+      folder: [{ index: 1, path: '/out/album/b.pdf', subdir: '/album-2' }],
+    });
+  });
+
+  it('a_retry_keeps_the_library_album_name_and_uses_the_root_for_the_fallback', () => {
+    expect(
+      planRelocation(['/save/album-1/a.pdf', '/out/album/sub/b.jpg'], ['/save/album-1', '/out/album'], true),
+    ).toEqual({
+      library: [{ index: 1, path: '/out/album/sub/b.jpg', album: 'album / sub', subdir: '/album-1/sub' }],
+      folder: [{ index: 0, path: '/save/album-1/a.pdf', subdir: 'album-1' }],
+    });
+  });
+
+  it('the_exact_name_wins_over_a_suffixed_name', () => {
+    // The payload has the folders `album` and `album-1`. A placed root with
+    // the exact name can only belong to `album`.
+    expect(
+      planRelocation(
+        ['/save/album/a.pdf', '/save/album-1/b.pdf', '/out/album/c.pdf'],
+        ['/save/album', '/save/album-1', '/out/album'],
+        false,
+      ).folder[2],
+    ).toEqual({ index: 2, path: '/out/album/c.pdf', subdir: '/album' });
+  });
+
+  it('an_unclear_root_sends_the_plain_name', () => {
+    // Pin: two suffixed roots match `album`. The choice is not clear, so the native
+    // move makes a new folder. A new folder is safer than a wrong merge.
+    expect(
+      planRelocation(
+        ['/save/album-1/a.pdf', '/save/album-2/b.pdf', '/out/album/c.pdf'],
+        ['/save/album-1', '/save/album-2', '/out/album'],
+        false,
+      ).folder[2],
+    ).toEqual({ index: 2, path: '/out/album/c.pdf', subdir: 'album' });
+  });
+
+  it('a_second_folder_with_the_same_name_is_not_forced_to_merge', () => {
+    // Pin: names that are not `album` or `album-<number>` do not count, and
+    // a root in the same parent folder is an engine root, not a placed root.
+    expect(
+      planRelocation(
+        ['/save/albums/a.pdf', '/save/album-x/b.pdf', '/out/album-1/c.pdf', '/out/album/d.pdf'],
+        ['/save/albums', '/save/album-x', '/out/album-1', '/out/album'],
+        false,
+      ).folder[3],
+    ).toEqual({ index: 3, path: '/out/album/d.pdf', subdir: 'album' });
+    // A Gallery URI and a SAF URI of a loose file name no root.
+    expect(
+      planRelocation(
+        ['content://media/external/images/media/7', treeDoc('album'), '/out/album/d.pdf'],
+        ['/out/album'],
+        false,
+      ).folder,
+    ).toEqual([{ index: 2, path: '/out/album/d.pdf', subdir: 'album' }]);
   });
 });
 

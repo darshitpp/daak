@@ -358,10 +358,14 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    * is what the tree gives. The Inbox's open verb must accept it.
    *
    * `subdirs[i]` is the folder below the tree for `paths[i]`, for example
-   * `album/sub`. Each directory of it is found or created in the tree. A moved
-   * file is a content:// URI, and JavaScript does not send it again, so a
-   * second call never moves a file twice. After the move, the empty folders
-   * that the engine made below its output directory are removed.
+   * `album/sub`. Its first name is the root. Each root gets the first free name
+   * in the tree (`album`, `album-1`, ...), so a moved folder never merges into
+   * a folder that exists. A subdir that starts with "/" names a root that the
+   * payload already uses, and that root is used as it is. Each directory below
+   * the root is found or created in the tree. A moved file is a content:// URI,
+   * and JavaScript does not send it again, so a second call never moves a file
+   * twice. After the move, the empty folders that the engine made below its
+   * output directory are removed.
    */
   @ReactMethod
   override fun moveReceivedFiles(paths: ReadableArray, subdirs: ReadableArray, promise: Promise) =
@@ -379,11 +383,14 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
             treeUri, DocumentsContract.getTreeDocumentId(treeUri))
     // One lookup for each subdir in this call, not one for each file.
     val dirs = HashMap<String, Uri?>()
+    // Task 12b (F4): the root name that this call uses for each requested root.
+    val roots = HashMap<String, String>()
     val out = input.mapIndexed { i, path ->
       val src = File(path)
       if (path.isEmpty() || !src.exists()) return@mapIndexed path
       try {
-        val parts = safeParts(parallelAt(subdirs, i).split("/"))
+        val subdir = parallelAt(subdirs, i)
+        val parts = withRoot(treeUri, root, safeParts(subdir.split("/")), subdir.startsWith("/"), roots)
         val key = parts.joinToString("/")
         val parent = if (dirs.containsKey(key)) dirs[key] else {
           safDir(treeUri, root, parts).also { dirs[key] = it }
@@ -446,6 +453,52 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    */
   private fun safeParts(parts: List<String>): List<String> =
       parts.filter { it.isNotEmpty() && it != "." && it != ".." }
+
+  /**
+   * Task 12b (F4): `parts` with its first name replaced by the root that this
+   * call uses for it. An exact root (the subdir starts with "/") is used as it
+   * is. Any other root gets the first free name of `name`, `name-1`, `name-2`,
+   * ... in the tree. One requested root gets one name for each call.
+   */
+  private fun withRoot(
+      treeUri: Uri,
+      root: Uri,
+      parts: List<String>,
+      exact: Boolean,
+      roots: HashMap<String, String>
+  ): List<String> {
+    if (parts.isEmpty()) return parts
+    val name = parts[0]
+    val key = if (exact) "/$name" else name
+    val chosen = roots[key] ?: (if (exact) name else freeName(treeUri, root, name, roots.values.toSet()))
+    roots[key] = chosen
+    return listOf(chosen) + parts.drop(1)
+  }
+
+  /**
+   * The first name of `name`, `name-1`, `name-2`, ... that no child of `root`
+   * has and that this call did not choose. The compare ignores case, because
+   * shared storage ignores case and the provider would rename the folder.
+   */
+  private fun freeName(treeUri: Uri, root: Uri, name: String, taken: Set<String>): String {
+    val children = DocumentsContract.buildChildDocumentsUriUsingTree(
+        treeUri, DocumentsContract.getDocumentId(root))
+    val names = ArrayList<String>()
+    reactApplicationContext.contentResolver.query(
+        children, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+      while (c.moveToNext()) {
+        c.getString(0)?.let { names.add(it) }
+      }
+    }
+    var chosen = name
+    var n = 1
+    while (taken.any { it.equals(chosen, ignoreCase = true) } ||
+        names.any { it.equals(chosen, ignoreCase = true) }) {
+      chosen = "$name-$n"
+      n += 1
+    }
+    return chosen
+  }
 
   /**
    * Find or create each directory of `parts` below `root` in the tree. An

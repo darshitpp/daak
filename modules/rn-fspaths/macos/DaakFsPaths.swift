@@ -235,10 +235,13 @@ class DaakFsPaths: NSObject {
   /// returns one location per input rather than failing as a batch.
   ///
   /// `subdirs[i]` is the folder below the remembered folder for `paths[i]`, for
-  /// example `album/sub`. A file that is already in `<folder>/<subdir>` answers
-  /// its own path and does not move, so a second call moves nothing twice.
-  /// After the move, the empty folders that the engine made below its output
-  /// directory are removed.
+  /// example `album/sub`. Its first name is the root. Each root gets the first
+  /// free name in the folder (`album`, `album-1`, ...), so a moved folder never
+  /// merges into a folder that exists. A subdir that starts with `/` names a
+  /// root that the payload already uses, and that root is used as it is.
+  /// A file that is already in the folder answers its own path and does not
+  /// move, so a second call moves nothing twice. After the move, the empty
+  /// folders that the engine made below its output directory are removed.
   @objc func moveReceivedFiles(_ paths: [String],
                                subdirs: [String],
                                resolve: @escaping RCTPromiseResolveBlock,
@@ -267,17 +270,30 @@ class DaakFsPaths: NSObject {
     defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
 
     let fm = FileManager.default
+    let norm = { (u: URL) in Self.withoutPrivate(u.standardizedFileURL.resolvingSymlinksInPath().path) }
+    let folderAt = norm(folder) + "/"
+    let outAt = norm(Self.dataDir().appendingPathComponent("downloads", isDirectory: true)) + "/"
+    // Task 12b (F4): the root name that this call uses for each requested root.
+    var roots: [String: String] = [:]
     var out: [String] = []
     for (i, path) in paths.enumerated() {
       let src = URL(fileURLWithPath: path)
-      var target = folder
-      for part in Self.safeParts(i < subdirs.count ? subdirs[i] : "") {
-        target.appendPathComponent(part, isDirectory: true)
-      }
-      // The file is already in its place: an earlier event moved it.
-      if Self.samePath(src.deletingLastPathComponent(), target) {
+      // The file is already in the save folder: an earlier event moved it. The
+      // save folder can hold the engine output folder, so that folder does not count.
+      let srcAt = norm(src)
+      if srcAt.hasPrefix(folderAt) && !srcAt.hasPrefix(outAt) {
         out.append(path)
         continue
+      }
+      let subdir = i < subdirs.count ? subdirs[i] : ""
+      var parts = Self.safeParts(subdir)
+      if !parts.isEmpty {
+        parts[0] = Self.chooseRoot(parts[0], exact: subdir.hasPrefix("/"), in: folder,
+                                   roots: &roots, fm: fm)
+      }
+      var target = folder
+      for part in parts {
+        target.appendPathComponent(part, isDirectory: true)
       }
       do {
         try fm.createDirectory(at: target, withIntermediateDirectories: true)
@@ -321,10 +337,30 @@ class DaakFsPaths: NSObject {
     path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
   }
 
-  /// True when two folder URLs name the same folder.
-  private static func samePath(_ a: URL, _ b: URL) -> Bool {
-    let norm = { (u: URL) in withoutPrivate(u.standardizedFileURL.resolvingSymlinksInPath().path) }
-    return norm(a) == norm(b)
+  /// Task 12b (F4): the root folder name in the save folder for a requested
+  /// root. An exact root (the subdir starts with `/`) is used as it is. Any
+  /// other root gets the first free name of `name`, `name-1`, `name-2`, ...
+  /// The chosen folder is made at once, so the file system decides if a later
+  /// name is free. One requested root gets one name for each call.
+  private static func chooseRoot(_ name: String, exact: Bool, in folder: URL,
+                                 roots: inout [String: String], fm: FileManager) -> String {
+    let key = exact ? "/" + name : name
+    if let known = roots[key] {
+      return known
+    }
+    var chosen = name
+    if !exact {
+      let taken = Set(roots.values)
+      var n = 1
+      while taken.contains(chosen) || fm.fileExists(atPath: folder.appendingPathComponent(chosen).path) {
+        chosen = "\(name)-\(n)"
+        n += 1
+      }
+      try? fm.createDirectory(at: folder.appendingPathComponent(chosen, isDirectory: true),
+                              withIntermediateDirectories: true)
+    }
+    roots[key] = chosen
+    return chosen
   }
 
   /// Remove each folder that is now empty, from the folder of each source up to

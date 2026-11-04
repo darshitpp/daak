@@ -167,6 +167,12 @@ function parallel(paths: string[], extra?: string[]): string[] {
  * `subdirs[i]` is the folder inside the save folder for `paths[i]`, for example
  * `album/sub`. A shorter array, or `''`, means the top of the save folder. A
  * file that is already at its place comes back with its own path.
+ *
+ * Task 12b (F4): the first name of a subdir is the root. In one call, the
+ * native move gives each root the first free name in the save folder (`album`,
+ * `album-1`, `album-2`). It never merges into a folder that exists. A subdir
+ * that starts with `/` (`/album-1/sub`) names a root that the payload already
+ * uses. The native move uses that root as it is, so a retry joins it.
  */
 export async function moveReceivedFiles(paths: string[], subdirs?: string[]): Promise<string[]> {
   return NativeDaakFsPaths.moveReceivedFiles(paths, parallel(paths, subdirs));
@@ -230,16 +236,88 @@ function alreadyMoved(path: string): boolean {
 // `/out/photos-1/a.jpg`. The leaf of the root is the folder name on disk, so a
 // suffixed folder keeps its suffix. It handles only `/` separators. Windows is
 // not released.
-function subdirOf(path: string, roots: string[]): string {
+function rootOf(path: string, roots: string[]): string {
   let best = '';
   for (const raw of roots) {
     const root = raw.replace(/\/+$/, '');
     if (root.length > best.length && path.startsWith(`${root}/`)) best = root;
   }
+  return best;
+}
+
+function subdirOf(path: string, roots: string[]): string {
+  const best = rootOf(path, roots);
   if (best === '') return '';
   const name = best.slice(best.lastIndexOf('/') + 1);
   const dirs = path.slice(best.length + 1).split('/').slice(0, -1);
   return [name, ...dirs].join('/');
+}
+
+type Place = { parent: string; leaf: string };
+
+// A SAF document URI: `content://<authority>/tree/<tree id>/document/<doc id>`.
+const SAF_DOC = /^content:\/\/[^/]+\/tree\/([^/]+)\/document\/([^/]+)$/;
+
+// The folder of a moved file on Android, from its SAF document URI. A path
+// style document id (the local storage provider) gives `<tree id>/<root>/...`.
+// Any other id names no folder. A loose file names no folder.
+function safPlace(path: string): Place | null {
+  const m = SAF_DOC.exec(path);
+  if (!m) return null;
+  let tree: string;
+  let doc: string;
+  try {
+    tree = decodeURIComponent(m[1]);
+    doc = decodeURIComponent(m[2]);
+  } catch {
+    return null;
+  }
+  if (!doc.startsWith(`${tree}/`)) return null;
+  const parts = doc.slice(tree.length + 1).split('/');
+  if (parts.length < 2 || parts[0] === '') return null;
+  return { parent: `saf:${tree}`, leaf: parts[0] };
+}
+
+// Every folder of this payload: each group root, and each SAF folder of a file
+// that moved on Android.
+function placesOf(savedPaths: string[], groupRoots: string[]): Place[] {
+  const places: Place[] = groupRoots.map((raw) => {
+    const root = raw.replace(/\/+$/, '');
+    const cut = root.lastIndexOf('/');
+    return { parent: root.slice(0, cut), leaf: root.slice(cut + 1) };
+  });
+  for (const path of savedPaths) {
+    const place = safPlace(path);
+    if (place) places.push(place);
+  }
+  return places;
+}
+
+/**
+ * Task 12b (F4): the save folder root that this payload already uses for the
+ * group at `root`, or null. The native move chose that root as the first free
+ * name of the group folder name, so it is `leaf` or `leaf-<number>`.
+ *
+ * Only a folder in another parent counts. The engine puts every group root in
+ * one output folder, so a root in the same parent is an engine root.
+ *
+ * The exact name wins: no other group of the payload can get it. When two
+ * suffixed names match, the answer is null, so the native move makes a new
+ * folder. A new folder is safer than a merge into the wrong folder.
+ */
+function placedRoot(root: string, places: Place[]): string | null {
+  if (root === '') return null;
+  const cut = root.lastIndexOf('/');
+  const parent = root.slice(0, cut);
+  const leaf = root.slice(cut + 1);
+  const suffixed = new RegExp(`^${leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`);
+  const names = new Set(
+    places
+      .filter((p) => p.parent !== parent && (p.leaf === leaf || suffixed.test(p.leaf)))
+      .map((p) => p.leaf),
+  );
+  if (names.has(leaf)) return leaf;
+  return names.size === 1 ? [...names][0] : null;
 }
 
 /**
@@ -250,6 +328,9 @@ function subdirOf(path: string, roots: string[]): string {
  * - Every other file goes to `folder`. Its `subdir` keeps the folder structure
  *   inside the save folder.
  * - A loose file has `album` and `subdir` as `''`.
+ * - A group that already has a root in the save folder (an earlier move of
+ *   this payload) gets that root with a leading `/` in `subdir`, for example
+ *   `/album-1/sub`. The `album` keeps the name on disk in the app folder.
  * - A path that starts with `photos:` or `content://` is in no list. It moved
  *   at an earlier `inbox.received` event of the same payload.
  */
@@ -259,13 +340,17 @@ export function planRelocation(
   photosOn: boolean,
 ): RelocationPlan {
   const plan: RelocationPlan = { library: [], folder: [] };
+  const places = placesOf(savedPaths, groupRoots);
   savedPaths.forEach((path, index) => {
     if (alreadyMoved(path)) return;
     const subdir = subdirOf(path, groupRoots);
+    const placed = placedRoot(rootOf(path, groupRoots), places);
+    // A leading `/` tells the native move to use this root as it is.
+    const target = placed === null ? subdir : `/${[placed, ...subdir.split('/').slice(1)].join('/')}`;
     if (photosOn && isMedia(path)) {
-      plan.library.push({ index, path, album: subdir.split('/').join(' / '), subdir });
+      plan.library.push({ index, path, album: subdir.split('/').join(' / '), subdir: target });
     } else {
-      plan.folder.push({ index, path, subdir });
+      plan.folder.push({ index, path, subdir: target });
     }
   });
   return plan;
