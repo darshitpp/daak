@@ -31,7 +31,7 @@ import {
   tail,
   type PanelFolder,
 } from './panel-model';
-import { formatEta, formatSpeed, useTransferSpeed } from '../state/speed';
+import { shortSpeedText, useTransferSpeed } from '../state/speed';
 import { useHeldBack } from './useHeldBack';
 import { usePanelTransfer } from './usePanelTransfer';
 
@@ -225,13 +225,7 @@ export function Popover({
     running && !view.waiting,
   );
   // The short form has no words "about" and "left". It must fit 320 px.
-  const left = speed.etaSeconds === null ? null : formatEta(speed.etaSeconds);
-  const speedLine =
-    speed.text === null
-      ? null
-      : left === null
-        ? formatSpeed(speed.bytesPerSec)
-        : `${formatSpeed(speed.bytesPerSec)} · ${left.replace(/^about /, '').replace(/ left$/, '')}`;
+  const speedLine = speed.text === null ? null : shortSpeedText(speed.bytesPerSec, speed.etaSeconds);
 
   const conn =
     connection.wifi === 'connected'

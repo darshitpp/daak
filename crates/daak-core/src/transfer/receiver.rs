@@ -1290,6 +1290,8 @@ async fn receive_with_resume_limit<T: FrameTransport>(
     .await;
     // Finish the pending write once. After an error, wait for it but do not
     // apply it: the receive returns the loop error.
+    // A frame that fails validation returns before the drain. The pending
+    // write error is then discarded. This is safe: no bit is set for it.
     let last = writes.finish().await;
     looped?;
     if let Some((done, written)) = last {

@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react-native';
-import { formatEta, formatSpeed, useTransferSpeed } from './speed';
+import { formatEta, formatSpeed, shortSpeedText, useTransferSpeed } from './speed';
 
 const MIB = 1024 * 1024;
 const TOTAL = 100000 * MIB;
@@ -92,6 +92,73 @@ describe('useTransferSpeed', () => {
     });
     expect(hook.result.current.text).toBe(text);
     expect(renders()).toBe(before);
+  });
+
+  it('no_zero_speed_after_stall_between_ticks', () => {
+    // The panel renders every 700 ms. A render can fall after the stall
+    // threshold and before the next 1 s tick. The three fields must agree.
+    for (let offset = 0; offset < 1000; offset += 100) {
+      const { hook } = setup();
+      let done = 0;
+      for (let i = 1; i <= 8; i += 1) {
+        done += 7 * MIB;
+        step(hook, 700, done);
+      }
+      expect(hook.result.current.text).not.toBeNull();
+      act(() => {
+        jest.advanceTimersByTime(offset);
+      });
+      for (let i = 0; i < 14; i += 1) {
+        step(hook, 700, done);
+        const r = hook.result.current;
+        if (r.text !== null) {
+          expect(r.bytesPerSec).toBeGreaterThan(0);
+        } else {
+          expect(r.bytesPerSec).toBe(0);
+          expect(r.etaSeconds).toBeNull();
+        }
+      }
+      expect(hook.result.current.text).toBeNull();
+      hook.unmount();
+    }
+  });
+
+  it('ema_step_change_moves_63_percent_in_tau', () => {
+    const { hook } = setup();
+    let done = 0;
+    for (let i = 0; i < 30; i += 1) {
+      done += MIB;
+      step(hook, 100, done);
+    }
+    expect(hook.result.current.bytesPerSec / MIB).toBeCloseTo(10, 0);
+    // The rate steps from 10 MiB/s to 20 MiB/s. Tau is 1.5 s.
+    for (let i = 0; i < 15; i += 1) {
+      done += 2 * MIB;
+      step(hook, 100, done);
+    }
+    // 10 + 0.632 * 10 = 16.3 MiB/s
+    expect(Math.abs(hook.result.current.bytesPerSec / MIB - 16.32)).toBeLessThan(1);
+  });
+
+  it('unmount_and_inactive_clear_the_interval', () => {
+    const { hook } = setup();
+    step(hook, 100, MIB);
+    expect(jest.getTimerCount()).toBeGreaterThan(0);
+    hook.rerender({ done: MIB, active: false });
+    expect(jest.getTimerCount()).toBe(0);
+    hook.rerender({ done: MIB, active: true });
+    expect(jest.getTimerCount()).toBeGreaterThan(0);
+    hook.unmount();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+});
+
+describe('shortSpeedText', () => {
+  it('short_form_has_no_about_or_left', () => {
+    expect(shortSpeedText(12.3 * MIB, 120)).toBe('12.3 MiB/s · 2 min');
+    expect(shortSpeedText(12.3 * MIB, 45)).toBe('12.3 MiB/s · 45 s');
+    expect(shortSpeedText(12.3 * MIB, null)).toBe('12.3 MiB/s');
+    expect(shortSpeedText(12.3 * MIB, 100 * 3600)).toBe('12.3 MiB/s');
   });
 });
 

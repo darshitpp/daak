@@ -1263,21 +1263,27 @@ mod tests {
         let (mine, theirs) = MemConn::pair();
         let peer = spawn_peer(theirs, src.manifest.payload_id, Some(CHUNKS as usize));
         let mut conn = TestTransport::new(mine).with_send_delay(STEP);
+        // Measure the real hook sleeps. On macOS a sleep of 20 ms lasts up to
+        // 25 ms. The sequential time is 2 x the measured sum, not the
+        // nominal 40 x 40 ms. The send delay has the same nominal step.
+        let slept = std::sync::Arc::new(std::sync::Mutex::new(Duration::ZERO));
+        let hook = {
+            let slept = slept.clone();
+            move || {
+                let t = std::time::Instant::now();
+                std::thread::sleep(STEP);
+                *slept.lock().unwrap() += t.elapsed();
+            }
+        };
         let start = std::time::Instant::now();
-        let r = stream_and_await_ack_with(
-            &mut conn,
-            &src.manifest,
-            &src.paths,
-            &[],
-            |_| {},
-            move || std::thread::sleep(STEP),
-        )
-        .await;
+        let r = stream_and_await_ack_with(&mut conn, &src.manifest, &src.paths, &[], |_| {}, hook)
+            .await;
         let elapsed = start.elapsed();
         drop(conn);
         r.unwrap();
         assert_eq!(peer.await.unwrap().len(), CHUNKS as usize);
-        let sequential = STEP * 2 * CHUNKS as u32;
+        let sequential = (*slept.lock().unwrap() * 2).max(STEP * 2 * CHUNKS as u32);
+        eprintln!("sender_overlap: loop {elapsed:?}, sequential {sequential:?}");
         assert!(
             elapsed < sequential * 3 / 4,
             "took {elapsed:?}; a sequential run takes about {sequential:?}"

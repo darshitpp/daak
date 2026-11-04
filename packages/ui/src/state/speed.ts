@@ -28,12 +28,25 @@ export function formatEta(secondsLeft: number): string | null {
   return `about ${Math.round(s / 3600)} h left`;
 }
 
+/**
+ * Format the short line for a narrow panel. The words "about" and "left" are
+ * absent. Example: `12.3 MiB/s · 2 min`. Without a time left, the speed only.
+ */
+export function shortSpeedText(bytesPerSec: number, etaSeconds: number | null): string {
+  const left = etaSeconds === null ? null : formatEta(etaSeconds);
+  if (left === null) return formatSpeed(bytesPerSec);
+  return `${formatSpeed(bytesPerSec)} · ${left.replace(/^about /, '').replace(/ left$/, '')}`;
+}
+
 type Window = {
   lastT: number;
   lastBytes: number;
   warmStart: number;
   rate: number | null;
 };
+
+type Shown = { bytesPerSec: number; etaSeconds: number | null; text: string | null };
+const HIDDEN: Shown = { bytesPerSec: 0, etaSeconds: null, text: null };
 
 const speedText = (rate: number, eta: number | null): string => {
   const left = eta === null ? null : formatEta(eta);
@@ -50,11 +63,12 @@ export function useTransferSpeed(
   bytesDone: number,
   bytesTotal: number,
   active: boolean,
-): { bytesPerSec: number; etaSeconds: number | null; text: string | null } {
+): Shown {
   const win = useRef<Window | null>(null);
   const total = useRef(bytesTotal);
   total.current = bytesTotal;
-  const [text, setText] = useState<string | null>(null);
+  // The three fields live in one state value. They never disagree.
+  const [shown, setShown] = useState<Shown>(HIDDEN);
 
   // Read the window at `now`. Return the visible rate, or null.
   const visible = (now: number): { rate: number; eta: number | null } | null => {
@@ -69,13 +83,21 @@ export function useTransferSpeed(
 
   const publish = (now: number) => {
     const v = visible(now);
-    setText(v ? speedText(v.rate, v.eta) : null);
+    const text = v ? speedText(v.rate, v.eta) : null;
+    // Set the state only when the text changes.
+    setShown((old) =>
+      old.text === text
+        ? old
+        : v
+          ? { bytesPerSec: v.rate, etaSeconds: v.eta, text }
+          : HIDDEN,
+    );
   };
 
   // Reset the window when the transfer changes or stops.
   useEffect(() => {
     win.current = null;
-    setText(null);
+    setShown(HIDDEN);
   }, [transferId, active]);
 
   // Add a sample each time `bytesDone` changes.
@@ -107,10 +129,5 @@ export function useTransferSpeed(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, transferId]);
 
-  const v = text === null ? null : visible(Date.now());
-  return {
-    bytesPerSec: v ? v.rate : 0,
-    etaSeconds: v ? v.eta : null,
-    text,
-  };
+  return shown;
 }
