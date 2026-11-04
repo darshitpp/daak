@@ -200,8 +200,8 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
             (try? FileManager.default.contentsOfDirectory(atPath: root.path)) != nil,
             let walker = FileManager.default.enumerator(
               at: root, includingPropertiesForKeys: keys, options: [],
-              errorHandler: { url, error in
-                NSLog("Daak: folderStats could not read \(url.path): \(error)")
+              errorHandler: { _, error in
+                NSLog("Daak: folderStats could not read an item (\((error as NSError).domain) \((error as NSError).code))")
                 unreadable = true
                 return false
               })
@@ -249,7 +249,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     guard target.hasPrefix(rootPath),
           let slotName = target.dropFirst(rootPath.count).split(separator: "/").first
     else {
-      reject("E_NOT_PICKED_COPY", "refused: \(path) is not a copy under daak-send", nil)
+      reject("E_NOT_PICKED_COPY", "the path is not a copy under daak-send", nil)
       return
     }
     let slot = URL(fileURLWithPath: rootPath, isDirectory: true)
@@ -258,7 +258,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       // A copy that is already gone is the wanted result.
       if fm.fileExists(atPath: slot.path) {
         do { try fm.removeItem(at: slot) } catch {
-          reject("E_DISCARD", "the copy could not be deleted: \(error.localizedDescription)", error)
+          reject("E_DISCARD", "the copy could not be deleted", nil)
           return
         }
       }
@@ -288,7 +288,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         let made = (try? slot.resourceValues(forKeys: [.creationDateKey]))?.creationDate
         if let made, made >= started { continue }
         do { try fm.removeItem(at: slot) } catch {
-          NSLog("Daak: an old folder copy could not be deleted: \(error)")
+          NSLog("Daak: an old folder copy could not be deleted (\((error as NSError).domain) \((error as NSError).code))")
         }
       }
       resolve(nil)
@@ -364,7 +364,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       defaults.set(url.path, forKey: Self.pathKey)
       resolve(url.path)
     } catch {
-      NSLog("Daak: the download folder bookmark could not be made: \(error)")
+      NSLog("Daak: the download folder bookmark could not be made (\((error as NSError).domain) \((error as NSError).code))")
       resolve(nil)
     }
   }
@@ -442,7 +442,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       do {
         try fm.createDirectory(at: target, withIntermediateDirectories: true)
       } catch {
-        NSLog("Daak: could not make a folder in the download folder: \(error)")
+        NSLog("Daak: could not make a folder in the download folder (\((error as NSError).domain) \((error as NSError).code))")
         out.append(path)
         continue
       }
@@ -462,7 +462,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       } catch {
         // The file stays where it is. The log says why, because a silent
         // fallback looks like a feature that does nothing.
-        NSLog("Daak: could not move \(src.lastPathComponent) into the download folder: \(error)")
+        NSLog("Daak: could not move a file into the download folder (\((error as NSError).domain) \((error as NSError).code))")
         out.append(path)
       }
     }
@@ -580,14 +580,14 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         album.addAssets(placeholders as NSArray)
       }
     } catch {
-      NSLog("Daak: could not add a folder to a Photos album: \(error)")
+      NSLog("Daak: could not add a folder to a Photos album (\((error as NSError).domain) \((error as NSError).code))")
       return paths
     }
     // The sources are deleted only AFTER the add, as in addToLibrary.
     return paths.enumerated().map { k, path in
       guard let identifier = identifiers[k] else { return path }
       do { try FileManager.default.removeItem(atPath: path) } catch {
-        NSLog("Daak: the saved photo's source file was not removed: \(error)")
+        NSLog("Daak: the saved photo's source file was not removed (\((error as NSError).domain) \((error as NSError).code))")
       }
       return "photos:" + identifier
     }
@@ -637,12 +637,12 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         identifier = request?.placeholderForCreatedAsset?.localIdentifier
       }
     } catch {
-      NSLog("Daak: could not add \(url.lastPathComponent) to Photos: \(error)")
+      NSLog("Daak: could not add a file to Photos (\((error as NSError).domain) \((error as NSError).code))")
       return path
     }
     guard let identifier else { return path }
     do { try FileManager.default.removeItem(at: url) } catch {
-      NSLog("Daak: the saved photo's source file was not removed: \(error)")
+      NSLog("Daak: the saved photo's source file was not removed (\((error as NSError).domain) \((error as NSError).code))")
     }
     return "photos:" + identifier
   }
@@ -656,7 +656,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       try fm.moveItem(at: src, to: dest)
       return
     } catch {
-      NSLog("Daak: a plain move was refused (\(error)); trying a coordinated copy")
+      NSLog("Daak: a plain move was refused (\((error as NSError).domain) \((error as NSError).code)); trying a coordinated copy")
     }
     var coordinationError: NSError?
     var copyError: Error?

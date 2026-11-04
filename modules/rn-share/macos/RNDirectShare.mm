@@ -67,7 +67,7 @@ RCT_EXPORT_METHOD(setDevices : (NSString *)devicesJson resolve : (RCTPromiseReso
   NSError *error = nil;
   id json = data == nil ? nil : [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
   if (![json isKindOfClass:[NSArray class]]) {
-    reject(@"E_BAD_DEVICES", error.localizedDescription ?: @"devices must be a JSON array", error);
+    reject(@"E_BAD_DEVICES", @"devices must be a JSON array", nil);
     return;
   }
   // Typed local, not `id json`: dot syntax on an `id` compiles only for a

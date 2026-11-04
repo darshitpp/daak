@@ -266,8 +266,8 @@ final class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
       } catch FolderCopyError.notDownloaded {
         reject("NOT_DOWNLOADED", "NOT_DOWNLOADED", nil)
       } catch {
-        NSLog("Daak: the picked folder could not be copied: \(error)")
-        reject("E_COPY", "the folder could not be copied: \(error.localizedDescription)", error)
+        NSLog("Daak: E_COPY: the picked folder could not be copied (\((error as NSError).domain) \((error as NSError).code))")
+        reject("E_COPY", "the folder could not be copied", nil)
       }
     }
   }

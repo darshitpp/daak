@@ -130,8 +130,8 @@ class DaakFsPaths: NSObject {
             (try? FileManager.default.contentsOfDirectory(atPath: root.path)) != nil,
             let walker = FileManager.default.enumerator(
               at: root, includingPropertiesForKeys: keys, options: [],
-              errorHandler: { url, error in
-                NSLog("Daak: folderStats could not read \(url.path): \(error)")
+              errorHandler: { _, error in
+                NSLog("Daak: folderStats could not read an item (\((error as NSError).domain) \((error as NSError).code))")
                 unreadable = true
                 return false
               })
@@ -200,7 +200,7 @@ class DaakFsPaths: NSObject {
         defaults.set(url.path, forKey: Self.pathKey)
         resolve(url.path)
       } catch {
-        reject("E_BOOKMARK", "could not remember that folder: \(error.localizedDescription)", error)
+        reject("E_BOOKMARK", "could not remember that folder", nil)
       }
     }
   }
@@ -282,7 +282,7 @@ class DaakFsPaths: NSObject {
       do {
         try fm.createDirectory(at: target, withIntermediateDirectories: true)
       } catch {
-        NSLog("Daak: could not make a folder in the download folder: \(error)")
+        NSLog("Daak: could not make a folder in the download folder (\((error as NSError).domain) \((error as NSError).code))")
         out.append(path)
         continue
       }

@@ -78,7 +78,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     try {
       activity.startActivity(Intent.createChooser(intent, "Share via"))
     } catch (t: Throwable) {
-      return promise.reject("E_SHARE", t)
+      return promise.reject("E_SHARE", "the share sheet did not open")
     }
     // Resolves when the OS chooser is up, not when a peer accepted anything.
     promise.resolve(null)
@@ -108,7 +108,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     } catch (t: Throwable) {
       // A device with no documents app throws ActivityNotFoundException.
       folderPromise = null
-      promise.reject("E_PICK", t)
+      promise.reject("E_PICK", "the folder picker did not open")
     }
   }
 
@@ -132,7 +132,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     } catch (cnf: ClassNotFoundException) {
       promise.resolve(null)
     } catch (t: Throwable) {
-      promise.reject("E_SHORTCUTS", t)
+      promise.reject("E_SHORTCUTS", "the share shortcuts did not update")
     }
   }
 
@@ -165,8 +165,8 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
         } catch (e: FolderPickError) {
           promise.reject(e.code, e.message)
         } catch (t: Throwable) {
-          android.util.Log.w("DaakShare", "the picked folder could not be copied", t)
-          promise.reject("E_COPY", "the folder could not be copied: ${t.message}", t)
+          android.util.Log.w("DaakShare", "E_COPY: the picked folder could not be copied: ${t.javaClass.simpleName}")
+          promise.reject("E_COPY", "the folder could not be copied")
         }
       }
       return
@@ -215,7 +215,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
         if (entry.isDir) {
           // listTree adds each folder once. A folder that exists is a second
           // folder with the same name, and the two must not merge in silence.
-          if (target.exists()) throw FolderPickError("E_COPY", "two folders have the name ${entry.parts.last()}")
+          if (target.exists()) throw FolderPickError("E_COPY", "two folders have the same name")
           if (!target.mkdirs()) throw IOException("could not make a folder")
           continue
         }
