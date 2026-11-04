@@ -584,6 +584,25 @@ pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
 /// never announced has no entry, and the sender then sends every chunk.
 pub(crate) type PeerVersions = Arc<std::sync::Mutex<HashMap<[u8; 16], u16>>>;
 
+/// Record the version from an mDNS announce. The announce is not
+/// authenticated, so only a device with a trusted pairing row gets an entry.
+/// The map then holds one entry or less for each pairing.
+fn note_announced_version(versions: &PeerVersions, peer: [u8; 16], version: u16, trusted: bool) {
+    if !trusted {
+        return;
+    }
+    if let Ok(mut map) = versions.lock() {
+        map.insert(peer, version);
+    }
+}
+
+/// Remove the version of a peer that is no longer paired.
+fn forget_peer_version(versions: &PeerVersions, peer: &[u8; 16]) {
+    if let Ok(mut map) = versions.lock() {
+        map.remove(peer);
+    }
+}
+
 /// The resume wait for a send to this peer.
 fn resume_wait_for(versions: &PeerVersions, peer: &[u8; 16]) -> Option<std::time::Duration> {
     let version = versions.lock().ok().and_then(|v| v.get(peer).copied());
@@ -1136,6 +1155,7 @@ impl Engine {
             // R42d: a completed pairing seeds this map with the address the
             // connection used, so the accept task needs a handle on it.
             let accept_devices = devices.clone();
+            let accept_versions = peer_versions.clone();
             let accept_confirm = confirm_required.clone();
             let out_dir = out_dir.clone();
             let pending_pairing = pending_pairing.clone();
@@ -1168,6 +1188,7 @@ impl Engine {
                     let tx = tx.clone();
                     let profile = profile.clone();
                     let devices = accept_devices.clone();
+                    let peer_versions = accept_versions.clone();
                     let confirm_required =
                         accept_confirm.load(std::sync::atomic::Ordering::Relaxed);
                     set.spawn(async move {
@@ -1181,6 +1202,7 @@ impl Engine {
                             &pairing_tx,
                             &tx,
                             &devices,
+                            &peer_versions,
                             confirm_required,
                             &mut conn,
                             local_addr,
@@ -1246,17 +1268,16 @@ impl Engine {
                         });
                         continue;
                     }
-                    if let Ok(mut versions) = peer_versions.lock() {
-                        versions.insert(device_id, proto_version);
-                    }
+                    // R42g: an announce is DISCOVERY, not trust. A peer
+                    // seen only over mDNS stays unpaired until a pairing
+                    // row exists, and the UI offers Pair for it.
+                    let paired = db.is_trusted(&device_id);
+                    note_announced_version(&peer_versions, device_id, proto_version, paired);
                     let info = DeviceInfo {
                         device_id,
                         name,
                         addr,
-                        // R42g: an announce is DISCOVERY, not trust. A peer
-                        // seen only over mDNS stays unpaired until a pairing
-                        // row exists, and the UI offers Pair for it.
-                        paired: db.is_trusted(&device_id),
+                        paired,
                     };
                     let is_new = note_found(&db, &devices, &seeded, &info).await;
                     if is_new {
@@ -1672,10 +1693,12 @@ impl Engine {
     async fn revoke_remote(
         db: &Db,
         devices: &SharedDevices,
+        versions: &PeerVersions,
         tx: &broadcast::Sender<EngineEvent>,
         peer: [u8; 16],
     ) -> Result<()> {
         db.revoke_pairing(&peer)?;
+        forget_peer_version(versions, &peer);
         db.delete_outbox_for_peer(&peer)?;
         db.cancel_outbound_transfers_for_peer(&peer)?;
         // The peer just connected to us, so it is on the network. It stays in the
@@ -1792,6 +1815,7 @@ impl Engine {
             .collect();
 
         self.db.revoke_pairing(&peer_device_id)?;
+        forget_peer_version(&self.peer_versions, &peer_device_id);
         if was_trusted && !delivered {
             self.db.add_unpair_notice(&peer_device_id)?;
         }
@@ -1872,6 +1896,27 @@ impl Engine {
         if let Ok(mut versions) = self.peer_versions.lock() {
             versions.insert(peer, version);
         }
+    }
+
+    /// Run the version step of an mDNS announce. An integration test has no
+    /// mDNS, so it calls this.
+    #[doc(hidden)]
+    pub fn note_announce(&self, peer: [u8; 16], version: u16) {
+        let trusted = self.db.is_trusted(&peer);
+        note_announced_version(&self.peer_versions, peer, version, trusted);
+    }
+
+    /// Run the step of an mDNS `Lost` event. An integration test has no mDNS,
+    /// so it calls this.
+    #[doc(hidden)]
+    pub async fn note_lost(&self, peer: [u8; 16]) {
+        handle_lost(&self.devices, &self.tx, self.identity.device_id(), peer).await;
+    }
+
+    /// The recorded protocol version of a peer, for a test.
+    #[doc(hidden)]
+    pub fn peer_version(&self, peer: [u8; 16]) -> Option<u16> {
+        self.peer_versions.lock().ok()?.get(&peer).copied()
     }
 
     /// R-T11-3: the registry resolves a peer's address from the device map, so a
@@ -2799,6 +2844,7 @@ impl Engine {
         pairing_tx: &mpsc::Sender<(String, [u8; 16])>,
         tx: &broadcast::Sender<EngineEvent>,
         devices: &SharedDevices,
+        peer_versions: &PeerVersions,
         confirm_required: bool,
         conn: &mut Connection<tokio::net::TcpStream>,
         // The host's bound address. The code branch reuses `send_listen_addr`
@@ -3169,7 +3215,7 @@ impl Engine {
             // The peer unpaired this device. It is not a failed transfer: revoke
             // our side of the pairing and tell the UI.
             Err(CoreError::PeerUnpaired) => {
-                Self::revoke_remote(db, devices, tx, hello.device_id).await?;
+                Self::revoke_remote(db, devices, peer_versions, tx, hello.device_id).await?;
                 Ok(())
             }
             Err(e) => {
@@ -4189,7 +4235,9 @@ mod tests {
         let devices: SharedDevices = Arc::new(Mutex::new(HashMap::from([(id, info)])));
         let (tx, mut rx) = broadcast::channel(8);
 
-        Engine::revoke_remote(&db, &devices, &tx, id).await.unwrap();
+        Engine::revoke_remote(&db, &devices, &Arc::default(), &tx, id)
+            .await
+            .unwrap();
 
         assert_eq!(db.get_pairing(&id).unwrap().unwrap().state, "revoked");
         let kept = devices.lock().await.get(&id).cloned();
