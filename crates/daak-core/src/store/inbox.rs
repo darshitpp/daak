@@ -563,8 +563,9 @@ mod tests {
 
     // A fixed time limit fails on a busy host. So this test compares 2 sizes
     // on the same host. The large run has 8 times more paths. A linear merge
-    // takes about 8 times longer. A quadratic merge takes about 64 times
-    // longer. Each size uses the best of 3 runs. Each run uses a new row.
+    // takes about 8 times longer. A quadratic merge takes about 59 times
+    // longer. The limit is 30 times, so it keeps a margin on both sides.
+    // Each size uses the best of 3 runs. Each run uses a new row.
     #[test]
     fn merge_inbox_paths_is_linear_in_the_path_count() {
         let db = Db::open_in_memory().unwrap();
@@ -594,10 +595,9 @@ mod tests {
         let small = best(2048);
         let large = best(16384);
         assert!(
-            large < small * 40,
+            large < small * 30,
             "merge_inbox_paths is not linear: 2048 paths took {small:?}, 16384 paths took {large:?}"
         );
-        assert!(large < std::time::Duration::from_secs(30));
     }
 
     // A list of the wrong length cannot be paired with the old list by index.
