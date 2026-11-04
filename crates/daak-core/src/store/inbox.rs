@@ -718,6 +718,33 @@ mod tests {
         );
     }
 
+    /// Pin: F4 gives a received folder a suffix on disk. The manifest group
+    /// stays `album`, and the disk root is `album-1`. The root comes from
+    /// `dest_path`, so it keeps the `album-1` leaf. A suffix on a subfolder
+    /// or a file does not change the component count.
+    #[test]
+    fn group_roots_keeps_the_dash_suffix_leaf_of_a_received_folder() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(
+            &db,
+            1,
+            &[
+                (Some(("album", "a.txt")), "/out/album-1/a.txt", "done"),
+                (
+                    Some(("album", "sub/b.txt")),
+                    "/out/album-1/sub-1/b-1.txt",
+                    "done",
+                ),
+                (Some(("album-1", "c.txt")), "/out/album-1-1/c.txt", "done"),
+            ],
+        );
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/album-1".to_string(), "/out/album-1-1".to_string()]
+        );
+    }
+
     // A path of only `..` or `.` has no component. The receiver then saves a
     // bare name in the output directory, so the file is not in a folder.
     #[test]

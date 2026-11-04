@@ -256,20 +256,88 @@ describe('planRelocation', () => {
 
   it('two_groups_with_one_album_name_stay_apart', () => {
     // The sender gives two folders named `photos` the names `photos` and
-    // `photos~1`. A root must match on a whole path component.
+    // `photos-1`. A root must match on a whole path component.
     expect(
       planRelocation(
-        ['/out/photos/a.jpg', '/out/photos~1/a.jpg', '/out/photos~1/s/b.pdf'],
-        ['/out/photos', '/out/photos~1'],
+        ['/out/photos/a.jpg', '/out/photos-1/a.jpg', '/out/photos-1/s/b.pdf'],
+        ['/out/photos', '/out/photos-1'],
         true,
       ),
     ).toEqual({
       library: [
         { index: 0, path: '/out/photos/a.jpg', album: 'photos', subdir: 'photos' },
-        { index: 1, path: '/out/photos~1/a.jpg', album: 'photos~1', subdir: 'photos~1' },
+        { index: 1, path: '/out/photos-1/a.jpg', album: 'photos-1', subdir: 'photos-1' },
       ],
-      folder: [{ index: 2, path: '/out/photos~1/s/b.pdf', subdir: 'photos~1/s' }],
+      folder: [{ index: 2, path: '/out/photos-1/s/b.pdf', subdir: 'photos-1/s' }],
     });
+  });
+});
+
+describe('a folder with a dash suffix on disk', () => {
+  /**
+   * Pin: the manifest group is `album`, and the receiver wrote the folder as
+   * `album-1`. The album and the subdir come from the disk root, so they keep
+   * the `album-1` leaf. A mixed folder sends the media to the library and the
+   * other files to `album-1` in the save folder. A nested folder keeps its
+   * relative structure. The row records each new path.
+   */
+  it('relocation_keeps_the_dash_suffix_leaf_of_a_received_folder', async () => {
+    const savedPaths = [
+      '/out/album-1/a.jpg',
+      '/out/album-1/sub/b.mov',
+      '/out/album-1/notes.pdf',
+      '/out/album-1/sub-1/c-1.txt',
+    ];
+    const roots = ['/out/album', '/out/album-1'];
+    expect(planRelocation(savedPaths, roots, true)).toEqual({
+      library: [
+        { index: 0, path: savedPaths[0], album: 'album-1', subdir: 'album-1' },
+        { index: 1, path: savedPaths[1], album: 'album-1 / sub', subdir: 'album-1/sub' },
+      ],
+      folder: [
+        { index: 2, path: savedPaths[2], subdir: 'album-1' },
+        { index: 3, path: savedPaths[3], subdir: 'album-1/sub-1' },
+      ],
+    });
+
+    saveToLibrary.mockResolvedValue(['photos:ID1', 'photos:ID2']);
+    moveReceivedFiles.mockResolvedValue(['/save/album-1/notes.pdf', '/save/album-1/sub-1/c-1.txt']);
+    const engine = engineSpy();
+    const after = ['photos:ID1', 'photos:ID2', '/save/album-1/notes.pdf', '/save/album-1/sub-1/c-1.txt'];
+    await expect(
+      relocateReceivedFiles(engine, { payloadId: 'p', savedPaths, groupRoots: ['/out/album-1'] }),
+    ).resolves.toEqual(after);
+    expect(saveToLibrary).toHaveBeenCalledWith(
+      ['/out/album-1/a.jpg', '/out/album-1/sub/b.mov'],
+      ['album-1', 'album-1 / sub'],
+    );
+    expect(moveReceivedFiles).toHaveBeenCalledWith(
+      ['/out/album-1/notes.pdf', '/out/album-1/sub-1/c-1.txt'],
+      ['album-1', 'album-1/sub-1'],
+    );
+    expect(engine.calls).toEqual([{ payloadId: 'p', paths: after }]);
+  });
+
+  /**
+   * Pin: the media library refuses the files. The fallback move keeps every
+   * file below `album-1` in the save folder, with its nested structure.
+   */
+  it('a_refused_library_save_keeps_the_dash_suffix_folder_in_the_save_folder', async () => {
+    saveToLibrary.mockImplementation(async (paths) => paths);
+    moveReceivedFiles.mockImplementation(async (paths) => paths.map((p) => p.replace('/out/', '/save/')));
+    const engine = engineSpy();
+    await relocateReceivedFiles(engine, {
+      payloadId: 'p',
+      savedPaths: ['/out/album-1/a.jpg', '/out/album-1/x/y/b.jpg'],
+      groupRoots: ['/out/album-1'],
+    });
+    expect(moveReceivedFiles).toHaveBeenCalledWith(
+      ['/out/album-1/a.jpg', '/out/album-1/x/y/b.jpg'],
+      ['album-1', 'album-1/x/y'],
+    );
+    expect(engine.calls).toEqual([
+      { payloadId: 'p', paths: ['/save/album-1/a.jpg', '/save/album-1/x/y/b.jpg'] },
+    ]);
   });
 });
 

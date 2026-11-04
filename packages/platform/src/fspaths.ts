@@ -227,7 +227,9 @@ function alreadyMoved(path: string): boolean {
 // The folder of `path` from the parent of its group root, for example
 // `album/sub`. `''` for a path under no root. The longest root wins, and a root
 // matches only on a whole path component, so `/out/photos` does not match
-// `/out/photos~1/a.jpg`. It handles only `/` separators. Windows is not released.
+// `/out/photos-1/a.jpg`. The leaf of the root is the folder name on disk, so a
+// suffixed folder keeps its suffix. It handles only `/` separators. Windows is
+// not released.
 function subdirOf(path: string, roots: string[]): string {
   let best = '';
   for (const raw of roots) {
