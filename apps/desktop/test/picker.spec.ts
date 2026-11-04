@@ -99,6 +99,14 @@ describe('the desktop shell hands the picker to the composer', () => {
     expect(dashboard.match(/onPickFiles=/g)?.length ?? 0).toBe(1);
   });
 
+  // Frame F3 on macOS: one button "Add files or folders" and no menu. The
+  // panel picks folders too, so the composer asks folderStats for the count.
+  it('labels the add button for files and folders and gives no folder menu', () => {
+    expect(dashboard).toMatch(/pickLabel="Add files or folders"/);
+    expect(dashboard).toMatch(/folderStats=\{\s*folderStats\s*\}/);
+    expect(dashboard).not.toMatch(/onPickFolder=/);
+  });
+
   it('attaches the native panel at startup, next to the other attach calls', () => {
     // attachPicker must run in index.js, above both roots: a picker attached
     // after AppRegistry.registerComponent would race the first render of the

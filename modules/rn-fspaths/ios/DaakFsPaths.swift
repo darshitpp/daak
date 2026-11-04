@@ -181,6 +181,120 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     resolve(sizes)
   }
 
+  /// The file count and the byte count of the regular files below `path`.
+  /// Hidden files count. A symlink does not count. Resolves NSNull for a path
+  /// that is not a folder, or for a tree that has an unreadable part.
+  @objc func folderStats(_ path: String,
+                         resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let root = URL(fileURLWithPath: path)
+      let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+      let values = try? root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+      // The walk calls the handler on the queue of this block, so a plain
+      // flag is safe.
+      var unreadable = false
+      // A root that exists but cannot be read gives an empty walk and no error.
+      // So read the root first.
+      guard values?.isDirectory == true, values?.isSymbolicLink != true,
+            (try? FileManager.default.contentsOfDirectory(atPath: root.path)) != nil,
+            let walker = FileManager.default.enumerator(
+              at: root, includingPropertiesForKeys: keys, options: [],
+              errorHandler: { _, error in
+                NSLog("Daak: folderStats could not read an item (\((error as NSError).domain) \((error as NSError).code))")
+                unreadable = true
+                return false
+              })
+      else {
+        resolve(NSNull())
+        return
+      }
+      var files = 0
+      var bytes = 0
+      for case let url as URL in walker {
+        guard let v = try? url.resourceValues(forKeys: Set(keys)),
+              v.isSymbolicLink != true, v.isRegularFile == true else { continue }
+        files += 1
+        bytes += v.fileSize ?? 0
+      }
+      if unreadable {
+        resolve(NSNull())
+        return
+      }
+      resolve(["files": files, "bytes": bytes])
+    }
+  }
+
+  /// `<caches>/daak-send`, the parent of every copy that DaakShare.pickFolder
+  /// makes. Keep this path equal to the one in DaakShare.copyPickedFolder.
+  private static func pickedCopiesRoot() -> URL {
+    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("daak-send", isDirectory: true)
+  }
+
+  /// Delete one copy that pickFolder made: the whole `<uuid>` slot that holds
+  /// `path`. Rejects a path that is not below `<caches>/daak-send` after the
+  /// symlinks and the `..` parts are resolved.
+  @objc func discardPickedCopy(_ path: String,
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    let fm = FileManager.default
+    let rootURL = Self.pickedCopiesRoot()
+    // The root must exist, so the root and the target resolve the same way.
+    try? fm.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    let root = Self.withoutPrivate(rootURL.standardizedFileURL.resolvingSymlinksInPath().path)
+    let target = Self.withoutPrivate(
+      URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path)
+    let rootPath = root.hasSuffix("/") ? root : root + "/"
+    guard target.hasPrefix(rootPath),
+          let slotName = target.dropFirst(rootPath.count).split(separator: "/").first
+    else {
+      reject("E_NOT_PICKED_COPY", "the path is not a copy under daak-send", nil)
+      return
+    }
+    let slot = URL(fileURLWithPath: rootPath, isDirectory: true)
+      .appendingPathComponent(String(slotName), isDirectory: true)
+    DispatchQueue.global(qos: .utility).async {
+      // A copy that is already gone is the wanted result.
+      if fm.fileExists(atPath: slot.path) {
+        do { try fm.removeItem(at: slot) } catch {
+          reject("E_DISCARD", "the copy could not be deleted", nil)
+          return
+        }
+      }
+      resolve(nil)
+    }
+  }
+
+  /// `resolvingSymlinksInPath` drops a leading `/private` only when the path
+  /// exists. On iOS `/private/var` and `/var` are the same folder. So drop it on
+  /// both sides of a compare, and a missing path compares like an existing one.
+  private static func withoutPrivate(_ path: String) -> String {
+    path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+  }
+
+  /// Delete every copy under `<caches>/daak-send` that an earlier run left.
+  /// A slot made after this sweep started belongs to a pick that runs now, so
+  /// the sweep keeps it.
+  @objc func sweepPickedCopies(_ resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    let started = Date()
+    DispatchQueue.global(qos: .utility).async {
+      let fm = FileManager.default
+      let slots = (try? fm.contentsOfDirectory(
+        at: Self.pickedCopiesRoot(), includingPropertiesForKeys: [.creationDateKey],
+        options: [])) ?? []
+      for slot in slots {
+        let made = (try? slot.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+        if let made, made >= started { continue }
+        do { try fm.removeItem(at: slot) } catch {
+          NSLog("Daak: an old folder copy could not be deleted (\((error as NSError).domain) \((error as NSError).code))")
+        }
+      }
+      resolve(nil)
+    }
+  }
+
   private static func documents() -> URL {
     // create: true, so a first launch has a directory and not a promise of one.
     let fm = FileManager.default
@@ -250,7 +364,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       defaults.set(url.path, forKey: Self.pathKey)
       resolve(url.path)
     } catch {
-      NSLog("Daak: the download folder bookmark could not be made: \(error)")
+      NSLog("Daak: the download folder bookmark could not be made (\((error as NSError).domain) \((error as NSError).code))")
       resolve(nil)
     }
   }
@@ -283,7 +397,19 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   /// cannot be moved keeps its ORIGINAL path, and an unset folder returns the
   /// input unchanged -- which is what makes the feature degrade to the old
   /// behavior rather than failing.
+  ///
+  /// `subdirs[i]` is the folder below the remembered folder for `paths[i]`, for
+  /// example `album/sub`. Its first name is the root. Each root gets the first
+  /// free name in the folder (`album`, `album-1`, ...), so a moved folder never
+  /// merges into a folder that exists. A subdir that starts with `/` names a
+  /// root that the payload already uses, and that root is used as it is.
+  /// A file that is already below the folder answers its own path and does
+  /// not move, so a second call moves nothing twice. One exception: when the
+  /// engine output folder is below the save folder (and is not the save
+  /// folder), a file in the output folder moves. After the move, the empty
+  /// folders that the engine made below its output directory are removed.
   @objc func moveReceivedFiles(_ paths: [String],
+                               subdirs: [String],
                                resolve: @escaping RCTPromiseResolveBlock,
                                reject: @escaping RCTPromiseRejectBlock) {
     guard let bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey) else {
@@ -306,17 +432,49 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     }
 
     let fm = FileManager.default
+    let norm = { (u: URL) in Self.withoutPrivate(u.standardizedFileURL.resolvingSymlinksInPath().path) }
+    let folderAt = norm(folder) + "/"
+    let outAt = norm(Self.dataDir().appendingPathComponent("downloads", isDirectory: true)) + "/"
+    // Task 12b (F4): the root name that this call uses for each requested root.
+    var roots: [String: String] = [:]
     var out: [String] = []
-    for path in paths {
+    for (i, path) in paths.enumerated() {
       let src = URL(fileURLWithPath: path)
-      var dest = folder.appendingPathComponent(src.lastPathComponent)
+      // The file is already in the save folder: an earlier event moved it. A
+      // save folder above the engine output folder (the app Documents, the home
+      // folder) holds new files too, so a file in the output folder does not
+      // count there. A save folder that is the output folder, or is below it,
+      // keeps each file below it in place, as before.
+      let srcAt = norm(src)
+      if srcAt.hasPrefix(folderAt) && (!srcAt.hasPrefix(outAt) || folderAt.hasPrefix(outAt)) {
+        out.append(path)
+        continue
+      }
+      let subdir = i < subdirs.count ? subdirs[i] : ""
+      var parts = Self.safeParts(subdir)
+      if !parts.isEmpty {
+        parts[0] = Self.chooseRoot(parts[0], exact: subdir.hasPrefix("/"), in: folder,
+                                   roots: &roots, fm: fm)
+      }
+      var target = folder
+      for part in parts {
+        target.appendPathComponent(part, isDirectory: true)
+      }
+      do {
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+      } catch {
+        NSLog("Daak: could not make a folder in the download folder (\((error as NSError).domain) \((error as NSError).code))")
+        out.append(path)
+        continue
+      }
+      var dest = target.appendingPathComponent(src.lastPathComponent)
       // Never overwrite: two files called photo.jpg are two files.
       var n = 1
       while fm.fileExists(atPath: dest.path) {
         let base = src.deletingPathExtension().lastPathComponent
         let ext = src.pathExtension
         let name = ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)"
-        dest = folder.appendingPathComponent(name)
+        dest = target.appendingPathComponent(name)
         n += 1
       }
       do {
@@ -325,11 +483,67 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       } catch {
         // The file stays where it is. The log says why, because a silent
         // fallback looks like a feature that does nothing.
-        NSLog("Daak: could not move \(src.lastPathComponent) into the download folder: \(error)")
+        NSLog("Daak: could not move a file into the download folder (\((error as NSError).domain) \((error as NSError).code))")
         out.append(path)
       }
     }
+    Self.pruneEmptyDirs(paths)
     resolve(out)
+  }
+
+  /// The folder names of a subdir. An empty part, `.`, and `..` are dropped, so
+  /// a subdir can never point above the chosen folder.
+  private static func safeParts(_ subdir: String) -> [String] {
+    subdir.split(separator: "/").map(String.init)
+      .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+  }
+
+  /// Task 12b (F4): the root folder name in the save folder for a requested
+  /// root. An exact root (the subdir starts with `/`) is used as it is. Any
+  /// other root gets the first free name of `name`, `name-1`, `name-2`, ...
+  /// The chosen folder is made at once, so the file system decides if a later
+  /// name is free. One requested root gets one name for each call.
+  private static func chooseRoot(_ name: String, exact: Bool, in folder: URL,
+                                 roots: inout [String: String], fm: FileManager) -> String {
+    let key = exact ? "/" + name : name
+    if let known = roots[key] {
+      return known
+    }
+    var chosen = name
+    if !exact {
+      let taken = Set(roots.values)
+      var n = 1
+      while taken.contains(chosen) || fm.fileExists(atPath: folder.appendingPathComponent(chosen).path) {
+        chosen = "\(name)-\(n)"
+        n += 1
+      }
+      try? fm.createDirectory(at: folder.appendingPathComponent(chosen, isDirectory: true),
+                              withIntermediateDirectories: true)
+    }
+    roots[key] = chosen
+    return chosen
+  }
+
+  /// Remove each folder that is now empty, from the folder of each source up to
+  /// the engine output directory. The output directory itself stays. A folder
+  /// outside it is never touched. A folder that still holds a file stops the walk.
+  private static func pruneEmptyDirs(_ sources: [String]) {
+    let fm = FileManager.default
+    let outDir = withoutPrivate(dataDir().appendingPathComponent("downloads", isDirectory: true)
+      .standardizedFileURL.resolvingSymlinksInPath().path)
+    for path in sources where !path.hasPrefix("photos:") {
+      var dir = URL(fileURLWithPath: path).deletingLastPathComponent()
+      while true {
+        let at = withoutPrivate(dir.standardizedFileURL.resolvingSymlinksInPath().path)
+        guard at.hasPrefix(outDir + "/") else { break }
+        guard let left = try? fm.contentsOfDirectory(atPath: at), left.isEmpty else { break }
+        // rmdir(2) removes only an EMPTY folder. A file that arrives after the
+        // check above makes it fail, and the file stays. removeItem would
+        // delete the folder and that file. A failure only stops the walk.
+        guard rmdir(at) == 0 else { break }
+        dir = dir.deletingLastPathComponent()
+      }
+    }
   }
 
   /// Add each image or video to the Photos library. One answer per input.
@@ -337,7 +551,13 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   /// This method must not prompt. Only onboarding and Settings ask. So a receive
   /// never shows a system prompt over an app that the user does not look at.
   /// With no access, every input comes back unchanged and the folder move runs.
+  ///
+  /// `albums[i]` is the album title for `paths[i]`, for example `album / sub`.
+  /// A file with `''` is added with no album, as before. The files of one title
+  /// go to a NEW album (`addToNewAlbum`). After the save, the empty folders that
+  /// the engine made below its output directory are removed.
   @objc func saveToLibrary(_ paths: [String],
+                           albums: [String],
                            resolve: @escaping RCTPromiseResolveBlock,
                            reject: @escaping RCTPromiseRejectBlock) {
     let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
@@ -347,8 +567,82 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     }
     // performChangesAndWait blocks, so it must not run on the main queue.
     DispatchQueue.global(qos: .userInitiated).async {
-      resolve(paths.map { Self.addToLibrary($0) })
+      // The answer keeps the input order. Each entry starts as "not saved".
+      var out = paths
+      var titles: [String] = []
+      var members: [String: [Int]] = [:]
+      for (i, path) in paths.enumerated() {
+        let title = i < albums.count ? albums[i] : ""
+        if title.isEmpty {
+          out[i] = Self.addToLibrary(path)
+          continue
+        }
+        if members[title] == nil { titles.append(title) }
+        members[title, default: []].append(i)
+      }
+      for title in titles {
+        let indexes = members[title] ?? []
+        let saved = Self.addToNewAlbum(title, paths: indexes.map { paths[$0] })
+        for (k, i) in indexes.enumerated() { out[i] = saved[k] }
+      }
+      Self.pruneEmptyDirs(paths)
+      resolve(out)
     }
+  }
+
+  /// Make a new album called `title` and add each image or video of `paths` to
+  /// it, in ONE change block. One answer per path, in order: `photos:<id>` for
+  /// a saved file, the original path for a file that was not saved.
+  ///
+  /// The app has add-only access. Add-only access cannot read albums, and a
+  /// fetch can show a prompt. So no album is fetched, and the album and its
+  /// assets are made together. A second call with the same title (the same
+  /// folder sent again, or a second `inbox.received` event of a repaired folder)
+  /// makes a second album with the same name. The user accepts this.
+  private static func addToNewAlbum(_ title: String, paths: [String]) -> [String] {
+    let media = paths.map { mediaFile($0) }
+    guard media.contains(where: { $0 != nil }) else { return paths }
+    var identifiers = [String?](repeating: nil, count: paths.count)
+    do {
+      try PHPhotoLibrary.shared().performChangesAndWait {
+        let album = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: title)
+        var placeholders: [PHObjectPlaceholder] = []
+        for (k, file) in media.enumerated() {
+          guard let file else { continue }
+          let request = file.isVideo
+            ? PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: file.url)
+            : PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: file.url)
+          if let placeholder = request?.placeholderForCreatedAsset {
+            identifiers[k] = placeholder.localIdentifier
+            placeholders.append(placeholder)
+          }
+        }
+        album.addAssets(placeholders as NSArray)
+      }
+    } catch {
+      NSLog("Daak: could not add a folder to a Photos album (\((error as NSError).domain) \((error as NSError).code))")
+      return paths
+    }
+    // The sources are deleted only AFTER the add, as in addToLibrary.
+    return paths.enumerated().map { k, path in
+      guard let identifier = identifiers[k] else { return path }
+      do { try FileManager.default.removeItem(atPath: path) } catch {
+        NSLog("Daak: the saved photo's source file was not removed (\((error as NSError).domain) \((error as NSError).code))")
+      }
+      return "photos:" + identifier
+    }
+  }
+
+  /// The URL and kind of a file that Photos can take, or nil for a missing file
+  /// or a type that is not an image or a video.
+  private static func mediaFile(_ path: String) -> (url: URL, isVideo: Bool)? {
+    let url = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: path),
+          let type = UTType(filenameExtension: url.pathExtension.lowercased())
+    else { return nil }
+    let isVideo = type.conforms(to: .movie)
+    guard isVideo || type.conforms(to: .image) else { return nil }
+    return (url, isVideo)
   }
 
   @objc func requestPhotosAccess(_ resolve: @escaping RCTPromiseResolveBlock,
@@ -371,12 +665,9 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
   /// the original path for any failure. The source is deleted only AFTER the
   /// add. A crash between the two steps leaves a duplicate and never loses the file.
   private static func addToLibrary(_ path: String) -> String {
-    let url = URL(fileURLWithPath: path)
-    guard FileManager.default.fileExists(atPath: path),
-          let type = UTType(filenameExtension: url.pathExtension.lowercased())
-    else { return path }
-    let isVideo = type.conforms(to: .movie)
-    guard isVideo || type.conforms(to: .image) else { return path }
+    guard let file = mediaFile(path) else { return path }
+    let url = file.url
+    let isVideo = file.isVideo
     var identifier: String?
     do {
       try PHPhotoLibrary.shared().performChangesAndWait {
@@ -386,12 +677,12 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
         identifier = request?.placeholderForCreatedAsset?.localIdentifier
       }
     } catch {
-      NSLog("Daak: could not add \(url.lastPathComponent) to Photos: \(error)")
+      NSLog("Daak: could not add a file to Photos (\((error as NSError).domain) \((error as NSError).code))")
       return path
     }
     guard let identifier else { return path }
     do { try FileManager.default.removeItem(at: url) } catch {
-      NSLog("Daak: the saved photo's source file was not removed: \(error)")
+      NSLog("Daak: the saved photo's source file was not removed (\((error as NSError).domain) \((error as NSError).code))")
     }
     return "photos:" + identifier
   }
@@ -405,7 +696,7 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
       try fm.moveItem(at: src, to: dest)
       return
     } catch {
-      NSLog("Daak: a plain move was refused (\(error)); trying a coordinated copy")
+      NSLog("Daak: a plain move was refused (\((error as NSError).domain) \((error as NSError).code)); trying a coordinated copy")
     }
     var coordinationError: NSError?
     var copyError: Error?

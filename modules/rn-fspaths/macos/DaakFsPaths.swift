@@ -111,6 +111,63 @@ class DaakFsPaths: NSObject {
     resolve(sizes)
   }
 
+  /// The file count and total bytes under a folder. A symlink is skipped, so a
+  /// link cannot pull in a tree outside the folder or loop forever. `NSNull`
+  /// marks a path that is not a readable folder.
+  @objc func folderStats(_ path: String,
+                         resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let root = URL(fileURLWithPath: path)
+      let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+      let values = try? root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+      // The walk calls the handler on the queue of this block, so a plain
+      // flag is safe.
+      var unreadable = false
+      // A root that exists but cannot be read gives an empty walk and no error.
+      // So read the root first.
+      guard values?.isDirectory == true, values?.isSymbolicLink != true,
+            (try? FileManager.default.contentsOfDirectory(atPath: root.path)) != nil,
+            let walker = FileManager.default.enumerator(
+              at: root, includingPropertiesForKeys: keys, options: [],
+              errorHandler: { _, error in
+                NSLog("Daak: folderStats could not read an item (\((error as NSError).domain) \((error as NSError).code))")
+                unreadable = true
+                return false
+              })
+      else {
+        resolve(NSNull())
+        return
+      }
+      var files = 0
+      var bytes = 0
+      for case let url as URL in walker {
+        guard let v = try? url.resourceValues(forKeys: Set(keys)),
+              v.isSymbolicLink != true, v.isRegularFile == true else { continue }
+        files += 1
+        bytes += v.fileSize ?? 0
+      }
+      if unreadable {
+        resolve(NSNull())
+        return
+      }
+      resolve(["files": files, "bytes": bytes])
+    }
+  }
+
+  /// No copy exists on macOS: the engine reads the chosen folder in place.
+  @objc func discardPickedCopy(_ path: String,
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    resolve(NSNull())
+  }
+
+  /// No copy exists on macOS, so there is nothing to sweep.
+  @objc func sweepPickedCopies(_ resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    resolve(NSNull())
+  }
+
   /// Ask for a folder and REMEMBER it.
   ///
   /// A sandboxed app cannot keep a path to a folder it does not own: the path
@@ -143,7 +200,7 @@ class DaakFsPaths: NSObject {
         defaults.set(url.path, forKey: Self.pathKey)
         resolve(url.path)
       } catch {
-        reject("E_BOOKMARK", "could not remember that folder: \(error.localizedDescription)", error)
+        reject("E_BOOKMARK", "could not remember that folder", nil)
       }
     }
   }
@@ -176,7 +233,19 @@ class DaakFsPaths: NSObject {
   /// A file that cannot be moved keeps its ORIGINAL path. That is the honest
   /// answer -- the file is still where the engine put it -- and it is why this
   /// returns one location per input rather than failing as a batch.
+  ///
+  /// `subdirs[i]` is the folder below the remembered folder for `paths[i]`, for
+  /// example `album/sub`. Its first name is the root. Each root gets the first
+  /// free name in the folder (`album`, `album-1`, ...), so a moved folder never
+  /// merges into a folder that exists. A subdir that starts with `/` names a
+  /// root that the payload already uses, and that root is used as it is.
+  /// A file that is already below the folder answers its own path and does
+  /// not move, so a second call moves nothing twice. One exception: when the
+  /// engine output folder is below the save folder (and is not the save
+  /// folder), a file in the output folder moves. After the move, the empty
+  /// folders that the engine made below its output directory are removed.
   @objc func moveReceivedFiles(_ paths: [String],
+                               subdirs: [String],
                                resolve: @escaping RCTPromiseResolveBlock,
                                reject: @escaping RCTPromiseRejectBlock) {
     guard let bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey) else {
@@ -203,10 +272,42 @@ class DaakFsPaths: NSObject {
     defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
 
     let fm = FileManager.default
+    let norm = { (u: URL) in Self.withoutPrivate(u.standardizedFileURL.resolvingSymlinksInPath().path) }
+    let folderAt = norm(folder) + "/"
+    let outAt = norm(Self.dataDir().appendingPathComponent("downloads", isDirectory: true)) + "/"
+    // Task 12b (F4): the root name that this call uses for each requested root.
+    var roots: [String: String] = [:]
     var out: [String] = []
-    for path in paths {
+    for (i, path) in paths.enumerated() {
       let src = URL(fileURLWithPath: path)
-      var dest = folder.appendingPathComponent(src.lastPathComponent)
+      // The file is already in the save folder: an earlier event moved it. A
+      // save folder above the engine output folder (the app Documents, the home
+      // folder) holds new files too, so a file in the output folder does not
+      // count there. A save folder that is the output folder, or is below it,
+      // keeps each file below it in place, as before.
+      let srcAt = norm(src)
+      if srcAt.hasPrefix(folderAt) && (!srcAt.hasPrefix(outAt) || folderAt.hasPrefix(outAt)) {
+        out.append(path)
+        continue
+      }
+      let subdir = i < subdirs.count ? subdirs[i] : ""
+      var parts = Self.safeParts(subdir)
+      if !parts.isEmpty {
+        parts[0] = Self.chooseRoot(parts[0], exact: subdir.hasPrefix("/"), in: folder,
+                                   roots: &roots, fm: fm)
+      }
+      var target = folder
+      for part in parts {
+        target.appendPathComponent(part, isDirectory: true)
+      }
+      do {
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+      } catch {
+        NSLog("Daak: could not make a folder in the download folder (\((error as NSError).domain) \((error as NSError).code))")
+        out.append(path)
+        continue
+      }
+      var dest = target.appendingPathComponent(src.lastPathComponent)
       // Never overwrite: two files called `photo.jpg` from two senders are two
       // files, and the second must not silently replace the first.
       var n = 1
@@ -214,7 +315,7 @@ class DaakFsPaths: NSObject {
         let base = src.deletingPathExtension().lastPathComponent
         let ext = src.pathExtension
         let name = ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)"
-        dest = folder.appendingPathComponent(name)
+        dest = target.appendingPathComponent(name)
         n += 1
       }
       do {
@@ -224,11 +325,75 @@ class DaakFsPaths: NSObject {
         out.append(path)
       }
     }
+    Self.pruneEmptyDirs(paths)
     resolve(out)
   }
 
+  /// The folder names of a subdir. An empty part, `.`, and `..` are dropped, so
+  /// a subdir can never point above the chosen folder.
+  private static func safeParts(_ subdir: String) -> [String] {
+    subdir.split(separator: "/").map(String.init)
+      .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+  }
+
+  /// `resolvingSymlinksInPath` drops a leading `/private` only when the path
+  /// exists. So drop it on both sides of a compare.
+  private static func withoutPrivate(_ path: String) -> String {
+    path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+  }
+
+  /// Task 12b (F4): the root folder name in the save folder for a requested
+  /// root. An exact root (the subdir starts with `/`) is used as it is. Any
+  /// other root gets the first free name of `name`, `name-1`, `name-2`, ...
+  /// The chosen folder is made at once, so the file system decides if a later
+  /// name is free. One requested root gets one name for each call.
+  private static func chooseRoot(_ name: String, exact: Bool, in folder: URL,
+                                 roots: inout [String: String], fm: FileManager) -> String {
+    let key = exact ? "/" + name : name
+    if let known = roots[key] {
+      return known
+    }
+    var chosen = name
+    if !exact {
+      let taken = Set(roots.values)
+      var n = 1
+      while taken.contains(chosen) || fm.fileExists(atPath: folder.appendingPathComponent(chosen).path) {
+        chosen = "\(name)-\(n)"
+        n += 1
+      }
+      try? fm.createDirectory(at: folder.appendingPathComponent(chosen, isDirectory: true),
+                              withIntermediateDirectories: true)
+    }
+    roots[key] = chosen
+    return chosen
+  }
+
+  /// Remove each folder that is now empty, from the folder of each source up to
+  /// the engine output directory. The output directory itself stays. A folder
+  /// outside it is never touched. A folder that still holds a file stops the walk.
+  private static func pruneEmptyDirs(_ sources: [String]) {
+    let fm = FileManager.default
+    let outDir = withoutPrivate(dataDir().appendingPathComponent("downloads", isDirectory: true)
+      .standardizedFileURL.resolvingSymlinksInPath().path)
+    for path in sources {
+      var dir = URL(fileURLWithPath: path).deletingLastPathComponent()
+      while true {
+        let at = withoutPrivate(dir.standardizedFileURL.resolvingSymlinksInPath().path)
+        guard at.hasPrefix(outDir + "/") else { break }
+        guard let left = try? fm.contentsOfDirectory(atPath: at), left.isEmpty else { break }
+        // rmdir(2) removes only an EMPTY folder. A file that arrives after the
+        // check above makes it fail, and the file stays. removeItem would
+        // delete the folder and that file. A failure only stops the walk.
+        guard rmdir(at) == 0 else { break }
+        dir = dir.deletingLastPathComponent()
+      }
+    }
+  }
+
   // macOS has no Photos support yet (R8). The shared relocate code calls these.
+  // `albums` is ignored.
   @objc func saveToLibrary(_ paths: [String],
+                           albums: [String],
                            resolve: @escaping RCTPromiseResolveBlock,
                            reject: @escaping RCTPromiseRejectBlock) {
     resolve(paths)

@@ -38,6 +38,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
   companion object {
     const val NAME = "DaakNotify"
     const val CHANNEL = "daak.received"
+    const val CHANNEL_FAILED = "daak.failed"
 
     const val ACTION_OPEN = "daak.open"
     const val ACTION_SHARE = "daak.share"
@@ -191,21 +192,30 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
    * R34: the channel must EXIST before posting on API 26+, or the post is
    * silently dropped. Idempotent: createNotificationChannel on an existing id
    * updates it and leaves the user's own importance choice alone.
+   *
+   * Two channels exist. A failed send has its own, so a user who mutes
+   * "Received files" still sees a failure.
    */
-  private fun ensureChannel() {
+  private fun ensureChannel(id: String) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val nm = ctx.getSystemService(NotificationManager::class.java)
-    if (nm.getNotificationChannel(CHANNEL) == null) {
+    if (nm.getNotificationChannel(id) == null) {
+      val name = if (id == CHANNEL_FAILED) "Send failures" else "Received files"
       nm.createNotificationChannel(
-          NotificationChannel(CHANNEL, "Received files", NotificationManager.IMPORTANCE_DEFAULT))
+          NotificationChannel(id, name, NotificationManager.IMPORTANCE_DEFAULT))
     }
   }
 
+  /** The channel for a category id. An unknown id gets the received channel. */
+  private fun channelFor(category: String): String =
+      if (category == CHANNEL_FAILED) CHANNEL_FAILED else CHANNEL
+
   override fun registerCategories(categoriesJson: String, promise: Promise) {
     // Android action buttons are per-notification, not per-category, so the
-    // channel is the only thing to install here. The JSON is still parsed so a
+    // channels are the only thing to install here. The JSON is still parsed so a
     // malformed caller is loud at registration rather than at every post.
-    ensureChannel()
+    ensureChannel(CHANNEL)
+    ensureChannel(CHANNEL_FAILED)
     try {
       JSONArray(categoriesJson)
     } catch (t: Throwable) {
@@ -222,8 +232,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
       promise.resolve(null)
       return
     }
-    ensureChannel()
-    val notification = NotificationCompat.Builder(ctx, category.ifEmpty { CHANNEL })
+    val channel = channelFor(category)
+    ensureChannel(channel)
+    val notification = NotificationCompat.Builder(ctx, channel)
         .setSmallIcon(android.R.drawable.stat_sys_download_done)
         .setContentTitle(title)
         .setContentText(body)

@@ -488,3 +488,36 @@ describe('AppShell desktop layout', () => {
   });
 });
 
+
+describe('AppShell folder places', () => {
+  const kid = (rel: string, destPath: string, itemIndex: number) =>
+    threadItem({
+      transferId: TID, itemIndex, type: 'file', text: null, name: rel, size: 10, destPath,
+      group: { name: 'album', rel, files: 2, bytes: 20 },
+    });
+  const engineWithFolder = () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([kid('a.jpg', 'photos:1', 0), kid('b.pdf', '/d/album/b.pdf', 1)]));
+    return engine;
+  };
+  const folderHost = (name: string | null) => ({ load: jest.fn(async () => name), choose: jest.fn(async () => null) });
+
+  // The thread names the save folder with the words that Settings shows.
+  it('names the save folder from the download folder row', async () => {
+    shell(engineWithFolder(), { downloadFolder: folderHost('Downloads / Daak'), library: 'Gallery', isMedia: (n) => n.endsWith('.jpg') });
+    fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
+    expect(await screen.findByText('Saved to Gallery and Downloads / Daak')).toBeTruthy();
+  });
+
+  it('names the app storage when no folder is chosen', async () => {
+    shell(engineWithFolder(), { downloadFolder: folderHost(null), library: 'Gallery', isMedia: (n) => n.endsWith('.jpg') });
+    fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
+    expect(await screen.findByText("Saved to Gallery and the app's own storage")).toBeTruthy();
+  });
+
+  it('uses the save folder name that the host gives', async () => {
+    shell(engineWithFolder(), { downloadFolder: folderHost('Ignored'), saveFolder: 'Daak', library: 'Photos', isMedia: (n) => n.endsWith('.jpg') });
+    fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
+    expect(await screen.findByText('Saved to Photos and Daak')).toBeTruthy();
+  });
+});

@@ -28,3 +28,10 @@ export async function askForPhotosIfUndetermined(
     // The user can still choose the permission in Settings.
   }
 }
+
+// The one word for the media library in the folder sheet: "Photos" or "Gallery".
+// No host means no media goes to a library.
+export function libraryOf(host: Pick<PhotosHost, 'destination'> | undefined): 'Photos' | 'Gallery' | undefined {
+  if (!host) return undefined;
+  return host.destination === 'Gallery' ? 'Gallery' : 'Photos';
+}

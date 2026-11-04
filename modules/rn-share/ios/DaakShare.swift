@@ -69,6 +69,27 @@ class DaakShare: NSObject {
     }
   }
 
+  /// Ask for one folder, then copy its tree into
+  /// `<caches>/daak-send/<uuid>/<folder name>`. Resolves the absolute path of
+  /// the copy, or nil on cancel. The picked folder is outside the sandbox and
+  /// its security scope closes, so the engine sends from the copy.
+  /// Rejects `NO_SPACE:<needed bytes>` or `EMPTY`.
+  @objc func pickFolder(_ resolve: @escaping RCTPromiseResolveBlock,
+                        reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      guard let root = Self.rootViewController() else {
+        reject("E_NO_VC", "no root view controller", nil); return
+      }
+      let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+      picker.allowsMultipleSelection = false
+      let delegate = FolderPickerDelegate(resolve: resolve, reject: reject)
+      picker.delegate = delegate
+      // The picker holds its delegate weakly. The picker keeps this one alive.
+      objc_setAssociatedObject(picker, &folderPickerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN)
+      root.present(picker, animated: true)
+    }
+  }
+
   // App Group drain. Moves staged bytes OUT of the share-inbox and into the
   // app's Documents dir. It does NOT send: the engine outbox owns sending.
   @objc func consumePendingInbox(_ resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
@@ -211,4 +232,125 @@ final class DocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
     resolve(urls.map { $0.path })
   }
   func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { resolve([]) }
+}
+
+private var folderPickerDelegateKey: UInt8 = 0
+
+/// Why a folder copy stopped. JS reads the reject message.
+enum FolderCopyError: Error {
+  case noSpace(Int64)
+  case empty
+  /// An iCloud Drive file in the tree is not on the device.
+  case notDownloaded
+}
+
+final class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
+  let resolve: RCTPromiseResolveBlock
+  let reject: RCTPromiseRejectBlock
+  init(resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    self.resolve = resolve; self.reject = reject
+  }
+
+  func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+    guard let folder = urls.first else { resolve(nil); return }
+    let resolve = self.resolve
+    let reject = self.reject
+    // The copy can take minutes. It must not block the main thread.
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        resolve(try Self.copyPickedFolder(folder).path)
+      } catch FolderCopyError.noSpace(let needed) {
+        reject("NO_SPACE", "NO_SPACE:\(needed)", nil)
+      } catch FolderCopyError.empty {
+        reject("EMPTY", "EMPTY", nil)
+      } catch FolderCopyError.notDownloaded {
+        reject("NOT_DOWNLOADED", "NOT_DOWNLOADED", nil)
+      } catch {
+        NSLog("Daak: E_COPY: the picked folder could not be copied (\((error as NSError).domain) \((error as NSError).code))")
+        reject("E_COPY", "the folder could not be copied", nil)
+      }
+    }
+  }
+
+  // Cancel starts no copy, so nothing is on disk to delete.
+  func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { resolve(nil) }
+
+  /// One item of the picked tree. `parts` is the path below the picked folder.
+  struct Entry {
+    let src: URL
+    let parts: [String]
+    let isDir: Bool
+    let size: Int64
+  }
+
+  /// Copy the tree below `folder` into a new slot in `<caches>/daak-send`.
+  /// The copy is file by file with `copyItem`, which streams or clones on disk.
+  /// No file goes into memory. Any failure deletes the slot.
+  static func copyPickedFolder(_ folder: URL) throws -> URL {
+    let opened = folder.startAccessingSecurityScopedResource()
+    defer { if opened { folder.stopAccessingSecurityScopedResource() } }
+    let fm = FileManager.default
+    let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    let slot = caches
+      .appendingPathComponent("daak-send", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let dest = slot.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
+    do {
+      var entries: [Entry] = []
+      try listTree(folder, parts: [], into: &entries)
+      let files = entries.filter { !$0.isDir }
+      if files.isEmpty { throw FolderCopyError.empty }
+      let total = files.reduce(Int64(0)) { $0 + $1.size }
+      let needed = Int64((Double(total) * 1.1).rounded(.up))
+      let free = (try? caches.resourceValues(
+        forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+        .volumeAvailableCapacityForImportantUsage
+      // An unknown free space is not a refusal. A full disk fails the copy.
+      if let free, free < needed { throw FolderCopyError.noSpace(needed) }
+      try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+      // listTree puts each folder before its contents, so a parent exists.
+      for entry in entries {
+        let target = entry.parts.reduce(dest) { $0.appendingPathComponent($1) }
+        if entry.isDir {
+          try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        } else {
+          try fm.copyItem(at: entry.src, to: target)
+        }
+      }
+      return dest
+    } catch {
+      try? fm.removeItem(at: slot)
+      throw error
+    }
+  }
+
+  /// True for the hidden placeholder `.<name>.icloud` that iOS shows for an
+  /// iCloud Drive file that is not on the device.
+  static func isICloudPlaceholder(_ name: String) -> Bool {
+    name.range(of: #"^\.(.+)\.icloud$"#, options: .regularExpression) != nil
+  }
+
+  /// List every folder and regular file below `dir`, hidden files included.
+  /// A symlink is skipped, so the copy cannot leave the picked tree.
+  /// An unreadable folder throws, so a copy never misses files in silence.
+  /// An iCloud placeholder throws `notDownloaded`. A copy of it sends the
+  /// placeholder and not the file. The listing runs before the first write,
+  /// so this refusal leaves nothing on disk.
+  static func listTree(_ dir: URL, parts: [String], into out: inout [Entry]) throws {
+    let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .fileSizeKey]
+    let children = try FileManager.default.contentsOfDirectory(
+      at: dir, includingPropertiesForKeys: Array(keys), options: [])
+    for child in children {
+      if isICloudPlaceholder(child.lastPathComponent) { throw FolderCopyError.notDownloaded }
+      let v = try child.resourceValues(forKeys: keys)
+      if v.isSymbolicLink == true { continue }
+      let p = parts + [child.lastPathComponent]
+      if v.isDirectory == true {
+        out.append(Entry(src: child, parts: p, isDir: true, size: 0))
+        try listTree(child, parts: p, into: &out)
+      } else if v.isRegularFile == true {
+        out.append(Entry(src: child, parts: p, isDir: false, size: Int64(v.fileSize ?? 0)))
+      }
+    }
+  }
 }

@@ -156,14 +156,46 @@ export async function clearDownloadFolder(): Promise<void> {
   return NativeDaakFsPaths.clearDownloadFolder();
 }
 
-export async function moveReceivedFiles(paths: string[]): Promise<string[]> {
-  return NativeDaakFsPaths.moveReceivedFiles(paths);
+// The native methods always get a second array with one entry for each path.
+// An Objective-C selector has a fixed argument list, so a call with 1 argument
+// cannot reach a method with 2. A missing entry is ''.
+function parallel(paths: string[], extra?: string[]): string[] {
+  return paths.map((_, i) => extra?.[i] ?? '');
 }
+
+/**
+ * `subdirs[i]` is the folder inside the save folder for `paths[i]`, for example
+ * `album/sub`. A shorter array, or `''`, means the top of the save folder. A
+ * file that is already at its place comes back with its own path.
+ *
+ * Task 12b (F4): the first name of a subdir is the root. In one call, the
+ * native move gives each root the first free name in the save folder (`album`,
+ * `album-1`, `album-2`). It never merges into a folder that exists. A subdir
+ * that starts with `/` (`/album-1/sub`) names a root that the payload already
+ * uses. The native move uses that root as it is, so a retry joins it.
+ */
+export async function moveReceivedFiles(paths: string[], subdirs?: string[]): Promise<string[]> {
+  const run = moveQueue.then(() => NativeDaakFsPaths.moveReceivedFiles(paths, parallel(paths, subdirs)));
+  // The next move waits for this move to settle. A failed move does not stop
+  // the next move. The caller of this move still gets its own error.
+  moveQueue = run.catch(() => undefined);
+  return run;
+}
+
+// The native move checks for a free root name, then creates it. Two calls at
+// the same time can pick the same root and merge two folders. So one call
+// runs at a time.
+let moveQueue: Promise<unknown> = Promise.resolve();
 
 export type PhotosAccess = 'granted' | 'denied' | 'undetermined' | 'unavailable';
 
-export async function saveToLibrary(paths: string[]): Promise<string[]> {
-  return NativeDaakFsPaths.saveToLibrary(paths);
+/**
+ * `albums[i]` is the album (iOS) or the folder below `Pictures/Daak` (Android)
+ * for `paths[i]`, for example `album / sub`. A shorter array, or `''`, means no
+ * album, as for a loose file.
+ */
+export async function saveToLibrary(paths: string[], albums?: string[]): Promise<string[]> {
+  return NativeDaakFsPaths.saveToLibrary(paths, parallel(paths, albums));
 }
 
 export async function requestPhotosAccess(): Promise<boolean> {
@@ -191,9 +223,147 @@ const MEDIA_EXT = new Set([
   'jpg', 'jpeg', 'png', 'heic', 'gif', 'webp', 'mp4', 'mov', 'm4v', '3gp', 'mkv',
 ]);
 
-function isMedia(path: string): boolean {
+export function isMedia(path: string): boolean {
   const dot = path.lastIndexOf('.');
   return dot >= 0 && MEDIA_EXT.has(path.slice(dot + 1).toLowerCase());
+}
+
+export type RelocationPlan = {
+  library: { index: number; path: string; album: string; subdir: string }[];
+  folder: { index: number; path: string; subdir: string }[];
+};
+
+// A path that is already in Photos (`photos:<id>`) or in Gallery or a SAF
+// folder (`content://`) moved at an earlier event. It does not move again.
+function alreadyMoved(path: string): boolean {
+  return path.startsWith('photos:') || path.startsWith('content://');
+}
+
+// The folder of `path` from the parent of its group root, for example
+// `album/sub`. `''` for a path under no root. The longest root wins, and a root
+// matches only on a whole path component, so `/out/photos` does not match
+// `/out/photos-1/a.jpg`. The leaf of the root is the folder name on disk, so a
+// suffixed folder keeps its suffix. It handles only `/` separators. Windows is
+// not released.
+function rootOf(path: string, roots: string[]): string {
+  let best = '';
+  for (const raw of roots) {
+    const root = raw.replace(/\/+$/, '');
+    if (root.length > best.length && path.startsWith(`${root}/`)) best = root;
+  }
+  return best;
+}
+
+function subdirOf(path: string, roots: string[]): string {
+  const best = rootOf(path, roots);
+  if (best === '') return '';
+  const name = best.slice(best.lastIndexOf('/') + 1);
+  const dirs = path.slice(best.length + 1).split('/').slice(0, -1);
+  return [name, ...dirs].join('/');
+}
+
+type Place = { parent: string; leaf: string };
+
+// A SAF document URI: `content://<authority>/tree/<tree id>/document/<doc id>`.
+const SAF_DOC = /^content:\/\/[^/]+\/tree\/([^/]+)\/document\/([^/]+)$/;
+
+// The folder of a moved file on Android, from its SAF document URI. A path
+// style document id (the local storage provider) gives `<tree id>/<root>/...`.
+// Any other id names no folder. A loose file names no folder.
+function safPlace(path: string): Place | null {
+  const m = SAF_DOC.exec(path);
+  if (!m) return null;
+  let tree: string;
+  let doc: string;
+  try {
+    tree = decodeURIComponent(m[1]);
+    doc = decodeURIComponent(m[2]);
+  } catch {
+    return null;
+  }
+  if (!doc.startsWith(`${tree}/`)) return null;
+  const parts = doc.slice(tree.length + 1).split('/');
+  if (parts.length < 2 || parts[0] === '') return null;
+  return { parent: `saf:${tree}`, leaf: parts[0] };
+}
+
+// Every folder of this payload: each group root, and each SAF folder of a file
+// that moved on Android.
+function placesOf(savedPaths: string[], groupRoots: string[]): Place[] {
+  const places: Place[] = groupRoots.map((raw) => {
+    const root = raw.replace(/\/+$/, '');
+    const cut = root.lastIndexOf('/');
+    return { parent: root.slice(0, cut), leaf: root.slice(cut + 1) };
+  });
+  for (const path of savedPaths) {
+    const place = safPlace(path);
+    if (place) places.push(place);
+  }
+  return places;
+}
+
+/**
+ * Task 12b (F4): the save folder root that this payload already uses for the
+ * group at `root`, or null. The native move chose that root as the first free
+ * name of the group folder name, so it is `leaf` or `leaf-<number>`.
+ *
+ * Only a folder in another parent counts. The engine puts every group root in
+ * one output folder, so a root in the same parent is an engine root.
+ *
+ * Only exactly one match counts. The exact name does not win, because
+ * another group can own it: groups `album` and `album-1` can move to
+ * `album-1` and `album-1-1`. When two names match, the answer is null, so the
+ * native move makes a new folder. A new folder is safer than a merge into the
+ * wrong folder.
+ */
+function placedRoot(root: string, places: Place[]): string | null {
+  if (root === '') return null;
+  const cut = root.lastIndexOf('/');
+  const parent = root.slice(0, cut);
+  const leaf = root.slice(cut + 1);
+  const suffixed = new RegExp(`^${leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`);
+  const names = new Set(
+    places
+      .filter((p) => p.parent !== parent && (p.leaf === leaf || suffixed.test(p.leaf)))
+      .map((p) => p.leaf),
+  );
+  return names.size === 1 ? [...names][0] : null;
+}
+
+/**
+ * Where each received file goes. `index` is the position in `savedPaths`.
+ *
+ * - A media file (by extension) goes to `library` when `photosOn` is true. Its
+ *   `album` is the folder path joined with ` / ` (spec C8).
+ * - Every other file goes to `folder`. Its `subdir` keeps the folder structure
+ *   inside the save folder.
+ * - A loose file has `album` and `subdir` as `''`.
+ * - A group that already has a root in the save folder (an earlier move of
+ *   this payload) gets that root with a leading `/` in `subdir`, for example
+ *   `/album-1/sub`. The `album` keeps the name on disk in the app folder.
+ * - A path that starts with `photos:` or `content://` is in no list. It moved
+ *   at an earlier `inbox.received` event of the same payload.
+ */
+export function planRelocation(
+  savedPaths: string[],
+  groupRoots: string[],
+  photosOn: boolean,
+): RelocationPlan {
+  const plan: RelocationPlan = { library: [], folder: [] };
+  const places = placesOf(savedPaths, groupRoots);
+  savedPaths.forEach((path, index) => {
+    if (alreadyMoved(path)) return;
+    const subdir = subdirOf(path, groupRoots);
+    const placed = placedRoot(rootOf(path, groupRoots), places);
+    // A leading `/` tells the native move to use this root as it is.
+    const target = placed === null ? subdir : `/${[placed, ...subdir.split('/').slice(1)].join('/')}`;
+    if (photosOn && isMedia(path)) {
+      plan.library.push({ index, path, album: subdir.split('/').join(' / '), subdir: target });
+    } else {
+      plan.folder.push({ index, path, subdir: target });
+    }
+  });
+  return plan;
 }
 
 /**
@@ -211,29 +381,43 @@ function isMedia(path: string): boolean {
  * for nothing is a row rewritten on every arrival.
  *
  * Media files go to the OS media library first (`saveToLibrary`). Each file
- * that the library did not take then goes to the chosen folder.
+ * that the library did not take then goes to the chosen folder, inside its
+ * group folder. The native side decides if the library is on: a target with
+ * no routing answers each original path, so the fallback move takes the file.
+ *
+ * A repaired folder sends a second `inbox.received` for the same payload. A
+ * path that moved to the library is skipped (`planRelocation`). A path that is
+ * already in the save folder goes to the native move, which answers its own
+ * path. The same path is "no move", so the row is not rewritten for it.
+ *
+ * Each native answer is used only when its length is correct, because
+ * `replaceInboxPaths` pairs the old and new lists by index.
  *
  * RETURNS the locations the move produced, or null when nothing moved. The
  * caller needs them because a notification is a SNAPSHOT: its payload JSON is
  * baked into the notification's extras at post time, so a banner posted before
- * the move carries paths the move then DELETES.
+ * the move carries paths the move then DELETES. The caller keeps the event
+ * entry, so the name and the count stay readable from it.
  */
 export async function relocateReceivedFiles(
   engine: { replaceInboxPaths(payloadId: string, paths: string[]): Promise<void> },
-  payload: { payloadId: string; savedPaths: string[] | null },
+  payload: { payloadId: string; savedPaths: string[] | null; groupRoots: string[] },
 ): Promise<string[] | null> {
   const before = payload.savedPaths;
   if (!before || before.length === 0) return null;
   const after = [...before];
+  const plan = planRelocation(before, payload.groupRoots, true);
 
   // Step 1: the media library. A failure leaves the paths as they are.
-  const mediaAt = before.flatMap((p, i) => (isMedia(p) ? [i] : []));
-  if (mediaAt.length > 0) {
+  if (plan.library.length > 0) {
     try {
-      const saved = await saveToLibrary(mediaAt.map((i) => before[i]));
-      if (saved.length === mediaAt.length) {
-        mediaAt.forEach((at, k) => {
-          after[at] = saved[k];
+      const saved = await saveToLibrary(
+        plan.library.map((e) => e.path),
+        plan.library.map((e) => e.album),
+      );
+      if (saved.length === plan.library.length) {
+        plan.library.forEach((e, k) => {
+          after[e.index] = saved[k];
         });
       }
     } catch {
@@ -241,14 +425,21 @@ export async function relocateReceivedFiles(
     }
   }
 
-  // Step 2: the chosen folder, for every path that is still the original.
-  const stillAt = before.flatMap((p, i) => (after[i] === p ? [i] : []));
+  // Step 2: the chosen folder, for each planned file that is still at its
+  // original path. A media file that the library did not take keeps its
+  // folder structure: each library entry has its own subdir.
+  const stillAt = [...plan.library, ...plan.folder]
+    .filter((e) => after[e.index] === before[e.index])
+    .sort((a, b) => a.index - b.index);
   if (stillAt.length > 0) {
     try {
-      const moved = await moveReceivedFiles(stillAt.map((i) => after[i]));
+      const moved = await moveReceivedFiles(
+        stillAt.map((e) => before[e.index]),
+        stillAt.map((e) => e.subdir),
+      );
       if (moved.length === stillAt.length) {
-        stillAt.forEach((at, k) => {
-          after[at] = moved[k];
+        stillAt.forEach((e, k) => {
+          after[e.index] = moved[k];
         });
       }
     } catch {
@@ -290,5 +481,40 @@ export async function fileSizes(paths: string[]): Promise<(number | null)[]> {
     return await NativeDaakFsPaths.fileSizes(paths);
   } catch {
     return paths.map(() => null);
+  }
+}
+
+/**
+ * The file count and total bytes of a folder tree. Resolves `null` when the
+ * native call rejects or is absent, so the review sheet shows a name and no
+ * total instead of an error.
+ */
+export async function folderStats(path: string): Promise<{ files: number; bytes: number } | null> {
+  try {
+    return (await NativeDaakFsPaths.folderStats?.(path)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete the private copy that `pickFolder` made. Never rejects: it is cleanup
+ * and runs from a handler that must not die. A copy that stays is removed by
+ * `sweepPickedCopies` at the next start.
+ */
+export async function discardPickedCopy(path: string): Promise<void> {
+  try {
+    await NativeDaakFsPaths.discardPickedCopy?.(path);
+  } catch {
+    // The sweep at the next start removes the copy.
+  }
+}
+
+/** Delete every private copy that an earlier run left. Never rejects. */
+export async function sweepPickedCopies(): Promise<void> {
+  try {
+    await NativeDaakFsPaths.sweepPickedCopies?.();
+  } catch {
+    // Nothing to do. The next start tries again.
   }
 }

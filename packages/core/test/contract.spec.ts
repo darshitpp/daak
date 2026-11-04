@@ -548,6 +548,34 @@ describe('InProcessEngine', () => {
     expect(got.items[0].textTruncated).toBe(true);
   });
 
+  it('passes the folder group through unchanged', async () => {
+    const page = {
+      items: [
+        {
+          transferId: '00'.repeat(16), itemIndex: 1, direction: 'in', type: 'file',
+          name: 'mid.bin', size: 10, text: null, state: 'done', destPath: null,
+          at: 1, transferState: 'done', error: null,
+          group: { name: 'album', rel: 'sub/mid.bin', files: 2, bytes: 30 },
+        },
+        {
+          transferId: '00'.repeat(16), itemIndex: 2, direction: 'in', type: 'file',
+          name: 'a.bin', size: 1, text: null, state: 'done', destPath: null,
+          at: 1, transferState: 'done', error: null, group: null,
+        },
+      ],
+      olderCursor: null,
+    };
+    const engine = new InProcessEngine(
+      fakeNative({ listThread: async () => JSON.stringify(page) }),
+      () => () => {},
+    );
+    const got = await engine.listThread('00'.repeat(16));
+    expect(got.items[0].group?.name).toBe('album');
+    expect(got.items[0].group?.rel).toBe('sub/mid.bin');
+    expect(got.items[0].group?.files).toBe(2);
+    expect(got.items[1].group).toBeNull();
+  });
+
   it('getItemText returns the text that the native module returns, whole and unparsed', async () => {
     const text = 'é"\\\n'.repeat(1000); // quotes, a backslash and a newline survive
     const calls: Array<[string, number]> = [];
@@ -590,6 +618,31 @@ describe('InProcessEngine', () => {
     );
     const [row] = await engine.listInbox();
     expect(row.savedPaths).toBeNull();
+  });
+
+  it('parses groupRoots as a string array', async () => {
+    const engine = new InProcessEngine(
+      fakeNative({
+        listInbox: async () =>
+          JSON.stringify([
+            {
+              payloadId: 'aa'.repeat(16),
+              transferId: 'aa'.repeat(16),
+              peerDeviceId: 'bb'.repeat(16),
+              kind: 'batch',
+              itemCount: 2,
+              summary: '2 file(s)',
+              receivedAt: 0,
+              savedPaths: ['/out/album/a.txt', '/out/album/b.txt'],
+              groupRoots: ['/out/album'],
+            },
+          ]),
+      }),
+      () => () => {},
+    );
+    const [row] = await engine.listInbox();
+    const roots: string[] = row.groupRoots ?? [];
+    expect(roots).toEqual(['/out/album']);
   });
 
   it('rejects a list payload that is not an array instead of returning it typed', async () => {

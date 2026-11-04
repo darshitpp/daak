@@ -33,6 +33,18 @@ export interface Spec extends TurboModule {
    */
   fileSizes(paths: string[]): Promise<(number | null)[]>;
   /**
+   * The file count and total bytes of a folder tree. Symlinks are skipped.
+   * Resolves `null` when the path is not a readable folder.
+   *
+   * This method and the next two are required. iOS, Android, and macOS
+   * implement all three.
+   */
+  folderStats(path: string): Promise<{ files: number; bytes: number } | null>;
+  /** Delete the private copy that `pickFolder` made. A no-op on macOS. */
+  discardPickedCopy(path: string): Promise<void>;
+  /** Delete every private copy that an earlier run left. A no-op on macOS. */
+  sweepPickedCopies(): Promise<void>;
+  /**
    * R42p: ask the OS for a folder to keep received files in, and REMEMBER it.
    * Resolves the folder's display name, or `null` when the user cancelled.
    */
@@ -48,16 +60,30 @@ export interface Spec extends TurboModule {
    * With no folder remembered, or when a move fails, the ORIGINAL path comes
    * back for that entry: the file is still where the engine put it, and one
    * failure must not lose the location of the others.
+   *
+   * `subdirs[i]` is the folder below the remembered folder for `paths[i]`, for
+   * example `album/sub`. `''` is the top of the folder. The array has one entry
+   * for each path. A file that is already in the save folder answers its own
+   * path and does not move. A file in the engine output folder still moves
+   * when that folder is below the save folder. After the move, the empty folders that the engine
+   * made below its output directory are removed.
+   * The first name is the root. A root gets a free name (`album-1`), but a
+   * subdir that starts with `/` names a root that the native move uses as is.
    */
-  moveReceivedFiles(paths: string[]): Promise<string[]>;
+  moveReceivedFiles(paths: string[], subdirs: string[]): Promise<string[]>;
   /**
    * Add each image or video to the OS media library, answering one string per
    * input, in order. A saved file answers a MARKER (`photos:<id>` on iOS, a
    * `content://` URI on Android) and the engine copy is deleted. A file that
    * was not saved answers its ORIGINAL path: no permission, an unsupported
    * type, an API level below 29, or any failure. It never rejects.
+   *
+   * `albums[i]` is the album for `paths[i]`, for example `album / sub`. `''` is
+   * no album. The array has one entry for each path. iOS makes a new Photos
+   * album with that title for each call. Add-only access cannot look up albums. Android uses `Pictures/Daak/album/sub` (or
+   * `Movies/Daak/...`). macOS ignores it.
    */
-  saveToLibrary(paths: string[]): Promise<string[]>;
+  saveToLibrary(paths: string[], albums: string[]): Promise<string[]>;
   /**
    * Ask for add-only access to the photo library. `true` when access is
    * granted. Android needs no permission and answers `true`. macOS has no

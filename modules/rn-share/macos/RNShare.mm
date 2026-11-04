@@ -178,6 +178,9 @@ RCT_EXPORT_METHOD(pickDocuments : (BOOL)multiple resolve : (RCTPromiseResolveBlo
 
   NSOpenPanel *panel = [NSOpenPanel openPanel];
   panel.allowsMultipleSelection = multiple;
+  // The user can pick a folder as well as files. NSURL.path gives the folder's
+  // path, and the engine sends the whole tree.
+  panel.canChooseDirectories = YES;
   // A REPLACING panel: the previous one is held so it is not deallocated under
   // the sheet, and replaced by the next pick, exactly like _picker above.
   _panel = panel;

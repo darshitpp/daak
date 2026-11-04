@@ -23,7 +23,7 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
@@ -56,6 +56,14 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   initialShareToken?: number;
   onShareSend?: (device: DeviceInfo, share: { files: string[]; text?: string }) => Promise<{ cancel: () => Promise<void> } | void>;
   onCancelShare?: () => void;
+  /** The phone folder picker. It resolves the path of a copy, or null on Cancel. */
+  onPickFolder?: () => Promise<string | null>;
+  /** The file count and the size of a folder. Null for a path that is not a folder. */
+  folderStats?: (path: string) => Promise<{ files: number; bytes: number } | null>;
+  /** Deletes a copy that `onPickFolder` made. */
+  discardPickedCopy?: (path: string) => Promise<void>;
+  /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
+  pickLabel?: string;
 }) {
   void state;
   return (
@@ -65,6 +73,10 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           layout="desktop"
           initialPeerDeviceId={peerDeviceId}
           onPickFiles={onPickFiles}
+          onPickFolder={onPickFolder}
+          folderStats={folderStats}
+          discardPickedCopy={discardPickedCopy}
+          pickLabel={pickLabel}
           inboxActions={inboxActions}
           pair={pair}
           alert={alert}

@@ -263,6 +263,7 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
         summary: "meet at 6".into(),
         received_at: 1_700_000_000,
         saved_paths: "[]".into(),
+        group_roots: Vec::new(),
     };
     let mapped = to_ffi_event(EngineEvent::InboxReceived(row));
     let FfiEvent::InboxReceived { data } = mapped else {
@@ -280,6 +281,7 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
             summary: "meet at 6".into(),
             received_at: 1_700_000_000,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         }),
         "the event payload must be the SAME InboxEntry the list endpoint returns"
     );
@@ -301,6 +303,7 @@ fn an_unparsable_saved_paths_is_null_in_the_event_payload_never_an_empty_list() 
         summary: String::new(),
         received_at: 0,
         saved_paths: "{not json".into(),
+        group_roots: Vec::new(),
     };
     let FfiEvent::InboxReceived { data } = to_ffi_event(EngineEvent::InboxReceived(row.clone()))
     else {
@@ -709,4 +712,31 @@ fn write_shared_fixture() {
     let text = serde_json::to_string_pretty(&serde_json::Value::Object(out)).unwrap();
     std::fs::write(fixture_path(), &text).unwrap();
     println!("{text}");
+}
+
+// The inbox entry names the folder roots, so the mobile move step keeps the
+// folder structure.
+#[test]
+fn the_inbox_entry_carries_the_group_roots() {
+    let row = daak_core::store::inbox::InboxRow {
+        id: [1u8; 16],
+        transfer_id: [1u8; 16],
+        peer_device_id: [2u8; 16],
+        kind: "batch".into(),
+        item_count: 1,
+        summary: "1 file(s)".into(),
+        received_at: 0,
+        saved_paths: "[]".into(),
+        group_roots: vec!["/out/album".into()],
+    };
+    let FfiEvent::InboxReceived { data } = to_ffi_event(EngineEvent::InboxReceived(row.clone()))
+    else {
+        panic!("expected an inbox event");
+    };
+    let json: serde_json::Value = serde_json::from_str(&data.payload_json).unwrap();
+    assert_eq!(json["groupRoots"], serde_json::json!(["/out/album"]));
+    assert_eq!(
+        daak_ffi::inbox_entry_json(&row)["groupRoots"],
+        serde_json::json!(["/out/album"])
+    );
 }

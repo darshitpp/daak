@@ -140,15 +140,29 @@ fn a_directory_becomes_one_item_per_file_with_relative_paths() {
         assert!(item.chunk_count.is_some(), "item {i} has no chunk_count");
     }
     let paths: Vec<String> = items.iter().map(rel_path).collect();
-    assert!(paths.contains(&"top.txt".to_string()), "got {paths:?}");
-    assert!(paths.contains(&"sub/mid.bin".to_string()), "got {paths:?}");
+    // Every path starts with the picked folder name, and every item names its
+    // group.
     assert!(
-        paths.contains(&"sub/nested/deep.txt".to_string()),
+        paths.contains(&"album/top.txt".to_string()),
         "got {paths:?}"
     );
-    // Names are unique within the share: staging is a flat namespace keyed by
-    // name, so two "index.html" in different folders would otherwise stage
-    // onto each other and ship one file's bytes under the other's hash.
+    assert!(
+        paths.contains(&"album/sub/mid.bin".to_string()),
+        "got {paths:?}"
+    );
+    assert!(
+        paths.contains(&"album/sub/nested/deep.txt".to_string()),
+        "got {paths:?}"
+    );
+    for item in &items {
+        assert_eq!(
+            item.attrs.get("group"),
+            Some(&ciborium::value::Value::Text("album".into()))
+        );
+    }
+    // Item names stay unique in one manifest. An old version 100 receiver
+    // refuses a manifest with a duplicate name. Staging uses `item_<index>`,
+    // so staging does not depend on the names.
     let mut names: Vec<&str> = items.iter().map(|i| i.name.as_deref().unwrap()).collect();
     let total = names.len();
     names.sort_unstable();
@@ -179,8 +193,8 @@ fn a_folders_children_account_for_its_bytes() {
 ///
 /// This drives the REAL path end to end: `from_picked_paths` to build, the real
 /// `Staging::stage` to lay down the copies (the same calls `outbox::enqueue`
-/// makes), `staging.staged_path` to address them (the same lookup the outbox
-/// drain does), and the real `send_transfer` / `receive_transfer`. The previous
+/// makes), `staging.staged_path` to address them (the path the outbox drain
+/// finds first), and the real `send_transfer` / `receive_transfer`. The previous
 /// version hand-copied into a flat tempdir with `std::fs::copy`, which proved
 /// nothing about the enqueue->staging->drain path it claimed to cover.
 #[tokio::test]
@@ -198,14 +212,15 @@ async fn a_folder_share_roundtrips_as_a_tree() {
     .unwrap();
 
     // The real staging root, addressed exactly as outbox::enqueue and the
-    // outbox drain address it: root / <hex payload_id> / <manifest name>.
+    // outbox drain address it: root / <hex payload_id> / item_<index>.
     let stage = tempfile::tempdir().unwrap();
     let staging = Staging::new(stage.path().to_path_buf());
     let mut paths: Vec<Option<PathBuf>> = Vec::new();
     for (item, src_path) in manifest.items.iter().zip(&sources) {
-        let name = item.name.as_deref().unwrap();
-        staging.stage(&manifest.payload_id, src_path, name).unwrap();
-        paths.push(Some(staging.staged_path(&manifest.payload_id, name)));
+        staging
+            .stage(&manifest.payload_id, src_path, item.index)
+            .unwrap();
+        paths.push(Some(staging.staged_path(&manifest.payload_id, item.index)));
     }
 
     let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
@@ -223,10 +238,11 @@ async fn a_folder_share_roundtrips_as_a_tree() {
         .unwrap();
     sender.await.unwrap();
 
-    // Every source file, byte for byte, at its place in the tree.
+    // Every source file, byte for byte, at its place in the tree. The tree sits
+    // inside a folder with the name of the picked folder.
     for f in walk(&root) {
         let rel = f.strip_prefix(&root).unwrap();
-        let landed = dst.path().join(rel);
+        let landed = dst.path().join("album").join(rel);
         assert!(
             landed.exists(),
             "a folder child did not land: {}",
@@ -239,6 +255,66 @@ async fn a_folder_share_roundtrips_as_a_tree() {
         walk(&root).len(),
         "the receiver must get the same file count"
     );
+}
+
+/// Two files whose names differ only in case, in two subfolders. On a
+/// case-insensitive host the second stage used to write its bytes into the
+/// first SOURCE file through the hard link. Both files must arrive with their
+/// own bytes, and both source files must keep their bytes.
+#[tokio::test]
+async fn two_files_whose_names_differ_only_in_case_both_arrive_intact() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let root = src.path().join("share");
+    std::fs::create_dir_all(root.join("x")).unwrap();
+    std::fs::create_dir_all(root.join("y")).unwrap();
+    let upper: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+    let lower: Vec<u8> = (0..30_000u32).map(|i| (i % 241) as u8).collect();
+    std::fs::write(root.join("x/A.txt"), &upper).unwrap();
+    std::fs::write(root.join("y/a.txt"), &lower).unwrap();
+
+    let (manifest, sources) = from_picked_paths(
+        sender_ref(),
+        std::slice::from_ref(&root),
+        CHUNK_SIZE_DEFAULT,
+    )
+    .unwrap();
+    let stage = tempfile::tempdir().unwrap();
+    let staging = Staging::new(stage.path().to_path_buf());
+    let paths = stage_manifest(&staging, &manifest, &sources);
+    assert_eq!(
+        std::fs::read(root.join("x/A.txt")).unwrap(),
+        upper,
+        "staging must not change the first source file"
+    );
+    assert_eq!(std::fs::read(root.join("y/a.txt")).unwrap(), lower);
+
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let sender = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        send_transfer(&mut conn, &m, &paths, &[], |_| {})
+            .await
+            .unwrap();
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    let received = receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {}).await;
+    sender.await.unwrap();
+
+    received.expect("the share must not fail with a hash mismatch");
+    assert!(
+        !dst.path().join("quarantine").exists(),
+        "a file was quarantined"
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("share/x/A.txt")).unwrap(),
+        upper
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("share/y/a.txt")).unwrap(),
+        lower
+    );
+    assert_eq!(std::fs::read(root.join("x/A.txt")).unwrap(), upper);
 }
 
 /// A symlink pointing outside the shared root must not smuggle its target in,
@@ -257,7 +333,7 @@ fn a_symlink_out_of_the_shared_root_is_not_followed() {
 
     let items = Item::from_folder(0, &root, CHUNK_SIZE_DEFAULT).unwrap();
     let paths: Vec<String> = items.iter().map(rel_path).collect();
-    assert_eq!(paths, vec!["ok.txt".to_string()], "got {paths:?}");
+    assert_eq!(paths, vec!["album/ok.txt".to_string()], "got {paths:?}");
 }
 
 /// An empty directory is a legitimate share: zero items, not an error, and
@@ -368,17 +444,14 @@ fn same_named_files_in_different_folders_stay_separate_in_staging() {
     let staging = Staging::new(dir.path().join("staging"));
     for (item, src) in manifest.items.iter().zip(&sources) {
         staging
-            .stage(&manifest.payload_id, src, item.name.as_deref().unwrap())
+            .stage(&manifest.payload_id, src, item.index)
             .unwrap();
     }
     let landed: Vec<String> = manifest
         .items
         .iter()
         .map(|i| {
-            std::fs::read_to_string(
-                staging.staged_path(&manifest.payload_id, i.name.as_deref().unwrap()),
-            )
-            .unwrap()
+            std::fs::read_to_string(staging.staged_path(&manifest.payload_id, i.index)).unwrap()
         })
         .collect();
     assert!(landed.contains(&"from a".to_string()), "got {landed:?}");
@@ -413,16 +486,16 @@ fn a_folder_share_never_puts_an_absolute_path_on_the_wire() {
     for item in &manifest.items {
         let rel = rel_path(item);
         assert!(
-            !rel.starts_with('/') && !rel.contains("album"),
-            "attrs[path] must be relative to the share root, got: {rel}"
+            !rel.starts_with('/') && rel.starts_with("album/"),
+            "attrs[path] must be relative and start with the folder name, got: {rel}"
         );
     }
 }
 
-/// F2: the used-name set is per-from_folder, so two picked folders each
-/// holding notes.txt collide. Staging is flat per payload, so that hard-links
-/// one item's staged file over another and the sender streams wrong bytes
-/// against the wrong hash. Uniqueness must be per MANIFEST.
+/// F2: two picked folders that each hold notes.txt give two items. Item
+/// names stay unique in one MANIFEST, because an old version 100 receiver
+/// refuses a duplicate name. Staging uses `item_<index>`, so staging does
+/// not depend on the names.
 #[test]
 fn two_folders_with_the_same_basename_produce_unique_manifest_names() {
     let dir = tempfile::tempdir().unwrap();
@@ -457,37 +530,36 @@ fn two_folders_with_the_same_basename_produce_unique_manifest_names() {
     let staging = Staging::new(dir.path().join("staging"));
     for (item, src) in manifest.items.iter().zip(&sources) {
         staging
-            .stage(&manifest.payload_id, src, item.name.as_deref().unwrap())
+            .stage(&manifest.payload_id, src, item.index)
             .unwrap();
     }
-    let staged: Vec<(String, String)> = manifest
+    let staged: Vec<(u32, String, String)> = manifest
         .items
         .iter()
         .map(|i| {
             (
+                i.index,
                 i.name.clone().unwrap(),
-                std::fs::read_to_string(
-                    staging.staged_path(&manifest.payload_id, i.name.as_deref().unwrap()),
-                )
-                .unwrap(),
+                std::fs::read_to_string(staging.staged_path(&manifest.payload_id, i.index))
+                    .unwrap(),
             )
         })
         .collect();
     assert_eq!(staged.len(), 4);
     // Both folders' notes.txt must still be present and DISTINCT on disk --
     // same bytes, so only the count can tell them apart, which is the point.
-    let notes: Vec<&(String, String)> = staged
+    let notes: Vec<&(u32, String, String)> = staged
         .iter()
-        .filter(|(n, _)| n.starts_with("notes"))
+        .filter(|(_, n, _)| n.starts_with("notes"))
         .collect();
     assert_eq!(
         notes.len(),
         2,
         "both notes.txt must be staged, got {staged:?}"
     );
-    for (name, _) in &notes {
+    for (index, name, _) in &notes {
         assert!(
-            staging.staged_path(&manifest.payload_id, name).exists(),
+            staging.staged_path(&manifest.payload_id, *index).exists(),
             "staged copy missing for {name}"
         );
     }
@@ -551,7 +623,11 @@ fn sources_stay_aligned_with_item_indices() {
             "item {i} hash does not match its own source"
         );
         if sources[i].starts_with(&root) {
-            assert_eq!(sources[i], root.join(rel_path(item)), "item {i} path");
+            assert_eq!(
+                sources[i],
+                root.parent().unwrap().join(rel_path(item)),
+                "item {i} path"
+            );
         }
     }
 }
@@ -616,11 +692,14 @@ fn stage_manifest(
         .items
         .iter()
         .map(|item| {
-            let name = item.name.as_deref().unwrap();
             staging
-                .stage(&manifest.payload_id, &sources[item.index as usize], name)
+                .stage(
+                    &manifest.payload_id,
+                    &sources[item.index as usize],
+                    item.index,
+                )
                 .unwrap();
-            Some(staging.staged_path(&manifest.payload_id, name))
+            Some(staging.staged_path(&manifest.payload_id, item.index))
         })
         .collect()
 }
@@ -657,7 +736,7 @@ async fn a_folder_share_resumes_mid_folder_through_the_real_receiver() {
     let nested_index = manifest
         .items
         .iter()
-        .position(|i| rel_path(i) == "sub/nested/deep.bin")
+        .position(|i| rel_path(i) == "album/sub/nested/deep.bin")
         .expect("the nested item must be in the manifest");
     let nested_bytes = std::fs::read(paths[nested_index].as_ref().unwrap()).unwrap();
     let dropper = tokio::spawn(async move {
@@ -697,7 +776,7 @@ async fn a_folder_share_resumes_mid_folder_through_the_real_receiver() {
         "a mid-folder drop must be an interrupt, got {first:?}"
     );
 
-    let deep = dst.path().join("sub/nested/deep.bin");
+    let deep = dst.path().join("album/sub/nested/deep.bin");
     assert!(
         deep.exists(),
         "the nested destination must exist after the first pass"
@@ -768,7 +847,7 @@ async fn a_folder_share_resumes_mid_folder_through_the_real_receiver() {
 
     assert_eq!(std::fs::read(&deep).unwrap(), nested);
     assert_eq!(
-        std::fs::read(dst.path().join("top.txt")).unwrap(),
+        std::fs::read(dst.path().join("album/top.txt")).unwrap(),
         b"top level"
     );
 }
@@ -804,11 +883,14 @@ async fn a_mixed_text_and_folder_share_is_received_end_to_end() {
             if !item.is_binary() {
                 return None;
             }
-            let name = item.name.as_deref().unwrap();
             staging
-                .stage(&manifest.payload_id, &sources[item.index as usize], name)
+                .stage(
+                    &manifest.payload_id,
+                    &sources[item.index as usize],
+                    item.index,
+                )
                 .unwrap();
-            Some(staging.staged_path(&manifest.payload_id, name))
+            Some(staging.staged_path(&manifest.payload_id, item.index))
         })
         .collect();
 
@@ -833,11 +915,12 @@ async fn a_mixed_text_and_folder_share_is_received_end_to_end() {
         .find(|i| !i.is_binary())
         .expect("the text item must survive the round trip");
     assert_eq!(text.text.as_deref(), Some("here is my note"));
-    // And the folder landed as a tree, with the loose file beside it.
+    // And the folder landed as a tree inside `album/`, with the loose file
+    // beside it.
     for f in walk(&root) {
         let rel = f.strip_prefix(&root).unwrap();
         assert_eq!(
-            std::fs::read(dst.path().join(rel)).unwrap(),
+            std::fs::read(dst.path().join("album").join(rel)).unwrap(),
             std::fs::read(&f).unwrap(),
             "folder child {}",
             rel.display()
@@ -850,24 +933,12 @@ async fn a_mixed_text_and_folder_share_is_received_end_to_end() {
 /// a folder `album/` that also contains a TOP-LEVEL `x.bin` -- what the iOS
 /// share sheet produces when a user picks a folder plus a file from inside it.
 ///
-/// The two items got distinct MANIFEST names (`x.bin` and `x.bin~1`), so
-/// staging held two files and the sender streamed both correctly -- but names
-/// are not destinations. The loose item carries no attrs["path"] and resolved
-/// to out_dir/x.bin, while the folder child carries attrs["path"] == "x.bin"
-/// and ALSO resolves to out_dir/x.bin. The receiver opened ONE file with
-/// truncate(false) for both
-/// and interleaved their chunks: BLAKE2b on item 0 failed, the whole transfer
-/// errored, and the file was quarantined with no explanation. A hard failure on
-/// an entirely ordinary mixed share.
-///
-/// The fix is in the BUILDER, because that is where the collision is created:
-/// from_picked_paths now deduplicates the folder child's attrs["path"] against
-/// every loose file's destination, so the child goes out as `x.bin~1` and the
-/// two land in different files. The receiver keeps its duplicate-destination
-/// rejection as a backstop against a hand-built or hostile manifest; it must
-/// never fire on a manifest the builder produced, and the socket-free unit test
-/// in manifest.rs (a_loose_file_naming_a_folder_child_gets_a_distinct_destination)
-/// is what pins that. This file just proves the bytes land.
+/// Before the group name, the loose item resolved to out_dir/x.bin and the
+/// folder child also resolved to out_dir/x.bin. The receiver interleaved their
+/// chunks, and the hash check failed. Now the folder child carries
+/// `album/x.bin`, so the two land in different files. A hand-built or hostile
+/// manifest can still name one destination twice. The receiver then gives the
+/// second item a `-N` suffix. It does not refuse the manifest.
 #[tokio::test]
 async fn a_loose_file_naming_a_folder_child_does_not_collide_on_the_receiver() {
     let src = tempfile::tempdir().unwrap();
@@ -883,14 +954,8 @@ async fn a_loose_file_naming_a_folder_child_does_not_collide_on_the_receiver() {
     let (manifest, sources) =
         from_picked_paths(sender_ref(), &[loose_path, root], CHUNK_SIZE_DEFAULT).unwrap();
     assert_eq!(manifest.items.len(), 2);
-    // The premise: the two items claim one destination through the two
-    // DIFFERENT resolution paths. Without this the test proves nothing.
     assert!(!manifest.items[0].attrs.contains_key("path"));
-    // The FOLDER child yields, because from_picked_paths seeds the destination
-    // set with every loose file up front, so the outcome does not depend on
-    // pick order: the loose file always keeps the bare `x.bin` and the child is
-    // suffixed on its way out.
-    assert_eq!(rel_path(&manifest.items[1]), "x.bin~1");
+    assert_eq!(rel_path(&manifest.items[1]), "album/x.bin");
     assert_ne!(manifest.items[0].name, manifest.items[1].name);
 
     let stage = tempfile::tempdir().unwrap();
@@ -911,30 +976,20 @@ async fn a_loose_file_naming_a_folder_child_does_not_collide_on_the_receiver() {
 
     let received = received.expect("the share must not fail with a hash mismatch");
     assert_eq!(received.items.len(), 2);
-    // Nothing quarantined, and both bytes intact at the two DISTINCT places the
-    // rules put them: the loose file flat, the folder child under its path.
     assert!(
         !dst.path().join("quarantine").exists(),
         "a file was quarantined"
     );
     assert_eq!(std::fs::read(dst.path().join("x.bin")).unwrap(), loose);
-    // FLAT under the share root, exactly as `a_folder_share_roundtrips_as_a_tree`
-    // already pins: attrs["path"] is relative to the picked ROOT, so picking
-    // `album/` does not recreate an `album/` level on the receiver -- the share
-    // root IS out_dir. The picked folder's own basename is not preserved as a
-    // directory. See the folder-tree note in the B1 ledger entry.
     assert_eq!(
-        std::fs::read(dst.path().join("x.bin~1")).unwrap(),
+        std::fs::read(dst.path().join("album/x.bin")).unwrap(),
         in_folder,
-        "the folder child must land at its (deduplicated) attrs path"
+        "the folder child must land inside its own folder"
     );
 }
 
 /// The same share picked the other way round: the folder first, the loose file
-/// second. The builder seeds its destination set with the loose files, so the
-/// FOLDER yields the name in both orders and the receiver ends up with the same
-/// two files either way -- a picker that reorders the user's selection must not
-/// decide whether their share works.
+/// second. The two files land in the same two places in both orders.
 #[tokio::test]
 async fn the_folder_first_order_also_delivers_both_files() {
     let src = tempfile::tempdir().unwrap();
@@ -950,7 +1005,7 @@ async fn the_folder_first_order_also_delivers_both_files() {
     let (manifest, sources) =
         from_picked_paths(sender_ref(), &[root, loose_path], CHUNK_SIZE_DEFAULT).unwrap();
     assert_eq!(manifest.items.len(), 2);
-    assert_eq!(rel_path(&manifest.items[0]), "x.bin~1");
+    assert_eq!(rel_path(&manifest.items[0]), "album/x.bin");
     assert!(!manifest.items[1].attrs.contains_key("path"));
 
     let stage = tempfile::tempdir().unwrap();
@@ -977,8 +1032,206 @@ async fn the_folder_first_order_also_delivers_both_files() {
     );
     assert_eq!(std::fs::read(dst.path().join("x.bin")).unwrap(), loose);
     assert_eq!(
-        std::fs::read(dst.path().join("x.bin~1")).unwrap(),
+        std::fs::read(dst.path().join("album/x.bin")).unwrap(),
         in_folder,
-        "the folder child must land under its (deduplicated) attrs path"
+        "the folder child must land inside its own folder"
     );
+}
+
+/// The round trip of the new shape: a received folder lands inside a folder
+/// that has the name of the picked folder, at every depth.
+#[tokio::test]
+async fn a_received_folder_lands_inside_its_own_folder() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let root = src.path().join("album");
+    make_tree(&root);
+
+    let (manifest, sources) = from_picked_paths(
+        sender_ref(),
+        std::slice::from_ref(&root),
+        CHUNK_SIZE_DEFAULT,
+    )
+    .unwrap();
+    let stage = tempfile::tempdir().unwrap();
+    let staging = Staging::new(stage.path().to_path_buf());
+    let paths = stage_manifest(&staging, &manifest, &sources);
+
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let sender = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        send_transfer(&mut conn, &m, &paths, &[], |_| {})
+            .await
+            .unwrap();
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
+        .await
+        .unwrap();
+    sender.await.unwrap();
+
+    let out = dst.path().join("album");
+    assert_eq!(std::fs::read(out.join("top.txt")).unwrap(), b"top level");
+    assert_eq!(
+        std::fs::read(out.join("sub/mid.bin")).unwrap(),
+        vec![1u8; 70_000]
+    );
+    assert_eq!(
+        std::fs::read(out.join("sub/nested/deep.txt")).unwrap(),
+        b"deep"
+    );
+    assert_eq!(walk(dst.path()).len(), 3, "nothing lands outside album/");
+}
+
+/// An old sender sends no `attrs["group"]`. The receiver must still land each
+/// file at its path.
+#[tokio::test]
+async fn a_manifest_without_group_still_lands_by_path() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let a = src.path().join("a.txt");
+    let b = src.path().join("b.txt");
+    std::fs::write(&a, b"alpha").unwrap();
+    std::fs::write(&b, b"bravo").unwrap();
+
+    let mut items = Vec::new();
+    for (index, (file, path)) in [(&a, "old/a.txt"), (&b, "old/sub/b.txt")]
+        .into_iter()
+        .enumerate()
+    {
+        let mut item = Item::from_file(index as u32, file, CHUNK_SIZE_DEFAULT).unwrap();
+        item.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text(path.to_string()),
+        );
+        items.push(item);
+    }
+    let manifest = Manifest::batch(sender_ref(), items).unwrap();
+    assert!(manifest
+        .items
+        .iter()
+        .all(|i| !i.attrs.contains_key("group")));
+
+    let paths = vec![Some(a), Some(b)];
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let sender = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        send_transfer(&mut conn, &m, &paths, &[], |_| {})
+            .await
+            .unwrap();
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    receive_transfer(&mut conn, dst.path(), |_| {}, None, |_| {})
+        .await
+        .unwrap();
+    sender.await.unwrap();
+
+    assert_eq!(
+        std::fs::read(dst.path().join("old/a.txt")).unwrap(),
+        b"alpha"
+    );
+    assert_eq!(
+        std::fs::read(dst.path().join("old/sub/b.txt")).unwrap(),
+        b"bravo"
+    );
+}
+
+/// One engine with an in-memory store. The engine announces nothing on the LAN.
+async fn engine(
+    name: &str,
+    out: PathBuf,
+) -> (
+    std::sync::Arc<daak_core::engine::Engine>,
+    std::sync::Arc<daak_core::store::Db>,
+) {
+    std::env::set_var("DAAK_MDNS_OFF_LAN", "1");
+    let store = daak_core::crypto::secret_store::MemorySecretStore::default();
+    let identity = daak_core::crypto::identity::import_from_store(&store).unwrap();
+    let db = std::sync::Arc::new(daak_core::store::Db::open_in_memory().unwrap());
+    db.migrate().unwrap();
+    let e = daak_core::engine::Engine::start(daak_core::engine::EngineConfig {
+        display_name: name.into(),
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+        out_dir: out,
+        identity,
+        db: db.clone(),
+    })
+    .await
+    .unwrap();
+    (std::sync::Arc::new(e), db)
+}
+
+/// Pin: this test passes on the old code.
+/// The first delivery writes the inbox row. A second delivery of the same
+/// payload id is then a duplicate, even with a changed manifest. The
+/// duplicate goes to the discard directory and changes no stored state.
+#[tokio::test]
+async fn a_duplicate_delivery_with_a_changed_manifest_keeps_the_rows_of_the_first_delivery() {
+    use daak_core::manifest::CHUNK_SIZE_MIN;
+    use daak_core::pairing::PairMode;
+
+    let a_out = tempfile::tempdir().unwrap();
+    let b_out = tempfile::tempdir().unwrap();
+    let (a, _) = engine("a", a_out.path().to_path_buf()).await;
+    let (b, b_db) = engine("b", b_out.path().to_path_buf()).await;
+    let b_id = b.pairing_bundle().await.identity.device_id;
+    b.offer_pairing(a.pairing_bundle().await, PairMode::Qr, None)
+        .await
+        .unwrap();
+    let b_srv = b.clone();
+    let server = tokio::spawn(async move { b_srv.accept_pairing_once().await.unwrap() });
+    a.pair_with(b.local_addr(), b.pairing_bundle().await)
+        .await
+        .unwrap();
+    server.await.unwrap();
+    a.note_peer(b_id, "b", b.local_addr()).await;
+
+    let src = tempfile::tempdir().unwrap();
+    let root = src.path().join("album");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.bin"), vec![1u8; 100]).unwrap();
+    std::fs::write(root.join("b.bin"), vec![2u8; 100]).unwrap();
+    let me = DeviceRef {
+        device_id: a.identity().device_id(),
+        name: "a".into(),
+    };
+    let (first, sources) =
+        from_picked_paths(me.clone(), std::slice::from_ref(&root), CHUNK_SIZE_MIN).unwrap();
+    let id = first.payload_id;
+    a.send_secure(b_id, first, sources.into_iter().map(Some).collect())
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !b.list_inbox().unwrap().iter().any(|r| r.id == id) {
+        assert!(tokio::time::Instant::now() < deadline, "no inbox row");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let rows_before = b_db.list_items(&id).unwrap();
+    assert_eq!(rows_before.len(), 2);
+    let manifest_before = b_db.get_transfer(&id).unwrap().unwrap().manifest;
+
+    // A changed b.bin and an extra file, under the same payload id.
+    std::fs::write(root.join("b.bin"), vec![9u8; 100]).unwrap();
+    std::fs::write(root.join("c.bin"), vec![3u8; 100]).unwrap();
+    let (mut second, sources) =
+        from_picked_paths(me, std::slice::from_ref(&root), CHUNK_SIZE_MIN).unwrap();
+    second.payload_id = id;
+    a.send_secure(b_id, second, sources.into_iter().map(Some).collect())
+        .await
+        .unwrap();
+
+    assert_eq!(b_db.list_items(&id).unwrap(), rows_before);
+    assert_eq!(
+        b_db.get_transfer(&id).unwrap().unwrap().manifest,
+        manifest_before
+    );
+    assert_eq!(
+        std::fs::read(b_out.path().join("album/b.bin")).unwrap(),
+        vec![2u8; 100],
+        "the duplicate does not touch the first file"
+    );
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
 }

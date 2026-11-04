@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DaakEngine, TransferSummary } from '@daak/core';
-import { isRunning, newestRunningOut } from './panel-model';
+import { isRunning, newestDone, newestRunningOut, panelFolder, type PanelFolder } from './panel-model';
 
 /** How often the panel reads the transfer while it runs. The engine emits no progress event. */
 export const PANEL_POLL_MS = 700;
@@ -26,6 +26,10 @@ export function usePanelTransfer(engine: DaakEngine) {
   const [send, setSend] = useState<PanelSend | null>(null);
   const [row, setRow] = useState<TransferSummary | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // The newest finished transfer. The recent row reads its folder.
+  const [lastDone, setLastDone] = useState<TransferSummary | null>(null);
+  const [folder, setFolder] = useState<PanelFolder | null>(null);
+  const [recent, setRecent] = useState<PanelFolder | null>(null);
   const sendRef = useRef(send);
   sendRef.current = send;
   const rowRef = useRef(row);
@@ -47,6 +51,7 @@ export function usePanelTransfer(engine: DaakEngine) {
     try {
       const all = await engine.listTransfers();
       if (!mounted.current || generation.current !== started) return;
+      setLastDone(newestDone(all) ?? null);
       const current = sendRef.current;
       if (current === null) {
         const running = newestRunningOut(all);
@@ -91,6 +96,47 @@ export function usePanelTransfer(engine: DaakEngine) {
       if (e.type.startsWith('transfer.') || e.type === 'outbox.queued') void refresh();
     });
   }, [engine, refresh]);
+
+  // The folder of the shown transfer. The item list is the only place that
+  // holds the folder name and the done count. It is read again when the row
+  // changes, so the count follows the poll. A note has no folder.
+  const rowKey = row === null || row.kind === 'text' ? null : row;
+  useEffect(() => {
+    if (rowKey === null) {
+      setFolder(null);
+      return undefined;
+    }
+    let live = true;
+    engine.listThread(rowKey.peerDeviceId).then(
+      (page) => {
+        if (live) setFolder(panelFolder(page.items, rowKey));
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+    // The row object is new on each read. These fields are what changes the folder.
+  }, [engine, rowKey?.transferId, rowKey?.peerDeviceId, rowKey?.state, rowKey?.bytesDone, rowKey?.updatedAt]);
+
+  // The recent row: the folder of the newest finished transfer. A finished
+  // transfer does not change, so its id and time are the key.
+  useEffect(() => {
+    if (lastDone === null || lastDone.kind === 'text') {
+      setRecent(null);
+      return undefined;
+    }
+    let live = true;
+    engine.listThread(lastDone.peerDeviceId).then(
+      (page) => {
+        if (live) setRecent(panelFolder(page.items, lastDone));
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [engine, lastDone?.transferId, lastDone?.updatedAt]);
 
   const polling = send !== null && (row === null || isRunning(row));
   useEffect(() => {
@@ -145,5 +191,5 @@ export function usePanelTransfer(engine: DaakEngine) {
     return null;
   }, [engine, refresh]);
 
-  return { send, row, failure, begin, clear, stop, retry };
+  return { send, row, failure, folder, recent, begin, clear, stop, retry };
 }

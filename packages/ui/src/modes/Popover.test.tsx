@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import type { DaakEngine, DaakEvent, DeviceInfo, QuarantineReport, SendRequest, TransferSummary } from '@daak/core';
 import { Popover } from './Popover';
 import { fakeEngine } from '../testing/fakeEngine';
+import { threadItem, threadPage } from '../testing/threadFixtures';
 import { initialUiState } from '../state/store';
 import { CANT_REACH_TOKEN } from '../state/useBlockers';
 import { RELEASES_URL } from '../screens/about-links';
@@ -482,5 +483,82 @@ describe('the held-back card', () => {
     list.mockResolvedValue([REPORT]);
     emit(engine, { type: 'transfer.item', transferId: REPORT.transferId, itemIndex: 0, state: 'quarantined' });
     expect(await screen.findByText('Held back')).toBeTruthy();
+  });
+});
+
+// Task 12 (design macos.html, popover screen). A folder is one row: the
+// in-progress row `Sending album · 4 of 12` with a progress bar, and the recent
+// row `album · 12 files · 34 MB` with `Saved to Downloads`.
+describe('folder rows', () => {
+  const MB34 = 34 * 1024 * 1024;
+  const folderItems = (transferId: string, direction: 'in' | 'out', done: number) =>
+    Array.from({ length: 12 }, (_, i) =>
+      threadItem({
+        transferId,
+        itemIndex: i,
+        direction,
+        type: 'file',
+        name: `f${i}.jpg`,
+        text: null,
+        size: 1,
+        state: i < done ? 'done' : 'pending',
+        destPath: i < done && direction === 'in' ? `/Users/me/Downloads/album/f${i}.jpg` : null,
+        transferState: done === 12 ? 'done' : 'active',
+        group: { name: 'album', rel: `f${i}.jpg`, files: 12, bytes: MB34 },
+      }),
+    );
+
+  it('shows Sending album · 4 of 12 with a progress bar for a running folder send', async () => {
+    const { engine } = spyEngine([pixel]);
+    jest
+      .spyOn(engine, 'listTransfers')
+      .mockResolvedValue([summary({ kind: 'batch', itemCount: 12, bytesDone: MB34 / 3, bytesTotal: MB34 })]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(TID, 'out', 4)));
+    mount(engine, [pixel]);
+    expect(await screen.findByText('Sending album · 4 of 12')).toBeTruthy();
+    expect(screen.getByText('Sending to Pixel 9')).toBeTruthy();
+    expect(screen.getByText('33%')).toBeTruthy();
+  });
+
+  it('shows the folder line on the done pane of a sent folder', async () => {
+    const { engine } = spyEngine([pixel]);
+    const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([
+      summary({ kind: 'batch', itemCount: 12, bytesDone: 0, bytesTotal: MB34 }),
+    ]);
+    const thread = jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(TID, 'out', 4)));
+    mount(engine, [pixel]);
+    await screen.findByText('Sending album · 4 of 12');
+    list.mockResolvedValue([summary({ kind: 'batch', itemCount: 12, state: 'done', bytesDone: MB34, bytesTotal: MB34 })]);
+    thread.mockResolvedValue(threadPage(folderItems(TID, 'out', 12)));
+    emit(engine, { type: 'transfer.done', transferId: TID });
+    expect(await screen.findByText('Sent to Pixel 9')).toBeTruthy();
+    expect(await screen.findByText('album · 12 files · 34.0 MB')).toBeTruthy();
+  });
+
+  it('shows the newest received folder as a recent row with the save folder', async () => {
+    const { engine } = spyEngine([pixel]);
+    const IN = 'ee'.repeat(16);
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([
+      summary({ transferId: IN, direction: 'in', kind: 'batch', state: 'done', itemCount: 12, bytesTotal: MB34 }),
+    ]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(IN, 'in', 12)));
+    mount(engine, [pixel], { saveFolderName: async () => 'Downloads' });
+    expect(await screen.findByText('album · 12 files · 34.0 MB')).toBeTruthy();
+    expect(await screen.findByText('Saved to Downloads')).toBeTruthy();
+    expect(screen.getByText('Recent transfers')).toBeTruthy();
+    // The device list stays usable under the row.
+    expect(screen.getByLabelText('send-to-' + pixel.deviceId)).toBeTruthy();
+  });
+
+  it('shows no recent row when the newest finished transfer is a loose file', async () => {
+    const { engine } = spyEngine([pixel]);
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary({ direction: 'in', state: 'done' })]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(
+      threadPage([threadItem({ transferId: TID, type: 'file', name: 'a.pdf', text: null })]),
+    );
+    mount(engine, [pixel]);
+    await settle();
+    await settle();
+    expect(screen.queryByText('Recent transfers')).toBeNull();
   });
 });

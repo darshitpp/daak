@@ -746,7 +746,11 @@ describe('fspaths exposes the library methods on the Spec and on every native', 
   const platform = read(repo + 'packages/platform/src/fspaths.ts');
 
   it('declares the three methods on the Spec', () => {
-    expect(spec).toMatch(/saveToLibrary\(paths: string\[\]\): Promise<string\[\]>;/);
+    // Task 11: the second array is required on the bridge. The facade always
+    // sends it, with '' for a loose file, because an Objective-C selector has a
+    // fixed argument list.
+    expect(spec).toMatch(/saveToLibrary\(paths: string\[\], albums: string\[\]\): Promise<string\[\]>;/);
+    expect(spec).toMatch(/moveReceivedFiles\(paths: string\[\], subdirs: string\[\]\): Promise<string\[\]>;/);
     expect(spec).toMatch(/requestPhotosAccess\(\): Promise<boolean>;/);
     expect(spec).toMatch(/photosAccessStatus\(\): Promise</);
   });
@@ -754,15 +758,26 @@ describe('fspaths exposes the library methods on the Spec and on every native', 
   it('implements them in Swift on iOS and macOS and in Kotlin', () => {
     for (const p of ['ios', 'macos']) {
       const swift = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.swift');
-      expect(swift).toMatch(/@objc func saveToLibrary\(_ paths: \[String\]/);
+      expect(swift).toMatch(/@objc func saveToLibrary\(_ paths: \[String\],\s+albums: \[String\],/);
+      expect(swift).toMatch(/@objc func moveReceivedFiles\(_ paths: \[String\],\s+subdirs: \[String\],/);
       expect(swift).toMatch(/@objc func requestPhotosAccess\(/);
       expect(swift).toMatch(/@objc func photosAccessStatus\(/);
       const mm = read(repo + 'modules/rn-fspaths/' + p + '/DaakFsPaths.mm');
-      expect(mm).toMatch(/RCT_EXTERN_METHOD\(saveToLibrary:/);
+      expect(mm).toMatch(
+        /RCT_EXTERN_METHOD\(saveToLibrary:\(NSArray<NSString \*> \*\)paths\s+albums:\(NSArray<NSString \*> \*\)albums\s+resolve:/,
+      );
+      expect(mm).toMatch(
+        /RCT_EXTERN_METHOD\(moveReceivedFiles:\(NSArray<NSString \*> \*\)paths\s+subdirs:\(NSArray<NSString \*> \*\)subdirs\s+resolve:/,
+      );
       expect(mm).toMatch(/RCT_EXTERN_METHOD\(requestPhotosAccess:/);
       expect(mm).toMatch(/RCT_EXTERN_METHOD\(photosAccessStatus:/);
     }
-    expect(kt).toMatch(/override fun saveToLibrary\(paths: ReadableArray, promise: Promise\)/);
+    expect(kt).toMatch(
+      /override fun saveToLibrary\(paths: ReadableArray, albums: ReadableArray, promise: Promise\)/,
+    );
+    expect(kt).toMatch(
+      /override fun moveReceivedFiles\(paths: ReadableArray, subdirs: ReadableArray, promise: Promise\)/,
+    );
     expect(kt).toMatch(/override fun requestPhotosAccess\(promise: Promise\)/);
     expect(kt).toMatch(/override fun photosAccessStatus\(promise: Promise\)/);
   });
@@ -771,6 +786,95 @@ describe('fspaths exposes the library methods on the Spec and on every native', 
     expect(platform).toMatch(/export async function saveToLibrary\(/);
     expect(platform).toMatch(/export async function requestPhotosAccess\(/);
     expect(platform).toMatch(/export async function photosAccessStatus\(/);
+  });
+
+  it('always sends one parallel entry for each path from the facade', () => {
+    expect(platform).not.toContain('ParallelCall');
+    expect(platform).not.toContain('withExtra');
+    expect(platform).toMatch(/NativeDaakFsPaths\.moveReceivedFiles\(paths, parallel\(paths, subdirs\)\)/);
+    expect(platform).toMatch(/NativeDaakFsPaths\.saveToLibrary\(paths, parallel\(paths, albums\)\)/);
+  });
+});
+
+// Task 11: a received folder keeps its structure in the library and in the save
+// folder. No native test target exists, so these pins hold the parts that fail
+// in silence.
+describe('native save and move keep the folder structure', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+  const kt = strip(
+    read(repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt'),
+  );
+  const ios = strip(read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift'));
+  const mac = strip(read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift'));
+  const from = (src: string, name: string) => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    return src.slice(at);
+  };
+
+  it('puts an Android album below Pictures/Daak or Movies/Daak as a real nested path', () => {
+    const fn = from(kt, 'private fun saveOne(');
+    // JavaScript sends the album as `album / sub`. Android needs `album/sub`.
+    expect(kt).toContain('.split(" / ")');
+    expect(fn).toMatch(/RELATIVE_PATH, if \(dirs\.isEmpty\(\)\) "\$folder\/Daak" else "\$folder\/Daak\/\$dirs"\)/);
+  });
+
+  it('finds or creates each SAF directory of the subdir before the Android move', () => {
+    const fn = from(kt, 'private fun safDir(');
+    expect(fn).toContain('DocumentsContract.Document.MIME_TYPE_DIR');
+    expect(fn).toContain('buildChildDocumentsUriUsingTree');
+    expect(fn.indexOf('buildChildDocumentsUriUsingTree')).toBeLessThan(fn.indexOf('MIME_TYPE_DIR'));
+  });
+
+  it('refuses a subdir part that is empty, a dot, or two dots on every platform', () => {
+    expect(kt).toMatch(/it\.isNotEmpty\(\) && it != "\." && it != "\.\."/);
+    for (const swift of [ios, mac]) {
+      expect(swift).toMatch(/!\$0\.isEmpty && \$0 != "\." && \$0 != "\.\."/);
+    }
+  });
+
+  it('removes only the empty directories below the engine output directory', () => {
+    for (const src of [kt, ios, mac]) {
+      expect(src).toMatch(/func? pruneEmptyDirs\(/);
+    }
+    expect(from(kt, 'private fun pruneEmptyDirs(')).toMatch(/list\(\)\?\.isEmpty\(\) != true\) break/);
+    for (const swift of [ios, mac]) {
+      const rest = from(swift, 'func pruneEmptyDirs(');
+      const fn = rest.slice(0, rest.indexOf('\n  }\n'));
+      expect(fn).toContain('contentsOfDirectory(atPath:');
+      expect(fn).toMatch(/\.isEmpty else \{ break \}/);
+      // Review fix: removeItem deletes a folder and its files. rmdir(2) fails on
+      // a folder that is not empty, so a file that arrives after the check stays.
+      expect(fn).toMatch(/rmdir\(at\) == 0 else \{ break \}/);
+      expect(fn).not.toContain('removeItem');
+    }
+  });
+
+  it('answers the input path for a file that is already in its place on iOS and macOS', () => {
+    for (const swift of [ios, mac]) {
+      const fn = from(swift, 'func moveReceivedFiles(');
+      expect(fn).not.toContain('samePath');
+      // A file inside the save folder answers its own path. A file in the engine
+      // output folder still moves, unless the save folder is that folder or below it.
+      expect(fn).toMatch(/if srcAt\.hasPrefix\(folderAt\) && \(!srcAt\.hasPrefix\(outAt\) \|\| folderAt\.hasPrefix\(outAt\)\) \{\s*out\.append\(path\)\s*continue/);
+    }
+  });
+
+  // User decision (Task 11): keep add-only access. Add-only access cannot read
+  // albums, so each call makes a new album and adds its assets in the same
+  // change block. A second call with the same title makes a second album.
+  it('makes a new album and adds its assets in one change block on iOS, with add-only access', () => {
+    const save = ios.slice(ios.indexOf('func saveToLibrary('), ios.indexOf('func requestPhotosAccess('));
+    expect(save).toContain('creationRequestForAssetCollection(withTitle:');
+    expect(save).toContain('placeholderForCreatedAsset');
+    expect(save).toMatch(/addAssets\(placeholders as NSArray\)/);
+    expect(save).not.toContain('fetchAssetCollections');
+    expect(save).not.toContain('.readWrite');
+    expect(ios).not.toContain('fetchAssetCollections');
   });
 });
 
@@ -832,8 +936,14 @@ describe('iOS saves to the Photos library with add-only access', () => {
     const start = ios.indexOf('func addToLibrary(');
     const fn = ios.slice(start, ios.indexOf('\n  }\n', start));
     expect(fn).not.toContain('try? FileManager.default.removeItem');
-    expect(fn).toMatch(/do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{\s*NSLog\("Daak: the saved photo's source file was not removed: \\\(error\)"\)/);
+    expect(fn).toMatch(/do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{\s*NSLog\("Daak: the saved photo's source file was not removed \(\\\(\(error as NSError\)\.domain\) \\\(\(error as NSError\)\.code\)\)"\)/);
+    expect(fn).not.toContain('\\(error)');
     expect(fn).toContain('return "photos:" + identifier');
+  });
+
+  it('says in a comment that a second call makes a second album with the same name', () => {
+    const save = ios.slice(ios.indexOf('func saveToLibrary('), ios.indexOf('func requestPhotosAccess('));
+    expect(save).toMatch(/second album with the same name/);
   });
 
   it('declares the add-only usage description', () => {
@@ -866,7 +976,8 @@ describe('Android saves to MediaStore without a permission', () => {
     const fn = kt.slice(kt.indexOf('private fun saveOne('));
     const del = fn.indexOf('if (!src.delete())');
     expect(del).toBeGreaterThan(fn.indexOf('IS_PENDING, 0'));
-    expect(fn).toContain('android.util.Log.w("DaakFsPaths", "saved item but could not delete source: ${src.name}")');
+    expect(fn).toContain('android.util.Log.w("DaakFsPaths", "saved item but could not delete source")');
+    expect(fn).not.toContain('${src.name}');
     expect(fn.indexOf('uri.toString()')).toBeGreaterThan(del);
   });
 
@@ -899,5 +1010,350 @@ describe('Android saves to MediaStore without a permission', () => {
     expect(manifest).not.toContain('READ_MEDIA_IMAGES');
     expect(manifest).not.toContain('READ_MEDIA_VIDEO');
     expect(manifest).not.toContain('READ_MEDIA_AUDIO');
+  });
+});
+
+// Folder send on iOS (Task 7). The picked folder is outside the sandbox, and its
+// security scope closes. So pickFolder copies the tree into the app cache, and
+// the engine sends from that copy. No iOS unit-test target exists, so these pins
+// hold the parts that fail in silence: a copy that loads a whole file into
+// memory, a symlink that escapes the tree, and a delete outside the cache.
+describe('iOS folder pick, copy, and stats', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+  const share = strip(read(repo + 'modules/rn-share/ios/DaakShare.swift'));
+  const shareMm = read(repo + 'modules/rn-share/ios/DaakShare.mm');
+  const fs = strip(read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift'));
+  const fsMm = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.mm');
+  // From the function name to the next member at the same indent.
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest.slice(1).search(/\n  (@objc )?(private )?(static )?func |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  it('declares pickFolder in Swift and in the .mm table', () => {
+    expect(share).toMatch(/@objc func pickFolder\(_ resolve: @escaping RCTPromiseResolveBlock/);
+    expect(shareMm).toMatch(/RCT_EXTERN_METHOD\(pickFolder:\(RCTPromiseResolveBlock\)resolve/);
+  });
+
+  it('opens a folder picker and assigns its delegate', () => {
+    const pick = body(share, '@objc func pickFolder');
+    expect(pick).toContain('UIDocumentPickerViewController(forOpeningContentTypes: [.folder])');
+    expect(pick).toMatch(/picker\.delegate = delegate/);
+  });
+
+  it('opens the security scope for the copy and closes it in a defer', () => {
+    const copy = body(share, 'static func copyPickedFolder');
+    const open = copy.indexOf('startAccessingSecurityScopedResource()');
+    expect(open).toBeGreaterThan(-1);
+    expect(copy).toMatch(/defer \{[^}]*stopAccessingSecurityScopedResource\(\)/);
+  });
+
+  it('copies into <caches>/daak-send/<uuid>/<folder name>, file by file, with no file in memory', () => {
+    expect(share).toMatch(/\.cachesDirectory/);
+    expect(share).toContain('"daak-send"');
+    const copy = body(share, 'static func copyPickedFolder');
+    expect(copy).toContain('UUID().uuidString');
+    expect(copy).toContain('lastPathComponent');
+    expect(copy).toMatch(/copyItem\(at:/);
+    expect(share).not.toMatch(/Data\(contentsOf: (e|entry|file|src)/);
+    expect(share).not.toMatch(/copyItem\(at: folder/);
+  });
+
+  it('skips symlinks in the copy walk', () => {
+    expect(body(share, 'static func listTree')).toMatch(/isSymbolicLink == true \{ continue \}/);
+  });
+
+  it('rejects NO_SPACE:<bytes> below size x 1.1 and EMPTY for a tree with no file', () => {
+    expect(share).toContain('volumeAvailableCapacityForImportantUsage');
+    expect(share).toMatch(/\* 1\.1/);
+    expect(share).toContain('"NO_SPACE:\\(');
+    expect(share).toMatch(/reject\("EMPTY", "EMPTY"/);
+  });
+
+  // An iCloud Drive file that is not on the device is a hidden placeholder,
+  // `.<name>.icloud`. A copy of it sends the placeholder, not the file, with no
+  // error. The listing refuses the whole pick before any copy starts.
+  it('refuses the pick with NOT_DOWNLOADED for an iCloud placeholder, before any copy', () => {
+    const list = body(share, 'static func listTree');
+    expect(list).toContain('isICloudPlaceholder(');
+    expect(list.indexOf('isICloudPlaceholder(')).toBeLessThan(list.indexOf('isSymbolicLink == true'));
+    expect(list).toMatch(/throw FolderCopyError\.notDownloaded/);
+    expect(share).toContain('"^\\.(.+)\\.icloud$"');
+    expect(share).toMatch(/reject\("NOT_DOWNLOADED", "NOT_DOWNLOADED"/);
+    // The listing runs before the space check and before the first folder is made.
+    const copy = body(share, 'static func copyPickedFolder');
+    expect(copy.indexOf('listTree(')).toBeLessThan(copy.indexOf('volumeAvailableCapacityForImportantUsage'));
+    expect(copy.indexOf('listTree(')).toBeLessThan(copy.indexOf('createDirectory('));
+  });
+
+  it('deletes the partial copy on any failure', () => {
+    const copy = body(share, 'static func copyPickedFolder');
+    expect(copy).toMatch(/catch \{\s*try\? fm\.removeItem\(at: slot\)\s*throw error/);
+  });
+
+  it('copies off the main thread', () => {
+    expect(share).toMatch(/DispatchQueue\.global\([^)]*\)\.async \{[\s\S]*copyPickedFolder/);
+  });
+
+  it('declares the three fspaths methods in Swift and in the .mm table', () => {
+    expect(fs).toMatch(/@objc func folderStats\(_ path: String/);
+    expect(fs).toMatch(/@objc func discardPickedCopy\(_ path: String/);
+    expect(fs).toMatch(/@objc func sweepPickedCopies\(_ resolve: @escaping RCTPromiseResolveBlock/);
+    expect(fsMm).toMatch(/RCT_EXTERN_METHOD\(folderStats:\(NSString \*\)path/);
+    expect(fsMm).toMatch(/RCT_EXTERN_METHOD\(discardPickedCopy:\(NSString \*\)path/);
+    expect(fsMm).toMatch(/RCT_EXTERN_METHOD\(sweepPickedCopies:\(RCTPromiseResolveBlock\)resolve/);
+  });
+
+  it('folderStats skips symlinks, has an error handler, and answers NSNull for an unreadable root', () => {
+    const stats = body(fs, '@objc func folderStats');
+    expect(stats).toContain('errorHandler');
+    expect(stats).toContain('isSymbolicLink');
+    expect(stats).toContain('NSNull()');
+    expect(stats).toContain('DispatchQueue.global');
+  });
+
+  it('discardPickedCopy resolves symlinks and .. BEFORE the daak-send prefix check, and refuses the rest', () => {
+    const discard = body(fs, '@objc func discardPickedCopy');
+    const resolveAt = discard.indexOf('resolvingSymlinksInPath()');
+    const standardAt = discard.indexOf('standardizedFileURL');
+    const prefixAt = discard.indexOf('hasPrefix(');
+    expect(resolveAt).toBeGreaterThan(-1);
+    expect(standardAt).toBeGreaterThan(-1);
+    expect(prefixAt).toBeGreaterThan(resolveAt);
+    expect(prefixAt).toBeGreaterThan(standardAt);
+    expect(discard).toMatch(/reject\("E_NOT_PICKED_COPY"/);
+    expect(fs).toContain('"daak-send"');
+  });
+
+  it('sweepPickedCopies deletes under daak-send only, and keeps a copy that a pick makes during the sweep', () => {
+    const sweep = body(fs, '@objc func sweepPickedCopies');
+    expect(sweep).toContain('pickedCopiesRoot()');
+    expect(sweep).toContain('creationDate');
+    expect(sweep).toMatch(/removeItem\(at: slot\)/);
+  });
+});
+
+// Folder send on Android (Task 8). SAF gives a content:// tree, not a path, and
+// the engine reads with std::fs. So pickFolder copies the tree into the app
+// cache, the same as iOS. No JVM test source set exists, so these pins hold the
+// parts that fail in silence: a copy that loads a whole file into memory, a
+// display name that escapes the slot, and a delete outside the cache.
+describe('Android folder pick, copy, and stats', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+  const share = strip(
+    read(repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/DaakShareModule.kt'),
+  );
+  const fs = strip(
+    read(
+      repo +
+        'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+    ),
+  );
+  const shareSpec = read(repo + 'modules/rn-share/js/NativeDaakShare.ts');
+  const fsSpec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  // From the function name to the next member at the same indent.
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest
+      .slice(1)
+      .search(/\n  (@ReactMethod\n  )?(override |private )?(inline )?fun |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  // A required Spec method is abstract in the generated Java spec. A Kotlin
+  // module without the override then fails the Gradle build.
+  it('makes the four folder methods required in both Specs', () => {
+    expect(shareSpec).toMatch(/^ {2}pickFolder\(\): Promise<string \| null>;/m);
+    expect(fsSpec).toMatch(/^ {2}folderStats\(path: string\)/m);
+    expect(fsSpec).toMatch(/^ {2}discardPickedCopy\(path: string\): Promise<void>;/m);
+    expect(fsSpec).toMatch(/^ {2}sweepPickedCopies\(\): Promise<void>;/m);
+    expect(shareSpec + fsSpec).not.toMatch(/(pickFolder|folderStats|PickedCopy|PickedCopies)\?\(/);
+  });
+
+  it.each([
+    ['rn-share', shareSpec, share],
+    ['rn-fspaths', fsSpec, fs],
+  ])('%s: the Kotlin module overrides every Spec method', (_name, spec, kt) => {
+    const methods = [...spec.matchAll(/^ {2}([a-zA-Z]\w*)\??\([^)]*\)\s*:/gm)].map((m) => m[1]);
+    expect(methods.length).toBeGreaterThan(3);
+    for (const m of methods) expect(kt).toMatch(new RegExp(`override fun ${m}\\(`));
+  });
+
+  it('opens ACTION_OPEN_DOCUMENT_TREE with its own request code', () => {
+    const pick = body(share, 'override fun pickFolder(promise: Promise)');
+    expect(pick).toContain('Intent.ACTION_OPEN_DOCUMENT_TREE');
+    expect(pick).toContain('PICK_FOLDER');
+    expect(share).toMatch(/PICK_FOLDER = \d+/);
+  });
+
+  it('resolves null on cancel and copies off the main thread', () => {
+    const result = body(share, 'override fun onActivityResult(');
+    expect(result).toContain('PICK_FOLDER');
+    expect(result).toMatch(/resolve\(null\)/);
+    expect(result).toMatch(/thread\([^)]*\) \{[\s\S]*copyPickedFolder\(/);
+  });
+
+  it('copies into <cacheDir>/daak-send/<uuid>/<folder name>, file by file, with no file in memory', () => {
+    const copy = body(share, 'private fun copyPickedFolder(');
+    expect(copy).toContain('ctx.cacheDir');
+    expect(copy).toContain('"daak-send"');
+    expect(copy).toContain('UUID.randomUUID()');
+    expect(copy).toContain('openInputStream(');
+    expect(copy).toContain('copyTo(');
+    expect(share).not.toMatch(/readBytes\(\)|readText\(\)/);
+  });
+
+  it('walks the tree with DocumentsContract and refuses a name that leaves the slot', () => {
+    const list = body(share, 'private fun listTree(');
+    expect(list).toContain('DocumentsContract.buildChildDocumentsUriUsingTree(');
+    expect(list).toContain('Document.MIME_TYPE_DIR');
+    expect(list).toContain('safeName(');
+    const safe = body(share, 'private fun safeName(');
+    expect(safe).toContain('"."');
+    expect(safe).toContain('".."');
+    expect(safe).toContain("'/'");
+  });
+
+  it('lists, then checks EMPTY, then checks the space, and only then writes', () => {
+    const copy = body(share, 'private fun copyPickedFolder(');
+    const list = copy.indexOf('listTree(');
+    const empty = copy.indexOf('FolderPickError("EMPTY"');
+    const space = copy.indexOf('StatFs(');
+    const write = copy.indexOf('mkdirs()');
+    expect(list).toBeGreaterThan(-1);
+    expect(empty).toBeGreaterThan(list);
+    expect(space).toBeGreaterThan(empty);
+    expect(write).toBeGreaterThan(space);
+    expect(copy).toContain('availableBytes');
+    expect(copy).toMatch(/\* 1\.1/);
+    expect(copy).toContain('"NO_SPACE:$needed"');
+  });
+
+  it('rejects with the codes the facade reads', () => {
+    expect(share).toMatch(/reject\(e\.code, e\.message\)/);
+    expect(share).toMatch(/FolderPickError\("NO_SPACE"/);
+    expect(share).toMatch(/FolderPickError\("EMPTY", "EMPTY"\)/);
+    expect(share).toMatch(/reject\("E_COPY"/);
+  });
+
+  it('deletes the partial copy on any failure', () => {
+    const copy = body(share, 'private fun copyPickedFolder(');
+    expect(copy).toMatch(/catch \(t: Throwable\) \{\s*slot\.deleteRecursively\(\)\s*throw t/);
+  });
+
+  it('folderStats walks off the main thread, skips symlinks, and answers null for an unreadable tree', () => {
+    const stats = body(fs, 'override fun folderStats(');
+    expect(stats).toMatch(/thread\(/);
+    expect(stats).toContain('Files.isSymbolicLink(');
+    expect(stats).toContain('resolve(null)');
+    expect(stats).toContain('listFiles()');
+    expect(stats).toContain('putDouble("files"');
+    expect(stats).toContain('putDouble("bytes"');
+  });
+
+  it('discardPickedCopy canonicalises BEFORE a component check under daak-send, and refuses the rest', () => {
+    const discard = body(fs, 'override fun discardPickedCopy(');
+    const canon = discard.indexOf('canonicalFile');
+    const check = discard.indexOf('.startsWith(root)');
+    expect(canon).toBeGreaterThan(-1);
+    expect(check).toBeGreaterThan(canon);
+    // Path.startsWith compares whole components: daak-sendX is not under daak-send.
+    expect(discard).toContain('toPath()');
+    expect(discard).toMatch(/reject\("E_NOT_PICKED_COPY"/);
+    expect(fs).toContain('"daak-send"');
+  });
+
+  it('sweepPickedCopies keeps a slot that a pick makes during the sweep', () => {
+    const sweep = body(fs, 'override fun sweepPickedCopies(');
+    const started = sweep.indexOf('val started = System.currentTimeMillis()');
+    const worker = sweep.indexOf('thread(');
+    expect(started).toBeGreaterThan(-1);
+    expect(worker).toBeGreaterThan(started);
+    expect(sweep).toMatch(/lastModified\(\) >= started\) continue/);
+    expect(sweep).toContain('pickedCopiesRoot()');
+    expect(sweep).toContain('deleteRecursively()');
+  });
+});
+
+// Cleanup C: small findings from the folder send and receive reviews.
+describe('cleanup C native pins', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+  const mac = strip(read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift'));
+  const ios = strip(read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift'));
+  const kt = strip(
+    read(
+      repo +
+        'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+    ),
+  );
+  const share = strip(
+    read(repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/DaakShareModule.kt'),
+  );
+  const fsSpec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const from = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    return src.slice(at);
+  };
+
+  it('prunes empty folders on a best-effort basis, so a throw never rejects the moves', () => {
+    for (const name of ['override fun moveReceivedFiles(', 'override fun saveToLibrary(']) {
+      const fn = from(kt, name).split('\n  @ReactMethod')[0];
+      expect(fn).toMatch(/runCatching \{ pruneEmptyDirs\(input\) \}/);
+      expect(fn).toContain('Log.w(');
+      expect(fn.indexOf('runCatching')).toBeGreaterThan(fn.indexOf('val out'));
+      expect(fn.indexOf('runCatching')).toBeLessThan(fn.indexOf('writable(out)'));
+    }
+  });
+
+  it('fails the pick when a second folder has the same name', () => {
+    const copy = from(share, 'private fun copyPickedFolder').split('\n  private fun listTree')[0];
+    const dirBranch = copy.slice(copy.indexOf('if (entry.isDir) {'), copy.indexOf('continue'));
+    expect(dirBranch).toMatch(/if \(target\.exists\(\)\) throw (FolderPickError|IOException)/);
+    expect(dirBranch).not.toContain('!target.isDirectory');
+    expect(dirBranch).toContain('mkdirs()');
+  });
+
+  it.each([
+    ['macOS', mac],
+    ['iOS', ios],
+  ])('%s folderStats answers NSNull when the root cannot be read', (_n, src) => {
+    const fn = from(src, '@objc func folderStats').split('\n  /// ')[0];
+    expect(fn).toContain('contentsOfDirectory(atPath:');
+    expect(fn).toContain('errorHandler');
+    expect(fn).toMatch(/unreadable = true/);
+    expect(fn.indexOf('contentsOfDirectory(atPath:')).toBeLessThan(fn.indexOf('enumerator('));
+    expect(fn).toMatch(/if unreadable \{\s*resolve\(NSNull\(\)\)/);
+  });
+
+  it('says that iOS always makes a new album', () => {
+    expect(fsSpec).not.toContain('finds or creates');
+    expect(fsSpec).toMatch(/iOS makes a new Photos[\s*]+album/);
+  });
+
+  it('logs a failed folder make on macOS, as iOS does', () => {
+    const move = from(mac, '@objc func moveReceivedFiles');
+    const at = move.indexOf('createDirectory(at: target');
+    const catchAt = move.indexOf('catch', at);
+    const line = move.slice(catchAt).split('\n')[1];
+    expect(line).toMatch(/NSLog\("Daak: could not make a folder/);
+    expect(line).not.toMatch(/\.path|\bpath\b/);
   });
 });

@@ -48,9 +48,9 @@ async fn transfers_four_gibibytes_with_bounded_memory() {
         std::fs::metadata(dst.path().join("big.bin")).unwrap().len(),
         4 * 1024 * 1024 * 1024
     );
-    // Memory flatness is validated by the ChunkReader bounded-buffer unit test in
-    // chunk::reader; when running this test, watch RSS with cargo test + top
-    // and confirm it stays in the low hundreds of MiB.
+    // The sender reads one chunk at a time (`read_chunk_checked` in
+    // transfer::sender). When you run this test, watch RSS with `top`.
+    // RSS must stay in the low hundreds of MiB.
 }
 
 /// W-FW-3: exit criterion 3, at the stated scale of 100 files with varying

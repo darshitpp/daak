@@ -162,3 +162,11 @@ describe('the macOS file picker exists and answers when the panel does', () => {
     expect(code).toContain('RCTAssertMainQueue();');
   });
 });
+
+// The folder feature sends a whole folder. The panel must let the user choose a
+// directory, or a folder can never reach engine.send on macOS.
+describe('the macOS file panel can choose folders', () => {
+  it('sets canChooseDirectories to YES inside pickDocuments', () => {
+    expect(methodBody()).toMatch(/panel\.canChooseDirectories\s*=\s*YES/);
+  });
+});

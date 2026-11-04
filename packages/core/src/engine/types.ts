@@ -70,6 +70,12 @@ export interface InboxEntry {
    * for an unparseable saved_paths blob.
    */
   savedPaths: string[] | null;
+  /**
+   * The folders in this payload, as directories. Absent from an old engine:
+   * treat `undefined` as `[]`. The `inbox.received` event holds the true roots.
+   * After a move to Photos or Gallery, `listInbox` returns `[]` for a folder.
+   */
+  groupRoots?: string[];
 }
 
 export type DaakEvent =
@@ -142,6 +148,16 @@ export interface CodePairingStatus {
   triesLeft: number;
 }
 
+/** The folder of an item in a sent folder. */
+export interface ThreadGroup {
+  name: string;
+  /** The path of the file below the folder, without the folder name. */
+  rel: string;
+  /** The file count and the byte total of the folder, over the whole transfer. */
+  files: number;
+  bytes: number;
+}
+
 export interface ThreadItem {
   transferId: string;
   itemIndex: number;
@@ -159,6 +175,8 @@ export interface ThreadItem {
   truncated?: boolean;
   /** The text of this item was cut to fit the page budget. */
   textTruncated?: boolean;
+  /** The folder of this item. null for a loose item. */
+  group: ThreadGroup | null;
 }
 
 export interface ThreadPage {

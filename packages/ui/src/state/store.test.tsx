@@ -74,6 +74,16 @@ describe('reduceUiState', () => {
     expect(s.inbox.map((i) => i.payloadId)).toEqual(['2', '1']);
   });
 
+  // A repaired folder sends inbox.received a second time for the same payload.
+  // The second event replaces the entry. It does not add a second copy.
+  it('replaces an inbox entry that has the same payload id', () => {
+    let s = reduceUiState(initialUiState, { type: 'inbox.received', payload: entry('1') });
+    s = reduceUiState(s, { type: 'inbox.received', payload: entry('2') });
+    s = reduceUiState(s, { type: 'inbox.received', payload: { ...entry('1'), summary: 'repaired' } });
+    expect(s.inbox.map((i) => i.payloadId)).toEqual(['2', '1']);
+    expect(s.inbox[1].summary).toBe('repaired');
+  });
+
   // R7: `transfer.item` carries no byte counts and `pairing.*` is not a store
   // concern. The default arm must be a no-op, and must not throw on an event
   // shape this reducer was never compiled against.

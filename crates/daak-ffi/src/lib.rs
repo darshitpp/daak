@@ -327,6 +327,7 @@ pub fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value 
                 "error": i.error,
                 "truncated": i.truncated,
                 "textTruncated": i.text_truncated,
+                "group": i.group.as_ref().map(daak_core::thread::ThreadGroup::to_json),
             })
         })
         .collect();
@@ -378,6 +379,7 @@ pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::
         "summary": row.summary,
         "receivedAt": row.received_at,
         "savedPaths": saved_paths,
+        "groupRoots": row.group_roots,
     })
 }
 

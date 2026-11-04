@@ -32,7 +32,7 @@ export function whenLabel(atSeconds: number, nowMs: number = Date.now()): string
   return at.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-function Quick({ label, text, onPress, testID }: { label: string; text: string; onPress: () => void; testID?: string }) {
+export function Quick({ label, text, onPress, testID }: { label: string; text: string; onPress: () => void; testID?: string }) {
   return (
     <Pressable
       accessibilityRole="button"

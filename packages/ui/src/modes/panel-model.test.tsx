@@ -1,9 +1,11 @@
 import type { DeviceInfo, TransferSummary } from '@daak/core';
+import { threadItem } from '../testing/threadFixtures';
 import {
   fileLine,
   isRunning,
   isSelectable,
   newestRunningOut,
+  panelFolder,
   panelDevices,
   percent,
   sendLine,
@@ -141,5 +143,25 @@ describe('sendViewOf', () => {
     expect(sendViewOf(row({ state: 'active', bytesDone: 5, bytesTotal: 10 }), online)).toEqual({
       kind: 'running', waiting: false, done: 5, total: 10,
     });
+  });
+});
+
+describe('panelFolder', () => {
+  const kid = (direction: 'in' | 'out') =>
+    threadItem({
+      transferId: 'tt'.repeat(16),
+      direction,
+      state: 'done',
+      type: 'file',
+      text: null,
+      name: 'a.txt',
+      destPath: '/d/album/a.txt',
+      group: { name: 'album', rel: 'a.txt', files: 1, bytes: 10 },
+    });
+  const t = { transferId: 'tt'.repeat(16), peerDeviceId: 'aa'.repeat(16) };
+
+  it('gives places null for a sent folder and a value for a received one', () => {
+    expect(panelFolder([kid('out')], t)?.places).toBeNull();
+    expect(panelFolder([kid('in')], t)?.places).not.toBeNull();
   });
 });

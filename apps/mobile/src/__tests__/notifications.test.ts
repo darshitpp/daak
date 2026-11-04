@@ -96,7 +96,8 @@ describe('startEngine notifications', () => {
     // async hop behind the event. Let the microtask queue drain.
     await Promise.resolve();
     await Promise.resolve();
-    expect(platform.notifyReceived).toHaveBeenCalledWith(entry);
+    // A loose entry has no folder text (Task 12), so the second argument is null.
+    expect(platform.notifyReceived).toHaveBeenCalledWith(entry, null);
   });
 
   it('ignores every other engine event', async () => {

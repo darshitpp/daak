@@ -18,11 +18,10 @@ import UserNotifications
 @objc(DaakNotify)
 final class DaakNotify: RCTEventEmitter {
   private static let event = "DaakNotifyEvent"
-  private static let receivedCategory = "daak.received"
 
-  // Fixed by packages/platform/src/notify.ts (DAK_RECEIVED_ACTIONS), so the ids
-  // are named here. registerCategories still takes the JSON arg so a second
-  // category does not need a native release.
+  // The titles of the action ids that packages/platform/src/notify.ts may list
+  // in a category (DAK_RECEIVED_ACTIONS). registerCategories installs the
+  // actions that each JSON entry lists and skips an id that is not here.
   private static let actionTitles: [(id: String, title: String)] = [
     ("daak.open", "Open"),
     ("daak.share", "Share"),
@@ -96,14 +95,28 @@ final class DaakNotify: RCTEventEmitter {
   @objc func registerCategories(_ categoriesJson: String,
                                 resolve: @escaping RCTPromiseResolveBlock,
                                 reject: @escaping RCTPromiseRejectBlock) {
-    let actions = DaakNotify.actionTitles.map {
-      UNNotificationAction(identifier: $0.id, title: $0.title, options: [.foreground])
+    // Parse first. A malformed array rejects and leaves the installed
+    // categories as they are.
+    guard let data = categoriesJson.data(using: .utf8),
+          let categories = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+    else {
+      reject("E_NOTIFY", "categoriesJson is not a JSON array", nil)
+      return
     }
-    let category = UNNotificationCategory(
-      identifier: DaakNotify.receivedCategory, actions: actions,
-      intentIdentifiers: [], options: [])
+    let installed: [UNNotificationCategory] = categories.compactMap { entry in
+      guard let id = entry["id"] as? String, !id.isEmpty else { return nil }
+      let listed = entry["actions"] as? [String] ?? []
+      let actions = listed.compactMap { actionId -> UNNotificationAction? in
+        guard let known = DaakNotify.actionTitles.first(where: { $0.id == actionId })
+        else { return nil }
+        return UNNotificationAction(
+          identifier: known.id, title: known.title, options: [.foreground])
+      }
+      return UNNotificationCategory(
+        identifier: id, actions: actions, intentIdentifiers: [], options: [])
+    }
     let center = UNUserNotificationCenter.current()
-    center.setNotificationCategories([category])
+    center.setNotificationCategories(Set(installed))
     // The centre delegate is NOT installed here. It is installed at app launch
     // by DaakNotificationDelegate.install(), because on a killed app iOS
     // delivers the tapped response at launch, before this module exists at all:

@@ -27,6 +27,7 @@ jest.mock('@daak/platform', () => ({
   stopTransferForeground: jest.fn(async () => {}),
   enqueueDrain: jest.fn(async () => {}),
   requestBatteryExemption: jest.fn(async () => {}),
+  sweepPickedCopies: jest.fn(async () => {}),
 }));
 
 import {
@@ -34,6 +35,7 @@ import {
   requestBatteryExemption,
   startTransferForeground,
   stopTransferForeground,
+  sweepPickedCopies,
 } from '@daak/platform';
 import type { DaakEngine, DaakEvent } from '@daak/core';
 
@@ -124,6 +126,35 @@ describe('startEngine: the foreground service and the one subscription', () => {
   it('does not drain the text/file share inbox', async () => {
     await startEngine();
     expect(jest.requireMock('@daak/platform').consumePendingShare).not.toHaveBeenCalled();
+  });
+});
+
+// Folder send (Task 7). A picked folder is copied into <caches>/daak-send. A
+// copy that a killed app left behind is removed at the next start, before the
+// user can pick again. The sweep is cleanup: a failure must not stop the start.
+describe('startEngine: the sweep of old folder copies', () => {
+  it('sweeps the old copies once, before the engine starts', async () => {
+    const start = jest.spyOn(engine, 'start');
+    await startEngine();
+    expect(sweepPickedCopies).toHaveBeenCalledTimes(1);
+    expect((sweepPickedCopies as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      start.mock.invocationCallOrder[0],
+    );
+    start.mockRestore();
+  });
+
+  it('starts the engine when the sweep rejects', async () => {
+    (sweepPickedCopies as jest.Mock).mockRejectedValueOnce(new Error('disk'));
+    await expect(startEngine()).resolves.toBeUndefined();
+    expect(handlers().size).toBe(1);
+  });
+
+  it('starts the engine when the sweep throws at once', async () => {
+    (sweepPickedCopies as jest.Mock).mockImplementationOnce(() => {
+      throw new Error('no native module');
+    });
+    await expect(startEngine()).resolves.toBeUndefined();
+    expect(handlers().size).toBe(1);
   });
 });
 

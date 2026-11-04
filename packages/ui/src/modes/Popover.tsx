@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { DaakEngine, DeviceInfo, QuarantineReport } from '@daak/core';
 import type { UiState } from '../state/store';
@@ -19,7 +19,18 @@ import {
 import { NOT_RECORDED, fingerprintGroups, humanBytes } from '../screens/quarantine-facts';
 import { RELEASES_URL } from '../screens/about-links';
 import { colors, radius, spacing, ui } from '../theme';
-import { isSelectable, panelDevices, percent, sendLine, sendViewOf, tail } from './panel-model';
+import { savedLine } from '../screens/thread-groups';
+import {
+  folderLine,
+  isSelectable,
+  panelDevices,
+  percent,
+  sendLine,
+  sendViewOf,
+  sendingFolderLine,
+  tail,
+  type PanelFolder,
+} from './panel-model';
 import { useHeldBack } from './useHeldBack';
 import { usePanelTransfer } from './usePanelTransfer';
 
@@ -50,6 +61,7 @@ export function Popover({
   alert,
   alertRouteToken,
   deviceNoun = 'device',
+  saveFolderName,
 }: {
   state: UiState;
   engine: DaakEngine;
@@ -66,6 +78,11 @@ export function Popover({
   alertRouteToken?: string;
   /** The word for this device in the held-back text. The host sets it. */
   deviceNoun?: DeviceNoun | 'device';
+  /**
+   * The save folder name that Settings shows. The recent row of a received
+   * folder says `Saved to {name}`. null is the app's own storage.
+   */
+  saveFolderName?: () => Promise<string | null>;
 }) {
   // The token says which notice it is (see `useBlockers`). Only Cannot reach
   // replaces the panes. Update available is a banner above them.
@@ -80,6 +97,23 @@ export function Popover({
   const [note, setNote] = useState('');
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ tone: 'ok' | 'err'; title: string; body: string } | null>(null);
+  const [saveFolder, setSaveFolder] = useState<string | undefined>(undefined);
+  // Read once for each open of the panel. The words are the Settings words
+  // (AppShell reads the same name for the folder sheet).
+  useEffect(() => {
+    if (saveFolderName === undefined) return undefined;
+    let live = true;
+    saveFolderName().then(
+      (n) => {
+        if (live) setSaveFolder(n ?? "the app's own storage");
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+    // The host can make a new function on each render. One read is enough.
+  }, []);
 
   const devices = panelDevices(state.devices);
   // One note for every pane. `stop` and `retry` set `result` while a transfer
@@ -208,13 +242,16 @@ export function Popover({
   if (transfer.send !== null && view !== null && view.kind !== 'stopped' && !waiting) {
     const who = nameOf(transfer.send.peerDeviceId);
     const label = transfer.send.label;
+    // Task 12: a folder is one row. The folder of this transfer, when it is one.
+    const folder = transfer.folder?.transferId === transfer.send.transferId ? transfer.folder : null;
     if (view.kind === 'running') {
       const pct = percent(view.done, view.total);
+      const line = folder !== null ? sendingFolderLine(folder) : sendLine(label, view.total);
       pane = (
         <View style={ui.stackSm} testID="popover-sending">
           <Text style={ui.h3}>{`Sending to ${who}`}</Text>
-          {sendLine(label, view.total) === '' ? null : (
-            <Text style={ui.hint} numberOfLines={1}>{sendLine(label, view.total)}</Text>
+          {line === '' ? null : (
+            <Text style={ui.hint} numberOfLines={1}>{line}</Text>
           )}
           <ProgressBar pct={pct ?? 0} />
           <View style={ui.progMeta}>
@@ -229,8 +266,10 @@ export function Popover({
       pane = (
         <View style={ui.stackSm} testID="popover-done">
           <Text style={ui.h3}>{`Sent to ${who}`}</Text>
-          {sendLine(label, view.total) === '' ? null : (
-            <Text style={ui.hint} numberOfLines={1}>{sendLine(label, view.total)}</Text>
+          {(folder !== null ? folderLine(folder) : sendLine(label, view.total)) === '' ? null : (
+            <Text style={ui.hint} numberOfLines={1}>
+              {folder !== null ? folderLine(folder) : sendLine(label, view.total)}
+            </Text>
           )}
           <Btn variant="ghost" block testID="popover-done-back" label="Back to sending" onPress={leaveTransfer} />
           {resultNote}
@@ -306,6 +345,9 @@ export function Popover({
         {devices.length === 0 ? (
           <Empty title="No paired devices yet" body="Pair a device on your Wi-Fi and it will show up here." />
         ) : null}
+        {transfer.recent !== null ? (
+          <RecentRow folder={transfer.recent} saveFolder={saveFolder} who={nameOf(transfer.recent.peerDeviceId)} />
+        ) : null}
         {resultNote}
       </View>
     );
@@ -378,6 +420,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warnTint,
   },
 });
+
+/**
+ * The recent transfer row of the design (macos.html, popover screen): the
+ * newest finished transfer, when it is a folder. The title line has the name,
+ * the file count, and the size. The second line says where it went.
+ */
+function RecentRow({ folder, saveFolder, who }: { folder: PanelFolder; saveFolder?: string; who: string }) {
+  const sub = folder.direction === 'in' ? savedLine(folder.places, undefined, saveFolder) : `Sent to ${who}`;
+  return (
+    <View style={ui.stackSm} testID="popover-recent">
+      <Text style={ui.sectionT}>Recent transfers</Text>
+      <View style={ui.listRow}>
+        <View style={ui.fill}>
+          <Text style={ui.rowTitle} numberOfLines={1}>{folderLine(folder)}</Text>
+          {sub === null ? null : <Text style={ui.rowSub} numberOfLines={1}>{sub}</Text>}
+        </View>
+      </View>
+    </View>
+  );
+}
 
 /**
  * A device row. An offline device shows and cannot be chosen (design:

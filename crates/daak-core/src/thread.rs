@@ -10,6 +10,7 @@ use crate::error::{CoreError, Result};
 use crate::manifest::{ItemType, Manifest};
 use crate::store::transfers::{ItemRow, TransferRow};
 use crate::store::Db;
+use std::collections::HashMap;
 
 // A page never holds more than this many transfers.
 pub const THREAD_MAX_LIMIT: u32 = 200;
@@ -41,6 +42,33 @@ pub struct ThreadItem {
     pub truncated: bool,
     // The text of this item was cut to fit the page budget (A2).
     pub text_truncated: bool,
+    // The folder that this item belongs to. None for a loose item.
+    pub group: Option<ThreadGroup>,
+}
+
+// The folder of an item in a sent folder. The sender writes attrs["group"]
+// and attrs["path"] on each file. files and bytes are the totals of the
+// folder over the whole manifest, so a cut page still shows the true totals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadGroup {
+    pub name: String,
+    // attrs["path"] without the group prefix.
+    pub rel: String,
+    pub files: u32,
+    pub bytes: u64,
+}
+
+impl ThreadGroup {
+    /// The wire JSON of the group. daak-ffi and daakd call this, so the 3
+    /// builders cannot drift on the group keys.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "name": self.name,
+            "rel": self.rel,
+            "files": self.files,
+            "bytes": self.bytes,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +235,7 @@ pub(crate) fn page_item_json(i: &ThreadItem) -> serde_json::Value {
         "error": i.error,
         "truncated": i.truncated,
         "textTruncated": i.text_truncated,
+        "group": i.group.as_ref().map(ThreadGroup::to_json),
     })
 }
 
@@ -285,7 +314,8 @@ fn expand(db: &Db, t: &TransferRow, out: &mut Vec<ThreadItem>) -> Result<()> {
                 is_text: bool,
                 name: Option<String>,
                 size: Option<u64>,
-                text: Option<String>| {
+                text: Option<String>,
+                group: Option<ThreadGroup>| {
         let row = find(index);
         ThreadItem {
             transfer_id: t.transfer_id,
@@ -304,18 +334,54 @@ fn expand(db: &Db, t: &TransferRow, out: &mut Vec<ThreadItem>) -> Result<()> {
             error: t.error.clone(),
             truncated: false,
             text_truncated: false,
+            group,
         }
     };
     match Manifest::from_cbor(&t.manifest) {
         Ok(m) => {
+            // One pass for the totals of each folder, then one pass for the
+            // items. Never count again for each item.
+            let attr = |i: &crate::manifest::Item, key: &str| {
+                i.attrs
+                    .get(key)
+                    .and_then(|v| v.as_text())
+                    .map(str::to_string)
+            };
+            let mut totals: HashMap<String, (u32, u64)> = HashMap::new();
+            for i in &m.items {
+                if let (Some(g), Some(_)) = (attr(i, "group"), attr(i, "path")) {
+                    let e = totals.entry(g).or_insert((0, 0));
+                    e.0 = e.0.saturating_add(1);
+                    e.1 = e.1.saturating_add(i.size.unwrap_or(0));
+                }
+            }
+            out.reserve(m.items.len());
             for i in &m.items {
                 let is_text = matches!(i.item_type, ItemType::Text);
+                let group = match (attr(i, "group"), attr(i, "path")) {
+                    (Some(name), Some(path)) => {
+                        let rel = path
+                            .strip_prefix(name.as_str())
+                            .and_then(|r| r.strip_prefix('/'))
+                            .unwrap_or(&path)
+                            .to_string();
+                        let (files, bytes) = totals.get(&name).copied().unwrap_or((0, 0));
+                        Some(ThreadGroup {
+                            name,
+                            rel,
+                            files,
+                            bytes,
+                        })
+                    }
+                    _ => None,
+                };
                 out.push(make(
                     i.index,
                     is_text,
                     i.name.clone(),
                     i.size,
                     i.text.clone(),
+                    group,
                 ));
             }
         }
@@ -328,6 +394,7 @@ fn expand(db: &Db, t: &TransferRow, out: &mut Vec<ThreadItem>) -> Result<()> {
                     r.item_type == "text",
                     r.name.clone(),
                     r.size,
+                    None,
                     None,
                 ));
             }
@@ -436,6 +503,7 @@ mod tests {
             error: None,
             truncated: false,
             text_truncated: false,
+            group: None,
         };
         let one = page_item_json(&item);
         let mut keys: Vec<String> = one
@@ -456,6 +524,101 @@ mod tests {
             page_json_len(std::slice::from_ref(&item)),
             serde_json::Value::Array(vec![one]).to_string().len(),
         );
+    }
+
+    fn folder_file(index: u32, group: &str, rel: &str, size: u64) -> Item {
+        let mut it = file(index, rel.rsplit('/').next().unwrap(), size);
+        it.attrs.insert(
+            "group".into(),
+            ciborium::value::Value::Text(group.to_string()),
+        );
+        it.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text(format!("{group}/{rel}")),
+        );
+        it
+    }
+
+    #[test]
+    fn expand_fills_group_from_the_manifest() {
+        let db = db();
+        let mut old = file(3, "old.bin", 5);
+        old.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("x/old.bin".into()),
+        );
+        let m = manifest(vec![
+            file(0, "loose.bin", 1),
+            folder_file(1, "album", "sub/mid.bin", 10),
+            folder_file(2, "album", "top.bin", 20),
+            old,
+        ]);
+        put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 4);
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert_eq!(page.items.len(), 4);
+        assert_eq!(page.items[0].group, None);
+        let g = page.items[1].group.as_ref().expect("a folder item");
+        assert_eq!(g.name, "album");
+        assert_eq!(g.rel, "sub/mid.bin");
+        assert_eq!((g.files, g.bytes), (2, 30));
+        let g = page.items[2].group.as_ref().expect("a folder item");
+        assert_eq!(g.rel, "top.bin");
+        assert_eq!((g.files, g.bytes), (2, 30));
+        // An old sender wrote a path but no group.
+        assert_eq!(page.items[3].group, None);
+    }
+
+    #[test]
+    fn group_totals_count_the_whole_manifest_when_the_page_is_cut() {
+        let db = db();
+        let long = "n".repeat(120);
+        let items: Vec<Item> = (0..4000u32)
+            .map(|i| folder_file(i, "album", &format!("{long}{i}.bin"), 2))
+            .collect();
+        let m = manifest(items);
+        put(&db, 1, 3, "out", "done", 10, m.to_cbor().unwrap(), 4000);
+        let page = list_thread(&db, &[3u8; 16], 50, None).unwrap();
+        assert!(page.items.len() < 4000, "the budget must cut the list");
+        assert!(page.items.iter().all(|i| i.truncated));
+        for i in &page.items {
+            let g = i.group.as_ref().expect("a folder item");
+            assert_eq!((g.files, g.bytes), (4000, 8000));
+        }
+    }
+
+    // A fixed time limit fails on a busy host. So this test compares 2 sizes
+    // on the same host. The large run has 16 times more items. A linear
+    // expand takes about 16 times longer. A quadratic expand takes about 256
+    // times longer. Load slows both runs, so the ratio stays stable. Each
+    // size uses the best of 3 runs, to ignore one noisy run.
+    #[test]
+    fn expand_is_linear_in_the_item_count() {
+        let db = db();
+        let best = |id: u8, n: u32| {
+            let items: Vec<Item> = (0..n)
+                .map(|i| folder_file(i, "album", &format!("f{i}.bin"), 1))
+                .collect();
+            let m = manifest(items);
+            put(&db, id, 3, "out", "done", 10, m.to_cbor().unwrap(), n);
+            let t = db.get_transfer(&[id; 16]).unwrap().unwrap();
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..3 {
+                let start = std::time::Instant::now();
+                let mut out = Vec::new();
+                expand(&db, &t, &mut out).unwrap();
+                best = best.min(start.elapsed());
+                assert_eq!(out.len(), n as usize);
+                assert_eq!(out[n as usize - 1].group.as_ref().unwrap().files, n);
+            }
+            best
+        };
+        let small = best(1, 4096);
+        let large = best(2, 65536);
+        assert!(
+            large < small * 40,
+            "expand is not linear: 4096 items took {small:?}, 65536 items took {large:?}"
+        );
+        assert!(large < std::time::Duration::from_secs(30));
     }
 
     #[test]

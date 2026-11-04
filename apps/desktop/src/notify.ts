@@ -6,12 +6,17 @@
 // This module is imported at the top of apps/desktop/index.js, above both
 // roots, so it must not evaluate either spec.
 //
-// Every import here is TYPE-only, for the same reason src/tray-action.ts:1 is:
+// Every import here is TYPE-only except actions.ts (it imports nothing), for the
+// same reason src/tray-action.ts:1 is:
 // the real system-notify module is pulled in LAZILY inside onDesktopNotify,
 // because this file is loaded by vitest under the react-native stub and must
 // not touch a TurboModule at all.
 import type { DaakEvent } from '@daak/core/src/engine/types';
 import type { NotifyAction } from '@daak/rn-notify/js/actions';
+import type { FailedSendEngine, FailedSendNotice } from '@daak/rn-notify/js/actions';
+// The ONE value import at the top. actions.ts imports nothing at all, so it
+// touches no TurboModule and loads under the vitest stub.
+import { failedSendNotice, failureKey } from '@daak/rn-notify/js/actions';
 
 // The decision, separated from the effects, for the reason src/tray-action.ts
 // gives: openDashboard() takes no argument, so a payload id carried through the
@@ -46,7 +51,8 @@ export function applyNotifyAction(action: NotifyAction['id'], host: NotifyHost):
 // The narrow slice of DaakEngine this file reads, declared here rather than
 // taking the full DaakEngine so the test can pass a two-method fake and this
 // file cannot grow a dependency on engine methods it has no business calling.
-export interface NotifyEngine {
+// Task 12: the 2 list reads of the failed-send notice (FailedSendEngine).
+export interface NotifyEngine extends FailedSendEngine {
   on(cb: (event: DaakEvent) => void): () => void;
 }
 
@@ -62,6 +68,8 @@ export interface NotifyPrefsLike {
 
 export interface NotifyDeps {
   post(entry: InboxBanner): Promise<void>;
+  /** The banner of a send that ended in a failure. Absent posts nothing. */
+  postFailed?(notice: FailedSendNotice): Promise<void>;
   /** Absent means "arrival on". A rejection also means "arrival on". */
   prefs?(): Promise<NotifyPrefsLike>;
 }
@@ -76,8 +84,34 @@ const PREFS_ON: NotifyPrefsLike = { arrival: true };
 // engine event stream that also carries pairing and transfer events, and an
 // unhandled rejection here would take the dashboard down over a denied
 // notification permission. Same reasoning as apps/mobile/src/bootstrap.ts:115.
+//
+// Task 12: it also posts one banner for a send that ends in a failure. The
+// engine sends transfer.failed once, at the end, and never on a retry back-off.
+// `posted` keeps one banner for each failure (`failureKey`: transfer id and row
+// time), so a repeat of the event posts once and a retry that fails again posts
+// again. `reading` drops a second event while the first read runs. It goes
+// through the same native notify as a received banner, so the same rule applies
+// while the app is in front: the delegate in macos/RNNotify.mm has no
+// willPresent, so no banner shows then.
 export function notifyInboxEntry(engine: NotifyEngine, deps: NotifyDeps): () => void {
+  const posted = new Set<string>();
+  const reading = new Set<string>();
   return engine.on((event) => {
+    if (event.type === 'transfer.failed') {
+      const postFailed = deps.postFailed;
+      const id = event.transferId;
+      if (postFailed === undefined || reading.has(id)) return;
+      reading.add(id);
+      void failedSendNotice(engine, id)
+        .then((notice) => {
+          if (notice === null || posted.has(failureKey(notice))) return undefined;
+          posted.add(failureKey(notice));
+          return postFailed(notice);
+        })
+        .then(undefined, () => undefined)
+        .finally(() => reading.delete(id));
+      return;
+    }
     if (event.type !== 'inbox.received') return;
     void Promise.resolve()
       .then(async () => {
@@ -144,6 +178,7 @@ export function onDesktopNotify(): () => void {
   const prefsMod = require('@daak/platform/src/notify-prefs') as typeof import('@daak/platform/src/notify-prefs');
   const stopEvents = notifyInboxEntry(engine, {
     post: (entry) => mod.notifyInbox(entry),
+    postFailed: (notice) => mod.notifyFailedSend(notice),
     prefs: () => prefsMod.loadNotifyPrefs(),
   });
   const stopActions = mod.onNotifyAction(({ actionId }) => applyNotifyAction(actionId, host));

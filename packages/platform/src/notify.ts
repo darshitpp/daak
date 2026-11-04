@@ -1,6 +1,10 @@
 import { NativeEventEmitter } from 'react-native';
 import NativeDaakNotify from '@daak/rn-notify';
 import type { InboxEntry } from '@daak/core';
+// Deep import of a file that imports nothing. The package barrel holds the
+// mobile TurboModule, and this file already reaches it through the line above.
+import { safeName } from '@daak/rn-notify/js/actions';
+import type { FailedSendNotice } from '@daak/rn-notify/js/actions';
 import { loadNotifyPrefs } from './notify-prefs';
 
 export const DAK_RECEIVED_CATEGORY = 'daak.received';
@@ -18,6 +22,15 @@ export type NotifyAction = (typeof DAK_RECEIVED_ACTIONS)[number];
  * in the same commit, once reveal exists.
  */
 export const DAK_REGISTERED_ACTIONS = ['daak.open', 'daak.share'] as const;
+
+/**
+ * The failed-send banner has its own category. On Android that gives it its own
+ * channel ("Send failures"), so a user who mutes "Received files" still sees a
+ * failure. On iOS it gives the banner only the Open button: Share needs saved
+ * paths, and a failed send has none.
+ */
+export const DAK_FAILED_CATEGORY = 'daak.failed';
+export const DAK_FAILED_ACTIONS = ['daak.open'] as const;
 
 export interface NotificationActionEvent {
   action: NotifyAction;
@@ -58,7 +71,10 @@ export async function initNotifications(known?: boolean): Promise<boolean> {
   // reject startEngine, and no notification detail may take down app startup
   // (R36, which is not permission-specific).
   await NativeDaakNotify.registerCategories(
-    JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+    JSON.stringify([
+      { id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS },
+      { id: DAK_FAILED_CATEGORY, actions: DAK_FAILED_ACTIONS },
+    ]),
   ).catch(() => false);
   return granted;
 }
@@ -69,8 +85,15 @@ export async function initNotifications(known?: boolean): Promise<boolean> {
  * process the user is receiving a file into. A dropped post is warned so it is
  * at least visible.
  * Reads the arrival preference first. "Arrival" off posts nothing.
+ *
+ * `text` is the folder text (`receivedText` in @daak/rn-notify). The host makes
+ * it from the event entry before the move. Without it the banner says `Daak`
+ * and the summary, as before.
  */
-export async function notifyReceived(entry: InboxEntry): Promise<void> {
+export async function notifyReceived(
+  entry: InboxEntry,
+  text?: { title: string; body: string } | null,
+): Promise<void> {
   // `loadNotifyPrefs` never rejects. A pref that is off posts nothing, which
   // costs a banner and never a transfer (R36). The OS permission is a second,
   // independent fact: the native `post` resolves without a banner when the OS
@@ -79,12 +102,35 @@ export async function notifyReceived(entry: InboxEntry): Promise<void> {
   if (!prefs.arrival) return;
   await NativeDaakNotify.post(
     entry.payloadId,
-    'Daak',
-    entry.summary,
+    text?.title ?? 'Daak',
+    text?.body ?? safeName(entry.summary),
     DAK_RECEIVED_CATEGORY,
     JSON.stringify(entry),
   ).catch((err: unknown) => {
     console.warn(`daak: no notification for ${entry.payloadId}: ${String(err)}`);
+  });
+}
+
+/**
+ * Posts the banner for a send that ended in a failure. Never throws, for the
+ * reason `notifyReceived` gives.
+ *
+ * It uses the same native post as a received banner, with its own category
+ * (`DAK_FAILED_CATEGORY`). iOS installs no `willPresent`, so the banner does not
+ * show while the app is in front (apps/mobile/ios/Daak/DaakNotificationDelegate.swift).
+ * The payload names the device, so a tap opens the thread of that device
+ * (`peerOfPayload` in apps/mobile). The category has no Share button. The arrival preference does not apply: this is not an arrival.
+ */
+export async function notifyFailedSend(notice: FailedSendNotice): Promise<void> {
+  const id = `failed:${notice.transferId}`;
+  await NativeDaakNotify.post(
+    id,
+    notice.title,
+    notice.body,
+    DAK_FAILED_CATEGORY,
+    JSON.stringify({ transferId: notice.transferId, peerDeviceId: notice.peerDeviceId }),
+  ).catch((err: unknown) => {
+    console.warn(`daak: no notification for ${id}: ${String(err)}`);
   });
 }
 

@@ -12,6 +12,10 @@ pub struct InboxRow {
     pub summary: String,
     pub received_at: i64,
     pub saved_paths: String,
+    /// The folders in this payload, as file system directories. Not stored.
+    /// `Engine::list_inbox` and the `InboxReceived` event fill it from
+    /// `group_roots`.
+    pub group_roots: Vec<String>,
 }
 
 impl Db {
@@ -42,6 +46,47 @@ impl Db {
             ],
         )?;
         Ok(changed == 1)
+    }
+
+    /// Add each path that the row does not list yet. A re-send repairs a held
+    /// file, and `add_inbox_once` then writes nothing. Returns the new row, or
+    /// `None` when no row exists or no path is new.
+    pub fn merge_inbox_paths(&self, id: &[u8; 16], paths: &[String]) -> Result<Option<InboxRow>> {
+        let conn = self.conn();
+        // One transaction holds the SELECT and the UPDATE. A path rewrite
+        // between them would make this write a stale list.
+        let tx = conn.unchecked_transaction()?;
+        let row = tx
+            .query_row(
+                "SELECT id, transfer_id, peer_device_id, kind, item_count, summary, received_at, saved_paths
+                   FROM inbox_history WHERE id = ?1",
+                rusqlite::params![&id[..]],
+                row_to_inbox,
+            )
+            .optional()?;
+        let Some(mut row) = row else {
+            return Ok(None);
+        };
+        let mut all = crate::engine::parse_json_string_array(&row.saved_paths);
+        let before = all.len();
+        // One set lookup for each new path keeps the merge linear. A path
+        // that the new list names 2 times goes in once.
+        let mut known: std::collections::HashSet<String> = all.iter().cloned().collect();
+        for p in paths {
+            if known.insert(p.clone()) {
+                all.push(p.clone());
+            }
+        }
+        if all.len() == before {
+            return Ok(None);
+        }
+        row.saved_paths = crate::engine::json_string_array(&all);
+        tx.execute(
+            "UPDATE inbox_history SET saved_paths = ?2 WHERE id = ?1",
+            rusqlite::params![&id[..], row.saved_paths],
+        )?;
+        tx.commit()?;
+        Ok(Some(row))
     }
 
     /// True when an inbound payload with this `payload_id` is already stored.
@@ -140,6 +185,70 @@ impl Db {
     }
 }
 
+/// The directory of each received folder, once each, in item order. Reads the
+/// items in state `done` whose `dest_path` is an absolute file system path. A
+/// `photos:` value, a `content://` value, and a relative value name no
+/// directory, so they add no root. The root is the `dest_path` without the
+/// last `n - 1` components, where `n` is the count of components in
+/// `attrs["path"]` (`<group>/<rel>`).
+pub fn group_roots(db: &Db, transfer_id: &[u8; 16]) -> Result<Vec<String>> {
+    let done: Vec<_> = db
+        .list_items(transfer_id)?
+        .into_iter()
+        .filter(|r| r.state == "done")
+        .filter_map(|r| {
+            let dest = r.dest_path?;
+            let is_fs_path = !dest.starts_with("photos:")
+                && !dest.starts_with("content://")
+                && std::path::Path::new(&dest).is_absolute();
+            is_fs_path.then_some((r.item_index, dest))
+        })
+        .collect();
+    if done.is_empty() {
+        return Ok(Vec::new());
+    }
+    // A manifest that does not parse names no folder.
+    let Some(t) = db.get_transfer(transfer_id)? else {
+        return Ok(Vec::new());
+    };
+    let Ok(m) = crate::manifest::Manifest::from_cbor(&t.manifest) else {
+        return Ok(Vec::new());
+    };
+    let mut roots: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (index, dest) in done {
+        // `validate_manifest` makes each item index equal to its position, so
+        // the lookup is direct. A row that does not agree names no folder.
+        let Some(item) = m.items.get(index as usize).filter(|i| i.index == index) else {
+            continue;
+        };
+        let text = |key: &str| item.attrs.get(key).and_then(|v| v.as_text());
+        let (Some(_), Some(rel)) = (text("group"), text("path")) else {
+            continue;
+        };
+        let Ok(parts) = crate::transfer::receiver::safe_components(rel, index) else {
+            continue;
+        };
+        // The receiver saves a bare name when no component is safe. That
+        // file is not in a folder.
+        if parts.is_empty() {
+            continue;
+        }
+        let mut root = std::path::Path::new(&dest);
+        for _ in 1..parts.len() {
+            match root.parent() {
+                Some(up) => root = up,
+                None => break,
+            }
+        }
+        let root = root.to_string_lossy().to_string();
+        if seen.insert(root.clone()) {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
+}
+
 fn row_to_inbox(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxRow> {
     let a16 = |v: Vec<u8>| -> rusqlite::Result<[u8; 16]> {
         v.try_into().map_err(|_| rusqlite::Error::InvalidQuery)
@@ -153,6 +262,7 @@ fn row_to_inbox(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxRow> {
         summary: r.get(5)?,
         received_at: r.get(6)?,
         saved_paths: r.get(7)?,
+        group_roots: Vec::new(),
     })
 }
 
@@ -170,6 +280,7 @@ mod tests {
             summary: format!("payload {id}"),
             received_at: at,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         }
     }
 
@@ -367,6 +478,128 @@ mod tests {
         assert_eq!(dest_of(&db, 1, 1).as_deref(), Some("/b"));
     }
 
+    // A repaired file adds its path once. A known path or a missing row
+    // changes nothing, so the caller sends no event.
+    #[test]
+    fn merge_inbox_paths_adds_only_a_new_path() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        assert_eq!(
+            db.merge_inbox_paths(&[1u8; 16], &["/a".into()]).unwrap(),
+            None
+        );
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a", "/c"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        assert_eq!(
+            db.merge_inbox_paths(&[1u8; 16], &["/a".into()]).unwrap(),
+            None
+        );
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/b".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["/a", "/c", "/b"]));
+        assert_eq!(db.list_inbox().unwrap()[0], merged);
+    }
+
+    // A moved row keeps its moved path. A new path is appended after it.
+    #[test]
+    fn merge_inbox_paths_keeps_a_moved_path_and_appends_the_new_one() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        db.replace_inbox_paths(&[1u8; 16], &["photos:ABC".to_string()])
+            .unwrap();
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/b".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["photos:ABC", "/b"]));
+        assert_eq!(db.list_inbox().unwrap()[0], merged);
+    }
+
+    // Pin: a small input with no duplicate inside the new list. A known path
+    // is skipped. Each new path keeps its order and goes after the old paths.
+    #[test]
+    fn merge_inbox_paths_matches_the_old_order_and_duplicate_semantics_on_a_small_input() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a", "/c"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/d".into(), "/a".into(), "/b".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["/a", "/c", "/d", "/b"]));
+        assert_eq!(db.list_inbox().unwrap()[0], merged);
+    }
+
+    // The new list can name one path 2 times. The row must list it once.
+    #[test]
+    fn merge_inbox_paths_adds_a_duplicate_inside_the_new_list_once() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/a"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        let merged = db
+            .merge_inbox_paths(&[1u8; 16], &["/b".into(), "/b".into(), "/a".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.saved_paths, json_of(&["/a", "/b"]));
+    }
+
+    // A fixed time limit fails on a busy host. So this test compares 2 sizes
+    // on the same host. The large run has 8 times more paths. A linear merge
+    // takes about 8 times longer. A quadratic merge takes about 59 times
+    // longer. The limit is 30 times, so it keeps a margin on both sides.
+    // Each size uses the best of 3 runs. Each run uses a new row.
+    #[test]
+    fn merge_inbox_paths_is_linear_in_the_path_count() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut next_id = 1u8;
+        let mut best = |n: u32| {
+            let old: Vec<String> = (0..n).map(|i| format!("/old/f{i}.bin")).collect();
+            let new: Vec<String> = (0..n).map(|i| format!("/new/f{i}.bin")).collect();
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..3 {
+                let id = next_id;
+                next_id += 1;
+                db.add_inbox(&InboxRow {
+                    saved_paths: crate::engine::json_string_array(&old),
+                    ..row(id, 100)
+                })
+                .unwrap();
+                let start = std::time::Instant::now();
+                let merged = db.merge_inbox_paths(&[id; 16], &new).unwrap().unwrap();
+                best = best.min(start.elapsed());
+                let all = crate::engine::parse_json_string_array(&merged.saved_paths);
+                assert_eq!(all.len(), 2 * n as usize);
+                assert_eq!(all[n as usize], new[0]);
+            }
+            best
+        };
+        let small = best(2048);
+        let large = best(16384);
+        assert!(
+            large < small * 30,
+            "merge_inbox_paths is not linear: 2048 paths took {small:?}, 16384 paths took {large:?}"
+        );
+    }
+
     // A list of the wrong length cannot be paired with the old list by index.
     // Writing it would store a list that names the wrong files.
     #[test]
@@ -390,6 +623,298 @@ mod tests {
         assert_eq!(dest_of(&db, 1, 0).as_deref(), Some("/app/a.jpg"));
         assert_eq!(db.list_inbox().unwrap()[0].saved_paths, r#"["/app/a.jpg"]"#);
     }
+
+    use crate::manifest::{DeviceRef, Item, ItemType, Manifest, PayloadKind};
+
+    fn file_item(index: u32, group: Option<(&str, &str)>) -> Item {
+        let mut it = Item {
+            index,
+            item_type: ItemType::Document,
+            name: Some(format!("f{index}")),
+            size: Some(1),
+            ..Default::default()
+        };
+        if let Some((g, rel)) = group {
+            it.attrs
+                .insert("group".into(), ciborium::value::Value::Text(g.into()));
+            it.attrs.insert(
+                "path".into(),
+                ciborium::value::Value::Text(format!("{g}/{rel}")),
+            );
+        }
+        it
+    }
+
+    // One received transfer: the manifest items and the matching item rows.
+    // Each entry is (group and rel, dest_path, state).
+    type Entry<'a> = (Option<(&'a str, &'a str)>, &'a str, &'a str);
+
+    fn received(db: &Db, id: u8, items: &[Entry]) {
+        let m = Manifest::new(
+            PayloadKind::Media,
+            DeviceRef {
+                device_id: [9u8; 16],
+                name: "x".into(),
+            },
+            items
+                .iter()
+                .enumerate()
+                .map(|(i, (g, _, _))| file_item(i as u32, *g))
+                .collect(),
+        );
+        db.upsert_transfer(&TransferRow {
+            manifest: m.to_cbor().unwrap(),
+            item_count: items.len() as u32,
+            ..transfer(id)
+        })
+        .unwrap();
+        for (i, (_, dest, state)) in items.iter().enumerate() {
+            db.upsert_item(&ItemRow {
+                state: (*state).into(),
+                ..item(id, i as u32, dest)
+            })
+            .unwrap();
+        }
+    }
+
+    fn album(db: &Db) {
+        received(
+            db,
+            1,
+            &[
+                (Some(("album", "a.txt")), "/out/album/a.txt", "done"),
+                (Some(("album", "sub/b.txt")), "/out/album/sub/b.txt", "done"),
+            ],
+        );
+    }
+
+    #[test]
+    fn group_roots_returns_the_folder_directory() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        album(&db);
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/album".to_string()]
+        );
+    }
+
+    #[test]
+    fn group_roots_lists_each_folder_once_in_item_order() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(
+            &db,
+            1,
+            &[
+                (Some(("zeta", "a.txt")), "/out/zeta/a.txt", "done"),
+                (Some(("album", "a.txt")), "/out/album/a.txt", "done"),
+                (Some(("zeta", "s/b.txt")), "/out/zeta/s/b.txt", "done"),
+            ],
+        );
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/zeta".to_string(), "/out/album".to_string()]
+        );
+    }
+
+    /// Pin: F4 gives a received folder a suffix on disk. The manifest group
+    /// stays `album`, and the disk root is `album-1`. The root comes from
+    /// `dest_path`, so it keeps the `album-1` leaf. A suffix on a subfolder
+    /// or a file does not change the component count.
+    #[test]
+    fn group_roots_keeps_the_dash_suffix_leaf_of_a_received_folder() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(
+            &db,
+            1,
+            &[
+                (Some(("album", "a.txt")), "/out/album-1/a.txt", "done"),
+                (
+                    Some(("album", "sub/b.txt")),
+                    "/out/album-1/sub-1/b-1.txt",
+                    "done",
+                ),
+                (Some(("album-1", "c.txt")), "/out/album-1-1/c.txt", "done"),
+            ],
+        );
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/album-1".to_string(), "/out/album-1-1".to_string()]
+        );
+    }
+
+    // A path of only `..` or `.` has no component. The receiver then saves a
+    // bare name in the output directory, so the file is not in a folder.
+    #[test]
+    fn group_roots_is_empty_when_the_path_has_no_safe_component() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut it = file_item(0, None);
+        it.attrs
+            .insert("group".into(), ciborium::value::Value::Text("g".into()));
+        it.attrs
+            .insert("path".into(), ciborium::value::Value::Text("..".into()));
+        let m = Manifest::new(
+            PayloadKind::Media,
+            DeviceRef {
+                device_id: [9u8; 16],
+                name: "x".into(),
+            },
+            vec![it],
+        );
+        db.upsert_transfer(&TransferRow {
+            manifest: m.to_cbor().unwrap(),
+            ..transfer(1)
+        })
+        .unwrap();
+        db.upsert_item(&item(1, 0, "/out/f0")).unwrap();
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn group_roots_is_empty_for_loose_files_and_old_senders() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut old = file_item(1, None);
+        old.attrs.insert(
+            "path".into(),
+            ciborium::value::Value::Text("x/old.bin".into()),
+        );
+        let m = Manifest::new(
+            PayloadKind::Media,
+            DeviceRef {
+                device_id: [9u8; 16],
+                name: "x".into(),
+            },
+            vec![file_item(0, None), old],
+        );
+        db.upsert_transfer(&TransferRow {
+            manifest: m.to_cbor().unwrap(),
+            ..transfer(1)
+        })
+        .unwrap();
+        db.upsert_item(&item(1, 0, "/out/loose.txt")).unwrap();
+        db.upsert_item(&item(1, 1, "/out/x/old.bin")).unwrap();
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+        assert!(group_roots(&db, &[7u8; 16]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn group_roots_follows_a_move_to_another_directory() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        album(&db);
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/out/album/a.txt", "/out/album/sub/b.txt"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        db.replace_inbox_paths(
+            &[1u8; 16],
+            &[
+                "/save/album/a.txt".to_string(),
+                "/save/album/sub/b.txt".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/save/album".to_string()]
+        );
+    }
+
+    #[test]
+    fn group_roots_skips_library_and_content_paths() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        album(&db);
+        db.add_inbox(&InboxRow {
+            saved_paths: json_of(&["/out/album/a.txt", "/out/album/sub/b.txt"]),
+            ..row(1, 100)
+        })
+        .unwrap();
+        db.replace_inbox_paths(
+            &[1u8; 16],
+            &[
+                "photos:ABC".to_string(),
+                "content://media/external/images/media/7".to_string(),
+            ],
+        )
+        .unwrap();
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn group_roots_skips_a_relative_path() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(&db, 1, &[(Some(("album", "a.txt")), "album/a.txt", "done")]);
+        assert!(group_roots(&db, &[1u8; 16]).unwrap().is_empty());
+    }
+
+    // A fixed time limit fails on a busy host. So this test compares 2 sizes
+    // on the same host, the same as `expand_is_linear_in_the_item_count` in
+    // thread.rs. The large run has 16 times more items. A linear lookup takes
+    // about 16 times longer. A quadratic lookup takes about 256 times longer.
+    // Each size uses the best of 3 runs.
+    #[test]
+    fn group_roots_is_linear_in_the_item_count() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let best = |id: u8, n: u32| {
+            let names: Vec<String> = (0..n).map(|i| format!("f{i}.bin")).collect();
+            let dests: Vec<String> = names.iter().map(|f| format!("/out/album/{f}")).collect();
+            let entries: Vec<Entry> = names
+                .iter()
+                .zip(&dests)
+                .map(|(f, d)| (Some(("album", f.as_str())), d.as_str(), "done"))
+                .collect();
+            received(&db, id, &entries);
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..3 {
+                let start = std::time::Instant::now();
+                let roots = group_roots(&db, &[id; 16]).unwrap();
+                best = best.min(start.elapsed());
+                assert_eq!(roots, vec!["/out/album".to_string()]);
+            }
+            best
+        };
+        let small = best(1, 4096);
+        let large = best(2, 65536);
+        assert!(
+            large < small * 40,
+            "group_roots is not linear: 4096 items took {small:?}, 65536 items took {large:?}"
+        );
+    }
+
+    #[test]
+    fn group_roots_skips_quarantined_items() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        received(
+            &db,
+            1,
+            &[
+                (
+                    Some(("album", "a.txt")),
+                    "/out/quarantine/x/a.txt",
+                    "quarantined",
+                ),
+                (Some(("album", "b.txt")), "/out/album/b.txt", "done"),
+                (
+                    Some(("other", "c.txt")),
+                    "/out/quarantine/x/c.txt",
+                    "quarantined",
+                ),
+            ],
+        );
+        assert_eq!(
+            group_roots(&db, &[1u8; 16]).unwrap(),
+            vec!["/out/album".to_string()]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -406,6 +931,7 @@ mod dedupe_tests {
             summary: "hi".into(),
             received_at: 1,
             saved_paths: "[]".into(),
+            group_roots: Vec::new(),
         }
     }
 

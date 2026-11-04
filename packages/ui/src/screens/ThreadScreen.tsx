@@ -11,9 +11,11 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
-import type { DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
+import type { DaakEvent, DeviceInfo, ThreadItem, TransferSummary } from '@daak/core';
 import { useEngine } from '../EngineContext';
 import { Bubble } from '../components/Bubble';
+import { FolderBubble } from '../components/FolderBubble';
+import { FolderSheet } from '../components/FolderSheet';
 import { Sheet } from '../components/Sheet';
 import { useToast } from '../components/Toast';
 import { Btn, Empty, Note, ProgressBar, Status, deviceLabel, presenceOf, type DeviceNoun } from '../components/ds';
@@ -21,6 +23,7 @@ import type { InboxActions } from '../inbox-actions';
 import { colors, control, ui } from '../theme';
 import { humanBytes } from './quarantine-facts';
 import { EMPTY_THREAD, itemKey, mergeThread, prependOlder, type ThreadView } from './thread-merge';
+import { folderPlaces, groupThread, savedLine, type FolderRow } from './thread-groups';
 
 const PAGE = 50;
 // More staged files than this fold into one summary chip. The composer must keep a fixed height.
@@ -49,6 +52,23 @@ export const splitExt = (name: string): [string, string] => {
 };
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 const errText = (e: unknown, fallback: string): string => (e instanceof Error ? e.message : fallback);
+
+/**
+ * The inline warning for a folder pick that failed. The pick rejects before a
+ * path exists, so the text says "this folder", not the folder name.
+ */
+export function folderPickError(e: unknown): string {
+  const m = e instanceof Error ? e.message : '';
+  if (m.startsWith('NO_SPACE:')) {
+    const need = humanBytes(Number(m.slice('NO_SPACE:'.length)));
+    return `Not enough space to prepare this folder. Free ${need !== '' ? need : 'some space'} and try again.`;
+  }
+  if (m === 'EMPTY') return 'This folder has no files to send.';
+  if (m === 'NOT_DOWNLOADED') {
+    return 'This folder has files that are not downloaded yet. Open the Files app, download the folder, and try again.';
+  }
+  return "Couldn't prepare this folder. Check that every file in it is on this device and try again.";
+}
 
 /** The composer, inside a keyboard avoiding view only when the host asks. */
 function ComposerWrap({ avoid, children }: { avoid: boolean; children: React.ReactNode }) {
@@ -81,6 +101,13 @@ export function ThreadScreen({
   initialFiles = [],
   deviceNoun = 'phone',
   keyboardAvoiding = false,
+  library,
+  saveFolder,
+  isMedia,
+  onPickFolder,
+  folderStats,
+  discardPickedCopy,
+  pickLabel = 'Add files',
 }: {
   peerDeviceId: string;
   onBack: () => void;
@@ -91,6 +118,24 @@ export function ThreadScreen({
   initialFiles?: string[];
   deviceNoun?: DeviceNoun;
   keyboardAvoiding?: boolean;
+  /** The media library of this device. Absent when the host saves no media there. */
+  library?: 'Photos' | 'Gallery';
+  /** The save folder name, as Settings shows it. */
+  saveFolder?: string;
+  /** True for a file name with a media extension. The host owns the list. */
+  isMedia?: (name: string) => boolean;
+  /**
+   * The phone folder picker. It copies the folder and resolves the path of the
+   * copy, or null on Cancel. When it is set, the add button is a paperclip with
+   * a menu. When it is not set (macOS), the add button opens `onPickFiles`.
+   */
+  onPickFolder?: () => Promise<string | null>;
+  /** The file count and the size of a folder. Null for a path that is not a folder. */
+  folderStats?: (path: string) => Promise<{ files: number; bytes: number } | null>;
+  /** Deletes a copy that `onPickFolder` made. */
+  discardPickedCopy?: (path: string) => Promise<void>;
+  /** The label of the add button when there is no folder menu. */
+  pickLabel?: string;
 }) {
   const engine = useEngine();
   const toast = useToast();
@@ -108,6 +153,18 @@ export function ThreadScreen({
   const [stopFor, setStopFor] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [sizes, setSizes] = useState<Record<string, number | null>>({});
+  const [folderKey, setFolderKey] = useState<string | null>(null);
+  // The staged folders: path to file count and size.
+  const [folders, setFolders] = useState<Record<string, { files: number; bytes: number }>>({});
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
+  // The staged paths that are copies from `onPickFolder`. Only these are discarded.
+  const copies = useRef<Set<string>>(new Set());
+  // A new folder pick or a Cancel makes the earlier pick stale.
+  const prepSeq = useRef(0);
+  // The copies that a pending send reads. The unmount must not delete them.
+  const inFlight = useRef<Set<string>>(new Set());
 
   const alive = useRef(true);
   const seq = useRef(0);
@@ -166,6 +223,19 @@ export function ThreadScreen({
     };
   }, [engine, load, schedule]);
 
+  // Best effort. A copy that stays goes at the next start (sweepPickedCopies).
+  const discard = useCallback((path: string) => {
+    if (!copies.current.delete(path) || !discardPickedCopy) return;
+    discardPickedCopy(path).catch(() => {});
+  }, [discardPickedCopy]);
+
+  // The staged copies go with the composer.
+  const discardRef = useRef(discard);
+  discardRef.current = discard;
+  useEffect(() => () => {
+    for (const p of [...copies.current]) if (!inFlight.current.has(p)) discardRef.current(p);
+  }, []);
+
   const loadOlder = async () => {
     if (thread.olderCursor === null || paging) return;
     setPaging(true);
@@ -208,7 +278,7 @@ export function ThreadScreen({
   };
 
   const name = device ? deviceLabel(device) : 'this device';
-  const canSend = device != null && (files.length > 0 || text.trim() !== '') && !sending;
+  const canSend = device != null && (files.length > 0 || text.trim() !== '') && !sending && !preparing;
 
   // The review state ends when no file is left. Staging files again then shows the chip.
   useEffect(() => {
@@ -220,7 +290,7 @@ export function ThreadScreen({
   // A rejected call records `null` for the paths, so the effect does not ask again.
   useEffect(() => {
     if (!reviewing || !fileSizes) return undefined;
-    const missing = files.filter((p) => !(p in sizes));
+    const missing = files.filter((p) => !(p in sizes) && !(p in folders));
     if (missing.length === 0) return undefined;
     let live = true;
     const record = (got: (number | null)[] | null) => {
@@ -233,13 +303,51 @@ export function ThreadScreen({
     };
     fileSizes(missing).then(record, () => record(null));
     return () => { live = false; };
-  }, [reviewing, files, fileSizes, sizes]);
+  }, [reviewing, files, fileSizes, sizes, folders]);
 
-  const allKnown = files.length > 0 && files.every((p) => typeof sizes[p] === 'number');
-  const total = allKnown ? humanBytes(files.reduce((a, p) => a + (sizes[p] as number), 0)) : '';
+  const sizeOf = (p: string): number | null => folders[p]?.bytes ?? (typeof sizes[p] === 'number' ? (sizes[p] as number) : null);
+  const allKnown = files.length > 0 && files.every((p) => sizeOf(p) !== null);
+  const total = allKnown ? humanBytes(files.reduce((a, p) => a + (sizeOf(p) as number), 0)) : '';
+  // A folder is not a file, so a list with a folder counts items (design `#cd-files-list`).
+  const staged = Object.keys(folders).some((p) => files.includes(p))
+    ? plural(files.length, 'item', 'items')
+    : plural(files.length, 'file', 'files');
+
+  // Marks each path that is a folder. A path that is not a folder gets no entry.
+  const measure = async (paths: string[]) => {
+    if (!folderStats) return;
+    const got = await Promise.all(paths.map((p) => folderStats(p).catch(() => null)));
+    if (!alive.current) return;
+    const found: Record<string, { files: number; bytes: number }> = {};
+    const empty: string[] = [];
+    paths.forEach((p, i) => {
+      const g = got[i];
+      if (g && g.files === 0) empty.push(p);
+      else if (g) found[p] = g;
+    });
+    if (Object.keys(found).length > 0) setFolders((f) => ({ ...f, ...found }));
+    // The engine skips or refuses an empty folder. Refuse it here, with its name.
+    if (empty.length > 0) {
+      setFiles((f) => f.filter((x) => !empty.includes(x)));
+      setPickError(`"${base(empty[empty.length - 1])}" has no files to send.`);
+    }
+  };
+
+  const remove = (p: string) => {
+    setFiles((f) => f.filter((x) => x !== p));
+    setFolders((f) => {
+      if (!(p in f)) return f;
+      const next = { ...f };
+      delete next[p];
+      return next;
+    });
+    discard(p);
+  };
 
   const pick = () => {
+    setMenuOpen(false);
     if (!onPickFiles) return;
+    setPickError(null);
     // A picker that rejects leaves the composer usable. Both native pickers
     // resolve an empty list on Cancel.
     // The picker is modal, so `files` cannot change while it is open. The toast
@@ -250,8 +358,52 @@ export function ThreadScreen({
         if (next.length === files.length) return;
         setFiles(next);
         toast.show(`${plural(next.length, 'file', 'files')} ready`);
+        // The macOS panel can also pick a folder. A phone file picker cannot,
+        // so a phone makes no bridge call for each file.
+        if (!onPickFolder) void measure(picked.filter((p) => !files.includes(p)));
       })
       .catch(() => {});
+  };
+
+  // The phone copies the folder first (design F4). Send waits for the copy.
+  const pickFolder = () => {
+    setMenuOpen(false);
+    if (!onPickFolder || preparing) return;
+    const mine = ++prepSeq.current;
+    const stale = () => !alive.current || mine !== prepSeq.current;
+    setPickError(null);
+    setPreparing(true);
+    void (async () => {
+      try {
+        const path = await onPickFolder();
+        if (path === null) return;
+        copies.current.add(path);
+        const stats = folderStats ? await folderStats(path).catch(() => null) : null;
+        if (stale()) {
+          discard(path);
+          return;
+        }
+        // A copy that cannot be measured is not a usable folder. Plain-file
+        // staging would send a directory to `fileSizes`.
+        if (folderStats && !stats) {
+          discard(path);
+          throw new Error('E_COPY');
+        }
+        if (stats) setFolders((f) => ({ ...f, [path]: stats }));
+        setFiles((f) => (f.includes(path) ? f : [...f, path]));
+        toast.show('Folder staged');
+      } catch (e) {
+        if (!stale()) setPickError(folderPickError(e));
+      } finally {
+        if (!stale()) setPreparing(false);
+      }
+    })();
+  };
+
+  // The copy cannot stop. The composer drops it and discards it when it arrives.
+  const cancelPrepare = () => {
+    prepSeq.current += 1;
+    setPreparing(false);
   };
 
   const submit = async () => {
@@ -267,9 +419,20 @@ export function ThreadScreen({
       // part leaves the composer as soon as the engine accepts it, so a failed
       // note does not send the files again.
       if (files.length > 0) {
-        await engine.send({ peerDeviceId, files });
+        const sent = files.filter((p) => copies.current.has(p));
+        sent.forEach((p) => inFlight.current.add(p));
+        try {
+          await engine.send({ peerDeviceId, files });
+        } finally {
+          sent.forEach((p) => inFlight.current.delete(p));
+          // A closed screen cannot show the chip again, so its copies go now.
+          if (!alive.current) sent.forEach(discard);
+        }
+        // The engine staged the files before it resolved, so the copies can go.
+        files.forEach(discard);
         setFiles([]);
         setSizes({});
+        setFolders({});
       }
       if (note !== '') {
         await engine.send({ peerDeviceId, text: note });
@@ -367,18 +530,43 @@ export function ThreadScreen({
   const removeChip = (p: string) => (
     <Pressable
       key={p}
-      onPress={() => setFiles((f) => f.filter((x) => x !== p))}
+      onPress={() => remove(p)}
       accessibilityRole="button"
       accessibilityLabel={`Remove ${base(p)}`}
       testID={`remove-${base(p)}`}
       style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
     >
-      <Text style={ui.chipLabel} numberOfLines={1}>{base(p)}</Text>
+      <Text style={ui.chipLabel} numberOfLines={1}>
+        {folders[p] ? `${base(p)} · ${plural(folders[p].files, 'file', 'files')}` : base(p)}
+      </Text>
       <Text style={ui.chipLabelOn}>×</Text>
     </Pressable>
   );
 
   const active = summaries.filter((s) => s.direction === 'out' && s.state === 'active');
+
+  // The thread item verbs. A bubble and a row of the folder sheet share them.
+  const preview = actions?.open
+    ? (i: ThreadItem) => {
+        const open = actions.open;
+        // Ruling: a Preview that no app can open is a toast.
+        const noApp = () => toast.show('This device cannot open files.');
+        if (open && i.destPath !== null) {
+          void open(i.destPath).then((ok) => { if (!ok) noApp(); }, noApp);
+        }
+      }
+    : undefined;
+  const share = actions?.share
+    ? (i: ThreadItem) => { if (i.destPath !== null) actions.share?.([i.destPath]); }
+    : undefined;
+  const canShare = (i: ThreadItem): boolean => i.destPath === null || (actions?.canShare?.(i.destPath) ?? true);
+  const openHeld = onOpenHeld ? (i: ThreadItem) => onOpenHeld({ transferId: i.transferId, itemIndex: i.itemIndex }) : undefined;
+
+  const rows = groupThread(thread.items);
+  // The host has no library (macOS, or Android 9 and older), so no media went there.
+  const placesOf = (r: FolderRow) =>
+    folderPlaces(r.children, library === undefined || isMedia === undefined ? 0 : r.children.filter((c) => isMedia(c.name ?? '')).length);
+  const openFolder = folderKey === null ? undefined : rows.find((r): r is FolderRow => r.kind === 'folder' && r.key === folderKey);
   const offline = device != null && device.presence === 'offline';
 
   return (
@@ -404,7 +592,20 @@ export function ThreadScreen({
         {device !== undefined && thread.items.length === 0 && loadError === '' ? (
           <Empty title="Nothing here yet" body="Send the first file or note with the buttons below. It travels straight to this device over your Wi-Fi." />
         ) : null}
-        {thread.items.map((it, idx) => (
+        {rows.map((row, idx) => {
+          if (row.kind === 'folder') {
+            return (
+              <FolderBubble
+                key={`folder:${row.key}`}
+                row={row}
+                savedLine={savedLine(placesOf(row), library, saveFolder)}
+                onOpen={(r) => { Keyboard.dismiss(); setFolderKey(r.key); }}
+              />
+            );
+          }
+          const it = row.item;
+          const next = rows[idx + 1];
+          return (
           <React.Fragment key={itemKey(it)}>
           <Bubble
             item={it}
@@ -430,33 +631,20 @@ export function ThreadScreen({
                   }
                 : undefined
             }
-            onPreview={
-              actions?.open
-                ? (i) => {
-                    const open = actions.open;
-                    // Ruling: a Preview that no app can open is a toast.
-                    const noApp = () => toast.show('This device cannot open files.');
-                    if (open && i.destPath !== null) {
-                      void open(i.destPath).then((ok) => { if (!ok) noApp(); }, noApp);
-                    }
-                  }
-                : undefined
-            }
-            onShare={
-              actions?.share && (it.destPath === null || (actions.canShare?.(it.destPath) ?? true))
-                ? (i) => i.destPath !== null && actions.share?.([i.destPath])
-                : undefined
-            }
-            onOpenHeld={onOpenHeld ? (i) => onOpenHeld({ transferId: i.transferId, itemIndex: i.itemIndex }) : undefined}
+            onPreview={preview}
+            onShare={share && canShare(it) ? share : undefined}
+            onOpenHeld={openHeld}
             onRetry={(i) => void retry(i.transferId)}
             onStop={(i) => void stopWaiting(i.transferId)}
           />
-          {/* The engine cut the item list of this send. Say so once, after its last kept item. */}
-          {it.truncated === true && thread.items[idx + 1]?.transferId !== it.transferId ? (
+          {/* The engine cut the item list of this send. Say so once, after its
+              last kept item. A folder sheet says it for its own files. */}
+          {it.truncated === true && (next?.kind === 'folder' ? next.transferId : next?.item.transferId) !== it.transferId ? (
             <Text style={ui.hint}>Some items of this send are not shown.</Text>
           ) : null}
           </React.Fragment>
-        ))}
+          );
+        })}
       </ScrollView>
 
       {active.map((s) => {
@@ -505,27 +693,47 @@ export function ThreadScreen({
 
       <ComposerWrap avoid={keyboardAvoiding}>
       <View style={ui.composer}>
-        {files.length > 0 ? (
+        {files.length > 0 || preparing ? (
           <View style={ui.stackSm}>
             <View style={[ui.row, { flexWrap: 'wrap' }]}>
               {files.length > MAX_CHIPS ? (
                 <Pressable
                   onPress={() => { Keyboard.dismiss(); setReviewing(true); }}
                   accessibilityRole="button"
-                  accessibilityLabel={`Review ${plural(files.length, 'file', 'files')}`}
+                  accessibilityLabel={`Review ${staged}`}
                   testID="files-review"
                   style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
                 >
-                  <Text style={ui.chipLabel}>{`${plural(files.length, 'file', 'files')} · Review`}</Text>
+                  <Text style={ui.chipLabel}>{`${staged} · Review`}</Text>
                 </Pressable>
               ) : (
                 files.map((p) => removeChip(p))
               )}
+              {preparing ? (
+                <View style={ui.chip} testID="prepare-chip">
+                  <Text style={ui.chipLabel}>Preparing…</Text>
+                </View>
+              ) : null}
+              {preparing ? <Btn label="Cancel" variant="ghost" size="sm" onPress={cancelPrepare} testID="prepare-cancel" /> : null}
             </View>
           </View>
         ) : null}
-        <View style={ui.composerRow}>
-          {onPickFiles ? <Btn label="Add files" variant="quiet" onPress={pick} testID="pick-files" /> : null}
+        {pickError !== null ? <Note tone="warn" body={pickError} testID="pick-error" accessibilityLabel={pickError} /> : null}
+        <View style={ui.composerRow} testID="composer-row">
+          {onPickFiles && onPickFolder ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add files or folders"
+              onPress={() => { Keyboard.dismiss(); setMenuOpen(true); }}
+              disabled={sending}
+              testID="pick-files"
+              style={({ pressed }) => [ui.btn, ui.btnQuiet, ui.addIcon, pressed ? ui.pressed : null]}
+            >
+              <PaperclipIcon />
+            </Pressable>
+          ) : onPickFiles ? (
+            <Btn label={pickLabel} variant="quiet" disabled={sending} onPress={pick} testID="pick-files" />
+          ) : null}
           <TextInput
             value={text}
             onChangeText={setText}
@@ -540,9 +748,17 @@ export function ThreadScreen({
       </View>
       </ComposerWrap>
 
+      {/* Design #cd-add-menu: two rows. The note field keeps its width. */}
+      <Sheet open={menuOpen} title="Add files or folders" onClose={() => setMenuOpen(false)}>
+        <View style={ui.stackSm}>
+          <Btn label="Files" variant="quiet" block onPress={pick} testID="pick-menu-files" />
+          <Btn label="Folder" variant="quiet" block onPress={pickFolder} testID="pick-menu-folder" />
+        </View>
+      </Sheet>
+
       <Sheet
         open={reviewing && files.length > 0}
-        title={plural(files.length, 'file', 'files') + (total !== '' ? ` · ${total}` : '')}
+        title={staged + (total !== '' ? ` · ${total}` : '')}
         onClose={() => setReviewing(false)}
         actions={<Btn label="Done" variant="quiet" block onPress={() => setReviewing(false)} testID="files-review-done" />}
       >
@@ -550,6 +766,15 @@ export function ThreadScreen({
           <View style={ui.list}>
             {files.map((p) => (
               <View key={p} style={ui.listRow}>
+                {folders[p] ? (
+                  // A folder is one row. The sheet does not list its files.
+                  <View style={ui.fill}>
+                    <Text style={ui.rowTitle} numberOfLines={1} ellipsizeMode="middle">{base(p)}</Text>
+                    <Text style={ui.rowSub}>
+                      {[plural(folders[p].files, 'file', 'files'), humanBytes(folders[p].bytes)].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                ) : (
                 <View style={ui.fill}>
                   <Text style={ui.rowTitle} numberOfLines={1} ellipsizeMode="middle">{splitExt(base(p))[0]}
                     <Text style={{ color: colors.meta }}>{splitExt(base(p))[1]}</Text>
@@ -558,19 +783,41 @@ export function ThreadScreen({
                     <Text style={ui.rowSub}>{humanBytes(sizes[p] as number)}</Text>
                   ) : null}
                 </View>
+                )}
                 <Btn
                   label="Remove"
                   accessibilityLabel={`Remove ${base(p)}`}
                   size="sm"
                   variant="quiet"
                   testID={`review-remove-${base(p)}`}
-                  onPress={() => setFiles((f) => f.filter((x) => x !== p))}
+                  onPress={() => remove(p)}
                 />
               </View>
             ))}
           </View>
         </ScrollView>
       </Sheet>
+
+      {openFolder !== undefined ? (
+        <FolderSheet
+          row={openFolder}
+          open
+          onClose={() => setFolderKey(null)}
+          onRetry={(i) => void retry(i.transferId)}
+          onStop={(r) => {
+            // One sheet shows at a time. The confirm sheet replaces the folder sheet.
+            setFolderKey(null);
+            setStopFor(r.transferId);
+          }}
+          onPreview={preview}
+          onShare={share}
+          canShare={canShare}
+          onOpenHeld={openHeld}
+          places={placesOf(openFolder)}
+          library={library}
+          saveFolder={saveFolder}
+        />
+      ) : null}
 
       <Sheet
         open={stopFor !== null}
@@ -587,6 +834,42 @@ export function ThreadScreen({
           {`Nothing has reached ${name} yet. If you stop now, the items stay on this ${deviceNoun}.`}
         </Text>
       </Sheet>
+    </View>
+  );
+}
+
+// The design `#cd-add` icon: a paperclip. react-native-svg is not a
+// dependency, so it is a long loop with a short open loop inside, turned
+// 45 degrees. The stroke is the design 1.75 at 20 points.
+const CLIP_STROKE = 1.75;
+
+/** The paperclip of the add button on a phone. */
+function PaperclipIcon({ color = colors.fg }: { color?: string }) {
+  return (
+    <View testID="paperclip-icon" style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '45deg' }] }}>
+      <View
+        style={{
+          width: 8,
+          height: 19,
+          borderWidth: CLIP_STROKE,
+          borderColor: color,
+          borderRadius: 4,
+          alignItems: 'center',
+          paddingTop: 4,
+        }}
+      >
+        <View
+          style={{
+            width: 3.5,
+            height: 9,
+            borderWidth: CLIP_STROKE,
+            borderTopWidth: 0,
+            borderColor: color,
+            borderBottomLeftRadius: 2,
+            borderBottomRightRadius: 2,
+          }}
+        />
+      </View>
     </View>
   );
 }

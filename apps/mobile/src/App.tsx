@@ -11,11 +11,14 @@ import {
   type SettingsHost,
   useBlockers,
 } from '@daak/ui';
-import { askForPhotosIfUndetermined, photosHost } from './photosHost';
+import { askForPhotosIfUndetermined, libraryOf, photosHost } from './photosHost';
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
   downloadFolderName,
+  discardPickedCopy,
+  folderStats,
+  isMedia,
   appInfo,
   copyToClipboard,
   loadNotifyPrefs,
@@ -32,7 +35,7 @@ import {
 import { OnboardingFlow } from './OnboardingFlow';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
-import { pickAttachedFiles } from './SendFlow';
+import { pickAttachedFiles, pickAttachedFolder } from './SendFlow';
 import { mobileInboxActions } from './inbox-actions';
 import { onDeepLink, type DeepLink } from './deeplink';
 import { peerOfPayload } from './notification-route';
@@ -421,6 +424,11 @@ export default function App() {
           // packages/ui, which takes no @daak/platform dependency and no
           // TurboModule.
           onPickFiles={pickAttachedFiles}
+          // The paperclip menu: Files or Folder. A folder is copied first, and
+          // the composer discards the copy after the send.
+          onPickFolder={pickAttachedFolder}
+          folderStats={folderStats}
+          discardPickedCopy={discardPickedCopy}
           inboxActions={mobileInboxActions}
           // The prototype's "...isn't showing? See what to check" affordances,
           // on the Devices tab and in Settings. This is the ONLY thing that
@@ -429,6 +437,12 @@ export default function App() {
           onCheckConnection={blockers.onCheckConnection}
           downloadFolder={downloadFolder}
           photos={photosHost}
+          // The folder sheet: where received media and other files went.
+          // iOS keeps files in the app folder that the Files app shows as "Daak".
+          // Android names the folder that Settings shows.
+          library={libraryOf(photosHost)}
+          saveFolder={Platform.OS === 'ios' ? 'Daak' : undefined}
+          isMedia={isMedia}
           initialPeerDeviceId={link.kind === 'send' ? link.deviceId : undefined}
           // ?? '' and not `link.text`: a send link with NO text is an
           // instruction to send nothing, and undefined here would leave the

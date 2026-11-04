@@ -22,8 +22,11 @@ import {
   DAK_REGISTERED_ACTIONS,
   DAK_RECEIVED_ACTIONS,
   DAK_RECEIVED_CATEGORY,
+  DAK_FAILED_ACTIONS,
+  DAK_FAILED_CATEGORY,
   handleNotificationAction,
   initNotifications,
+  notifyFailedSend,
   notifyReceived,
   onNotificationAction,
 } from './notify';
@@ -65,6 +68,23 @@ describe('notifyReceived', () => {
     );
   });
 
+  // Task 12: the host gives the folder text. The payload stays the entry.
+  it('posts the text that the host gives for a folder', async () => {
+    await notifyReceived(entry, { title: 'Received a folder', body: 'album · 12 files' });
+    expect(native.post).toHaveBeenCalledWith(
+      'p1',
+      'Received a folder',
+      'album · 12 files',
+      DAK_RECEIVED_CATEGORY,
+      JSON.stringify(entry),
+    );
+  });
+
+  it('cleans the summary of a peer in the fallback body', async () => {
+    await notifyReceived({ ...entry, summary: 'a\nb\u202E\u200B' });
+    expect(native.post).toHaveBeenCalledWith('p1', 'Daak', 'a b', DAK_RECEIVED_CATEGORY, expect.any(String));
+  });
+
   it('posts nothing when the arrival preference is off', async () => {
     prefs.mockResolvedValue({ arrival: false });
     await notifyReceived(entry);
@@ -89,8 +109,13 @@ describe('initNotifications', () => {
   it('registers the received category with its registered action ids', async () => {
     await initNotifications();
     expect(native.registerCategories).toHaveBeenCalledWith(
-      JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+      JSON.stringify([
+        { id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS },
+        { id: DAK_FAILED_CATEGORY, actions: DAK_FAILED_ACTIONS },
+      ]),
     );
+    expect(DAK_FAILED_CATEGORY).toBe('daak.failed');
+    expect(DAK_FAILED_ACTIONS).toEqual(['daak.open']);
   });
 
   it('reports the runtime-permission answer', async () => {
@@ -129,7 +154,10 @@ describe('initNotifications', () => {
   it('registers only the actions that have a working handler (R37)', async () => {
     await initNotifications();
     expect(native.registerCategories).toHaveBeenCalledWith(
-      JSON.stringify([{ id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS }]),
+      JSON.stringify([
+        { id: DAK_RECEIVED_CATEGORY, actions: DAK_REGISTERED_ACTIONS },
+        { id: DAK_FAILED_CATEGORY, actions: DAK_FAILED_ACTIONS },
+      ]),
     );
     expect(DAK_REGISTERED_ACTIONS).toEqual(['daak.open', 'daak.share']);
     expect(DAK_RECEIVED_ACTIONS).toContain('daak.folder');
@@ -267,5 +295,34 @@ describe('onNotificationAction', () => {
         h,
       ),
     ).not.toThrow();
+  });
+});
+
+describe('notifyFailedSend', () => {
+  const notice = {
+    transferId: '11'.repeat(16),
+    peerDeviceId: 'aa'.repeat(16),
+    updatedAt: 1,
+    title: "Couldn't send album",
+    body: 'Open Daak to try again.',
+  };
+
+  // Its own category, so the OS gives it its own channel and its own buttons. The payload names the device, so a tap opens its thread.
+  it('posts with its own id and a payload that names the device', async () => {
+    await notifyFailedSend(notice);
+    expect(native.post).toHaveBeenCalledWith(
+      `failed:${'11'.repeat(16)}`,
+      "Couldn't send album",
+      'Open Daak to try again.',
+      DAK_FAILED_CATEGORY,
+      JSON.stringify({ transferId: '11'.repeat(16), peerDeviceId: 'aa'.repeat(16) }),
+    );
+  });
+
+  it('does not throw when the native post rejects', async () => {
+    native.post.mockRejectedValueOnce(new Error('denied'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(notifyFailedSend(notice)).resolves.toBeUndefined();
+    warn.mockRestore();
   });
 });

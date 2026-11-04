@@ -15,6 +15,12 @@ RCT_EXTERN_METHOD(exists:(NSString *)path
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(fileSizes:(NSArray<NSString *> *)paths
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(folderStats:(NSString *)path
+                  resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(discardPickedCopy:(NSString *)path
+                  resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(sweepPickedCopies:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(chooseDownloadFolder:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(downloadFolderName:(RCTPromiseResolveBlock)resolve
@@ -22,9 +28,11 @@ RCT_EXTERN_METHOD(downloadFolderName:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(clearDownloadFolder:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(moveReceivedFiles:(NSArray<NSString *> *)paths
+                  subdirs:(NSArray<NSString *> *)subdirs
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(saveToLibrary:(NSArray<NSString *> *)paths
+                  albums:(NSArray<NSString *> *)albums
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(requestPhotosAccess:(RCTPromiseResolveBlock)resolve

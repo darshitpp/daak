@@ -195,6 +195,51 @@ describe('an un-listened emit falls through to the stash', () => {
   });
 });
 
+describe('the failed-send category has its own channel and its own buttons', () => {
+  const kotlin = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt',
+  );
+
+  it('Android creates the channel daak.failed named Send failures, beside daak.received', () => {
+    const ensure = kotlin.slice(
+      kotlin.indexOf('private fun ensureChannel'),
+      kotlin.indexOf('override fun registerCategories'),
+    );
+    expect(ensure).toMatch(/"daak\.received"|CHANNEL\b/);
+    expect(ensure).toContain('"Received files"');
+    expect(kotlin).toMatch(/const val CHANNEL_FAILED = "daak\.failed"/);
+    expect(ensure).toContain('CHANNEL_FAILED');
+    expect(ensure).toContain('"Send failures"');
+    expect(ensure).toMatch(/IMPORTANCE_DEFAULT/);
+  });
+
+  it('Android creates the channels on registration and falls back to daak.received on a post', () => {
+    const register = kotlin.slice(
+      kotlin.indexOf('override fun registerCategories'),
+      kotlin.indexOf('override fun post('),
+    );
+    expect(register).toMatch(/ensureChannels?\(/);
+    const post = kotlin.slice(kotlin.indexOf('override fun post('), kotlin.indexOf('override fun cancel('));
+    expect(post).toMatch(/channelFor\(category\)/);
+    expect(kotlin).toMatch(/private fun channelFor\(category: String\)[^\n]*\n?[^\n]*CHANNEL_FAILED[^\n]*CHANNEL/);
+    expect(post).not.toMatch(/category\.ifEmpty/);
+    expect(post).not.toMatch(/addAction/);
+  });
+
+  it('iOS builds one category for each JSON entry and keeps Share off daak.failed', () => {
+    const register = iosModule.slice(
+      iosModule.indexOf('func registerCategories('),
+      iosModule.indexOf('func post('),
+    );
+    expect(register).toMatch(/JSONSerialization\.jsonObject/);
+    expect(register).toMatch(/UNNotificationCategory\(\s*identifier: id/);
+    expect(register).toMatch(/let categories = try\? JSONSerialization/);
+    expect(register).toMatch(/reject\("E_NOTIFY"/);
+    expect(register).not.toContain('daak.share');
+    expect(iosModule).not.toMatch(/receivedCategory/);
+  });
+});
+
 describe('iOS cold-start action taps', () => {
   it('installs the notification delegate at app launch, not from JS', () => {
     expect(iosLaunchDelegate).not.toBe('');

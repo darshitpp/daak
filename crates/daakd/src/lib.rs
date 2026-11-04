@@ -226,6 +226,7 @@ fn thread_page_json(p: &daak_core::thread::ThreadPage) -> serde_json::Value {
                 "error": i.error,
                 "truncated": i.truncated,
                 "textTruncated": i.text_truncated,
+                "group": i.group.as_ref().map(daak_core::thread::ThreadGroup::to_json),
             })
         })
         .collect();
@@ -279,6 +280,7 @@ fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Valu
         "summary": row.summary,
         "receivedAt": row.received_at,
         "savedPaths": saved_paths,
+        "groupRoots": row.group_roots,
     })
 }
 
@@ -1047,6 +1049,7 @@ mod tests {
                 error: None,
                 truncated: false,
                 text_truncated: false,
+                group: None,
             }],
             older_cursor: Some("5:00".into()),
         };
@@ -1097,6 +1100,7 @@ mod tests {
             error: None,
             truncated,
             text_truncated,
+            group: None,
         };
         let page = daak_core::thread::ThreadPage {
             items: vec![item(true, false), item(false, true)],
@@ -1502,6 +1506,7 @@ mod tests {
             summary: "hi".into(),
             received_at: 0,
             saved_paths: "{not json".into(),
+            group_roots: Vec::new(),
         };
         assert!(inbox_entry_json(&row)["savedPaths"].is_null());
         // A real empty list stays an empty list.
@@ -1511,6 +1516,25 @@ mod tests {
         assert_eq!(
             inbox_entry_json(&row)["savedPaths"],
             serde_json::json!(["/tmp/a.bin"])
+        );
+    }
+
+    #[test]
+    fn the_inbox_entry_carries_the_group_roots() {
+        let row = daak_core::store::inbox::InboxRow {
+            id: [1u8; 16],
+            transfer_id: [1u8; 16],
+            peer_device_id: [2u8; 16],
+            kind: "batch".into(),
+            item_count: 1,
+            summary: "1 file(s)".into(),
+            received_at: 0,
+            saved_paths: "[]".into(),
+            group_roots: vec!["/out/album".into()],
+        };
+        assert_eq!(
+            inbox_entry_json(&row)["groupRoots"],
+            serde_json::json!(["/out/album"])
         );
     }
 }
