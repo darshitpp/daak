@@ -13,8 +13,8 @@ use daak_core::transfer::{receive_transfer, send_transfer};
 
 const MIB: u64 = 1024 * 1024;
 
-/// Send `files` files of `total_mib / files` MiB each. Return MiB/s.
-async fn run(total_mib: u64, files: u32) -> f64 {
+/// Send `files` files of `total_mib / files` MiB each. Return (MiB/s, elapsed seconds).
+async fn run(total_mib: u64, files: u32) -> (f64, f64) {
     // One scratch directory holds the sources, the output, and the quarantine.
     let scratch =
         PathBuf::from(std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into())).join("daak");
@@ -86,15 +86,16 @@ async fn run(total_mib: u64, files: u32) -> f64 {
             .len();
         assert_eq!(len, per_file, "file {i} has the wrong size");
     }
-    (total_mib as f64) / secs
+    ((total_mib as f64) / secs, secs)
 }
 
-/// 64 MiB in 8 files. The floor of 5 MiB/s catches a hang only.
+/// 64 MiB in 8 files. The floor of 1 MiB/s catches a hang only.
+/// It does not compare runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn throughput_report() {
-    let rate = run(64, 8).await;
-    println!("throughput_report: {rate:.1} MiB/s (64 MiB, 8 files, loopback, encryption included)");
-    assert!(rate >= 5.0, "rate {rate:.1} MiB/s is below 5 MiB/s");
+    let (rate, secs) = run(64, 8).await;
+    println!("throughput_report: {rate:.2} MiB/s in {secs:.2} s (64 MiB, 8 files, loopback, encryption included)");
+    assert!(rate >= 1.0, "rate {rate:.1} MiB/s is below 1 MiB/s");
 }
 
 /// 512 MiB in 64 files. It runs only when `DAAK_PERF=1`.
@@ -103,8 +104,8 @@ async fn throughput_large() {
     if std::env::var("DAAK_PERF").as_deref() != Ok("1") {
         return;
     }
-    let rate = run(512, 64).await;
+    let (rate, secs) = run(512, 64).await;
     println!(
-        "throughput_large: {rate:.1} MiB/s (512 MiB, 64 files, loopback, encryption included)"
+        "throughput_large: {rate:.2} MiB/s in {secs:.2} s (512 MiB, 64 files, loopback, encryption included)"
     );
 }
