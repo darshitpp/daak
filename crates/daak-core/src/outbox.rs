@@ -24,13 +24,9 @@ pub fn enqueue(
     // and the CLI both look it up with `item.index as usize`).
     for item in manifest.binary_items() {
         if let Some(src) = files.get(item.index as usize) {
-            // The MANIFEST's name, not the source's leaf: a folder can hold two
-            // files with the same leaf, and staging is a flat namespace.
-            staging.stage(
-                &manifest.payload_id,
-                src,
-                item.name.as_deref().unwrap_or_default(),
-            )?;
+            // Staging keys the file on its item index, not on a name. Two
+            // names can collide on a case-insensitive file system.
+            staging.stage(&manifest.payload_id, src, item.index)?;
         }
     }
     // R-T10-11: the row id IS the payload id. Every other transfer id in the
@@ -334,7 +330,7 @@ mod tests {
         let due = db.due_outbox(crate::manifest::now_ms() as i64).unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].state, "pending");
-        assert!(staging.staged_path(&manifest.payload_id, "a.bin").exists());
+        assert!(staging.staged_path(&manifest.payload_id, 0).exists());
     }
 
     // R-A: the brief's only test never exercises the worker loop, so the drain
@@ -397,7 +393,7 @@ mod tests {
         enqueue(&db, &staging, &[9u8; 16], &manifest, &files).unwrap();
 
         assert!(
-            staging.staged_path(&manifest.payload_id, "b.bin").exists(),
+            staging.staged_path(&manifest.payload_id, 1).exists(),
             "the file item (index 1) must be the one staged"
         );
     }

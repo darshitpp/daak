@@ -217,7 +217,7 @@ fn cancel_fails_the_row_removes_staging_and_retry_rearms_it() {
     let f = src_dir.path().join("a.bin");
     std::fs::write(&f, b"data").unwrap();
     let (id, manifest) = binary_send(&db, &staging, [6u8; 16], &f);
-    let staged = staging.staged_path(&manifest.payload_id, "a.bin");
+    let staged = staging.staged_path(&manifest.payload_id, 0);
     assert!(staged.exists(), "enqueue staged the file");
 
     daak_core::engine::cancel_with(&db, &staging, id).unwrap();

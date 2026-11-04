@@ -193,8 +193,8 @@ fn a_folders_children_account_for_its_bytes() {
 ///
 /// This drives the REAL path end to end: `from_picked_paths` to build, the real
 /// `Staging::stage` to lay down the copies (the same calls `outbox::enqueue`
-/// makes), `staging.staged_path` to address them (the same lookup the outbox
-/// drain does), and the real `send_transfer` / `receive_transfer`. The previous
+/// makes), `staging.staged_path` to address them (the path the outbox drain
+/// finds first), and the real `send_transfer` / `receive_transfer`. The previous
 /// version hand-copied into a flat tempdir with `std::fs::copy`, which proved
 /// nothing about the enqueue->staging->drain path it claimed to cover.
 #[tokio::test]
@@ -212,14 +212,15 @@ async fn a_folder_share_roundtrips_as_a_tree() {
     .unwrap();
 
     // The real staging root, addressed exactly as outbox::enqueue and the
-    // outbox drain address it: root / <hex payload_id> / <manifest name>.
+    // outbox drain address it: root / <hex payload_id> / item_<index>.
     let stage = tempfile::tempdir().unwrap();
     let staging = Staging::new(stage.path().to_path_buf());
     let mut paths: Vec<Option<PathBuf>> = Vec::new();
     for (item, src_path) in manifest.items.iter().zip(&sources) {
-        let name = item.name.as_deref().unwrap();
-        staging.stage(&manifest.payload_id, src_path, name).unwrap();
-        paths.push(Some(staging.staged_path(&manifest.payload_id, name)));
+        staging
+            .stage(&manifest.payload_id, src_path, item.index)
+            .unwrap();
+        paths.push(Some(staging.staged_path(&manifest.payload_id, item.index)));
     }
 
     let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
@@ -443,17 +444,14 @@ fn same_named_files_in_different_folders_stay_separate_in_staging() {
     let staging = Staging::new(dir.path().join("staging"));
     for (item, src) in manifest.items.iter().zip(&sources) {
         staging
-            .stage(&manifest.payload_id, src, item.name.as_deref().unwrap())
+            .stage(&manifest.payload_id, src, item.index)
             .unwrap();
     }
     let landed: Vec<String> = manifest
         .items
         .iter()
         .map(|i| {
-            std::fs::read_to_string(
-                staging.staged_path(&manifest.payload_id, i.name.as_deref().unwrap()),
-            )
-            .unwrap()
+            std::fs::read_to_string(staging.staged_path(&manifest.payload_id, i.index)).unwrap()
         })
         .collect();
     assert!(landed.contains(&"from a".to_string()), "got {landed:?}");
@@ -532,37 +530,36 @@ fn two_folders_with_the_same_basename_produce_unique_manifest_names() {
     let staging = Staging::new(dir.path().join("staging"));
     for (item, src) in manifest.items.iter().zip(&sources) {
         staging
-            .stage(&manifest.payload_id, src, item.name.as_deref().unwrap())
+            .stage(&manifest.payload_id, src, item.index)
             .unwrap();
     }
-    let staged: Vec<(String, String)> = manifest
+    let staged: Vec<(u32, String, String)> = manifest
         .items
         .iter()
         .map(|i| {
             (
+                i.index,
                 i.name.clone().unwrap(),
-                std::fs::read_to_string(
-                    staging.staged_path(&manifest.payload_id, i.name.as_deref().unwrap()),
-                )
-                .unwrap(),
+                std::fs::read_to_string(staging.staged_path(&manifest.payload_id, i.index))
+                    .unwrap(),
             )
         })
         .collect();
     assert_eq!(staged.len(), 4);
     // Both folders' notes.txt must still be present and DISTINCT on disk --
     // same bytes, so only the count can tell them apart, which is the point.
-    let notes: Vec<&(String, String)> = staged
+    let notes: Vec<&(u32, String, String)> = staged
         .iter()
-        .filter(|(n, _)| n.starts_with("notes"))
+        .filter(|(_, n, _)| n.starts_with("notes"))
         .collect();
     assert_eq!(
         notes.len(),
         2,
         "both notes.txt must be staged, got {staged:?}"
     );
-    for (name, _) in &notes {
+    for (index, name, _) in &notes {
         assert!(
-            staging.staged_path(&manifest.payload_id, name).exists(),
+            staging.staged_path(&manifest.payload_id, *index).exists(),
             "staged copy missing for {name}"
         );
     }
@@ -695,11 +692,14 @@ fn stage_manifest(
         .items
         .iter()
         .map(|item| {
-            let name = item.name.as_deref().unwrap();
             staging
-                .stage(&manifest.payload_id, &sources[item.index as usize], name)
+                .stage(
+                    &manifest.payload_id,
+                    &sources[item.index as usize],
+                    item.index,
+                )
                 .unwrap();
-            Some(staging.staged_path(&manifest.payload_id, name))
+            Some(staging.staged_path(&manifest.payload_id, item.index))
         })
         .collect()
 }
@@ -883,11 +883,14 @@ async fn a_mixed_text_and_folder_share_is_received_end_to_end() {
             if !item.is_binary() {
                 return None;
             }
-            let name = item.name.as_deref().unwrap();
             staging
-                .stage(&manifest.payload_id, &sources[item.index as usize], name)
+                .stage(
+                    &manifest.payload_id,
+                    &sources[item.index as usize],
+                    item.index,
+                )
                 .unwrap();
-            Some(staging.staged_path(&manifest.payload_id, name))
+            Some(staging.staged_path(&manifest.payload_id, item.index))
         })
         .collect();
 

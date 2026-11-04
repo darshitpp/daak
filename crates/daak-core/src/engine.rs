@@ -3687,7 +3687,7 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
         if item.is_binary() {
             let path = ctx
                 .staging
-                .staged_path(&row.payload_id, item.name.as_deref().unwrap_or_default());
+                .find_staged(&row.payload_id, item.index, item.name.as_deref());
             // B3: a staged file that is NOT THERE will still not be there on
             // the next attempt, so retrying burns all 8 attempts over ~35
             // minutes to arrive at the same failure. The reachable way to get
@@ -3696,8 +3696,8 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             // user, but the harm (a 35 minute silent burn) is not. Terminal on
             // the first attempt, exactly like an undecodable manifest above.
             if !path.exists() {
-                // The staged path ends in the user file name, so neither the
-                // log nor the reason names the path.
+                // An old staged path ends in the user file name, so neither
+                // the log nor the reason names the path.
                 tracing::warn!(
                     "outbox drain: row {} staged file for item {} is gone",
                     short_id(&row.id),
@@ -4805,7 +4805,7 @@ mod tests {
         );
     }
 
-    // Task 5 privacy: the staged path ends in the user file name. When the
+    // Task 5 privacy: an old staged path ends in the user file name. When the
     // staged file is gone, neither the log nor the `TransferFailed` error may
     // hold that name or that path.
     #[tokio::test]
@@ -4847,7 +4847,7 @@ mod tests {
         )
         .unwrap();
         let row = db.get_outbox(&id).unwrap().unwrap();
-        let staged = staging.staged_path(&row.payload_id, NAME);
+        let staged = staging.staged_path(&row.payload_id, 0);
         std::fs::remove_file(&staged).unwrap();
         assert!(db.mark_outbox_sending(&id).unwrap());
 
@@ -5025,6 +5025,157 @@ mod tests {
             seen.push(e);
         }
         seen
+    }
+
+    type Received = Arc<std::sync::Mutex<HashMap<u32, Vec<u8>>>>;
+
+    /// A stub peer that keeps the bytes of each item, then acks the transfer.
+    fn capturing_peer_registry() -> (SharedSessions<crate::net::secure::MemConn>, Received) {
+        let received: Received = Arc::default();
+        let store = received.clone();
+        let sessions: SharedSessions<crate::net::secure::MemConn> =
+            Arc::new(Mutex::new(SessionRegistry::new(
+                std::time::Duration::from_secs(30),
+                Box::new(move |_p: [u8; 16]| {
+                    let store = store.clone();
+                    Box::pin(async move {
+                        let (mine, mut theirs) = crate::net::secure::SecureConnection::<
+                            crate::net::secure::MemConn,
+                        >::test_pair();
+                        tokio::spawn(async move {
+                            use crate::net::FrameTransport;
+                            let Ok(Some(f)) = theirs.recv().await else {
+                                return;
+                            };
+                            let m = Manifest::from_cbor(&f.body).unwrap();
+                            let total: u64 = m.items.iter().filter_map(|i| i.chunk_count).sum();
+                            for _ in 0..total {
+                                let Ok(Some(f)) = theirs.recv().await else {
+                                    return;
+                                };
+                                let (index, _, data) =
+                                    crate::transfer::sender::decode_chunk_body(&f.body).unwrap();
+                                store
+                                    .lock()
+                                    .unwrap()
+                                    .entry(index)
+                                    .or_default()
+                                    .extend_from_slice(&data);
+                            }
+                            let ack = crate::control::AckMsg {
+                                transfer_id: m.payload_id,
+                                item_index: 0,
+                                complete: true,
+                                hash_ok: true,
+                            };
+                            let _ = theirs
+                                .send(
+                                    crate::session::CONTROL_STREAM,
+                                    RecordType::Ack,
+                                    Bytes::from(ack.to_cbor().unwrap()),
+                                )
+                                .await;
+                            let _ = theirs.recv().await;
+                        });
+                        Ok(mine)
+                    })
+                        as crate::session::BoxFutureConn<crate::net::secure::MemConn>
+                }) as crate::session::BoxConnect<crate::net::secure::MemConn>,
+            )));
+        (sessions, received)
+    }
+
+    fn two_item_manifest(first: &Path, second: &Path) -> Manifest {
+        Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![
+                crate::manifest::Item::from_file(0, first, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+                crate::manifest::Item::from_file(1, second, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// F4: names are case sensitive. Two names that differ only by case
+    /// collide on a case-insensitive file system. Staging must keep both
+    /// files, and the drain must send the bytes of each item.
+    #[tokio::test]
+    async fn staging_two_files_whose_names_differ_only_by_case_keeps_both_and_the_outbox_drain_sends_each_correct_bytes(
+    ) {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("x")).unwrap();
+        std::fs::create_dir_all(src.path().join("y")).unwrap();
+        let lower = src.path().join("x/a.txt");
+        let upper = src.path().join("y/A.txt");
+        std::fs::write(&lower, b"lower case bytes").unwrap();
+        std::fs::write(&upper, b"UPPER CASE BYTES").unwrap();
+        let manifest = two_item_manifest(&lower, &upper);
+        let id = crate::outbox::enqueue(
+            &db,
+            &staging,
+            &[9u8; 16],
+            &manifest,
+            &[lower.clone(), upper.clone()],
+        )
+        .expect("staging keeps both files");
+
+        let (sessions, received) = capturing_peer_registry();
+        let events = drain_one(&db, &staging, sessions, id).await;
+        assert!(
+            events.iter().any(
+                |e| matches!(e, EngineEvent::TransferDone { transfer_id } if *transfer_id == id)
+            ),
+            "the drain completes, got {events:?}"
+        );
+        let received = received.lock().unwrap();
+        assert_eq!(received[&0], b"lower case bytes");
+        assert_eq!(received[&1], b"UPPER CASE BYTES");
+        assert_eq!(std::fs::read(&lower).unwrap(), b"lower case bytes");
+        assert_eq!(std::fs::read(&upper).unwrap(), b"UPPER CASE BYTES");
+    }
+
+    /// Upgrade pin: an outbox row staged before `item_<index>` keeps its file
+    /// under the item name. The drain must still find that file.
+    #[tokio::test]
+    async fn the_drain_finds_a_file_staged_under_the_old_name_based_path() {
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Arc::new(Staging::new(root.path().to_path_buf()));
+        let src = tempfile::tempdir().unwrap();
+        let first = src.path().join("one.bin");
+        let second = src.path().join("two.bin");
+        std::fs::write(&first, b"first item").unwrap();
+        std::fs::write(&second, b"second item").unwrap();
+        let manifest = two_item_manifest(&first, &second);
+        // No files: the row exists, but nothing is staged.
+        let id = crate::outbox::enqueue(&db, &staging, &[9u8; 16], &manifest, &[]).unwrap();
+        // The layout of the old version: <root>/<hex payload id>/<item name>.
+        let old_dir = root.path().join(hex::encode(manifest.payload_id));
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::copy(&first, old_dir.join("one.bin")).unwrap();
+        std::fs::copy(&second, old_dir.join("two.bin")).unwrap();
+
+        let (sessions, received) = capturing_peer_registry();
+        let events = drain_one(&db, &staging, sessions, id).await;
+        assert!(
+            events.iter().any(
+                |e| matches!(e, EngineEvent::TransferDone { transfer_id } if *transfer_id == id)
+            ),
+            "the drain completes, got {events:?}"
+        );
+        let received = received.lock().unwrap();
+        assert_eq!(received[&0], b"first item");
+        assert_eq!(received[&1], b"second item");
     }
 
     /// Task 2b: a drain to a peer that announced 101 waits for the resume
