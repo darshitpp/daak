@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text } from 'react-native';
-import { act, render, screen } from '@testing-library/react-native';
+import { act, renderAsync, screen } from '@testing-library/react-native';
 import { DaakUiApp } from './App';
 import { createUiRuntime } from './headless';
 import { fakeEngine } from './testing/fakeEngine';
@@ -10,12 +10,12 @@ import { CANT_REACH_TOKEN } from './state/useBlockers';
 import type { DaakEvent } from '@daak/core';
 
 describe('DaakUiApp', () => {
-  it('renders the popover from the folded state', () => {
+  it('renders the popover from the folded state', async () => {
     const engine = fakeEngine();
     const bus = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
     const runtime = createUiRuntime(engine);
-    render(<DaakUiApp mode="popover" engine={engine} runtime={runtime} />);
-    act(() => {
+    await renderAsync(<DaakUiApp mode="popover" engine={engine} runtime={runtime} />);
+    await act(async () => {
       bus.forEach((h) => h({ type: 'device.discovered', device: { deviceId: 'a', name: 'A', addr: '1.2.3.4:1', paired: true } }));
     });
     // The device name and the avatar initial are the same letter here, so this
@@ -26,7 +26,7 @@ describe('DaakUiApp', () => {
 
   // finding 8: useSyncExternalStore resubscribes whenever `subscribe` changes
   // identity, and an inline arrow changed on every render the event caused.
-  it('does not resubscribe once per event', () => {
+  it('does not resubscribe once per event', async () => {
     const engine = fakeEngine();
     const bus = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
     const runtime = createUiRuntime(engine);
@@ -39,7 +39,7 @@ describe('DaakUiApp', () => {
         return runtime.subscribe(l);
       },
     };
-    render(<DaakUiApp mode="popover" engine={engine} runtime={counting} />);
+    await renderAsync(<DaakUiApp mode="popover" engine={engine} runtime={counting} />);
     expect(subscribes).toBe(1);
     for (let i = 0; i < 3; i += 1) {
       act(() => {
@@ -60,10 +60,10 @@ describe('DaakUiApp', () => {
   // blocking-screen suite is source-shape only, so a shell could satisfy every
   // source pin and still drop the node on the way into Popover. This mounts the
   // real tree with the real host props and asserts on what is drawn.
-  it('renders the cannot-reach screen in the popover, and no panel', () => {
+  it('renders the cannot-reach screen in the popover, and no panel', async () => {
     const engine = fakeEngine();
     const runtime = createUiRuntime(engine);
-    render(
+    await renderAsync(
       <DaakUiApp
         mode="popover"
         engine={engine}
@@ -91,10 +91,10 @@ describe('DaakUiApp', () => {
   // and Send keeps working. The panel draws its own two-line banner with the
   // design words, so the alert node is not drawn for it. The cannot-reach case
   // above still proves the node reaches the popover.
-  it('keeps the panel for an update notice, and shows the banner', () => {
+  it('keeps the panel for an update notice, and shows the banner', async () => {
     const engine = fakeEngine();
     const runtime = createUiRuntime(engine);
-    render(
+    await renderAsync(
       <DaakUiApp
         mode="popover"
         engine={engine}
@@ -112,10 +112,10 @@ describe('DaakUiApp', () => {
   // panel, or renders the alert unconditionally, passes the case above and
   // still drops the panel on every ordinary launch. An alert with NO token is
   // the resting state of every healthy launch, so the panel must be there.
-  it('renders the normal popover panel when no alert is routed', () => {
+  it('renders the normal popover panel when no alert is routed', async () => {
     const engine = fakeEngine();
     const runtime = createUiRuntime(engine);
-    render(
+    await renderAsync(
       <DaakUiApp
         mode="popover"
         engine={engine}
@@ -146,7 +146,7 @@ describe('DaakUiApp mounts the shared toast', () => {
     ['popover', CANT_REACH_TOKEN],
   ] as const)('shows a toast that a child raises in %s mode', async (mode, token) => {
     const engine = fakeEngine();
-    render(
+    await renderAsync(
       <DaakUiApp
         mode={mode}
         engine={engine}

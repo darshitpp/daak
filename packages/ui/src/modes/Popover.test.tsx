@@ -1,6 +1,6 @@
 import React from 'react';
 import { Linking, StyleSheet, Text } from 'react-native';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, renderAsync, screen, waitFor, fireEventAsync } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, DeviceInfo, QuarantineReport, SendRequest, TransferSummary } from '@daak/core';
 import { Popover } from './Popover';
 import { fakeEngine } from '../testing/fakeEngine';
@@ -56,9 +56,9 @@ const emit = (engine: DaakEngine, e: DaakEvent) =>
     (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers.forEach((h) => h(e));
   });
 const settle = () => act(async () => {});
-const mount = (engine: DaakEngine, devices: DeviceInfo[], props: Partial<React.ComponentProps<typeof Popover>> = {}) =>
-  render(<Popover state={stateOf(devices)} engine={engine} onExpand={() => {}} {...props} />);
-const open = (d: DeviceInfo) => fireEvent.press(screen.getByLabelText('send-to-' + d.deviceId));
+const mount = async (engine: DaakEngine, devices: DeviceInfo[], props: Partial<React.ComponentProps<typeof Popover>> = {}) =>
+  await renderAsync(<Popover state={stateOf(devices)} engine={engine} onExpand={() => {}} {...props} />);
+const open = async (d: DeviceInfo) => fireEventAsync.press(screen.getByLabelText('send-to-' + d.deviceId));
 const REPORT: QuarantineReport = {
   transferId: 'dd'.repeat(16),
   itemIndex: 0,
@@ -73,9 +73,9 @@ const REPORT: QuarantineReport = {
 };
 
 describe('the panel frame', () => {
-  it('is 320 wide and shows the wordmark', () => {
+  it('is 320 wide and shows the wordmark', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     expect(StyleSheet.flatten(screen.getByTestId('popover-root').props.style).width).toBe(320);
     expect(screen.getByLabelText('Daak')).toBeTruthy();
   });
@@ -83,36 +83,36 @@ describe('the panel frame', () => {
   // The header line and the row of the online device both read "On this network".
   it('shows the connection line from the engine devices', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     await waitFor(() => expect(screen.getAllByText('On this network')).toHaveLength(2));
   });
 
   it('says so when no device is on the network', async () => {
     const { engine } = spyEngine([tablet]);
-    mount(engine, [tablet]);
+    await mount(engine, [tablet]);
     expect(await screen.findByText('No device found on this Wi-Fi')).toBeTruthy();
   });
 
-  it('still offers the full app as the way out', () => {
+  it('still offers the full app as the way out', async () => {
     const { engine } = spyEngine([pixel]);
     const onExpand = jest.fn();
-    mount(engine, [pixel], { onExpand });
+    await mount(engine, [pixel], { onExpand });
     expect(screen.getByText('Open the full app')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('open-dashboard'));
+    await fireEventAsync.press(screen.getByTestId('open-dashboard'));
     expect(onExpand).toHaveBeenCalled();
   });
 
   // The update notice is a BANNER above the list (design macos-menubar.html,
   // #update-banner), so the list, Send, and Open the full app stay usable.
-  it('shows the update banner above a still-usable list', () => {
+  it('shows the update banner above a still-usable list', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
+    await mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
     expect(
       screen.getByText('A newer version of Daak is out. Some devices may not connect until you update.'),
     ).toBeTruthy();
     expect(screen.getByText('Open the download page')).toBeTruthy();
     expect(screen.getByLabelText('send-to-' + pixel.deviceId)).toBeTruthy();
-    open(pixel);
+    await open(pixel);
     expect(screen.getByTestId('popover-send')).toBeTruthy();
     expect(screen.getByTestId('open-dashboard')).toBeTruthy();
   });
@@ -120,16 +120,16 @@ describe('the panel frame', () => {
   it('opens the download page from the banner', async () => {
     const openUrl = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
-    fireEvent.press(screen.getByTestId('popover-update-download'));
+    await mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
+    await fireEventAsync.press(screen.getByTestId('popover-update-download'));
     await waitFor(() => expect(openUrl).toHaveBeenCalledWith(RELEASES_URL));
   });
 
   // The design `.pop-banner-t` uses the full foreground colour, not the muted
   // note text. So the banner text takes `ui.bannerTxt`.
-  it('gives the update banner text the full-strength banner style', () => {
+  it('gives the update banner text the full-strength banner style', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
+    await mount(engine, [pixel], { alert: <Text>update</Text>, alertRouteToken: pixel.deviceId });
     const t = screen.getByText(
       'A newer version of Daak is out. Some devices may not connect until you update.',
     );
@@ -139,9 +139,9 @@ describe('the panel frame', () => {
 
   // The cannot-reach screen still replaces the panel, as it replaces the tab
   // bar. It is not a banner.
-  it('replaces the panel for a cannot-reach notice', () => {
+  it('replaces the panel for a cannot-reach notice', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel], { alert: <Text>unreachable</Text>, alertRouteToken: CANT_REACH_TOKEN });
+    await mount(engine, [pixel], { alert: <Text>unreachable</Text>, alertRouteToken: CANT_REACH_TOKEN });
     expect(screen.getByText('unreachable')).toBeTruthy();
     expect(screen.queryByLabelText('send-to-' + pixel.deviceId)).toBeNull();
     expect(screen.queryByTestId('open-dashboard')).toBeNull();
@@ -150,62 +150,62 @@ describe('the panel frame', () => {
 });
 
 describe('the device list', () => {
-  it('shows the empty state for 0 paired devices', () => {
+  it('shows the empty state for 0 paired devices', async () => {
     const { engine } = spyEngine([]);
-    mount(engine, [mk('Stranger', 'online', false)]);
+    await mount(engine, [mk('Stranger', 'online', false)]);
     expect(screen.getByText('No paired devices yet')).toBeTruthy();
     expect(screen.getByText('Pair a device on your Wi-Fi and it will show up here.')).toBeTruthy();
     expect(screen.queryByText('Stranger')).toBeNull();
   });
 
-  it('shows 1 device with its status word', () => {
+  it('shows 1 device with its status word', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     expect(screen.getByText('Pixel 9')).toBeTruthy();
     expect(screen.getAllByText('On this network').length).toBeGreaterThan(0);
   });
 
   // Review Focus 4.
-  it('shows 3 of 5 devices, in the design order', () => {
+  it('shows 3 of 5 devices, in the design order', async () => {
     const five = [mk('Zed', 'offline'), mk('Bea', 'away'), mk('Cy', 'online'), mk('Al', 'online'), mk('Di', 'offline')];
     const { engine } = spyEngine(five);
-    mount(engine, five);
+    await mount(engine, five);
     const labels = screen.getAllByLabelText(/^send-to-/).map((n) => n.props.accessibilityLabel);
     const byName = (n: string) => 'send-to-' + five.find((d) => d.name === n)!.deviceId;
     expect(labels).toEqual([byName('Al'), byName('Cy'), byName('Bea')]);
   });
 
-  it('shows the three words of the design for the three states', () => {
+  it('shows the three words of the design for the three states', async () => {
     const list = [pixel, iPad, tablet];
     const { engine } = spyEngine(list);
-    mount(engine, list);
+    await mount(engine, list);
     expect(screen.getByText('Away')).toBeTruthy();
     expect(screen.getByText('Not on this network')).toBeTruthy();
   });
 
-  it('does not let the user choose an offline row', () => {
+  it('does not let the user choose an offline row', async () => {
     const { engine } = spyEngine([tablet]);
-    mount(engine, [tablet]);
+    await mount(engine, [tablet]);
     const row = screen.getByLabelText('send-to-' + tablet.deviceId);
     expect(row.props.accessibilityState).toMatchObject({ disabled: true });
-    fireEvent.press(row);
+    await fireEventAsync.press(row);
     expect(screen.queryByTestId('popover-back')).toBeNull();
   });
 
-  it('lets the user choose an away row', () => {
+  it('lets the user choose an away row', async () => {
     const { engine } = spyEngine([iPad]);
-    mount(engine, [iPad]);
-    open(iPad);
+    await mount(engine, [iPad]);
+    await open(iPad);
     expect(screen.getByTestId('popover-back')).toBeTruthy();
     expect(screen.getByText('Living Room iPad')).toBeTruthy();
   });
 });
 
 describe('the send pane', () => {
-  it('shows Add files, the note field, and a disabled Send', () => {
+  it('shows Add files, the note field, and a disabled Send', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel], { onPickFiles: async () => [] });
-    open(pixel);
+    await mount(engine, [pixel], { onPickFiles: async () => [] });
+    await open(pixel);
     expect(screen.getByText('Add files')).toBeTruthy();
     expect(screen.getByPlaceholderText('Or type a note')).toBeTruthy();
     expect(screen.getByTestId('popover-send').props.accessibilityState).toMatchObject({ disabled: true });
@@ -214,29 +214,29 @@ describe('the send pane', () => {
 
   it('enables Send for a note and sends it as text', async () => {
     const { engine, sent } = spyEngine([pixel]);
-    mount(engine, [pixel]);
-    open(pixel);
-    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), '  hello  ');
-    fireEvent.press(screen.getByTestId('popover-send'));
+    await mount(engine, [pixel]);
+    await open(pixel);
+    await fireEventAsync.changeText(screen.getByPlaceholderText('Or type a note'), '  hello  ');
+    await fireEventAsync.press(screen.getByTestId('popover-send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: pixel.deviceId, text: 'hello' }]));
   });
 
-  it('renders no picker when the host supplies none', () => {
+  it('renders no picker when the host supplies none', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel]);
-    open(pixel);
+    await mount(engine, [pixel]);
+    await open(pixel);
     expect(screen.queryByTestId('popover-pick')).toBeNull();
   });
 
   it('sends the picked file to the tapped device, with "Send to {name}"', async () => {
     const { engine, sent } = spyEngine([pixel, thinkpad]);
     const onPickFiles = jest.fn(async () => ['/Users/d/Documents/grocery-list.txt']);
-    mount(engine, [pixel, thinkpad], { onPickFiles });
-    open(thinkpad);
-    fireEvent.press(screen.getByTestId('popover-pick'));
+    await mount(engine, [pixel, thinkpad], { onPickFiles });
+    await open(thinkpad);
+    await fireEventAsync.press(screen.getByTestId('popover-pick'));
     await waitFor(() => expect(screen.getByText('grocery-list.txt')).toBeTruthy());
     expect(screen.getByText('Send to ThinkPad')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('popover-send'));
+    await fireEventAsync.press(screen.getByTestId('popover-send'));
     await waitFor(() =>
       expect(sent).toEqual([{ peerDeviceId: thinkpad.deviceId, files: ['/Users/d/Documents/grocery-list.txt'] }]),
     );
@@ -245,26 +245,26 @@ describe('the send pane', () => {
   // The panel supports 1 file at a time, as a radio group.
   it('chooses one file from several, and sends only that file', async () => {
     const { engine, sent } = spyEngine([pixel]);
-    mount(engine, [pixel], { onPickFiles: async () => ['/a/one.pdf', '/a/two.pdf'] });
-    open(pixel);
-    fireEvent.press(screen.getByTestId('popover-pick'));
+    await mount(engine, [pixel], { onPickFiles: async () => ['/a/one.pdf', '/a/two.pdf'] });
+    await open(pixel);
+    await fireEventAsync.press(screen.getByTestId('popover-pick'));
     await screen.findByText('one.pdf');
     expect(screen.getByLabelText('popover-file-one.pdf').props.accessibilityState).toMatchObject({ checked: true });
     expect(screen.getByLabelText('popover-file-two.pdf').props.accessibilityState).toMatchObject({ checked: false });
-    fireEvent.press(screen.getByLabelText('popover-file-two.pdf'));
+    await fireEventAsync.press(screen.getByLabelText('popover-file-two.pdf'));
     expect(screen.getByLabelText('popover-file-one.pdf').props.accessibilityState).toMatchObject({ checked: false });
-    fireEvent.press(screen.getByTestId('popover-send'));
+    await fireEventAsync.press(screen.getByTestId('popover-send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: pixel.deviceId, files: ['/a/two.pdf'] }]));
   });
 
   it('sends the file first and the note second', async () => {
     const { engine, sent } = spyEngine([pixel]);
-    mount(engine, [pixel], { onPickFiles: async () => ['/a/one.pdf'] });
-    open(pixel);
-    fireEvent.press(screen.getByTestId('popover-pick'));
+    await mount(engine, [pixel], { onPickFiles: async () => ['/a/one.pdf'] });
+    await open(pixel);
+    await fireEventAsync.press(screen.getByTestId('popover-pick'));
     await screen.findByText('one.pdf');
-    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'see attached');
-    fireEvent.press(screen.getByTestId('popover-send'));
+    await fireEventAsync.changeText(screen.getByPlaceholderText('Or type a note'), 'see attached');
+    await fireEventAsync.press(screen.getByTestId('popover-send'));
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[0]).toEqual({ peerDeviceId: pixel.deviceId, files: ['/a/one.pdf'] });
     expect(sent[1]).toEqual({ peerDeviceId: pixel.deviceId, text: 'see attached' });
@@ -273,10 +273,10 @@ describe('the send pane', () => {
   it('shows the engine refusal and keeps the note', async () => {
     const engine = fakeEngine([pixel]);
     jest.spyOn(engine, 'send').mockRejectedValue(new Error('peer is not paired'));
-    mount(engine, [pixel]);
-    open(pixel);
-    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
-    fireEvent.press(screen.getByTestId('popover-send'));
+    await mount(engine, [pixel]);
+    await open(pixel);
+    await fireEventAsync.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
+    await fireEventAsync.press(screen.getByTestId('popover-send'));
     expect(await screen.findByText('peer is not paired')).toBeTruthy();
     expect(screen.getByText('That send did not go through')).toBeTruthy();
     expect(screen.getByPlaceholderText('Or type a note').props.value).toBe('hello');
@@ -284,13 +284,13 @@ describe('the send pane', () => {
 
   it('drops the staged file and note when it goes back to the device list', async () => {
     const { engine, sent } = spyEngine([pixel, thinkpad]);
-    mount(engine, [pixel, thinkpad], { onPickFiles: async () => ['/tmp/a.txt'] });
-    open(pixel);
-    fireEvent.press(screen.getByTestId('popover-pick'));
+    await mount(engine, [pixel, thinkpad], { onPickFiles: async () => ['/tmp/a.txt'] });
+    await open(pixel);
+    await fireEventAsync.press(screen.getByTestId('popover-pick'));
     await screen.findByText('a.txt');
-    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'stale');
-    fireEvent.press(screen.getByTestId('popover-back'));
-    open(thinkpad);
+    await fireEventAsync.changeText(screen.getByPlaceholderText('Or type a note'), 'stale');
+    await fireEventAsync.press(screen.getByTestId('popover-back'));
+    await open(thinkpad);
     expect(screen.queryByText('a.txt')).toBeNull();
     expect(screen.getByPlaceholderText('Or type a note').props.value).toBe('');
     expect(sent).toEqual([]);
@@ -302,12 +302,12 @@ describe('the sending pane', () => {
   // at once, and the user would never see the device list.
   async function startSend(engine: DaakEngine, devices: DeviceInfo[], rows: TransferSummary[]) {
     const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([]);
-    mount(engine, devices, { onPickFiles: async () => ['/a/Q3-report.pdf'] });
-    open(devices[0]);
-    fireEvent.press(screen.getByTestId('popover-pick'));
+    await mount(engine, devices, { onPickFiles: async () => ['/a/Q3-report.pdf'] });
+    await open(devices[0]);
+    await fireEventAsync.press(screen.getByTestId('popover-pick'));
     await screen.findByText('Q3-report.pdf');
     list.mockResolvedValue(rows);
-    fireEvent.press(screen.getByTestId('popover-send'));
+    await fireEventAsync.press(screen.getByTestId('popover-send'));
   }
 
   it('shows the design words and the progress of the running transfer', async () => {
@@ -331,7 +331,7 @@ describe('the sending pane', () => {
     const { engine } = spyEngine([pixel]);
     const cancel = jest.spyOn(engine, 'cancel');
     await startSend(engine, [pixel], [summary()]);
-    fireEvent.press(await screen.findByTestId('popover-stop'));
+    await fireEventAsync.press(await screen.findByTestId('popover-stop'));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(TID));
     expect(await screen.findByText('Add files')).toBeTruthy();
     expect(screen.queryByText('Sending to Pixel 9')).toBeNull();
@@ -341,7 +341,7 @@ describe('the sending pane', () => {
     const { engine } = spyEngine([pixel]);
     jest.spyOn(engine, 'cancel').mockRejectedValue(new Error('too late'));
     await startSend(engine, [pixel], [summary()]);
-    fireEvent.press(await screen.findByTestId('popover-stop'));
+    await fireEventAsync.press(await screen.findByTestId('popover-stop'));
     expect(await screen.findByText('too late')).toBeTruthy();
     expect(screen.getByText('Sending did not stop')).toBeTruthy();
     expect(screen.getByText('Sending to Pixel 9')).toBeTruthy();
@@ -352,7 +352,7 @@ describe('the sending pane', () => {
     const { engine } = spyEngine([pixel]);
     jest.spyOn(engine, 'retry').mockRejectedValue(new Error('peer is gone'));
     await startSend(engine, [pixel], [summary({ state: 'failed' })]);
-    fireEvent.press(await screen.findByTestId('popover-retry'));
+    await fireEventAsync.press(await screen.findByTestId('popover-retry'));
     expect(await screen.findByText('peer is gone')).toBeTruthy();
     expect(screen.getByText('That send did not start again')).toBeTruthy();
     expect(screen.getByText('That send did not go through')).toBeTruthy();
@@ -363,7 +363,7 @@ describe('the sending pane', () => {
     await startSend(engine, [pixel], [summary({ state: 'done', bytesDone: 4_400_000, bytesTotal: 4_400_000 })]);
     expect(await screen.findByText('Sent to Pixel 9')).toBeTruthy();
     expect(screen.getByText('Q3-report.pdf · 4.2 MB')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('popover-done-back'));
+    await fireEventAsync.press(screen.getByTestId('popover-done-back'));
     expect(await screen.findByText('Add files')).toBeTruthy();
     expect(screen.queryByText('Sent to Pixel 9')).toBeNull();
   });
@@ -375,7 +375,7 @@ describe('the sending pane', () => {
     await screen.findByText('That send did not go through');
     emit(engine, { type: 'transfer.failed', transferId: TID, error: 'peer went away' });
     expect(await screen.findByText('peer went away')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('popover-retry'));
+    await fireEventAsync.press(screen.getByTestId('popover-retry'));
     await waitFor(() => expect(retry).toHaveBeenCalledWith(TID));
   });
 });
@@ -388,7 +388,7 @@ describe('the panel speed', () => {
   async function pollFor(engine: DaakEngine, rows: (n: number) => TransferSummary[], polls: number) {
     let n = 0;
     jest.spyOn(engine, 'listTransfers').mockImplementation(async () => rows(n));
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     await settle();
     for (let i = 0; i < polls; i++) {
       n = i + 1;
@@ -423,7 +423,7 @@ describe('the panel speed', () => {
       jest.spyOn(engine, 'listTransfers').mockImplementation(async () => [
         summary({ peerDeviceId: peerOff.deviceId, state, bytesDone: n * 7 * MIB, bytesTotal: 400 * MIB }),
       ]);
-      const view = mount(engine, [peerOff]);
+      const view = await mount(engine, [peerOff]);
       await settle();
       for (let i = 0; i < 5; i++) {
         n = i + 1;
@@ -433,7 +433,7 @@ describe('the panel speed', () => {
       }
       expect(screen.queryByTestId('popover-speed')).toBeNull();
       expect(screen.queryByText(/MiB\/s/)).toBeNull();
-      view.unmount();
+      await view.unmountAsync();
       jest.useRealTimers();
     }
   });
@@ -445,19 +445,19 @@ describe('closing the panel during a transfer', () => {
     const { engine } = spyEngine([pixel]);
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
     const cancel = jest.spyOn(engine, 'cancel');
-    const view = mount(engine, [pixel]);
+    const view = await mount(engine, [pixel]);
     await screen.findByText('Sending to Pixel 9');
-    view.unmount();
+    await view.unmountAsync();
     expect(cancel).not.toHaveBeenCalled();
   });
 
   it('shows the sending pane again when the panel opens again', async () => {
     const { engine } = spyEngine([pixel]);
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary({ bytesDone: 1, bytesTotal: 4 })]);
-    const first = mount(engine, [pixel]);
+    const first = await mount(engine, [pixel]);
     await screen.findByText('Sending to Pixel 9');
-    first.unmount();
-    mount(engine, [pixel]);
+    await first.unmountAsync();
+    await mount(engine, [pixel]);
     expect(await screen.findByText('Sending to Pixel 9')).toBeTruthy();
     expect(screen.getByText('Stop sending')).toBeTruthy();
   });
@@ -465,7 +465,7 @@ describe('closing the panel during a transfer', () => {
   it('says it will send later for a queued transfer to an offline device', async () => {
     const { engine } = spyEngine([tablet]);
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary({ peerDeviceId: tablet.deviceId, state: 'queued' })]);
-    mount(engine, [tablet]);
+    await mount(engine, [tablet]);
     expect(await screen.findByText('Will send when Kitchen Tablet is back')).toBeTruthy();
     expect(screen.queryByText('Sending over your Wi-Fi')).toBeNull();
   });
@@ -474,14 +474,14 @@ describe('closing the panel during a transfer', () => {
   it('keeps the device list when a queued transfer waits for an offline device', async () => {
     const { engine, sent } = spyEngine([pixel, tablet]);
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary({ peerDeviceId: tablet.deviceId, state: 'queued' })]);
-    mount(engine, [pixel, tablet]);
+    await mount(engine, [pixel, tablet]);
     expect(await screen.findByText('Will send when Kitchen Tablet is back')).toBeTruthy();
     expect(screen.queryByTestId('popover-sending')).toBeNull();
     // The list is still there, and the user can pick another device and send.
-    open(pixel);
+    await open(pixel);
     expect(screen.getByTestId('popover-back')).toBeTruthy();
-    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hi');
-    fireEvent.press(screen.getByTestId('popover-send'));
+    await fireEventAsync.changeText(screen.getByPlaceholderText('Or type a note'), 'hi');
+    await fireEventAsync.press(screen.getByTestId('popover-send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: pixel.deviceId, text: 'hi' }]));
   });
 
@@ -489,8 +489,8 @@ describe('closing the panel during a transfer', () => {
     const { engine } = spyEngine([pixel, tablet]);
     jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary({ peerDeviceId: tablet.deviceId, state: 'queued' })]);
     const cancel = jest.spyOn(engine, 'cancel');
-    mount(engine, [pixel, tablet]);
-    fireEvent.press(await screen.findByTestId('popover-stop'));
+    await mount(engine, [pixel, tablet]);
+    await fireEventAsync.press(await screen.findByTestId('popover-stop'));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(TID));
     await waitFor(() => expect(screen.queryByText('Will send when Kitchen Tablet is back')).toBeNull());
     expect(screen.getByLabelText('send-to-' + pixel.deviceId)).toBeTruthy();
@@ -500,7 +500,7 @@ describe('closing the panel during a transfer', () => {
 describe('the held-back card', () => {
   it('shows no card when nothing is held', async () => {
     const { engine } = spyEngine([pixel]);
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     await settle();
     expect(screen.queryByText('Held back')).toBeNull();
   });
@@ -508,12 +508,12 @@ describe('the held-back card', () => {
   it('shows the newest item with its name and size, and expands the explanation', async () => {
     const { engine } = spyEngine([pixel]);
     jest.spyOn(engine, 'listQuarantineReports').mockResolvedValue([REPORT]);
-    mount(engine, [pixel], { deviceNoun: 'Mac' });
+    await mount(engine, [pixel], { deviceNoun: 'Mac' });
     expect(await screen.findByText('Held back')).toBeTruthy();
     expect(screen.getByText('harbor-lighthouse.jpg · 4.2 MB')).toBeTruthy();
     expect(screen.getByText('What does this mean?')).toBeTruthy();
     expect(screen.queryByTestId('popover-held-why')).toBeNull();
-    fireEvent.press(screen.getByLabelText('popover-held-toggle'));
+    await fireEventAsync.press(screen.getByLabelText('popover-held-toggle'));
     expect(
       screen.getByText(
         'Its check did not match what the sender promised, so it was not opened. Nothing was deleted and nothing left this Mac.',
@@ -528,7 +528,7 @@ describe('the held-back card', () => {
   it('shows "Not recorded" for a name the device did not record', async () => {
     const { engine } = spyEngine([pixel]);
     jest.spyOn(engine, 'listQuarantineReports').mockResolvedValue([{ ...REPORT, name: null, size: null }]);
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     expect(await screen.findByText('Not recorded')).toBeTruthy();
   });
 
@@ -536,7 +536,7 @@ describe('the held-back card', () => {
   it('shows an item that is held back while the panel is open', async () => {
     const { engine } = spyEngine([pixel]);
     const list = jest.spyOn(engine, 'listQuarantineReports').mockResolvedValue([]);
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     await settle();
     expect(screen.queryByText('Held back')).toBeNull();
     list.mockResolvedValue([REPORT]);
@@ -573,7 +573,7 @@ describe('folder rows', () => {
       .spyOn(engine, 'listTransfers')
       .mockResolvedValue([summary({ kind: 'batch', itemCount: 12, bytesDone: MB34 / 3, bytesTotal: MB34 })]);
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(TID, 'out', 4)));
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     expect(await screen.findByText('Sending album · 4 of 12')).toBeTruthy();
     expect(screen.getByText('Sending to Pixel 9')).toBeTruthy();
     expect(screen.getByText('33%')).toBeTruthy();
@@ -585,7 +585,7 @@ describe('folder rows', () => {
       summary({ kind: 'batch', itemCount: 12, bytesDone: 0, bytesTotal: MB34 }),
     ]);
     const thread = jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(TID, 'out', 4)));
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     await screen.findByText('Sending album · 4 of 12');
     list.mockResolvedValue([summary({ kind: 'batch', itemCount: 12, state: 'done', bytesDone: MB34, bytesTotal: MB34 })]);
     thread.mockResolvedValue(threadPage(folderItems(TID, 'out', 12)));
@@ -601,7 +601,7 @@ describe('folder rows', () => {
       summary({ transferId: IN, direction: 'in', kind: 'batch', state: 'done', itemCount: 12, bytesTotal: MB34 }),
     ]);
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(folderItems(IN, 'in', 12)));
-    mount(engine, [pixel], { saveFolderName: async () => 'Downloads' });
+    await mount(engine, [pixel], { saveFolderName: async () => 'Downloads' });
     expect(await screen.findByText('album · 12 files · 34.0 MB')).toBeTruthy();
     expect(await screen.findByText('Saved to Downloads')).toBeTruthy();
     expect(screen.getByText('Recent transfers')).toBeTruthy();
@@ -615,7 +615,7 @@ describe('folder rows', () => {
     jest.spyOn(engine, 'listThread').mockResolvedValue(
       threadPage([threadItem({ transferId: TID, type: 'file', name: 'a.pdf', text: null })]),
     );
-    mount(engine, [pixel]);
+    await mount(engine, [pixel]);
     await settle();
     await settle();
     expect(screen.queryByText('Recent transfers')).toBeNull();

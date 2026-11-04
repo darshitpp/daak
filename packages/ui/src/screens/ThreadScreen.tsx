@@ -480,7 +480,8 @@ export function ThreadScreen({
         await engine.send({ peerDeviceId, text: note });
         setText('');
       }
-      toast.show(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
+      // A closed screen has no toast. The provider is gone and its timer would never clear.
+      if (alive.current) toast.show(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
       stick.current = true;
     } catch (e) {
       setResult({

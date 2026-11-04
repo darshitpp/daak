@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, renderHook, screen } from '@testing-library/react-native';
+import { act, fireEvent, renderAsync, renderHook, screen } from '@testing-library/react-native';
 import type { DaakEngine } from '@daak/core';
 import { useBlockers } from './useBlockers';
 import type { IncompatiblePeer } from './store';
@@ -40,7 +40,7 @@ const peer = (deviceId: string) => ({ deviceId });
  * renderer". This component holds both, so a press on the rendered screen can
  * be observed on the NEXT hook value.
  */
-function mountWithAlert(engine: DaakEngine, initialPeers: IncompatiblePeer[] = []) {
+async function mountWithAlert(engine: DaakEngine, initialPeers: IncompatiblePeer[] = []) {
   const seen: ReturnType<typeof useBlockers> = {
     alert: undefined,
     alertRouteToken: undefined,
@@ -51,13 +51,11 @@ function mountWithAlert(engine: DaakEngine, initialPeers: IncompatiblePeer[] = [
     Object.assign(seen, useBlockers(engine, peers));
     return <>{seen.alert}</>;
   }
-  const ui = render(<Harness peers={initialPeers} />);
+  const ui = await renderAsync(<Harness peers={initialPeers} />);
   return {
     current: () => seen,
     setPeers: (peers: IncompatiblePeer[]) =>
-      act(() => {
-        ui.rerender(<Harness peers={peers} />);
-      }),
+      ui.rerenderAsync(<Harness peers={peers} />),
     press: (testID: string) =>
       act(() => {
         fireEvent.press(screen.getByTestId(testID));
@@ -92,14 +90,14 @@ describe('useBlockers, which screen opens', () => {
   // R43b: the check runs when the user asks it. A mount-time devices() answers
   // "nobody" on a healthy LAN whenever the other device is asleep, and that
   // wall in front of a working app is worse than no screen at all.
-  it('runs no engine call on mount', () => {
+  it('runs no engine call on mount', async () => {
     const engine = stubEngine();
     renderHook(() => useBlockers(engine, []));
     expect(engine.devices).not.toHaveBeenCalled();
     expect(engine.listTransfers).not.toHaveBeenCalled();
   });
 
-  it('shows nothing when no peer is out of step and no check has run', () => {
+  it('shows nothing when no peer is out of step and no check has run', async () => {
     const { result } = renderHook(() => useBlockers(stubEngine(), []));
     expect(result.current.alert).toBeUndefined();
     expect(result.current.alertRouteToken).toBeUndefined();
@@ -108,9 +106,9 @@ describe('useBlockers, which screen opens', () => {
 
   // The peer list is the host's, already reduced from peer.incompatible. The
   // hook renders it. It does not filter the list or reduce it again.
-  it('opens update required as soon as a peer is out of step', () => {
+  it('opens update required as soon as a peer is out of step', async () => {
     const { result } = renderHook(() => useBlockers(stubEngine(), [outOfStep]));
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getByTestId('screen-update-required')).toBeTruthy();
     // The card has no "Latest" row. The screen shows no protocol number.
     expect(screen.queryByText('Latest')).toBeNull();
@@ -119,7 +117,7 @@ describe('useBlockers, which screen opens', () => {
 
   // A peer that is behind means this app is the newer one. No download exists
   // for this user, and the screen says "a new version is available".
-  it('does not open update available for a peer that is behind this app', () => {
+  it('does not open update available for a peer that is behind this app', async () => {
     const behind = { ...outOfStep, peerDeviceId: 'cc'.repeat(16), peerVersion: 1, ourVersion: 3 };
     const { result } = renderHook(() => useBlockers(stubEngine(), [behind]));
     expect(result.current.alert).toBeUndefined();
@@ -134,7 +132,7 @@ describe('useBlockers, which screen opens', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getByTestId('screen-update-required')).toBeTruthy();
     expect(screen.queryByTestId('screen-cant-reach')).toBeNull();
   });
@@ -147,7 +145,7 @@ describe('useBlockers, the reachability check', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getByTestId('screen-cant-reach')).toBeTruthy();
     // The empty answer is its own text. A rejection never reaches here.
     expect(screen.getByText("Daak can't reach any devices")).toBeTruthy();
@@ -180,7 +178,7 @@ describe('useBlockers, the reachability check', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getByTestId('screen-cant-reach')).toBeTruthy();
     expect(result.current.alertRouteToken).toBe('cant-reach');
   });
@@ -217,7 +215,7 @@ describe('useBlockers, the reachability check', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     // Note keeps a real label (the title) beside its testID, so the two are no
     // longer the same string. This case queries the test id.
     expect(screen.getByTestId('cant-reach-error')).toBeTruthy();
@@ -240,7 +238,7 @@ describe('useBlockers, the reachability check', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getAllByTestId('cant-reach-queued')).toHaveLength(1);
     expect(screen.getByText('To ccccdddd')).toBeTruthy();
     expect(screen.getByText('900 B')).toBeTruthy();
@@ -259,7 +257,7 @@ describe('useBlockers, the reachability check', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getByTestId('screen-cant-reach')).toBeTruthy();
     expect(screen.queryByTestId('cant-reach-queued')).toBeNull();
   });
@@ -270,10 +268,10 @@ describe('useBlockers, a peer that re-announces on a timer', () => {
 
   // The engine re-announces on a timer. A repeat announcement of the SAME peer
   // is the same fact restated, so the screen must stay up rather than cycle.
-  it('leaves the screen open when the same peer announces again', () => {
-    const h = mount();
-    h.setPeers([outOfStep]);
-    h.setPeers([outOfStep]);
+  it('leaves the screen open when the same peer announces again', async () => {
+    const h = await mount();
+    await h.setPeers([outOfStep]);
+    await h.setPeers([outOfStep]);
     expect(h.current().alert).not.toBeUndefined();
     expect(h.current().alertRouteToken).toBe(outOfStep.peerDeviceId);
   });
@@ -281,26 +279,26 @@ describe('useBlockers, a peer that re-announces on a timer', () => {
   // Remind me later closes the screen WITHOUT navigating, and the peer is now
   // in the shown set, so its next announcement must not put the screen back up.
   // A timer that re-opened it would make the button impossible to use.
-  it('does not reopen the screen after the user dismissed it', () => {
-    const h = mount();
-    h.setPeers([outOfStep]);
+  it('does not reopen the screen after the user dismissed it', async () => {
+    const h = await mount();
+    await h.setPeers([outOfStep]);
     h.press('update-dismiss');
     expect(h.current().alert).toBeUndefined();
     expect(h.current().alertRouteToken).toBeUndefined();
     // The dismissal is not consent to be navigated.
     expect(h.current().settingsRouteToken).toBeUndefined();
 
-    h.setPeers([outOfStep]);
+    await h.setPeers([outOfStep]);
     expect(h.current().alert).toBeUndefined();
   });
 
   // Two out-of-step devices are two separate facts. The second one still gets
   // its own screen, even though the first was already on it.
-  it('still opens the screen for a peer it has not shown it to before', () => {
-    const h = mount();
-    h.setPeers([outOfStep]);
+  it('still opens the screen for a peer it has not shown it to before', async () => {
+    const h = await mount();
+    await h.setPeers([outOfStep]);
     h.press('update-dismiss');
-    h.setPeers([outOfStep, secondPeer]);
+    await h.setPeers([outOfStep, secondPeer]);
     expect(h.current().alert).not.toBeUndefined();
     expect(h.current().alertRouteToken).toBe(secondPeer.peerDeviceId);
   });
@@ -312,7 +310,7 @@ describe('useBlockers, Open Settings', () => {
   // token must fire again when asked twice. A boolean would not.
   it('clears the cannot-reach screen and routes to Settings, every time', async () => {
     const engine = stubEngine({ devices: jest.fn(async () => []) });
-    const h = mountWithAlert(engine);
+    const h = await mountWithAlert(engine);
     await act(async () => {
       h.current().onCheckConnection();
     });
@@ -332,25 +330,23 @@ describe('useBlockers, Open Settings', () => {
 describe('useBlockers, Update available', () => {
   const info = { version: '1.2.3', build: '45' };
 
-  function mountHost(engine: DaakEngine, host: Parameters<typeof useBlockers>[2]) {
+  async function mountHost(engine: DaakEngine, host: Parameters<typeof useBlockers>[2]) {
     const seen = { current: undefined as ReturnType<typeof useBlockers> | undefined };
     function Harness({ peers }: { peers: IncompatiblePeer[] }) {
       seen.current = useBlockers(engine, peers, host);
       return <>{seen.current.alert}</>;
     }
-    const ui = render(<Harness peers={[]} />);
+    const ui = await renderAsync(<Harness peers={[]} />);
     return {
       current: () => seen.current as ReturnType<typeof useBlockers>,
       setPeers: (peers: IncompatiblePeer[]) =>
-        act(() => {
-          ui.rerender(<Harness peers={peers} />);
-        }),
+        ui.rerenderAsync(<Harness peers={peers} />),
     };
   }
 
   it('opens the releases page through the host opener and leaves the screen up', async () => {
     const openUrl = jest.fn();
-    const h = mountHost(stubEngine(), { openUrl });
+    const h = await mountHost(stubEngine(), { openUrl });
     await h.setPeers([outOfStep]);
     fireEvent.press(screen.getByTestId('update-open'));
     expect(openUrl).toHaveBeenCalledWith('https://github.com/darshitpp/daak/releases/latest');
@@ -360,7 +356,7 @@ describe('useBlockers, Update available', () => {
 
   // "Remind me later" and the back arrow both dismiss. Neither routes to Settings.
   it('dismisses from the back arrow without routing', async () => {
-    const h = mountHost(stubEngine(), undefined);
+    const h = await mountHost(stubEngine(), undefined);
     await h.setPeers([outOfStep]);
     fireEvent.press(screen.getByTestId('onb-back'));
     expect(h.current().alert).toBeUndefined();
@@ -368,7 +364,7 @@ describe('useBlockers, Update available', () => {
   });
 
   it('shows the app version once it loads', async () => {
-    const h = mountHost(stubEngine(), { appInfo: async () => info });
+    const h = await mountHost(stubEngine(), { appInfo: async () => info });
     await h.setPeers([outOfStep]);
     expect(await screen.findByText('Version 1.2.3 (build 45)')).toBeTruthy();
   });
@@ -376,13 +372,13 @@ describe('useBlockers, Update available', () => {
   // The host may be a sync function, and it may fail. The screen must still
   // open, with no "This app" row.
   it('accepts a sync appInfo', async () => {
-    const h = mountHost(stubEngine(), { appInfo: () => info });
+    const h = await mountHost(stubEngine(), { appInfo: () => info });
     await h.setPeers([outOfStep]);
     expect(await screen.findByText('Version 1.2.3 (build 45)')).toBeTruthy();
   });
 
   it('shows the screen with no app row when appInfo throws', async () => {
-    const h = mountHost(stubEngine(), {
+    const h = await mountHost(stubEngine(), {
       appInfo: () => {
         throw new Error('no native module');
       },
@@ -403,9 +399,9 @@ describe('useBlockers, Update available', () => {
       seen.current = useBlockers(engine, peers, { appInfo });
       return <>{seen.current.alert}</>;
     }
-    const ui = render(<Harness peers={[]} />);
+    const ui = await renderAsync(<Harness peers={[]} />);
     await act(async () => {
-      ui.rerender(<Harness peers={[outOfStep]} />);
+      await ui.rerenderAsync(<Harness peers={[outOfStep]} />);
     });
     await act(async () => {});
     expect(appInfo).toHaveBeenCalledTimes(1);
@@ -428,7 +424,7 @@ describe('useBlockers, the retry on the cannot-reach screen', () => {
         });
       }),
     });
-    const h = mountWithAlert(engine);
+    const h = await mountWithAlert(engine);
     await act(async () => {
       h.current().onCheckConnection();
     });
@@ -455,7 +451,7 @@ describe('useBlockers, the retry on the cannot-reach screen', () => {
         { transferId: 't1', peerDeviceId: 'aaaaaaaa', state: 'pending', bytesTotal: 7 },
       ]),
     });
-    const h = mountWithAlert(engine);
+    const h = await mountWithAlert(engine);
     await act(async () => {
       h.current().onCheckConnection();
     });
@@ -482,7 +478,7 @@ describe('useBlockers, the host argument', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getByText('This Mac is on this Wi-Fi. The devices you paired need to be on the same network too.')).toBeTruthy();
   });
 
@@ -492,7 +488,7 @@ describe('useBlockers, the host argument', () => {
     await act(async () => {
       result.current.onCheckConnection();
     });
-    render(<>{result.current.alert}</>);
+    await renderAsync(<>{result.current.alert}</>);
     expect(screen.getByText('This device is on this Wi-Fi. The devices you paired need to be on the same network too.')).toBeTruthy();
   });
 });
