@@ -1,6 +1,6 @@
 import React from 'react';
 import { Linking } from 'react-native';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, renderAsync, screen, waitFor, fireEventAsync } from '@testing-library/react-native';
 import type { DaakEngine } from '@daak/core';
 import { mockPlatformHost } from '../testPlatformMock';
 import App from '../App';
@@ -73,15 +73,15 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 async function openThenLink(url: string) {
-  render(<App />);
-  emit(url);
+  await renderAsync(<App />);
+  await act(async () => { emit(url); });
 }
 
 it('routes a send link to the thread, prefilled and pointed at that peer', async () => {
   await openThenLink('daak://send?deviceId=' + PEER + '&text=from%20a%20link');
   expect(await screen.findByDisplayValue('from a link')).toBeTruthy();
   const sent = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: 'bb'.repeat(16), queued: false });
-  fireEvent.press(await screen.findByTestId('send'));
+  await fireEventAsync.press(await screen.findByTestId('send'));
   await waitFor(() => expect(sent).toHaveBeenCalledWith({ peerDeviceId: PEER, text: 'from a link' }));
 });
 
@@ -97,8 +97,8 @@ it('does not send when a send link opens the thread', async () => {
 // Routing is the half no parser test could see: a link that arrives while the
 // user sits on Devices must move them into the thread.
 it('moves the user from Devices into the thread', async () => {
-  render(<App />);
-  fireEvent.press(await screen.findByTestId('tab-devices'));
+  await renderAsync(<App />);
+  await fireEventAsync.press(await screen.findByTestId('tab-devices'));
   expect(screen.getByTestId('pair-a-device')).toBeTruthy();
   await act(async () => {
     emit('daak://send?deviceId=' + PEER);
@@ -108,15 +108,15 @@ it('moves the user from Devices into the thread', async () => {
 
 it('opens pairing from a pair link and joins with its bundle, no camera', async () => {
   const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: '555666' });
-  render(<App />);
-  emit('daak://pair?bundle=' + encodeURIComponent(BUNDLE));
+  await renderAsync(<App />);
+  await act(async () => { emit('daak://pair?bundle=' + encodeURIComponent(BUNDLE)); });
   // Route reached, and the bundle handed to the engine as PARSED cbor -- never
   // the raw link value, which is the R88 rule for a scanned QR too.
   // The link's bundle names no address, so the fourth argument is `undefined`
   // and the joiner falls back to discovery (R42c/R42d).
   // A link is an untrusted request from another app or a web page. It asks the
   // user first and joins nothing until the user taps Pair.
-  fireEvent.press(await screen.findByTestId('link-pair-confirm'));
+  await fireEventAsync.press(await screen.findByTestId('link-pair-confirm'));
   await waitFor(() => expect(pair).toHaveBeenCalledWith(PEER, 'qr', 'aabbcc', undefined));
   expect(await screen.findByText('555 666')).toBeTruthy();
   expect(jest.requireMock('@daak/platform').scanQr).not.toHaveBeenCalled();
@@ -124,11 +124,11 @@ it('opens pairing from a pair link and joins with its bundle, no camera', async 
 
 it('asks before it joins a pair link, and Cancel joins nothing', async () => {
   const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: '555666' });
-  render(<App />);
-  emit('daak://pair?bundle=' + encodeURIComponent(BUNDLE));
+  await renderAsync(<App />);
+  await act(async () => { emit('daak://pair?bundle=' + encodeURIComponent(BUNDLE)); });
   expect(await screen.findByText(/Pair with/)).toBeTruthy();
   expect(pair).not.toHaveBeenCalled();
-  fireEvent.press(screen.getByTestId('link-pair-cancel'));
+  await fireEventAsync.press(screen.getByTestId('link-pair-cancel'));
   expect(pair).not.toHaveBeenCalled();
   expect(screen.queryByTestId('link-pair-confirm')).toBeNull();
 });
@@ -136,8 +136,8 @@ it('asks before it joins a pair link, and Cancel joins nothing', async () => {
 it('says so when a pair link is not a bundle', async () => {
   jest.spyOn(engine, 'pair').mockResolvedValue({ sas: 'x' });
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-  render(<App />);
-  emit('daak://pair?bundle=' + encodeURIComponent('not json'));
+  await renderAsync(<App />);
+  await act(async () => { emit('daak://pair?bundle=' + encodeURIComponent('not json')); });
   // The screen shows the design note and the reason in its own small line. The log has it too.
   expect(await screen.findByText("We couldn't read that code.")).toBeTruthy();
   expect(screen.getByTestId('pairing-error-detail')).toHaveTextContent(/bad JSON/);
@@ -150,27 +150,27 @@ it('says so when a pair link is not a bundle', async () => {
 // there from Devices and sees no link.
 it('does not join when the pair route is opened by hand', async () => {
   const pair = jest.spyOn(engine, 'pair').mockResolvedValue({ sas: 'x' });
-  render(<App />);
-  fireEvent.press(await screen.findByTestId('tab-devices'));
-  fireEvent.press(screen.getByTestId('pair-a-device'));
+  await renderAsync(<App />);
+  await fireEventAsync.press(await screen.findByTestId('tab-devices'));
+  await fireEventAsync.press(screen.getByTestId('pair-a-device'));
   expect(screen.getByText('Show my code')).toBeTruthy();
   expect(pair).not.toHaveBeenCalled();
 });
 
 // A hand-typed note must survive a re-render on a plain mount.
 it('does not fight a hand-typed note once the thread is open', async () => {
-  render(<App />);
+  await renderAsync(<App />);
   await act(async () => {
     emit('daak://send?deviceId=' + PEER);
   });
-  fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'mine');
+  await fireEventAsync.changeText(await screen.findByPlaceholderText('Or type a note'), 'mine');
   expect(screen.getByDisplayValue('mine')).toBeTruthy();
 });
 
 // A send link with NO text must clear the box. The old note belongs to the
 // previous target and must not go to a peer the user did not choose.
 it('does not carry an earlier note to a later send link with no text', async () => {
-  render(<App />);
+  await renderAsync(<App />);
   await act(async () => {
     emit('daak://send?deviceId=' + OTHER + '&text=for%20the%20old%20peer');
   });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text } from 'react-native';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, renderAsync, screen, waitFor, fireEventAsync } from '@testing-library/react-native';
 import type { DaakEngine, DeviceInfo } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
@@ -12,19 +12,19 @@ const peer: DeviceInfo = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '',
 const second: DeviceInfo = { deviceId: 'cc'.repeat(16), name: 'ThinkPad', addr: '', online: true, presence: 'online', paired: true };
 const TID = 'bb'.repeat(16);
 
-function shell(engine: DaakEngine, props: React.ComponentProps<typeof AppShell> = {}) {
+async function shell(engine: DaakEngine, props: React.ComponentProps<typeof AppShell> = {}) {
   const ui = (p: React.ComponentProps<typeof AppShell>) => (
     <EngineProvider engine={engine}>
       <AppShell {...p} />
     </EngineProvider>
   );
-  const utils = render(ui(props));
-  return { ...utils, again: (p: React.ComponentProps<typeof AppShell>) => utils.rerender(ui(p)) };
+  const utils = await renderAsync(ui(props));
+  return { ...utils, again: (p: React.ComponentProps<typeof AppShell>) => utils.rerenderAsync(ui(p)) };
 }
 
 describe('AppShell tabs', () => {
   it('opens on Devices and shows two tabs only', async () => {
-    shell(fakeEngine([peer]));
+    await shell(fakeEngine([peer]));
     expect(await screen.findByText('Your devices')).toBeTruthy();
     expect(screen.getByTestId('tab-devices')).toBeTruthy();
     expect(screen.getByTestId('tab-settings')).toBeTruthy();
@@ -36,22 +36,22 @@ describe('AppShell tabs', () => {
   // An app that injects the control into Settings but forgets AppShell shows a
   // Settings screen with no affordance on it.
   it('threads a background slot through to the Settings tab', async () => {
-    shell(fakeEngine([]), { background: <Text>allow-bg</Text> });
-    fireEvent.press(screen.getByTestId('tab-settings'));
+    await shell(fakeEngine([]), { background: <Text>allow-bg</Text> });
+    await fireEventAsync.press(screen.getByTestId('tab-settings'));
     expect(await screen.findByText('allow-bg')).toBeTruthy();
   });
 
   it('threads a pair slot through to Pairing and routes out again', async () => {
-    shell(fakeEngine([]), { pair: <Text>pair-ui</Text> });
-    fireEvent.press(await screen.findByTestId('pair-a-device'));
+    await shell(fakeEngine([]), { pair: <Text>pair-ui</Text> });
+    await fireEventAsync.press(await screen.findByTestId('pair-a-device'));
     expect(screen.getByText('pair-ui')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('pair-back'));
+    await fireEventAsync.press(screen.getByTestId('pair-back'));
     expect(screen.queryByText('pair-ui')).toBeNull();
     expect(screen.getByTestId('pair-a-device')).toBeTruthy();
   });
 
-  it('routes a pair link into the pair slot', () => {
-    shell(fakeEngine([]), { pair: <Text>pair-ui</Text>, pairBundle: '{"cbor":"aabb"}' });
+  it('routes a pair link into the pair slot', async () => {
+    await shell(fakeEngine([]), { pair: <Text>pair-ui</Text>, pairBundle: '{"cbor":"aabb"}' });
     expect(screen.getByText('pair-ui')).toBeTruthy();
   });
 });
@@ -60,21 +60,21 @@ describe('AppShell thread route', () => {
   it('opens a thread from a device row, hides the tab bar, and sends to that peer', async () => {
     const engine = fakeEngine([peer, second]);
     const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: false });
-    shell(engine);
-    fireEvent.press(await screen.findByTestId('open-' + second.deviceId));
+    await shell(engine);
+    await fireEventAsync.press(await screen.findByTestId('open-' + second.deviceId));
     expect(await screen.findByTestId('thread-back')).toBeTruthy();
     expect(screen.queryByTestId('tab-devices')).toBeNull();
-    fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'hi');
-    fireEvent.press(screen.getByTestId('send'));
+    await fireEventAsync.changeText(await screen.findByPlaceholderText('Or type a note'), 'hi');
+    await fireEventAsync.press(screen.getByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: second.deviceId, text: 'hi' }));
-    fireEvent.press(screen.getByTestId('thread-back'));
+    await fireEventAsync.press(screen.getByTestId('thread-back'));
     expect(await screen.findByTestId('tab-devices')).toBeTruthy();
   });
 
   it('opens a thread for an offline paired device', async () => {
     const off = { ...peer, presence: 'offline' as const, online: false };
-    shell(fakeEngine([off]));
-    fireEvent.press(await screen.findByTestId('open-' + off.deviceId));
+    await shell(fakeEngine([off]));
+    await fireEventAsync.press(await screen.findByTestId('open-' + off.deviceId));
     expect(await screen.findByText('Not on this network')).toBeTruthy();
     expect(await screen.findByPlaceholderText('Or type a note')).toBeTruthy();
   });
@@ -82,9 +82,9 @@ describe('AppShell thread route', () => {
   it('routes a send link to the thread of that device, seeded with the note', async () => {
     const engine = fakeEngine([peer, second]);
     const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: false });
-    shell(engine, { initialPeerDeviceId: peer.deviceId, initialText: 'from a link' });
+    await shell(engine, { initialPeerDeviceId: peer.deviceId, initialText: 'from a link' });
     expect(await screen.findByDisplayValue('from a link')).toBeTruthy();
-    fireEvent.press(await screen.findByTestId('send'));
+    await fireEventAsync.press(await screen.findByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, text: 'from a link' }));
   });
 
@@ -92,9 +92,9 @@ describe('AppShell thread route', () => {
   // must not go to the new one (the composer remounts).
   it('lets a later link replace the open thread and clears the old note', async () => {
     const engine = fakeEngine([peer, second]);
-    const { again } = shell(engine, { initialPeerDeviceId: second.deviceId });
-    fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'for the old peer');
-    again({ initialPeerDeviceId: peer.deviceId, initialText: '' });
+    const { again } = await shell(engine, { initialPeerDeviceId: second.deviceId });
+    await fireEventAsync.changeText(await screen.findByPlaceholderText('Or type a note'), 'for the old peer');
+    await again({ initialPeerDeviceId: peer.deviceId, initialText: '' });
     await waitFor(() => expect(screen.queryByDisplayValue('for the old peer')).toBeNull());
     expect(await screen.findByText('Pixel 9')).toBeTruthy();
   });
@@ -103,26 +103,26 @@ describe('AppShell thread route', () => {
   it('shows Not paired any more for a link that names an unknown device', async () => {
     const engine = fakeEngine([peer]);
     const send = jest.spyOn(engine, 'send');
-    shell(engine, { initialPeerDeviceId: 'dd'.repeat(16), initialText: 'x' });
+    await shell(engine, { initialPeerDeviceId: 'dd'.repeat(16), initialText: 'x' });
     expect(await screen.findByText('Not paired any more')).toBeTruthy();
     expect(send).not.toHaveBeenCalled();
-    fireEvent.press(screen.getByTestId('thread-back'));
+    await fireEventAsync.press(screen.getByTestId('thread-back'));
     expect(await screen.findByTestId('tab-devices')).toBeTruthy();
   });
 
   it('holds an OS share on Devices until the user picks a device', async () => {
     const engine = fakeEngine([peer]);
     const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: TID, queued: false });
-    shell(engine, { initialText: 'shared note', initialFiles: ['/Documents/photo.png'] });
+    await shell(engine, { initialText: 'shared note', initialFiles: ['/Documents/photo.png'] });
     expect(await screen.findByText('Pick a device for what you shared')).toBeTruthy();
-    fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
+    await fireEventAsync.press(await screen.findByTestId('open-' + peer.deviceId));
     expect(await screen.findByDisplayValue('shared note')).toBeTruthy();
     expect(screen.getByText('photo.png')).toBeTruthy();
-    fireEvent.press(await screen.findByTestId('send'));
+    await fireEventAsync.press(await screen.findByTestId('send'));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(send).toHaveBeenNthCalledWith(1, { peerDeviceId: peer.deviceId, files: ['/Documents/photo.png'] });
     expect(send).toHaveBeenNthCalledWith(2, { peerDeviceId: peer.deviceId, text: 'shared note' });
-    fireEvent.press(screen.getByTestId('thread-back'));
+    await fireEventAsync.press(screen.getByTestId('thread-back'));
     await screen.findByText('Your devices');
     expect(screen.queryByText('Pick a device for what you shared')).toBeNull();
   });
@@ -133,18 +133,18 @@ describe('AppShell pending share actions', () => {
   const peerRow = () => screen.findByTestId('open-' + peer.deviceId);
 
   it('a new initialShareToken with the same files shows the pending share again after a cancel', async () => {
-    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onCancelShare: () => {} });
+    const { again } = await shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onCancelShare: () => {} });
     expect(await screen.findByTestId('pending-share')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('cancel-share'));
+    await fireEventAsync.press(screen.getByTestId('cancel-share'));
     expect(screen.queryByTestId('pending-share')).toBeNull();
-    again({ initialFiles: files, initialShareToken: 2, onCancelShare: () => {} });
+    await again({ initialFiles: files, initialShareToken: 2, onCancelShare: () => {} });
     expect(await screen.findByTestId('pending-share')).toBeTruthy();
   });
 
   it('with onShareSend, tapping a device calls onShareSend with that device and the files, then opens the thread with no files in the composer', async () => {
     const onShareSend = jest.fn().mockResolvedValue(undefined);
-    shell(fakeEngine([peer]), { initialFiles: files, onShareSend });
-    fireEvent.press(await peerRow());
+    await shell(fakeEngine([peer]), { initialFiles: files, onShareSend });
+    await fireEventAsync.press(await peerRow());
     expect(await screen.findByTestId('thread-back')).toBeTruthy();
     expect(onShareSend).toHaveBeenCalledWith(expect.objectContaining({ deviceId: peer.deviceId }), { files, text: undefined });
     expect(screen.queryByText('a.png')).toBeNull();
@@ -152,22 +152,22 @@ describe('AppShell pending share actions', () => {
   });
 
   it('without onShareSend, tapping a device opens the thread with the files in the composer', async () => {
-    shell(fakeEngine([peer]), { initialFiles: files });
-    fireEvent.press(await peerRow());
+    await shell(fakeEngine([peer]), { initialFiles: files });
+    await fireEventAsync.press(await peerRow());
     expect(await screen.findByText('a.png')).toBeTruthy();
   });
 
   it('when onShareSend rejects, the share stays pending and a toast shows the error', async () => {
     const onShareSend = jest.fn().mockRejectedValue(new Error('disk is full'));
     const engine = fakeEngine([peer]);
-    render(
+    await renderAsync(
       <EngineProvider engine={engine}>
         <ToastProvider>
           <AppShell initialFiles={files} onShareSend={onShareSend} />
         </ToastProvider>
       </EngineProvider>,
     );
-    fireEvent.press(await peerRow());
+    await fireEventAsync.press(await peerRow());
     expect(await screen.findByText(/Could not send: disk is full/)).toBeTruthy();
     expect(screen.queryByTestId('thread-back')).toBeNull();
     expect(screen.getByTestId('pending-share')).toBeTruthy();
@@ -176,10 +176,10 @@ describe('AppShell pending share actions', () => {
   it('ignores a second device tap while onShareSend is pending', async () => {
     let release: () => void = () => {};
     const onShareSend = jest.fn().mockImplementation(() => new Promise<void>((r) => { release = r; }));
-    shell(fakeEngine([peer]), { initialFiles: files, onShareSend });
+    await shell(fakeEngine([peer]), { initialFiles: files, onShareSend });
     const row = await peerRow();
-    fireEvent.press(row);
-    fireEvent.press(row);
+    await fireEventAsync.press(row);
+    await fireEventAsync.press(row);
     expect(onShareSend).toHaveBeenCalledTimes(1);
     await act(async () => release());
     expect(await screen.findByTestId('thread-back')).toBeTruthy();
@@ -187,32 +187,32 @@ describe('AppShell pending share actions', () => {
 
   it('a text-only share never calls onShareSend', async () => {
     const onShareSend = jest.fn().mockResolvedValue(undefined);
-    shell(fakeEngine([peer]), { initialText: 'note', onShareSend });
-    fireEvent.press(await peerRow());
+    await shell(fakeEngine([peer]), { initialText: 'note', onShareSend });
+    await fireEventAsync.press(await peerRow());
     expect(await screen.findByDisplayValue('note')).toBeTruthy();
     expect(onShareSend).not.toHaveBeenCalled();
   });
 
   it('without onCancelShare the note shows and there is no Cancel button', async () => {
-    shell(fakeEngine([peer]), { initialFiles: files });
+    await shell(fakeEngine([peer]), { initialFiles: files });
     expect(await screen.findByTestId('pending-share')).toBeTruthy();
     expect(screen.queryByTestId('cancel-share')).toBeNull();
   });
 
   it('Cancel clears the pending share and calls onCancelShare', async () => {
     const onCancelShare = jest.fn();
-    shell(fakeEngine([peer]), { initialFiles: files, onCancelShare });
-    fireEvent.press(await screen.findByTestId('cancel-share'));
+    await shell(fakeEngine([peer]), { initialFiles: files, onCancelShare });
+    await fireEventAsync.press(await screen.findByTestId('cancel-share'));
     expect(screen.queryByTestId('pending-share')).toBeNull();
     expect(onCancelShare).toHaveBeenCalledTimes(1);
   });
 
   it('a new initialShareToken replaces a pending share', async () => {
     const onShareSend = jest.fn().mockResolvedValue(undefined);
-    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
+    const { again } = await shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
     await screen.findByTestId('pending-share');
-    again({ initialFiles: ['/Users/me/b.png', '/Users/me/c.png'], initialShareToken: 2, onShareSend });
-    fireEvent.press(await peerRow());
+    await again({ initialFiles: ['/Users/me/b.png', '/Users/me/c.png'], initialShareToken: 2, onShareSend });
+    await fireEventAsync.press(await peerRow());
     await waitFor(() => expect(onShareSend).toHaveBeenCalledTimes(1));
     expect(onShareSend.mock.calls[0][1].files).toEqual(['/Users/me/b.png', '/Users/me/c.png']);
     await screen.findByTestId('thread-back');
@@ -230,9 +230,9 @@ describe('AppShell pending share actions', () => {
     const d = deferred();
     const cancel = jest.fn().mockResolvedValue(undefined);
     const onCancelShare = jest.fn();
-    shell(fakeEngine([peer]), { initialFiles: files, onShareSend: () => d.promise, onCancelShare });
-    fireEvent.press(await peerRow());
-    fireEvent.press(screen.getByTestId('cancel-share'));
+    await shell(fakeEngine([peer]), { initialFiles: files, onShareSend: () => d.promise, onCancelShare });
+    await fireEventAsync.press(await peerRow());
+    await fireEventAsync.press(screen.getByTestId('cancel-share'));
     expect(onCancelShare).toHaveBeenCalledTimes(1);
     await act(async () => d.resolve({ cancel }));
     expect(cancel).toHaveBeenCalledTimes(1);
@@ -242,15 +242,15 @@ describe('AppShell pending share actions', () => {
 
   it('Cancel during a pending send and then a rejected send shows no error', async () => {
     const d = deferred();
-    render(
+    await renderAsync(
       <EngineProvider engine={fakeEngine([peer])}>
         <ToastProvider>
           <AppShell initialFiles={files} onShareSend={() => d.promise} onCancelShare={() => {}} />
         </ToastProvider>
       </EngineProvider>,
     );
-    fireEvent.press(await peerRow());
-    fireEvent.press(screen.getByTestId('cancel-share'));
+    await fireEventAsync.press(await peerRow());
+    await fireEventAsync.press(screen.getByTestId('cancel-share'));
     await act(async () => d.reject(new Error('send aborted')));
     expect(screen.queryByText(/send aborted/)).toBeNull();
     expect(screen.queryByTestId('thread-back')).toBeNull();
@@ -258,15 +258,15 @@ describe('AppShell pending share actions', () => {
 
   it('a failed cancel shows an error that says the send may still finish', async () => {
     const d = deferred();
-    render(
+    await renderAsync(
       <EngineProvider engine={fakeEngine([peer])}>
         <ToastProvider>
           <AppShell initialFiles={files} onShareSend={() => d.promise} onCancelShare={() => {}} />
         </ToastProvider>
       </EngineProvider>,
     );
-    fireEvent.press(await peerRow());
-    fireEvent.press(screen.getByTestId('cancel-share'));
+    await fireEventAsync.press(await peerRow());
+    await fireEventAsync.press(screen.getByTestId('cancel-share'));
     await act(async () => d.resolve({ cancel: () => Promise.reject(new Error('no route')) }));
     expect(await screen.findByText(/Could not cancel: no route/)).toBeTruthy();
     expect(screen.queryByTestId('thread-back')).toBeNull();
@@ -277,10 +277,10 @@ describe('AppShell pending share actions', () => {
     const cancel = jest.fn().mockResolvedValue(undefined);
     const onShareSend = () => d.promise;
     const onCancelShare = () => {};
-    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend, onCancelShare });
-    fireEvent.press(await peerRow());
-    fireEvent.press(screen.getByTestId('cancel-share'));
-    again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend, onCancelShare });
+    const { again } = await shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend, onCancelShare });
+    await fireEventAsync.press(await peerRow());
+    await fireEventAsync.press(screen.getByTestId('cancel-share'));
+    await again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend, onCancelShare });
     await act(async () => d.resolve({ cancel }));
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('pending-share')).toBeTruthy();
@@ -289,9 +289,9 @@ describe('AppShell pending share actions', () => {
   it('a share delivered during a pending send stays pending after the send finishes', async () => {
     let release: () => void = () => {};
     const onShareSend = jest.fn().mockImplementation(() => new Promise<void>((r) => { release = r; }));
-    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
-    fireEvent.press(await peerRow());
-    again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend });
+    const { again } = await shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1, onShareSend });
+    await fireEventAsync.press(await peerRow());
+    await again({ initialFiles: ['/Users/me/new.png'], initialShareToken: 2, onShareSend });
     await act(async () => release());
     expect(screen.getByTestId('pending-share')).toBeTruthy();
     expect(screen.queryByTestId('thread-back')).toBeNull();
@@ -299,9 +299,9 @@ describe('AppShell pending share actions', () => {
 
   // Intended: a consumed delivery sets initialFiles to undefined. The pending share stays.
   it('initialFiles becoming undefined after a consume leaves the pending share in place', async () => {
-    const { again } = shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1 });
+    const { again } = await shell(fakeEngine([peer]), { initialFiles: files, initialShareToken: 1 });
     await screen.findByTestId('pending-share');
-    again({ initialFiles: undefined, initialShareToken: 1 });
+    await again({ initialFiles: undefined, initialShareToken: 1 });
     expect(screen.getByTestId('pending-share')).toBeTruthy();
   });
 });
@@ -313,12 +313,12 @@ describe('AppShell held route', () => {
       threadItem({ type: 'file', text: null, name: 'bad.jpg', state: 'quarantined', transferId: TID, itemIndex: 1 }),
     ]));
     const report = jest.spyOn(engine, 'quarantineReport');
-    shell(engine, { initialPeerDeviceId: peer.deviceId });
-    fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
+    await shell(engine, { initialPeerDeviceId: peer.deviceId });
+    await fireEventAsync.press(await screen.findByLabelText('Review bad.jpg'));
     expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
     expect(screen.queryByTestId('tab-devices')).toBeNull();
     await waitFor(() => expect(report).toHaveBeenCalledWith(TID, 1));
-    fireEvent.press(screen.getByTestId('onb-back'));
+    await fireEventAsync.press(screen.getByTestId('onb-back'));
     expect(await screen.findByTestId('thread-back')).toBeTruthy();
   });
 
@@ -329,13 +329,13 @@ describe('AppShell held route', () => {
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
       threadItem({ type: 'file', text: null, name: 'bad.jpg', state: 'quarantined', transferId: TID, itemIndex: 1 }),
     ]));
-    shell(engine, { initialPeerDeviceId: peer.deviceId, onPickFiles: async () => ['/Users/d/a.pdf'] });
-    fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'half written');
-    fireEvent.press(screen.getByTestId('pick-files'));
+    await shell(engine, { initialPeerDeviceId: peer.deviceId, onPickFiles: async () => ['/Users/d/a.pdf'] });
+    await fireEventAsync.changeText(await screen.findByPlaceholderText('Or type a note'), 'half written');
+    await fireEventAsync.press(screen.getByTestId('pick-files'));
     await screen.findByText('a.pdf');
-    fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
+    await fireEventAsync.press(await screen.findByLabelText('Review bad.jpg'));
     expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('onb-back'));
+    await fireEventAsync.press(screen.getByTestId('onb-back'));
     expect(await screen.findByDisplayValue('half written')).toBeTruthy();
     expect(screen.getByText('a.pdf')).toBeTruthy();
   });
@@ -346,13 +346,13 @@ describe('AppShell held route', () => {
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
       threadItem({ type: 'file', text: null, name: 'bad.jpg', state: 'quarantined', transferId: TID, itemIndex: 1 }),
     ]));
-    shell(engine, { initialPeerDeviceId: peer.deviceId, deviceNoun: 'Mac' });
-    fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
+    await shell(engine, { initialPeerDeviceId: peer.deviceId, deviceNoun: 'Mac' });
+    await fireEventAsync.press(await screen.findByLabelText('Review bad.jpg'));
     expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
     expect(screen.getByLabelText('Back to conversation')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('quarantine-delete'));
+    await fireEventAsync.press(screen.getByTestId('quarantine-delete'));
     expect(screen.getByText('It was never opened. Deleting it only clears the holding area on this Mac.')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('quarantine-delete-confirm'));
+    await fireEventAsync.press(screen.getByTestId('quarantine-delete-confirm'));
     // The design returns to the conversation after the delete.
     await waitFor(() => expect(screen.queryByTestId('quarantine-route')).toBeNull());
   });
@@ -361,43 +361,43 @@ describe('AppShell held route', () => {
 describe('AppShell tokens', () => {
   it('lands on Settings for a settings token, and again for a repeat', async () => {
     const engine = fakeEngine([peer]);
-    const { again } = shell(engine);
+    const { again } = await shell(engine);
     await screen.findByText('Your devices');
-    again({ settingsRouteToken: '1' });
+    await again({ settingsRouteToken: '1' });
     expect(await screen.findByTestId('save-name')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('tab-devices'));
+    await fireEventAsync.press(screen.getByTestId('tab-devices'));
     await screen.findByText('Your devices');
-    again({ settingsRouteToken: '2' });
+    await again({ settingsRouteToken: '2' });
     expect(await screen.findByTestId('save-name')).toBeTruthy();
   });
 
   // A tapped [Open] notification. The host may name the sender.
   it('routes a notification token to Devices, or to the sender thread, and again on a repeat', async () => {
     const engine = fakeEngine([peer]);
-    const { again } = shell(engine);
-    fireEvent.press(screen.getByTestId('tab-settings'));
+    const { again } = await shell(engine);
+    await fireEventAsync.press(screen.getByTestId('tab-settings'));
     await screen.findByTestId('save-name');
-    again({ inboxRouteToken: '1' });
+    await again({ inboxRouteToken: '1' });
     expect(await screen.findByText('Your devices')).toBeTruthy();
-    again({ inboxRouteToken: '2', inboxPeerDeviceId: peer.deviceId });
+    await again({ inboxRouteToken: '2', inboxPeerDeviceId: peer.deviceId });
     expect(await screen.findByTestId('thread-back')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('thread-back'));
-    again({ inboxRouteToken: '3', inboxPeerDeviceId: peer.deviceId });
+    await fireEventAsync.press(screen.getByTestId('thread-back'));
+    await again({ inboxRouteToken: '3', inboxPeerDeviceId: peer.deviceId });
     expect(await screen.findByTestId('thread-back')).toBeTruthy();
   });
 
   it('shows a blocking alert instead of the tabs', async () => {
-    shell(fakeEngine([peer]), { alert: <Text>blocked</Text>, alertRouteToken: 'p' });
+    await shell(fakeEngine([peer]), { alert: <Text>blocked</Text>, alertRouteToken: 'p' });
     expect(screen.getByText('blocked')).toBeTruthy();
     expect(screen.queryByTestId('tab-devices')).toBeNull();
   });
 
   it('threads photos from the shell to the Settings Photos row', async () => {
-    shell(fakeEngine([]), {
+    await shell(fakeEngine([]), {
       downloadFolder: { load: async () => null, choose: async () => null },
       photos: { destination: 'Photos app', status: async () => 'undetermined', request: async () => true, openSettings: () => {} },
     });
-    fireEvent.press(screen.getByTestId('tab-settings'));
+    await fireEventAsync.press(screen.getByTestId('tab-settings'));
     expect(await screen.findByTestId('photos-access-row')).toBeTruthy();
     expect(screen.getByText('Photos and videos go to the Photos app. Other files go to this folder.')).toBeTruthy();
   });
@@ -407,17 +407,17 @@ describe('AppShell tokens', () => {
     const engine = fakeEngine([peer]);
     jest.spyOn(engine, 'revokePairing').mockResolvedValue();
     const onUnpair = jest.fn();
-    shell(engine, { onUnpair });
-    fireEvent.press(screen.getByTestId('tab-settings'));
-    fireEvent.press(await screen.findByTestId('remove-' + peer.deviceId));
-    fireEvent.press(screen.getByTestId('confirm-remove'));
+    await shell(engine, { onUnpair });
+    await fireEventAsync.press(screen.getByTestId('tab-settings'));
+    await fireEventAsync.press(await screen.findByTestId('remove-' + peer.deviceId));
+    await fireEventAsync.press(screen.getByTestId('confirm-remove'));
     await waitFor(() => expect(onUnpair).toHaveBeenCalledWith(peer));
   });
 
   it('threads settingsHost from the shell to the Arrival switches', async () => {
     const load = jest.fn(async () => ({ arrival: true }));
-    shell(fakeEngine([]), { settingsHost: { notifyPrefs: { load, save: async () => {} } }, deviceNoun: 'phone' });
-    fireEvent.press(screen.getByTestId('tab-settings'));
+    await shell(fakeEngine([]), { settingsHost: { notifyPrefs: { load, save: async () => {} } }, deviceNoun: 'phone' });
+    await fireEventAsync.press(screen.getByTestId('tab-settings'));
     expect(await screen.findByText('Shows a message on this phone.')).toBeTruthy();
     expect(load).toHaveBeenCalled();
   });
@@ -433,7 +433,7 @@ describe('AppShell desktop layout', () => {
   const settingsSelected = () => screen.getByLabelText('Settings').props.accessibilityState;
 
   it('draws the sidebar and its version footer on the Devices route', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME });
+    await shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME });
     expect(await screen.findByTestId('window-sidebar')).toBeTruthy();
     expect(screen.getByText('Version 0.4.2 (build 1180)')).toBeTruthy();
     expect(devicesSelected()).toMatchObject({ selected: true });
@@ -441,29 +441,29 @@ describe('AppShell desktop layout', () => {
   });
 
   it('keeps the sidebar on Settings and highlights Settings', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, settingsRouteToken: '1' });
+    await shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, settingsRouteToken: '1' });
     expect(await screen.findByTestId('save-name')).toBeTruthy();
     expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(settingsSelected()).toMatchObject({ selected: true });
   });
 
   it('routes from the sidebar to Settings', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME });
-    fireEvent.press(await screen.findByTestId('side-settings'));
+    await shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME });
+    await fireEventAsync.press(await screen.findByTestId('side-settings'));
     expect(await screen.findByTestId('save-name')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('side-devices'));
+    await fireEventAsync.press(screen.getByTestId('side-devices'));
     expect(await screen.findByText('Your devices')).toBeTruthy();
   });
 
   it('keeps the sidebar inside a thread, and highlights Devices', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, initialPeerDeviceId: peer.deviceId });
+    await shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, initialPeerDeviceId: peer.deviceId });
     await screen.findByTestId('thread-back');
     expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(devicesSelected()).toMatchObject({ selected: true });
   });
 
   it('keeps the sidebar on the pair route, and highlights Devices', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, pair: <Text>pair-ui</Text>, pairBundle: '{"cbor":"aabb"}' });
+    await shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, pair: <Text>pair-ui</Text>, pairBundle: '{"cbor":"aabb"}' });
     expect(await screen.findByText('pair-ui')).toBeTruthy();
     expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(devicesSelected()).toMatchObject({ selected: true });
@@ -474,15 +474,15 @@ describe('AppShell desktop layout', () => {
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([
       threadItem({ type: 'file', text: null, name: 'bad.jpg', state: 'quarantined', transferId: TID, itemIndex: 1 }),
     ]));
-    shell(engine, { layout: 'desktop', windowChrome: CHROME, initialPeerDeviceId: peer.deviceId });
-    fireEvent.press(await screen.findByLabelText('Review bad.jpg'));
+    await shell(engine, { layout: 'desktop', windowChrome: CHROME, initialPeerDeviceId: peer.deviceId });
+    await fireEventAsync.press(await screen.findByLabelText('Review bad.jpg'));
     expect(await screen.findByTestId('quarantine-route')).toBeTruthy();
     expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(devicesSelected()).toMatchObject({ selected: true });
   });
 
   it('hides the sidebar while a notice shows', async () => {
-    shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, alert: <Text>blocked</Text>, alertRouteToken: 'p' });
+    await shell(fakeEngine([peer]), { layout: 'desktop', windowChrome: CHROME, alert: <Text>blocked</Text>, alertRouteToken: 'p' });
     expect(screen.getByText('blocked')).toBeTruthy();
     expect(screen.queryByTestId('window-sidebar')).toBeNull();
   });
@@ -504,20 +504,20 @@ describe('AppShell folder places', () => {
 
   // The thread names the save folder with the words that Settings shows.
   it('names the save folder from the download folder row', async () => {
-    shell(engineWithFolder(), { downloadFolder: folderHost('Downloads / Daak'), library: 'Gallery', isMedia: (n) => n.endsWith('.jpg') });
-    fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
+    await shell(engineWithFolder(), { downloadFolder: folderHost('Downloads / Daak'), library: 'Gallery', isMedia: (n) => n.endsWith('.jpg') });
+    await fireEventAsync.press(await screen.findByTestId('open-' + peer.deviceId));
     expect(await screen.findByText('Saved to Gallery and Downloads / Daak')).toBeTruthy();
   });
 
   it('names the app storage when no folder is chosen', async () => {
-    shell(engineWithFolder(), { downloadFolder: folderHost(null), library: 'Gallery', isMedia: (n) => n.endsWith('.jpg') });
-    fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
+    await shell(engineWithFolder(), { downloadFolder: folderHost(null), library: 'Gallery', isMedia: (n) => n.endsWith('.jpg') });
+    await fireEventAsync.press(await screen.findByTestId('open-' + peer.deviceId));
     expect(await screen.findByText("Saved to Gallery and the app's own storage")).toBeTruthy();
   });
 
   it('uses the save folder name that the host gives', async () => {
-    shell(engineWithFolder(), { downloadFolder: folderHost('Ignored'), saveFolder: 'Daak', library: 'Photos', isMedia: (n) => n.endsWith('.jpg') });
-    fireEvent.press(await screen.findByTestId('open-' + peer.deviceId));
+    await shell(engineWithFolder(), { downloadFolder: folderHost('Ignored'), saveFolder: 'Daak', library: 'Photos', isMedia: (n) => n.endsWith('.jpg') });
+    await fireEventAsync.press(await screen.findByTestId('open-' + peer.deviceId));
     expect(await screen.findByText('Saved to Photos and Daak')).toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
 import React from 'react';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { renderAsync, screen, waitFor, fireEventAsync } from '@testing-library/react-native';
 import type { DeviceInfo, TransferSummary } from '@daak/core';
 import { AppShell, EngineProvider, fakeEngine } from '@daak/ui';
 
@@ -38,10 +38,10 @@ beforeEach(() => {
 // that device id. That is the difference between a route and a no-op.
 it('routes the device row into the thread for that peer', async () => {
   const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: OLD, queued: false });
-  render(<Shell />);
-  fireEvent.press(await screen.findByTestId('open-' + device.deviceId));
-  fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'hello');
-  fireEvent.press(screen.getByTestId('send'));
+  await renderAsync(<Shell />);
+  await fireEventAsync.press(await screen.findByTestId('open-' + device.deviceId));
+  await fireEventAsync.changeText(await screen.findByPlaceholderText('Or type a note'), 'hello');
+  await fireEventAsync.press(screen.getByTestId('send'));
   await waitFor(() => expect(send).toHaveBeenCalledWith({ peerDeviceId: device.deviceId, text: 'hello' }));
 });
 
@@ -49,11 +49,11 @@ it('routes the device row into the thread for that peer', async () => {
 // and a button wired to nothing is indistinguishable from a working one.
 it('sends the paths the injected picker returned', async () => {
   const send = jest.spyOn(engine, 'send').mockResolvedValue({ transferId: OLD, queued: false });
-  render(<Shell />);
-  fireEvent.press(await screen.findByTestId('open-' + device.deviceId));
-  fireEvent.press(await screen.findByTestId('pick-files'));
+  await renderAsync(<Shell />);
+  await fireEventAsync.press(await screen.findByTestId('open-' + device.deviceId));
+  await fireEventAsync.press(await screen.findByTestId('pick-files'));
   await waitFor(() => expect(screen.getByText('a.pdf')).toBeTruthy());
-  fireEvent.press(screen.getByTestId('send'));
+  await fireEventAsync.press(screen.getByTestId('send'));
   await waitFor(() =>
     expect(send).toHaveBeenCalledWith({ peerDeviceId: device.deviceId, files: ['/Users/d/Documents/a.pdf'] }),
   );
@@ -64,12 +64,12 @@ it('sends the paths the injected picker returned', async () => {
 it('shows both active transfers and cancels the one that was tapped', async () => {
   jest.spyOn(engine, 'listTransfers').mockResolvedValue([active(NEW, 6), active(OLD, 5)]);
   const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
-  render(<Shell />);
-  fireEvent.press(await screen.findByTestId('open-' + device.deviceId));
+  await renderAsync(<Shell />);
+  await fireEventAsync.press(await screen.findByTestId('open-' + device.deviceId));
   await screen.findByTestId('thread-active-' + OLD);
   expect(screen.getByTestId('thread-active-' + NEW)).toBeTruthy();
-  fireEvent.press(screen.getByTestId('thread-stop-' + OLD));
-  fireEvent.press(screen.getByTestId('confirm-stop'));
+  await fireEventAsync.press(screen.getByTestId('thread-stop-' + OLD));
+  await fireEventAsync.press(screen.getByTestId('confirm-stop'));
   await waitFor(() => expect(cancel).toHaveBeenCalledWith(OLD));
   expect(cancel).toHaveBeenCalledTimes(1);
 });
@@ -78,7 +78,7 @@ it('shows both active transfers and cancels the one that was tapped', async () =
 // and it waits for the engine. A second one deletes the batch twice and loses
 // the bytes. SendFlow is the file that owns the picker, so a second drain
 // would grow there.
-it('does not drain the staged share inbox on the way to Send', () => {
+it('does not drain the staged share inbox on the way to Send', async () => {
   const src = readFileSync(join(__dirname, '..', 'SendFlow.tsx'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
@@ -91,7 +91,7 @@ describe('no dead onSend callback exists anywhere in the tree', () => {
   const roots = ['packages/ui/src', 'apps/mobile/src'];
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
-  it('finds no empty onSend callback', () => {
+  it('finds no empty onSend callback', async () => {
     const files: string[] = [];
     const walk = (dir: string) => {
       for (const e of require('fs').readdirSync(dir, { withFileTypes: true })) {

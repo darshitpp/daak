@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, renderAsync, screen, waitFor, fireEventAsync } from '@testing-library/react-native';
 import type { DaakEngine, DeviceInfo, SendRequest } from '@daak/core';
 import { Dashboard } from './Dashboard';
 import { fakeEngine } from '../testing/fakeEngine';
@@ -27,7 +27,7 @@ function spyEngine(devices: DeviceInfo[] = [peer]): { engine: DaakEngine; sent: 
 
 describe('Dashboard (window mode)', () => {
   it('opens on Devices with the window sidebar and its version footer', async () => {
-    render(<Dashboard state={initialUiState} engine={fakeEngine([])} windowChrome={{ version: 'Version 1.0 (build 7)' }} />);
+    await renderAsync(<Dashboard state={initialUiState} engine={fakeEngine([])} windowChrome={{ version: 'Version 1.0 (build 7)' }} />);
     expect(await screen.findByText('No paired devices yet')).toBeTruthy();
     expect(screen.getByTestId('window-sidebar')).toBeTruthy();
     expect(screen.getByText('Version 1.0 (build 7)')).toBeTruthy();
@@ -37,9 +37,9 @@ describe('Dashboard (window mode)', () => {
   // the named device and at no other.
   it('opens the thread at the peerDeviceId override, not at the first device', async () => {
     const { engine, sent } = spyEngine([peer, second]);
-    render(<Dashboard state={initialUiState} engine={engine} peerDeviceId={second.deviceId} />);
-    fireEvent.changeText(await screen.findByPlaceholderText('Or type a note'), 'hi');
-    fireEvent.press(screen.getByTestId('send'));
+    await renderAsync(<Dashboard state={initialUiState} engine={engine} peerDeviceId={second.deviceId} />);
+    await fireEventAsync.changeText(await screen.findByPlaceholderText('Or type a note'), 'hi');
+    await fireEventAsync.press(screen.getByTestId('send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: second.deviceId, text: 'hi' }]));
   });
 
@@ -47,7 +47,7 @@ describe('Dashboard (window mode)', () => {
   // to the first device would send to a machine the link never named.
   it('opens no composer when the override is not a known device', async () => {
     const { engine, sent } = spyEngine();
-    render(<Dashboard state={initialUiState} engine={engine} peerDeviceId={'cc'.repeat(16)} />);
+    await renderAsync(<Dashboard state={initialUiState} engine={engine} peerDeviceId={'cc'.repeat(16)} />);
     expect(await screen.findByText('Not paired any more')).toBeTruthy();
     expect(screen.queryByPlaceholderText('Or type a note')).toBeNull();
     expect(sent).toEqual([]);
@@ -57,17 +57,17 @@ describe('Dashboard (window mode)', () => {
   it('hands a host-supplied picker to the thread', async () => {
     const { engine, sent } = spyEngine();
     const onPickFiles = jest.fn(async () => ['/Users/d/Documents/a.pdf']);
-    render(<Dashboard state={initialUiState} engine={engine} peerDeviceId={peer.deviceId} onPickFiles={onPickFiles} />);
-    fireEvent.press(await screen.findByTestId('pick-files'));
+    await renderAsync(<Dashboard state={initialUiState} engine={engine} peerDeviceId={peer.deviceId} onPickFiles={onPickFiles} />);
+    await fireEventAsync.press(await screen.findByTestId('pick-files'));
     await waitFor(() => expect(screen.getByText('a.pdf')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('send'));
+    await fireEventAsync.press(screen.getByTestId('send'));
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: peer.deviceId, files: ['/Users/d/Documents/a.pdf'] }]));
   });
 
   // Frame F3 on macOS: the label and the folder stats reach the thread composer.
   it('hands the add button label and the folder stats to the thread', async () => {
     const { engine } = spyEngine();
-    render(
+    await renderAsync(
       <Dashboard
         state={initialUiState}
         engine={engine}
@@ -77,14 +77,14 @@ describe('Dashboard (window mode)', () => {
         pickLabel="Add files or folders"
       />,
     );
-    fireEvent.press(await screen.findByText('Add files or folders'));
+    await fireEventAsync.press(await screen.findByText('Add files or folders'));
     expect(await screen.findByText('album · 3 files')).toBeTruthy();
   });
 
   it('hands the folder picker to the thread', async () => {
     const { engine } = spyEngine();
     const onPickFolder = jest.fn(async () => '/c/daak-send/U/album');
-    render(
+    await renderAsync(
       <Dashboard
         state={initialUiState}
         engine={engine}
@@ -94,8 +94,8 @@ describe('Dashboard (window mode)', () => {
         folderStats={async () => ({ files: 2, bytes: 10 })}
       />,
     );
-    fireEvent.press(await screen.findByLabelText('Add files or folders'));
-    fireEvent.press(screen.getByTestId('pick-menu-folder'));
+    await fireEventAsync.press(await screen.findByLabelText('Add files or folders'));
+    await fireEventAsync.press(screen.getByTestId('pick-menu-folder'));
     expect(await screen.findByText('album · 2 files')).toBeTruthy();
     expect(onPickFolder).toHaveBeenCalledTimes(1);
   });

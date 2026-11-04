@@ -28,15 +28,37 @@ use support::{
     run_in_child_with_nofile, send_chunk, send_without_resume_frame, sender_ref, Sink, CHUNK,
 };
 
-/// A file of 3 full chunks of `CHUNK_SIZE_MIN`, with its one item manifest.
-fn three_chunk_file(dir: &Path) -> (Manifest, Vec<Option<PathBuf>>, PathBuf, Vec<u8>) {
+/// The most chunks that the sender reads before the send of chunk 0 ends.
+/// This value is `READ_AHEAD + 2` in `transfer/sender.rs`: 1 chunk in
+/// `send`, `READ_AHEAD` (2) chunks in the channel, and 1 chunk in the reader.
+/// `READ_AHEAD` is `pub(crate)`, so this test cannot import it.
+const READ_AHEAD_PLUS_2: usize = 4;
+
+/// The chunk count of the source file in the change tests. It is more than
+/// `READ_AHEAD_PLUS_2`, so the sender reads a chunk after the change.
+const CHANGE_CHUNKS: usize = 8;
+
+/// A file of `CHANGE_CHUNKS` full chunks of `CHUNK_SIZE_MIN`, with its one
+/// item manifest.
+fn eight_chunk_file(dir: &Path) -> (Manifest, Vec<Option<PathBuf>>, PathBuf, Vec<u8>) {
     let path = dir.join("a.bin");
-    let original = bytes_of_len(1, CHUNK * 3);
+    let original = bytes_of_len(1, CHUNK * CHANGE_CHUNKS);
     std::fs::write(&path, &original).unwrap();
     let item = Item::from_file(0, &path, CHUNK_SIZE_MIN).unwrap();
-    assert_eq!(item.chunk_count, Some(3));
+    assert_eq!(item.chunk_count, Some(CHANGE_CHUNKS as u64));
     let manifest = Manifest::new(PayloadKind::Media, sender_ref(), vec![item]);
     (manifest, vec![Some(path.clone())], path, original)
+}
+
+/// The sender reads ahead. So up to `READ_AHEAD_PLUS_2` chunks that it read
+/// before the change can leave. A chunk that it reads after the change fails
+/// the send. The chunks that left must hold only original bytes.
+fn assert_read_ahead_bound(sink: &Sink) {
+    let n = sink.chunks.len();
+    assert!(
+        (1..=READ_AHEAD_PLUS_2).contains(&n),
+        "{n} chunks left the sender; the limit is READ_AHEAD + 2 = {READ_AHEAD_PLUS_2}"
+    );
 }
 
 /// Every chunk on the wire must hold the original bytes at its offset.
@@ -108,29 +130,34 @@ async fn a_sender_only_round_trip_of_600_files_works_at_256_open_files() {
 async fn a_source_file_replaced_between_chunks_fails_the_send_and_no_foreign_byte_reaches_the_wire()
 {
     let dir = tempfile::tempdir().unwrap();
-    let (manifest, paths, path, original) = three_chunk_file(dir.path());
+    let (manifest, paths, path, original) = eight_chunk_file(dir.path());
     let swap = dir.path().join("swap.tmp");
     let target = path.clone();
     // An editor saves atomically: it writes a new file, then renames it over
-    // the old path. The new file has a new inode and the same size.
+    // the old path. The new file has a new inode and the same size. A read
+    // that started before the rename reads the old inode, so it reads
+    // original bytes.
     let mut sink = Sink::with_hook(move |_, chunk| {
         if chunk == 0 {
-            std::fs::write(&swap, bytes_of_len(99, CHUNK * 3)).unwrap();
+            std::fs::write(&swap, bytes_of_len(99, CHUNK * CHANGE_CHUNKS)).unwrap();
             std::fs::rename(&swap, &target).unwrap();
         }
     });
     let r = send_without_resume_frame(&mut sink, &manifest, &paths, |_| {}).await;
     assert_only_original_bytes(&sink, &original);
     assert_transfer_error_with_no_name(r, dir.path());
-    assert_eq!(sink.chunks.len(), 1, "no chunk leaves after the change");
+    assert_read_ahead_bound(&sink);
 }
 
 #[tokio::test]
 async fn a_source_file_truncated_between_chunks_fails_the_send_and_sends_no_foreign_byte() {
     let dir = tempfile::tempdir().unwrap();
-    let (manifest, paths, path, original) = three_chunk_file(dir.path());
+    let (manifest, paths, path, original) = eight_chunk_file(dir.path());
     let target = path.clone();
-    // The same inode gets new, shorter content.
+    // The same inode gets new, shorter content. The reader can be in a read
+    // during the truncate. That read is short, and the sender gives the same
+    // transfer error as the size check. A read that starts after the change
+    // fails the size check.
     let mut sink = Sink::with_hook(move |_, chunk| {
         if chunk == 0 {
             std::fs::write(&target, bytes_of_len(99, CHUNK + 10)).unwrap();
@@ -139,18 +166,20 @@ async fn a_source_file_truncated_between_chunks_fails_the_send_and_sends_no_fore
     let r = send_without_resume_frame(&mut sink, &manifest, &paths, |_| {}).await;
     assert_only_original_bytes(&sink, &original);
     assert_transfer_error_with_no_name(r, dir.path());
-    assert_eq!(sink.chunks.len(), 1, "no chunk leaves after the change");
+    assert_read_ahead_bound(&sink);
 }
 
 /// Pin: this test passes before and after F2. A symlink that replaces the
 /// source path after chunk 1 must not put the bytes of its target on the wire.
+/// The file has more chunks than `READ_AHEAD_PLUS_2`, so the sender opens the
+/// path after the swap.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_symlink_swapped_in_for_a_source_file_is_not_followed() {
     let dir = tempfile::tempdir().unwrap();
-    let (manifest, paths, path, original) = three_chunk_file(dir.path());
+    let (manifest, paths, path, original) = eight_chunk_file(dir.path());
     let other = dir.path().join("other.bin");
-    std::fs::write(&other, bytes_of_len(99, CHUNK * 3)).unwrap();
+    std::fs::write(&other, bytes_of_len(99, CHUNK * CHANGE_CHUNKS)).unwrap();
     let target = path.clone();
     let mut sink = Sink::with_hook(move |_, chunk| {
         if chunk == 0 {

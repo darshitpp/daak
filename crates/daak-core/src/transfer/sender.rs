@@ -267,12 +267,31 @@ fn ack_verdict(manifest: &Manifest, ack: &AckMsg) -> Option<Result<()>> {
     Some(Ok(()))
 }
 
+/// The capacity of the channel between the reader task and the send loop.
+pub(crate) const READ_AHEAD: usize = 2;
+
 async fn stream_and_await_ack<T: FrameTransport>(
     conn: &mut T,
     manifest: &Manifest,
     paths: &[Option<PathBuf>],
     ranges: &[Vec<(u64, u64)>],
+    on_progress: impl FnMut(u64),
+) -> Result<()> {
+    stream_and_await_ack_with(conn, manifest, paths, ranges, on_progress, || {}).await
+}
+
+/// `stream_and_await_ack` with a test hook. The reader task calls
+/// `read_hook` before each chunk read.
+///
+/// If the caller drops the returned future, the reader task is not aborted.
+/// It ends after at most one more read, because the channel is closed.
+pub(crate) async fn stream_and_await_ack_with<T: FrameTransport>(
+    conn: &mut T,
+    manifest: &Manifest,
+    paths: &[Option<PathBuf>],
+    ranges: &[Vec<(u64, u64)>],
     mut on_progress: impl FnMut(u64),
+    read_hook: impl Fn() + Send + Sync + 'static,
 ) -> Result<()> {
     // F1: every caller gets cleaned ranges, also a caller of `send_transfer`.
     let ranges = &clean_ranges(manifest, ranges.to_vec());
@@ -316,32 +335,61 @@ async fn stream_and_await_ack<T: FrameTransport>(
         });
     }
 
-    // One total for the span. No event for each chunk.
-    let mut sent: u64 = 0;
-    for (item_index, chunk_index) in interleave(scheduled, 1) {
-        if !chunk_in_ranges(ranges, item_index, chunk_index) {
-            continue;
+    let order: Vec<(u32, u64)> = interleave(scheduled, 1)
+        .into_iter()
+        .filter(|&(item, chunk)| chunk_in_ranges(ranges, item, chunk))
+        .collect();
+
+    // One reader task reads the chunks in wire order. The channel holds up to
+    // READ_AHEAD chunks, so the reader reads the next chunk while the loop
+    // below sends the current one. The reader stops after the first error.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<(u32, u64, Vec<u8>)>>(READ_AHEAD);
+    let reader = tokio::task::spawn_blocking(move || {
+        for (item_index, chunk_index) in order {
+            read_hook();
+            // F2: each chunk opens the file again with its own checks.
+            let read = files
+                .get(item_index as usize)
+                .cloned()
+                .flatten()
+                .ok_or_else(|| CoreError::Transfer(format!("no source for item {item_index}")))
+                .and_then(|(path, chunk_size, want)| {
+                    read_chunk_checked(&path, chunk_size, chunk_index, want)
+                })
+                .map(|data| (item_index, chunk_index, data));
+            let failed = read.is_err();
+            // A send error means that the loop stopped. The reader then ends.
+            if tx.blocking_send(read).is_err() || failed {
+                return;
+            }
         }
-        let (path, chunk_size, want) = files
-            .get(item_index as usize)
-            .cloned()
-            .flatten()
-            .ok_or_else(|| CoreError::Transfer(format!("no source for item {item_index}")))?;
-        let data = tokio::task::spawn_blocking(move || {
-            read_chunk_checked(&path, chunk_size, chunk_index, want)
-        })
-        .await
-        .map_err(|e| CoreError::Transfer(format!("chunk read task failed: {e}")))??;
-        let body = encode_chunk_body(item_index, chunk_index, &data);
-        on_progress(data.len() as u64);
-        sent += data.len() as u64;
-        conn.send(
-            crate::session::item_stream(item_index),
-            RecordType::Chunk,
-            Bytes::from(body),
-        )
-        .await?;
+    });
+
+    let streamed = async {
+        // One total for the span. No event for each chunk.
+        let mut sent: u64 = 0;
+        while let Some(read) = rx.recv().await {
+            let (item_index, chunk_index, data) = read?;
+            let body = encode_chunk_body(item_index, chunk_index, &data);
+            conn.send(
+                crate::session::item_stream(item_index),
+                RecordType::Chunk,
+                Bytes::from(body),
+            )
+            .await?;
+            // The progress follows the wire, so it runs after the send.
+            on_progress(data.len() as u64);
+            sent += data.len() as u64;
+        }
+        Ok::<u64, CoreError>(sent)
     }
+    .await;
+    // On every exit: close the channel, then wait for the reader once. A
+    // reader in a file read ends after that read.
+    drop(rx);
+    let joined = reader.await;
+    let sent = streamed?;
+    joined.map_err(|e| CoreError::Transfer(format!("chunk read task failed: {e}")))?;
     tracing::Span::current().record("bytes", sent);
 
     loop {
@@ -389,7 +437,6 @@ fn read_chunk_checked(
     index: u64,
     want: (u64, Option<(u64, u64)>),
 ) -> Result<Vec<u8>> {
-    use std::io::{Read, Seek};
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -408,9 +455,26 @@ fn read_chunk_checked(
         .filter(|offset| *offset < want.0)
         .ok_or_else(|| CoreError::Transfer(format!("chunk {index} missing")))?;
     let len = (want.0 - offset).min(chunk_size);
+    read_at(&mut file, offset, len)
+}
+
+/// Read `len` bytes at `offset`. A short read means that the file got shorter
+/// after the file id check. That is a source change, so the error is the
+/// same as the error of the id check.
+fn read_at(
+    file: &mut (impl std::io::Read + std::io::Seek),
+    offset: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
     file.seek(std::io::SeekFrom::Start(offset))?;
     let mut data = vec![0u8; len as usize];
-    file.read_exact(&mut data)?;
+    file.read_exact(&mut data).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            CoreError::Transfer("the source file changed during the send".into())
+        } else {
+            e.into()
+        }
+    })?;
     Ok(data)
 }
 
@@ -898,6 +962,336 @@ mod tests {
         assert!(
             matches!(r, Err(CoreError::Protocol(_))),
             "a close before the ack is a retryable transport error, got {r:?}"
+        );
+    }
+
+    // Pipeline tests. They call `stream_and_await_ack_with` directly, so the
+    // peer gets no manifest frame and send number 1 is chunk number 1.
+
+    use crate::transfer::test_transport::TestTransport;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Source files on disk and the manifest for them.
+    struct Source {
+        dir: tempfile::TempDir,
+        manifest: Manifest,
+        paths: Vec<Option<PathBuf>>,
+    }
+
+    /// Make one file for each entry of `counts`. File `i` has `counts[i]`
+    /// chunks of `CHUNK_SIZE_MIN`. Its last chunk is 7 bytes short.
+    fn source(counts: &[u64]) -> Source {
+        let dir = tempfile::tempdir().unwrap();
+        let mut items = Vec::new();
+        let mut paths = Vec::new();
+        for (i, count) in counts.iter().enumerate() {
+            let p = dir.path().join(format!("f{i}.bin"));
+            let size = (*count * CHUNK_SIZE_MIN as u64 - 7) as usize;
+            std::fs::write(&p, vec![i as u8 + 1; size]).unwrap();
+            let item = Item::from_file(i as u32, &p, CHUNK_SIZE_MIN).unwrap();
+            assert_eq!(item.chunk_count, Some(*count));
+            items.push(item);
+            paths.push(Some(p));
+        }
+        let manifest = Manifest::new(PayloadKind::Media, sender(), items);
+        Source {
+            dir,
+            manifest,
+            paths,
+        }
+    }
+
+    /// A peer that records each chunk as `(item, chunk)`. After `ack_after`
+    /// chunks it sends a complete ack. It reads until the sender closes.
+    fn spawn_peer(
+        mut theirs: impl FrameTransport + Send + 'static,
+        id: [u8; 16],
+        ack_after: Option<usize>,
+    ) -> tokio::task::JoinHandle<Vec<(u32, u64)>> {
+        tokio::spawn(async move {
+            let mut chunks = Vec::new();
+            while let Ok(Some(f)) = theirs.recv().await {
+                if f.kind != RecordType::Chunk {
+                    continue;
+                }
+                let (item, chunk, _) = decode_chunk_body(&f.body).unwrap();
+                chunks.push((item, chunk));
+                if Some(chunks.len()) == ack_after {
+                    let ack = AckMsg {
+                        transfer_id: id,
+                        item_index: 0,
+                        complete: true,
+                        hash_ok: true,
+                    };
+                    theirs
+                        .send(
+                            CONTROL_STREAM,
+                            RecordType::Ack,
+                            Bytes::from(ack.to_cbor().unwrap()),
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+            chunks
+        })
+    }
+
+    /// A read hook that counts its calls. The test keeps one clone of the
+    /// counter. When the reader task ends, it drops the hook and its clone.
+    fn counting_hook(count: &Arc<AtomicUsize>) -> impl Fn() + Send + Sync + 'static {
+        let count = count.clone();
+        move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn sender_frame_order_matches_interleave() {
+        let src = source(&[3, 1, 2]);
+        let expected = interleave(
+            src.manifest
+                .items
+                .iter()
+                .map(|item| ScheduledItem {
+                    index: item.index,
+                    path: PathBuf::new(),
+                    chunk_size: CHUNK_SIZE_MIN,
+                    chunk_count: item.chunk_count.unwrap(),
+                })
+                .collect(),
+            1,
+        );
+        let (mine, theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = spawn_peer(theirs, src.manifest.payload_id, Some(expected.len()));
+        let mut conn = TestTransport::new(mine);
+        let r = stream_and_await_ack_with(&mut conn, &src.manifest, &src.paths, &[], |_| {}, || {})
+            .await;
+        drop(conn);
+        r.unwrap();
+        assert_eq!(peer.await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn sender_source_change_fails_and_reader_ends() {
+        let src = source(&[4]);
+        let p = src.paths[0].clone().unwrap();
+        let spare = src.dir.path().join("spare.bin");
+        std::fs::copy(&p, &spare).unwrap();
+        // Before read 2, a file with the same size and a new inode replaces
+        // the source.
+        let count = Arc::new(AtomicUsize::new(0));
+        let hook = {
+            let count = count.clone();
+            move || {
+                if count.fetch_add(1, Ordering::SeqCst) + 1 == 2 {
+                    std::fs::rename(&spare, &p).unwrap();
+                }
+            }
+        };
+        let (mine, theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = spawn_peer(theirs, src.manifest.payload_id, None);
+        let mut conn = TestTransport::new(mine);
+        let r = stream_and_await_ack_with(&mut conn, &src.manifest, &src.paths, &[], |_| {}, hook)
+            .await;
+        assert_eq!(Arc::strong_count(&count), 1, "the reader task ended");
+        drop(conn);
+        match r {
+            Err(CoreError::Transfer(text)) => {
+                assert_eq!(text, "the source file changed during the send")
+            }
+            other => panic!("got {other:?}"),
+        }
+        assert_eq!(peer.await.unwrap(), vec![(0, 0)]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sender_symlink_swap_between_chunks_fails() {
+        let src = source(&[4]);
+        let p = src.paths[0].clone().unwrap();
+        let target = src.dir.path().join("target.bin");
+        std::fs::copy(&p, &target).unwrap();
+        // Before read 2, a symlink to a copy replaces the source.
+        let count = Arc::new(AtomicUsize::new(0));
+        let hook = {
+            let count = count.clone();
+            let p = p.clone();
+            move || {
+                if count.fetch_add(1, Ordering::SeqCst) + 1 == 2 {
+                    std::fs::remove_file(&p).unwrap();
+                    std::os::unix::fs::symlink(&target, &p).unwrap();
+                }
+            }
+        };
+        let (mine, theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = spawn_peer(theirs, src.manifest.payload_id, None);
+        let mut conn = TestTransport::new(mine);
+        let r = stream_and_await_ack_with(&mut conn, &src.manifest, &src.paths, &[], |_| {}, hook)
+            .await;
+        assert_eq!(Arc::strong_count(&count), 1, "the reader task ended");
+        drop(conn);
+        let e = r.expect_err("a symlink swap must fail the send");
+        let dir = src.dir.path().to_string_lossy().into_owned();
+        assert!(!e.to_string().contains(&dir), "the error holds a path: {e}");
+        assert_eq!(
+            peer.await.unwrap(),
+            vec![(0, 0)],
+            "no chunk goes out after the read error"
+        );
+    }
+
+    #[tokio::test]
+    async fn sender_early_stop_ends_reader() {
+        let src = source(&[6]);
+        let count = Arc::new(AtomicUsize::new(0));
+        let (mine, theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = spawn_peer(theirs, src.manifest.payload_id, None);
+        let mut conn = TestTransport::new(mine).fail_send_at(3);
+        let r = stream_and_await_ack_with(
+            &mut conn,
+            &src.manifest,
+            &src.paths,
+            &[],
+            |_| {},
+            counting_hook(&count),
+        )
+        .await;
+        assert_eq!(Arc::strong_count(&count), 1, "the reader task ended");
+        drop(conn);
+        match r {
+            Err(CoreError::Protocol(text)) => assert_eq!(text, "test transport: send failed"),
+            other => panic!("got {other:?}"),
+        }
+        assert_eq!(peer.await.unwrap(), vec![(0, 0), (0, 1)]);
+    }
+
+    #[tokio::test]
+    async fn sender_reader_stops_at_read_ahead_plus_2() {
+        let src = source(&[10]);
+        let count = Arc::new(AtomicUsize::new(0));
+        let (mine, theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = spawn_peer(theirs, src.manifest.payload_id, None);
+        // The gate never opens, so the first chunk send blocks.
+        let mut conn = TestTransport::new(mine).block_until(Arc::new(tokio::sync::Notify::new()));
+        let bound = READ_AHEAD + 2;
+        {
+            let run = stream_and_await_ack_with(
+                &mut conn,
+                &src.manifest,
+                &src.paths,
+                &[],
+                |_| {},
+                counting_hook(&count),
+            );
+            tokio::pin!(run);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while count.load(Ordering::SeqCst) < bound && tokio::time::Instant::now() < deadline {
+                tokio::select! {
+                    r = &mut run => panic!("the send must block, got {r:?}"),
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+            // Give the reader time to read too far, if it can.
+            tokio::select! {
+                r = &mut run => panic!("the send must block, got {r:?}"),
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+            }
+            assert_eq!(count.load(Ordering::SeqCst), bound);
+        }
+        // The drop of the send future closes the channel. The reader then ends.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&count) > 1 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(Arc::strong_count(&count), 1, "the reader task ended");
+        drop(conn);
+        assert!(peer.await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sender_progress_runs_after_send() {
+        let src = source(&[3, 2]);
+        let total: u64 = src.manifest.items.iter().map(|i| i.size.unwrap()).sum();
+        let (mine, theirs) = SecureConnection::<MemConn>::test_pair();
+        let peer = spawn_peer(theirs, src.manifest.payload_id, Some(5));
+        let mut conn = TestTransport::new(mine);
+        let done = conn.completed_sends();
+        // Each entry is (sends completed at the call, bytes of the call).
+        let mut progress = Vec::new();
+        let r = stream_and_await_ack_with(
+            &mut conn,
+            &src.manifest,
+            &src.paths,
+            &[],
+            |n| progress.push((done.load(Ordering::SeqCst), n)),
+            || {},
+        )
+        .await;
+        drop(conn);
+        r.unwrap();
+        assert_eq!(peer.await.unwrap().len(), 5);
+        let seen: Vec<usize> = progress.iter().map(|(d, _)| *d).collect();
+        assert_eq!(seen, vec![1, 2, 3, 4, 5], "progress k runs after send k");
+        assert_eq!(progress.iter().map(|(_, n)| n).sum::<u64>(), total);
+    }
+
+    /// A truncate after the file id check and before `read_exact` gives a
+    /// short read. The read hook cannot make this case, because the hook runs
+    /// before the open and the id check. So this test gives `read_at` a
+    /// reader that is shorter than the chunk.
+    #[test]
+    fn sender_truncate_during_read_gives_changed_error() {
+        let original = [1u8; 100];
+        let mut short = std::io::Cursor::new(original[..70].to_vec());
+        match read_at(&mut short, 50, 50) {
+            Err(CoreError::Transfer(text)) => {
+                assert_eq!(text, "the source file changed during the send")
+            }
+            other => panic!("got {other:?}"),
+        }
+        // The read of the bytes that are still there gives the original bytes.
+        assert_eq!(read_at(&mut short, 0, 70).unwrap(), original[..70]);
+    }
+
+    #[tokio::test]
+    async fn sender_overlap() {
+        const CHUNKS: u64 = 40;
+        const STEP: Duration = Duration::from_millis(20);
+        let src = source(&[CHUNKS]);
+        // A plain `MemConn` pair: no Noise layer. In a debug build the encrypt
+        // and the decrypt of a 64 KiB chunk cost several ms on the same
+        // thread. The 40 x 40 ms model does not count that cost.
+        let (mine, theirs) = MemConn::pair();
+        let peer = spawn_peer(theirs, src.manifest.payload_id, Some(CHUNKS as usize));
+        let mut conn = TestTransport::new(mine).with_send_delay(STEP);
+        // Measure the real hook sleeps. On macOS a sleep of 20 ms lasts up to
+        // 25 ms. The sequential time is 2 x the measured sum, not the
+        // nominal 40 x 40 ms. The send delay has the same nominal step.
+        let slept = std::sync::Arc::new(std::sync::Mutex::new(Duration::ZERO));
+        let hook = {
+            let slept = slept.clone();
+            move || {
+                let t = std::time::Instant::now();
+                std::thread::sleep(STEP);
+                *slept.lock().unwrap() += t.elapsed();
+            }
+        };
+        let start = std::time::Instant::now();
+        let r = stream_and_await_ack_with(&mut conn, &src.manifest, &src.paths, &[], |_| {}, hook)
+            .await;
+        let elapsed = start.elapsed();
+        drop(conn);
+        r.unwrap();
+        assert_eq!(peer.await.unwrap().len(), CHUNKS as usize);
+        // This formula assumes that the hook sleep and the send delay are
+        // the same step (`STEP`). Change both together.
+        let sequential = (*slept.lock().unwrap() * 2).max(STEP * 2 * CHUNKS as u32);
+        eprintln!("sender_overlap: loop {elapsed:?}, sequential {sequential:?}");
+        assert!(
+            elapsed < sequential * 3 / 4,
+            "took {elapsed:?}; a sequential run takes about {sequential:?}"
         );
     }
 }

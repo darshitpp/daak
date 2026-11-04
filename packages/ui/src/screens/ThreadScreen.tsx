@@ -22,6 +22,7 @@ import { Btn, Empty, Note, ProgressBar, Status, deviceLabel, presenceOf, type De
 import type { InboxActions } from '../inbox-actions';
 import { colors, control, ui } from '../theme';
 import { humanBytes } from './quarantine-facts';
+import { useTransferSpeed } from '../state/speed';
 import { EMPTY_THREAD, itemKey, mergeThread, prependOlder, type ThreadView } from './thread-merge';
 import { folderPlaces, groupThread, savedLine, type FolderRow } from './thread-groups';
 
@@ -81,6 +82,47 @@ function ComposerWrap({ avoid, children }: { avoid: boolean; children: React.Rea
 
 // A failure that needs the user to act. A success is a toast, not a result.
 type Result = { title: string; body: string; retry?: boolean } | null;
+
+/**
+ * The card of one running send. It is a component because the speed hook must
+ * not run inside `active.map`. Every transfer in `active` is running.
+ */
+function ActiveSendCard({
+  s,
+  live,
+  name,
+  onStop,
+}: {
+  s: TransferSummary;
+  live: { done: number; total: number } | undefined;
+  name: string;
+  onStop: () => void;
+}) {
+  const done = live?.done ?? s.bytesDone;
+  const total = live?.total ?? s.bytesTotal;
+  const known = done > 0 && total > 0;
+  const pct = known ? Math.floor((done / total) * 100) : 0;
+  const { text: speed } = useTransferSpeed(s.transferId, done, total, true);
+  return (
+    <View style={[ui.card, { marginHorizontal: 12, marginBottom: 8 }]} testID={`thread-active-${s.transferId}`}>
+      <Text style={ui.h3}>{`Sending to ${name}`}</Text>
+      <Text style={ui.hint}>
+        {[plural(s.itemCount, 'item', 'items'), humanBytes(total)].filter(Boolean).join(' · ')}
+      </Text>
+      <ProgressBar pct={pct} />
+      <View style={ui.progMeta}>
+        <Text style={[ui.hint, { flexShrink: 1 }]}>Sending over your Wi-Fi</Text>
+        <View style={{ flexDirection: 'row', gap: 8, flexShrink: 1 }}>
+          {speed === null ? null : (
+            <Text style={ui.hint} numberOfLines={1} testID={`thread-speed-${s.transferId}`}>{speed}</Text>
+          )}
+          {known ? <Text style={ui.progN}>{pct + '%'}</Text> : null}
+        </View>
+      </View>
+      <Btn label="Stop sending" variant="danger" block testID={`thread-stop-${s.transferId}`} onPress={onStop} />
+    </View>
+  );
+}
 
 /**
  * The conversation with one paired device (design: `contact-detail`). It
@@ -167,6 +209,10 @@ export function ThreadScreen({
   const inFlight = useRef<Set<string>>(new Set());
 
   const alive = useRef(true);
+
+  // A closed screen has no toast. The provider is gone and its timer would never clear.
+
+  const say = (message: string) => { if (alive.current) toast.show(message); };
   const seq = useRef(0);
   const frame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const scroller = useRef<ScrollView>(null);
@@ -357,7 +403,7 @@ export function ThreadScreen({
         const next = [...files, ...picked.filter((p) => !files.includes(p))];
         if (next.length === files.length) return;
         setFiles(next);
-        toast.show(`${plural(next.length, 'file', 'files')} ready`);
+        say(`${plural(next.length, 'file', 'files')} ready`);
         // The macOS panel can also pick a folder. A phone file picker cannot,
         // so a phone makes no bridge call for each file.
         if (!onPickFolder) void measure(picked.filter((p) => !files.includes(p)));
@@ -391,7 +437,7 @@ export function ThreadScreen({
         }
         if (stats) setFolders((f) => ({ ...f, [path]: stats }));
         setFiles((f) => (f.includes(path) ? f : [...f, path]));
-        toast.show('Folder staged');
+        say('Folder staged');
       } catch (e) {
         if (!stale()) setPickError(folderPickError(e));
       } finally {
@@ -438,7 +484,7 @@ export function ThreadScreen({
         await engine.send({ peerDeviceId, text: note });
         setText('');
       }
-      toast.show(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
+      say(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
       stick.current = true;
     } catch (e) {
       setResult({
@@ -458,7 +504,7 @@ export function ThreadScreen({
     if (id === null) return;
     try {
       await engine.cancel(id);
-      toast.show('Sending stopped');
+      say('Sending stopped');
     } catch (e) {
       setResult({ title: 'Sending did not stop', body: errText(e, 'The engine refused.') });
     }
@@ -469,7 +515,7 @@ export function ThreadScreen({
   const stopWaiting = async (transferId: string) => {
     try {
       await engine.cancel(transferId);
-      toast.show('Stopped');
+      say('Stopped');
     } catch (e) {
       setResult({ title: 'Sending did not stop', body: errText(e, 'The engine refused.') });
     }
@@ -480,7 +526,7 @@ export function ThreadScreen({
     try {
       await engine.retry(transferId);
       // The task order: the app shows the design success word after a Retry.
-      toast.show(`Sent to ${name}`);
+      say(`Sent to ${name}`);
     } catch (e) {
       setResult({ title: 'Try again did not work', body: errText(e, 'The engine refused.') });
     }
@@ -550,7 +596,7 @@ export function ThreadScreen({
     ? (i: ThreadItem) => {
         const open = actions.open;
         // Ruling: a Preview that no app can open is a toast.
-        const noApp = () => toast.show('This device cannot open files.');
+        const noApp = () => say('This device cannot open files.');
         if (open && i.destPath !== null) {
           void open(i.destPath).then((ok) => { if (!ok) noApp(); }, noApp);
         }
@@ -624,9 +670,9 @@ export function ThreadScreen({
                     void engine.getItemText(i.transferId, i.itemIndex).then(
                       (whole) => {
                         actions.copy?.(whole);
-                        toast.show('Copied');
+                        say('Copied');
                       },
-                      () => toast.show('Could not copy the whole text.'),
+                      () => say('Could not copy the whole text.'),
                     );
                   }
                 : undefined
@@ -647,33 +693,15 @@ export function ThreadScreen({
         })}
       </ScrollView>
 
-      {active.map((s) => {
-        const live = progress[s.transferId];
-        const done = live?.done ?? s.bytesDone;
-        const total = live?.total ?? s.bytesTotal;
-        const known = done > 0 && total > 0;
-        const pct = known ? Math.floor((done / total) * 100) : 0;
-        return (
-          <View key={s.transferId} style={[ui.card, { marginHorizontal: 12, marginBottom: 8 }]} testID={`thread-active-${s.transferId}`}>
-            <Text style={ui.h3}>{`Sending to ${name}`}</Text>
-            <Text style={ui.hint}>
-              {[plural(s.itemCount, 'item', 'items'), humanBytes(total)].filter(Boolean).join(' · ')}
-            </Text>
-            <ProgressBar pct={pct} />
-            <View style={ui.progMeta}>
-              <Text style={ui.hint}>Sending over your Wi-Fi</Text>
-              {known ? <Text style={ui.progN}>{pct + '%'}</Text> : null}
-            </View>
-            <Btn
-              label="Stop sending"
-              variant="danger"
-              block
-              testID={`thread-stop-${s.transferId}`}
-              onPress={() => setStopFor(s.transferId)}
-            />
-          </View>
-        );
-      })}
+      {active.map((s) => (
+        <ActiveSendCard
+          key={s.transferId}
+          s={s}
+          live={progress[s.transferId]}
+          name={name}
+          onStop={() => setStopFor(s.transferId)}
+        />
+      ))}
 
       {result ? (
         <View style={{ paddingHorizontal: 12, gap: 8 }}>

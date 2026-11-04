@@ -4,6 +4,8 @@ pub mod receiver;
 pub mod resume;
 pub mod scheduler;
 pub mod sender;
+#[cfg(test)]
+pub(crate) mod test_transport;
 
 pub use quarantine::Quarantine;
 pub use receiver::{receive_transfer, receive_transfer_from};

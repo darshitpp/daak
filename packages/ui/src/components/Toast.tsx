@@ -35,9 +35,13 @@ export function ToastProvider({ children, durationMs = 2600, bottomOffset = 96, 
 }) {
   const [message, setMessage] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
 
   const show = useCallback(
     (next: string) => {
+      // A caller can run after an await, when this provider is gone. A timer
+      // that starts then has no cleanup and keeps the process alive.
+      if (!mounted.current) return;
       if (timer.current !== null) clearTimeout(timer.current);
       setMessage(next);
       timer.current = setTimeout(() => {
@@ -48,13 +52,14 @@ export function ToastProvider({ children, durationMs = 2600, bottomOffset = 96, 
     [durationMs],
   );
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       if (timer.current !== null) clearTimeout(timer.current);
       timer.current = null;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const api = useMemo<ToastApi>(() => ({ show }), [show]);
 

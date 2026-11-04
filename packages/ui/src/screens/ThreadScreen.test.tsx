@@ -38,6 +38,9 @@ const summary = (p: Partial<TransferSummary> = {}): TransferSummary => ({
 });
 
 describe('ThreadScreen', () => {
+  // A load that is still pending when a test ends must finish inside act.
+  afterEach(async () => { await settle(0); });
+
   // Review Focus 1.
   it('shows the empty state and keeps the composer when the thread has no items', async () => {
     mount(fakeEngine([peer]));
@@ -605,6 +608,53 @@ describe('ThreadScreen', () => {
     expect(await screen.findByText('25%')).toBeTruthy();
   });
 
+  // Task 6. The hook reads Date.now. The test moves the clock by hand.
+  it('thread_row_shows_speed_while_active', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
+    const MIB = 1024 * 1024;
+    let now = 1_000_000;
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mount(engine);
+      await screen.findByText('Sending to Pixel 9');
+      for (let i = 1; i <= 5; i++) {
+        now += 500;
+        emit(engine, { type: 'transfer.progress', transferId: TID, bytesDone: i * 5 * MIB, bytesTotal: 128 * MIB });
+      }
+      expect(await screen.findByText(/MiB\/s/)).toBeTruthy();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('thread_row_hides_speed_when_done_or_failed', async () => {
+    const MIB = 1024 * 1024;
+    for (const state of ['done', 'failed'] as const) {
+      const engine = fakeEngine([peer]);
+      const list = jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
+      let now = 1_000_000;
+      const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const view = mount(engine);
+        await screen.findByText('Sending to Pixel 9');
+        for (let i = 1; i <= 5; i++) {
+          now += 500;
+          emit(engine, { type: 'transfer.progress', transferId: TID, bytesDone: i * 5 * MIB, bytesTotal: 128 * MIB });
+        }
+        await screen.findByText(/MiB\/s/);
+        // The engine now lists no active transfer. The card goes away.
+        list.mockResolvedValue([summary({ state })]);
+        emit(engine, { type: 'transfer.done', transferId: TID } as DaakEvent);
+        await waitFor(() => expect(screen.queryByTestId('thread-active-' + TID)).toBeNull());
+        expect(screen.queryByText(/MiB\/s/)).toBeNull();
+        view.unmount();
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
   // Design: the Stop action on a queued bubble needs no confirm sheet.
   it('shows a queued outbound item as Waiting to send and stops it with no sheet', async () => {
     const engine = fakeEngine([{ ...peer, presence: 'offline', online: false }]);
@@ -852,6 +902,8 @@ describe('ThreadScreen', () => {
 
 
 describe('ThreadScreen folders', () => {
+  afterEach(async () => { await settle(0); });
+
   const FOLDER = 'ee'.repeat(16);
   const kid = (rel: string, p: Partial<Parameters<typeof threadItem>[0]> = {}) =>
     threadItem({
@@ -944,6 +996,8 @@ describe('ThreadScreen folders', () => {
 
 // Task 9, frames F3 and F4: stage a folder in the composer.
 describe('ThreadScreen folder staging', () => {
+  afterEach(async () => { await settle(0); });
+
   const COPY = '/data/cache/daak-send/U1/album';
   const STATS = { files: 12, bytes: 34 * 1024 * 1024 };
   const flat = (s: unknown) => StyleSheet.flatten(s as StyleProp<ViewStyle>) ?? {};
