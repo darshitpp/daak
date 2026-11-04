@@ -857,7 +857,10 @@ describe('native save and move keep the folder structure', () => {
   it('answers the input path for a file that is already in its place on iOS and macOS', () => {
     for (const swift of [ios, mac]) {
       const fn = from(swift, 'func moveReceivedFiles(');
-      expect(fn).toMatch(/if Self\.samePath\(src\.deletingLastPathComponent\(\), target\) \{\s*out\.append\(path\)/);
+      expect(fn).not.toContain('samePath');
+      // A file inside the save folder answers its own path. A file in the engine
+      // output folder still moves, unless the save folder is that folder or below it.
+      expect(fn).toMatch(/if srcAt\.hasPrefix\(folderAt\) && \(!srcAt\.hasPrefix\(outAt\) \|\| folderAt\.hasPrefix\(outAt\)\) \{\s*out\.append\(path\)\s*continue/);
     }
   });
 
@@ -933,7 +936,8 @@ describe('iOS saves to the Photos library with add-only access', () => {
     const start = ios.indexOf('func addToLibrary(');
     const fn = ios.slice(start, ios.indexOf('\n  }\n', start));
     expect(fn).not.toContain('try? FileManager.default.removeItem');
-    expect(fn).toMatch(/do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{\s*NSLog\("Daak: the saved photo's source file was not removed: \\\(error\)"\)/);
+    expect(fn).toMatch(/do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{\s*NSLog\("Daak: the saved photo's source file was not removed \(\\\(\(error as NSError\)\.domain\) \\\(\(error as NSError\)\.code\)\)"\)/);
+    expect(fn).not.toContain('\\(error)');
     expect(fn).toContain('return "photos:" + identifier');
   });
 
@@ -972,7 +976,8 @@ describe('Android saves to MediaStore without a permission', () => {
     const fn = kt.slice(kt.indexOf('private fun saveOne('));
     const del = fn.indexOf('if (!src.delete())');
     expect(del).toBeGreaterThan(fn.indexOf('IS_PENDING, 0'));
-    expect(fn).toContain('android.util.Log.w("DaakFsPaths", "saved item but could not delete source: ${src.name}")');
+    expect(fn).toContain('android.util.Log.w("DaakFsPaths", "saved item but could not delete source")');
+    expect(fn).not.toContain('${src.name}');
     expect(fn.indexOf('uri.toString()')).toBeGreaterThan(del);
   });
 
