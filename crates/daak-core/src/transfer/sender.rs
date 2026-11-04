@@ -434,7 +434,6 @@ fn read_chunk_checked(
     index: u64,
     want: (u64, Option<(u64, u64)>),
 ) -> Result<Vec<u8>> {
-    use std::io::{Read, Seek};
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -453,9 +452,26 @@ fn read_chunk_checked(
         .filter(|offset| *offset < want.0)
         .ok_or_else(|| CoreError::Transfer(format!("chunk {index} missing")))?;
     let len = (want.0 - offset).min(chunk_size);
+    read_at(&mut file, offset, len)
+}
+
+/// Read `len` bytes at `offset`. A short read means that the file got shorter
+/// after the file id check. That is a source change, so the error is the
+/// same as the error of the id check.
+fn read_at(
+    file: &mut (impl std::io::Read + std::io::Seek),
+    offset: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
     file.seek(std::io::SeekFrom::Start(offset))?;
     let mut data = vec![0u8; len as usize];
-    file.read_exact(&mut data)?;
+    file.read_exact(&mut data).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            CoreError::Transfer("the source file changed during the send".into())
+        } else {
+            e.into()
+        }
+    })?;
     Ok(data)
 }
 
@@ -1216,6 +1232,24 @@ mod tests {
         let seen: Vec<usize> = progress.iter().map(|(d, _)| *d).collect();
         assert_eq!(seen, vec![1, 2, 3, 4, 5], "progress k runs after send k");
         assert_eq!(progress.iter().map(|(_, n)| n).sum::<u64>(), total);
+    }
+
+    /// A truncate after the file id check and before `read_exact` gives a
+    /// short read. The read hook cannot make this case, because the hook runs
+    /// before the open and the id check. So this test gives `read_at` a
+    /// reader that is shorter than the chunk.
+    #[test]
+    fn sender_truncate_during_read_gives_changed_error() {
+        let original = [1u8; 100];
+        let mut short = std::io::Cursor::new(original[..70].to_vec());
+        match read_at(&mut short, 50, 50) {
+            Err(CoreError::Transfer(text)) => {
+                assert_eq!(text, "the source file changed during the send")
+            }
+            other => panic!("got {other:?}"),
+        }
+        // The read of the bytes that are still there gives the original bytes.
+        assert_eq!(read_at(&mut short, 0, 70).unwrap(), original[..70]);
     }
 
     #[tokio::test]
