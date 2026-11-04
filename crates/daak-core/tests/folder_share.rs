@@ -1134,3 +1134,100 @@ async fn a_manifest_without_group_still_lands_by_path() {
         b"bravo"
     );
 }
+
+/// One engine with an in-memory store. The engine announces nothing on the LAN.
+async fn engine(
+    name: &str,
+    out: PathBuf,
+) -> (
+    std::sync::Arc<daak_core::engine::Engine>,
+    std::sync::Arc<daak_core::store::Db>,
+) {
+    std::env::set_var("DAAK_MDNS_OFF_LAN", "1");
+    let store = daak_core::crypto::secret_store::MemorySecretStore::default();
+    let identity = daak_core::crypto::identity::import_from_store(&store).unwrap();
+    let db = std::sync::Arc::new(daak_core::store::Db::open_in_memory().unwrap());
+    db.migrate().unwrap();
+    let e = daak_core::engine::Engine::start(daak_core::engine::EngineConfig {
+        display_name: name.into(),
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+        out_dir: out,
+        identity,
+        db: db.clone(),
+    })
+    .await
+    .unwrap();
+    (std::sync::Arc::new(e), db)
+}
+
+/// The first delivery writes the inbox row. A second delivery of the same
+/// payload id is then a duplicate, even with a changed manifest. The
+/// duplicate goes to the discard directory and changes no stored state.
+#[tokio::test]
+async fn a_duplicate_delivery_with_a_changed_manifest_keeps_the_rows_of_the_first_delivery() {
+    use daak_core::manifest::CHUNK_SIZE_MIN;
+    use daak_core::pairing::PairMode;
+
+    let a_out = tempfile::tempdir().unwrap();
+    let b_out = tempfile::tempdir().unwrap();
+    let (a, _) = engine("a", a_out.path().to_path_buf()).await;
+    let (b, b_db) = engine("b", b_out.path().to_path_buf()).await;
+    let b_id = b.pairing_bundle().await.identity.device_id;
+    b.offer_pairing(a.pairing_bundle().await, PairMode::Qr, None)
+        .await
+        .unwrap();
+    let b_srv = b.clone();
+    let server = tokio::spawn(async move { b_srv.accept_pairing_once().await.unwrap() });
+    a.pair_with(b.local_addr(), b.pairing_bundle().await)
+        .await
+        .unwrap();
+    server.await.unwrap();
+    a.note_peer(b_id, "b", b.local_addr()).await;
+
+    let src = tempfile::tempdir().unwrap();
+    let root = src.path().join("album");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.bin"), vec![1u8; 100]).unwrap();
+    std::fs::write(root.join("b.bin"), vec![2u8; 100]).unwrap();
+    let me = DeviceRef {
+        device_id: a.identity().device_id(),
+        name: "a".into(),
+    };
+    let (first, sources) =
+        from_picked_paths(me.clone(), std::slice::from_ref(&root), CHUNK_SIZE_MIN).unwrap();
+    let id = first.payload_id;
+    a.send_secure(b_id, first, sources.into_iter().map(Some).collect())
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !b.list_inbox().unwrap().iter().any(|r| r.id == id) {
+        assert!(tokio::time::Instant::now() < deadline, "no inbox row");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let rows_before = b_db.list_items(&id).unwrap();
+    assert_eq!(rows_before.len(), 2);
+    let manifest_before = b_db.get_transfer(&id).unwrap().unwrap().manifest;
+
+    // A changed b.bin and an extra file, under the same payload id.
+    std::fs::write(root.join("b.bin"), vec![9u8; 100]).unwrap();
+    std::fs::write(root.join("c.bin"), vec![3u8; 100]).unwrap();
+    let (mut second, sources) =
+        from_picked_paths(me, std::slice::from_ref(&root), CHUNK_SIZE_MIN).unwrap();
+    second.payload_id = id;
+    a.send_secure(b_id, second, sources.into_iter().map(Some).collect())
+        .await
+        .unwrap();
+
+    assert_eq!(b_db.list_items(&id).unwrap(), rows_before);
+    assert_eq!(
+        b_db.get_transfer(&id).unwrap().unwrap().manifest,
+        manifest_before
+    );
+    assert_eq!(
+        std::fs::read(b_out.path().join("album/b.bin")).unwrap(),
+        vec![2u8; 100],
+        "the duplicate does not touch the first file"
+    );
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
+}

@@ -68,9 +68,68 @@ pub(crate) fn insert_transfer(c: &rusqlite::Connection, t: &TransferRow) -> Resu
     Ok(())
 }
 
+/// The statements of `Db::fresh_start`. It takes the connection, because the
+/// `Db` lock is not reentrant.
+fn fresh_start_in(
+    c: &rusqlite::Connection,
+    transfer_id: &[u8; 16],
+    payload_id: &[u8; 16],
+    peer: &[u8; 16],
+    kind: &str,
+    item_count: u32,
+    manifest: &[u8],
+) -> Result<()> {
+    let tx = c.unchecked_transaction()?;
+    // The receiver keys its bitmaps by the payload id.
+    tx.execute(
+        "DELETE FROM chunk_state WHERE transfer_id = ?1",
+        rusqlite::params![&payload_id[..]],
+    )?;
+    tx.execute(
+        "DELETE FROM transfer_items WHERE transfer_id = ?1",
+        rusqlite::params![&transfer_id[..]],
+    )?;
+    tx.execute(
+        "UPDATE transfers SET manifest = ?2, peer_device_id = ?3, kind = ?4, item_count = ?5
+          WHERE transfer_id = ?1",
+        rusqlite::params![
+            &transfer_id[..],
+            manifest,
+            &peer[..],
+            kind,
+            item_count as i64
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 impl Db {
     pub fn upsert_transfer(&self, t: &TransferRow) -> Result<()> {
         insert_transfer(&self.conn(), t)
+    }
+
+    /// Forget the receive state of a known payload whose manifest changed.
+    /// One transaction deletes every bitmap and every item row. It also
+    /// stores the new manifest, peer, kind, and item count. Files on disk stay.
+    pub fn fresh_start(
+        &self,
+        transfer_id: &[u8; 16],
+        payload_id: &[u8; 16],
+        peer: &[u8; 16],
+        kind: &str,
+        item_count: u32,
+        manifest: &[u8],
+    ) -> Result<()> {
+        fresh_start_in(
+            &self.conn(),
+            transfer_id,
+            payload_id,
+            peer,
+            kind,
+            item_count,
+            manifest,
+        )
     }
 
     pub fn get_transfer(&self, id: &[u8; 16]) -> Result<Option<TransferRow>> {
@@ -586,5 +645,107 @@ mod item_tests {
 
         db.set_item_state(&[4u8; 16], 7, "done").unwrap();
         assert_eq!(db.list_items(&[4u8; 16]).unwrap()[0].state, "done");
+    }
+}
+
+#[cfg(test)]
+mod fresh_start_tests {
+    use super::*;
+    use crate::chunk::ChunkBitmap;
+
+    const ID: [u8; 16] = [4u8; 16];
+
+    /// An inbound transfer with 2 item rows and a bitmap for each item.
+    fn seeded() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.upsert_transfer(&TransferRow {
+            transfer_id: ID,
+            payload_id: ID,
+            peer_device_id: [6u8; 16],
+            direction: "in".into(),
+            kind: "media".into(),
+            state: "active".into(),
+            bytes_total: 10,
+            bytes_done: 0,
+            item_count: 2,
+            created_at: 1,
+            updated_at: 1,
+            manifest: vec![1, 2, 3],
+            error: None,
+        })
+        .unwrap();
+        let mut b = ChunkBitmap::new(100);
+        b.set(0);
+        for i in 0..2 {
+            db.upsert_item(&ItemRow {
+                transfer_id: ID,
+                item_index: i,
+                item_type: "document".into(),
+                name: None,
+                mime: None,
+                size: Some(5),
+                hash: None,
+                dest_path: None,
+                state: "done".into(),
+            })
+            .unwrap();
+            db.save_bitmap(&ID, i, &b).unwrap();
+        }
+        db
+    }
+
+    fn bitmap_rows(db: &Db) -> i64 {
+        db.conn()
+            .query_row(
+                "SELECT COUNT(*) FROM chunk_state WHERE transfer_id = ?1",
+                rusqlite::params![&ID[..]],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn fresh_start_deletes_the_rows_and_the_bitmaps_and_stores_the_manifest() {
+        let db = seeded();
+        assert_eq!(bitmap_rows(&db), 4);
+        db.fresh_start(&ID, &ID, &[6u8; 16], "media", 1, &[7, 8])
+            .unwrap();
+        assert!(db.list_items(&ID).unwrap().is_empty());
+        assert_eq!(bitmap_rows(&db), 0);
+        assert_eq!(db.get_transfer(&ID).unwrap().unwrap().manifest, vec![7, 8]);
+    }
+
+    #[test]
+    fn fresh_start_is_one_transaction() {
+        let db = seeded();
+        // The transfer update fails after both deletes ran.
+        db.conn()
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_update BEFORE UPDATE ON transfers
+                 BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+            )
+            .unwrap();
+        assert!(db
+            .fresh_start(&ID, &ID, &[6u8; 16], "media", 1, &[7, 8])
+            .is_err());
+        assert_eq!(db.list_items(&ID).unwrap().len(), 2, "the rows stay");
+        assert_eq!(bitmap_rows(&db), 4, "the bitmaps stay");
+        assert_eq!(
+            db.get_transfer(&ID).unwrap().unwrap().manifest,
+            vec![1, 2, 3],
+            "the manifest stays"
+        );
+    }
+
+    #[test]
+    fn fresh_start_updates_the_peer_and_the_kind() {
+        let db = seeded();
+        db.fresh_start(&ID, &ID, &[8u8; 16], "batch", 1, &[7, 8])
+            .unwrap();
+        let row = db.get_transfer(&ID).unwrap().unwrap();
+        assert_eq!(row.peer_device_id, [8u8; 16]);
+        assert_eq!(row.kind, "batch");
+        assert_eq!(row.item_count, 1, "the new manifest has 1 item");
     }
 }

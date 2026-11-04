@@ -566,3 +566,68 @@ async fn staging_survives_deletion_of_the_source() {
     p.a.shutdown().await.unwrap();
     p.b.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn the_outbox_retry_resumes_for_a_folder_and_for_a_loose_file() {
+    let p = pair().await;
+    // The folder: a0, b0, c0, and b1 cross the wire. The cut is inside b2.
+    let (_, after) = drop_then_retry(&p, (4 * CHUNK + CHUNK / 2) as u64).await;
+    let missing = (FILE_LEN - 2 * CHUNK) as u64;
+    assert!(
+        (missing..missing + SLACK).contains(&after),
+        "the folder retry sends only the missing chunks, got {after}"
+    );
+
+    // The loose file: chunks 0 and 1 cross the wire. The cut is inside chunk 2.
+    let src = tempfile::tempdir().unwrap();
+    let file = src.path().join("loose.bin");
+    std::fs::write(&file, file_bytes(4)).unwrap();
+    let me = DeviceRef {
+        device_id: [0u8; 16],
+        name: "a".into(),
+    };
+    let (manifest, sources) =
+        from_picked_paths(me, std::slice::from_ref(&file), CHUNK_SIZE_MIN).unwrap();
+    {
+        let mut s = p.proxy.lock().unwrap();
+        s.a_to_b = 0;
+        s.cut_after = Some((2 * CHUNK + CHUNK / 2) as u64);
+    }
+    let id =
+        p.a.enqueue_outbox_send(p.b_id, manifest, sources)
+            .await
+            .unwrap();
+    wait_until("the first drain fails", || {
+        let (state, attempts) = outbox_state(&p.a_db, &id);
+        state == "pending" && attempts >= 1
+    })
+    .await;
+    wait_until("B saves its chunk bitmap", || {
+        p.b_db.load_bitmap(&id, 0, 4).unwrap().is_set(1)
+    })
+    .await;
+
+    let mut rx = p.b.events();
+    {
+        let mut s = p.proxy.lock().unwrap();
+        s.a_to_b = 0;
+        s.refuse = false;
+    }
+    p.a.retry(id).unwrap();
+    b_done(&mut rx, id).await;
+    wait_until("A settles the row", || {
+        outbox_state(&p.a_db, &id).0 == "done"
+    })
+    .await;
+    assert_eq!(
+        std::fs::read(p.b_out.path().join("loose.bin")).unwrap(),
+        file_bytes(4)
+    );
+    let after = p.proxy.lock().unwrap().a_to_b;
+    assert!(
+        (missing..missing + SLACK).contains(&after),
+        "the loose file retry sends only chunks 2 and 3, got {after}"
+    );
+    p.a.shutdown().await.unwrap();
+    p.b.shutdown().await.unwrap();
+}

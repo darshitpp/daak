@@ -12,19 +12,23 @@
 
 mod support;
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use daak_core::control::AckMsg;
 use daak_core::framing::RecordType;
-use daak_core::manifest::Manifest;
+use daak_core::manifest::{from_picked_paths, Manifest, CHUNK_SIZE_MIN};
 use daak_core::net::{tcp, CONTROL_STREAM};
 use daak_core::store::inbox::InboxRow;
+use daak_core::store::transfers::{ItemRow, TransferRow};
 use daak_core::transfer::{
     decode_chunk_body, receive_transfer, resume_wait, send_transfer, send_transfer_resuming,
     RESUME_WAIT,
 };
-use support::{db, file_bytes, folder, read_resume, resumed_pass, send_chunk, CHUNK, FILE_LEN};
+use support::{
+    db, file_bytes, folder, read_resume, resumed_pass, send_chunk, sender_ref, CHUNK, FILE_LEN,
+};
 
 #[tokio::test]
 async fn a_new_transfer_gets_a_full_resume_message_and_sends_everything() {
@@ -351,5 +355,249 @@ async fn progress_starts_at_the_bytes_already_held() {
         progress.iter().sum::<u64>(),
         3 * FILE_LEN as u64,
         "the bar ends at the total"
+    );
+}
+
+/// Build the manifest of `album` again after a change on disk. The new
+/// manifest keeps the payload id of `old`.
+fn rebuilt(src: &Path, old: &Manifest) -> (Manifest, Vec<Option<PathBuf>>) {
+    let (mut m, sources) =
+        from_picked_paths(sender_ref(), &[src.join("album")], CHUNK_SIZE_MIN).unwrap();
+    m.payload_id = old.payload_id;
+    assert_ne!(
+        m.to_cbor().unwrap(),
+        old.to_cbor().unwrap(),
+        "the test needs a changed manifest"
+    );
+    (m, sources.into_iter().map(Some).collect())
+}
+
+/// The bytes of `b.bin` with 1 changed byte in chunk 0. The length is the same.
+fn changed_b() -> Vec<u8> {
+    let mut b = file_bytes(2);
+    b[5] ^= 0xff;
+    b
+}
+
+#[tokio::test]
+async fn a_resend_with_a_changed_manifest_and_the_same_payload_id_hashes_every_item_against_the_new_manifest(
+) {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    let (_, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    for i in 0..3 {
+        let row = db.get_item(&manifest.payload_id, i).unwrap().unwrap();
+        assert_eq!(row.state, "done", "item {i} is done after pass 1");
+    }
+
+    // The sender changes b.bin and sends again under the same payload id.
+    std::fs::write(src.path().join("album/b.bin"), changed_b()).unwrap();
+    let (changed, new_paths) = rebuilt(src.path(), &manifest);
+    let (sent, r, _) = resumed_pass(&changed, &new_paths, dst.path(), &db).await;
+    r.unwrap();
+    for i in 0..3u32 {
+        assert_eq!(
+            sent.get(&i).copied().unwrap_or(0),
+            FILE_LEN as u64,
+            "item {i} crosses the wire in full"
+        );
+    }
+    // Task 3b moves the new file to a name with a suffix. Task 3b updates
+    // this assertion.
+    assert_eq!(
+        std::fs::read(dst.path().join("album/b.bin")).unwrap(),
+        changed_b(),
+        "the changed file has the new bytes"
+    );
+    let row = db.get_transfer(&manifest.payload_id).unwrap().unwrap();
+    assert_eq!(row.manifest, changed.to_cbor().unwrap());
+}
+
+#[tokio::test]
+async fn an_interrupted_receive_with_bitmaps_and_no_rows_starts_fresh_when_the_manifest_changes() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+
+    // Connection 1: files 1 and 3 in full, then chunks 0 and 1 of file 2. Then
+    // the connection drops.
+    let (listener, addr) = tcp::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let m = manifest.clone();
+    let p = paths.clone();
+    let dropper = tokio::spawn(async move {
+        let (mut conn, _) = tcp::accept(&listener).await.unwrap();
+        conn.send(
+            CONTROL_STREAM,
+            RecordType::Manifest,
+            Bytes::from(m.to_cbor().unwrap()),
+        )
+        .await
+        .unwrap();
+        let _ = read_resume(&mut conn).await;
+        for item in [0u32, 2] {
+            let bytes = std::fs::read(p[item as usize].as_ref().unwrap()).unwrap();
+            for c in 0..4 {
+                send_chunk(&mut conn, item, c, &bytes).await;
+            }
+        }
+        let b = std::fs::read(p[1].as_ref().unwrap()).unwrap();
+        send_chunk(&mut conn, 1, 0, &b).await;
+        send_chunk(&mut conn, 1, 1, &b).await;
+    });
+    let mut conn = tcp::dial(addr).await.unwrap();
+    let first = tokio::time::timeout(
+        Duration::from_secs(10),
+        receive_transfer(&mut conn, dst.path(), |_| {}, Some(&db), |_| {}),
+    )
+    .await
+    .expect("pass 1 hung");
+    dropper.await.unwrap();
+    assert!(
+        matches!(first, Err(daak_core::CoreError::TransferInterrupted)),
+        "a drop is an interrupt, got {first:?}"
+    );
+    assert!(
+        db.list_items(&manifest.payload_id).unwrap().is_empty(),
+        "an interrupted receive writes no item rows"
+    );
+    assert!(
+        db.load_bitmap(&manifest.payload_id, 1, 4)
+            .unwrap()
+            .is_set(0),
+        "the receiver holds chunk 0 of file 2"
+    );
+
+    // Connection 2: a changed b.bin under the same payload id.
+    std::fs::write(src.path().join("album/b.bin"), changed_b()).unwrap();
+    let (changed, new_paths) = rebuilt(src.path(), &manifest);
+    let (sent, r, _) = resumed_pass(&changed, &new_paths, dst.path(), &db).await;
+    r.unwrap();
+    for i in 0..3u32 {
+        assert_eq!(
+            sent.get(&i).copied().unwrap_or(0),
+            FILE_LEN as u64,
+            "item {i} crosses the wire in full"
+        );
+    }
+    assert_eq!(
+        std::fs::read(dst.path().join("album/b.bin")).unwrap(),
+        changed_b()
+    );
+}
+
+#[tokio::test]
+async fn a_manifest_that_shrinks_leaves_no_old_item_rows() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    let (_, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    assert_eq!(db.list_items(&manifest.payload_id).unwrap().len(), 3);
+
+    // The sender removes c.bin and sends again under the same payload id.
+    std::fs::remove_file(src.path().join("album/c.bin")).unwrap();
+    let (smaller, new_paths) = rebuilt(src.path(), &manifest);
+    assert_eq!(smaller.items.len(), 2);
+    let (_, r, _) = resumed_pass(&smaller, &new_paths, dst.path(), &db).await;
+    r.unwrap();
+    let rows: Vec<u32> = db
+        .list_items(&manifest.payload_id)
+        .unwrap()
+        .iter()
+        .map(|r| r.item_index)
+        .collect();
+    assert_eq!(rows, vec![0, 1], "no row of the old item 2 stays");
+    let row = db.get_transfer(&manifest.payload_id).unwrap().unwrap();
+    assert_eq!(
+        row.item_count as usize,
+        rows.len(),
+        "the item count follows the new manifest"
+    );
+}
+
+#[tokio::test]
+async fn a_resend_with_the_same_manifest_still_resumes() {
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    let (_, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+
+    let (sent, r, _) = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+    r.unwrap();
+    for i in 0..3u32 {
+        assert_eq!(
+            sent.get(&i).copied().unwrap_or(0),
+            0,
+            "item {i} does not cross the wire again"
+        );
+    }
+    assert_eq!(db.list_items(&manifest.payload_id).unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn a_peer_that_reuses_the_payload_id_of_an_outbound_transfer_leaves_that_transfer_untouched()
+{
+    let src = tempfile::tempdir().unwrap();
+    let dst = tempfile::tempdir().unwrap();
+    let (manifest, paths) = folder(src.path());
+    let db = db();
+    let id = manifest.payload_id;
+
+    // This device sent a payload with the same id to another peer.
+    let out = TransferRow {
+        transfer_id: id,
+        payload_id: id,
+        peer_device_id: [9u8; 16],
+        direction: "out".into(),
+        kind: "media".into(),
+        state: "done".into(),
+        bytes_total: 3 * FILE_LEN as u64,
+        bytes_done: 3 * FILE_LEN as u64,
+        item_count: 3,
+        created_at: 1,
+        updated_at: 1,
+        manifest: vec![1, 2, 3],
+        error: None,
+    };
+    db.upsert_transfer(&out).unwrap();
+    for i in 0..3u32 {
+        db.upsert_item(&ItemRow {
+            transfer_id: id,
+            item_index: i,
+            item_type: "document".into(),
+            name: None,
+            mime: None,
+            size: Some(FILE_LEN as u64),
+            hash: None,
+            dest_path: None,
+            state: "done".into(),
+        })
+        .unwrap();
+    }
+    // A bitmap at an index that the incoming manifest does not name.
+    let mut held = daak_core::chunk::ChunkBitmap::new(4);
+    held.set(0);
+    db.save_bitmap(&id, 7, &held).unwrap();
+    let rows_before = db.list_items(&id).unwrap();
+
+    let _ = resumed_pass(&manifest, &paths, dst.path(), &db).await;
+
+    let row = db.get_transfer(&id).unwrap().unwrap();
+    assert_eq!(row.direction, "out");
+    assert_eq!(row.manifest, out.manifest, "the manifest stays");
+    assert_eq!(row.peer_device_id, out.peer_device_id, "the peer stays");
+    assert_eq!(row.kind, out.kind, "the kind stays");
+    assert_eq!(row.item_count, 3, "the item count stays");
+    assert_eq!(db.list_items(&id).unwrap(), rows_before, "the rows stay");
+    assert!(
+        db.load_bitmap(&id, 7, 4).unwrap().is_set(0),
+        "the bitmap stays"
     );
 }

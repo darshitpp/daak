@@ -504,13 +504,13 @@ async fn receive_with_resume_limit<T: FrameTransport>(
     // chunks and does not touch its file, because the platform can have moved
     // it. A `quarantined` or `failed` item is received again in full. While
     // such an item exists, the payload is not a duplicate.
-    let earlier: Vec<ItemRow> = match db {
+    let mut earlier: Vec<ItemRow> = match db {
         Some(db) => db.list_items(&manifest.payload_id)?,
         None => Vec::new(),
     };
     // Sets, not lists: the receiver looks up each item and each chunk, and a
     // folder can hold 65 536 items.
-    let redo: HashSet<u32> = earlier
+    let mut redo: HashSet<u32> = earlier
         .iter()
         .filter(|r| r.state == "quarantined" || r.state == "failed")
         .map(|r| r.item_index)
@@ -519,6 +519,28 @@ async fn receive_with_resume_limit<T: FrameTransport>(
         Some(db) => redo.is_empty() && db.payload_seen(&manifest.payload_id)?,
         None => false,
     };
+    // F9: the stored state of a payload describes the stored manifest only.
+    // A changed manifest under the same payload id starts fresh. Both byte
+    // strings are re-encodes by this receiver, and they hold the sender.
+    // Only an inbound row starts fresh. An outbound row of this device with
+    // the same id keeps its state.
+    let kind = format!("{:?}", manifest.kind).to_lowercase();
+    let encoded = manifest.to_cbor()?;
+    if let Some(db) = db.filter(|_| !dedupe) {
+        let stored = db.get_transfer(&manifest.payload_id)?;
+        if stored.is_some_and(|t| t.direction == "in" && t.manifest != encoded) {
+            db.fresh_start(
+                &manifest.payload_id,
+                &manifest.payload_id,
+                &manifest.sender.device_id,
+                &kind,
+                manifest.items.len() as u32,
+                &encoded,
+            )?;
+            earlier.clear();
+            redo.clear();
+        }
+    }
     // A duplicate settles nothing. It writes every chunk into the discard
     // directory, as before, so an old sender that sends all chunks completes.
     let settled: HashSet<u32> = if dedupe {
@@ -552,7 +574,7 @@ async fn receive_with_resume_limit<T: FrameTransport>(
             payload_id: manifest.payload_id,
             peer_device_id: manifest.sender.device_id,
             direction: "in".into(),
-            kind: format!("{:?}", manifest.kind).to_lowercase(),
+            kind: kind.clone(),
             state: "active".into(),
             // B2: bytes_total is the bytes that will be WRITTEN. A non-binary
             // item is never materialised (see the dest_path note below), so a
@@ -564,7 +586,7 @@ async fn receive_with_resume_limit<T: FrameTransport>(
             item_count: manifest.items.len() as u32,
             created_at: now,
             updated_at: now,
-            manifest: manifest.to_cbor()?,
+            manifest: encoded.clone(),
             error: None,
         })?;
     }
