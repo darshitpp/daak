@@ -285,6 +285,33 @@ pub(crate) fn validate_manifest(manifest: &Manifest) -> Result<()> {
             )));
         }
     }
+    // F7: a group item must carry a path that starts with its group. The
+    // notification and the move step read the root folder from the path, not
+    // from the group value. A mismatch makes them name the wrong folder. An
+    // item with no group is unchanged. The message holds no name.
+    for item in &manifest.items {
+        let Some(group) = item.attrs.get("group") else {
+            continue;
+        };
+        let group_ok = match group {
+            ciborium::value::Value::Text(g) => {
+                !g.is_empty() && !g.contains('/') && !g.contains('\\')
+            }
+            _ => false,
+        };
+        let path_ok = match (group, item.attrs.get("path")) {
+            (ciborium::value::Value::Text(g), Some(ciborium::value::Value::Text(p))) => p
+                .strip_prefix(g.as_str())
+                .is_some_and(|rest| rest.starts_with('/')),
+            _ => false,
+        };
+        if !group_ok || !path_ok {
+            return Err(CoreError::Protocol(format!(
+                "item {} has a group that does not match its path",
+                item.index
+            )));
+        }
+    }
     // F4: two items resolving to the SAME destination both open that file and
     // write interleaved chunks into it. The key is the RESOLVED destination of
     // EVERY binary item, not the raw attrs["path"], because the two populations
@@ -2148,6 +2175,79 @@ mod tests {
         item.attrs
             .insert("path".into(), ciborium::value::Value::Text(rel.to_string()));
         item
+    }
+
+    fn group_item(index: u32, group: ciborium::value::Value, path: &str) -> Item {
+        let mut item = peer_item(index, path);
+        item.attrs.insert("group".into(), group);
+        item
+    }
+
+    fn text(s: &str) -> ciborium::value::Value {
+        ciborium::value::Value::Text(s.to_string())
+    }
+
+    fn batch(items: Vec<Item>) -> Manifest {
+        Manifest::new(PayloadKind::Batch, dev(), items)
+    }
+
+    #[test]
+    fn a_group_item_whose_path_does_not_start_with_its_group_is_refused() {
+        let manifest = batch(vec![group_item(0, text("album"), "other/a.txt")]);
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(CoreError::Protocol(m)) if !m.contains("album") && !m.contains("other")
+        ));
+        // A prefix without the slash is not the group folder.
+        let manifest = batch(vec![group_item(0, text("album"), "album2/a.txt")]);
+        assert!(validate_manifest(&manifest).is_err());
+        // A group item with no path is refused.
+        let mut item = group_item(0, text("album"), "album/a.txt");
+        item.attrs.remove("path");
+        assert!(validate_manifest(&batch(vec![item])).is_err());
+    }
+
+    #[test]
+    fn a_group_with_a_slash_a_backslash_no_text_or_a_non_text_value_is_refused() {
+        let cases = [
+            group_item(0, text("a/b"), "a/b/x.txt"),
+            group_item(0, text("a\\b"), "a\\b/x.txt"),
+            group_item(0, text(""), "/x.txt"),
+            group_item(0, ciborium::value::Value::Integer(7.into()), "7/x.txt"),
+            group_item(0, ciborium::value::Value::Bool(true), "true/x.txt"),
+        ];
+        for item in cases {
+            assert!(validate_manifest(&batch(vec![item])).is_err());
+        }
+    }
+
+    #[test]
+    fn a_manifest_from_the_builder_is_accepted_for_an_unsafe_group_name_and_a_duplicate_folder_name(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut picked = Vec::new();
+        for parent in ["a", "b"] {
+            let root = dir.path().join(parent).join("we:ird*name?");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("one.jpg"), parent.as_bytes()).unwrap();
+            picked.push(root);
+        }
+        let (manifest, _) =
+            crate::manifest::from_picked_paths(dev(), &picked, CHUNK_SIZE_MIN).unwrap();
+        assert!(manifest.items.iter().any(|i| i.attrs.contains_key("group")));
+        validate_manifest(&manifest).unwrap();
+    }
+
+    #[test]
+    fn an_item_with_no_group_is_accepted() {
+        let manifest = batch(vec![peer_item(0, "plain/a.txt")]);
+        validate_manifest(&manifest).unwrap();
+    }
+
+    #[test]
+    fn a_matching_group_item_is_accepted() {
+        let manifest = batch(vec![group_item(0, text("album"), "album/sub/a.txt")]);
+        validate_manifest(&manifest).unwrap();
     }
 
     /// F3: a symlink ALREADY inside out_dir defeats the per-component filter,
