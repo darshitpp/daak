@@ -313,6 +313,8 @@ RCT_EXPORT_METHOD(notify : (NSString *)payloadJson resolve : (RCTPromiseResolveB
     UNMutableNotificationContent *content = [UNMutableNotificationContent new];
     content.title = (NSString *)title;
     content.body = (NSString *)bodyText;
+    // The default for `sound` is nil, which is silent.
+    content.sound = [UNNotificationSound defaultSound];
     // An absent or unknown category means NO buttons, which is a notification.
     // Forcing a default here would attach three buttons to a category whose
     // actions may never have been installed.
