@@ -157,6 +157,8 @@ final class DaakNotify: RCTEventEmitter {
       let content = UNMutableNotificationContent()
       content.title = title
       content.body = body
+      // The default for `sound` is nil, which is silent.
+      content.sound = .default
       content.categoryIdentifier = category
       // userInfo must be property-list shaped, so the JSON travels as a String
       // and is handed back to JS unchanged.

@@ -7,7 +7,7 @@ import { secureGet, secureSet } from './securestore';
  * `initNotifications` asks for it. A banner appears only when BOTH are on.
  *
  * The design has one switch, "Tell me when a file arrives". It has no sound
- * switch, so the banner uses the platform default sound behavior.
+ * switch. The native modules always set the default notification sound.
  *
  * The store is the keystore, the same store `onboarding.ts` uses for its flags.
  * Desktop and mobile both read it through `secureGet`, so one key serves both.
