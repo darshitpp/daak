@@ -19,11 +19,6 @@
   <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.darshit.daak%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fdarshitpp%2Fdaak%22%2C%22author%22%3A%22darshitpp%22%2C%22name%22%3A%22Daak%22%7D"><img alt="Get it on Obtainium" src="docs/assets/obtainium-badge.png" height="80"></a>
 </p>
 
-<p align="center">
-  <a href="sidestore://source?url=https%3A%2F%2Fgithub.com%2Fdarshitpp%2Fdaak%2Freleases%2Flatest%2Fdownload%2Fsource.json"><img alt="Add to SideStore" src="https://img.shields.io/badge/Add%20to-SideStore-blueviolet?style=for-the-badge"></a>
-  <a href="altstore://source?url=https%3A%2F%2Fgithub.com%2Fdarshitpp%2Fdaak%2Freleases%2Flatest%2Fdownload%2Fsource.json"><img alt="Add to AltStore" src="https://img.shields.io/badge/Add%20to-AltStore-0a84ff?style=for-the-badge"></a>
-</p>
-
 Daak (डाक, "post") moves photos, files, and text between your own
 devices over your local network. Nothing goes through the internet. Nothing
 goes through a server. You do not create an account.
@@ -235,8 +230,7 @@ The steps for Daak are the same for all three tools.
 the tool shows each new release as an update.
 
 1. In the tool on your iPhone, add this source:
-   `https://github.com/darshitpp/daak/releases/latest/download/source.json`.
-   You can also tap an **Add to** badge at the top of this page.
+   `https://github.com/darshitpp/daak/releases/latest/download/source.json`
 2. Install Daak from the source. If Daak is already on your iPhone, this
    install replaces it. In a test with SideStore, the pairings stayed.
 3. For a new release, tap **Update** in the tool.
