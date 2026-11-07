@@ -226,6 +226,17 @@ The steps for Daak are the same for all three tools.
    Without it, Daak cannot find other devices. Also allow **Camera** to scan a
    QR code and **Notifications** to see received items.
 
+**Get updates in SideStore or AltStore.** Add the Daak source one time. Then
+the tool shows each new release as an update.
+
+1. In the tool on your iPhone, add this source:
+   `https://github.com/darshitpp/daak/releases/latest/download/source.json`
+2. Install Daak from the source. If Daak is already on your iPhone, this
+   install replaces it. In a test with SideStore, the pairings stayed.
+3. For a new release, tap **Update** in the tool.
+
+Add only this source. The source must show the developer Darshit.
+
 A free Apple ID profile lasts 7 days. After 7 days, the app stops opening.
 Refresh it in the same tool before that time. SideStore and AltStore can
 refresh in the background. Your pairings and data stay on the device when you
