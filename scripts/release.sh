@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # One command for a whole Daak release: build, sign, hash, tag, GitHub Release,
-# Homebrew cask, F-Droid merge request.
+# SideStore source, Homebrew cask, F-Droid merge request.
 #
 #   scripts/release.sh <version> [--from N] [--to N]
 #
@@ -55,6 +55,8 @@ APK_ARM32="$APK_DIR/daak-$VERSION-armeabi-v7a.apk"
 APK_UNI="$APK_DIR/daak-$VERSION-universal.apk"
 DMG="$SCRATCH/dmg/Daak-$VERSION.dmg"
 IPA="$SCRATCH/ipa/Daak-$VERSION.ipa"
+SOURCE="$SCRATCH/source/source.json"
+SOURCE_URL="https://github.com/$REPO/releases/latest/download/source.json"
 SUMS="release/sha256-$VERSION.txt"
 TAG="v$VERSION"
 
@@ -216,15 +218,42 @@ if run 10; then
   if [ -f "release/notes-$VERSION.md" ]; then
     gh release edit "$TAG" --repo "$REPO" --notes-file "release/notes-$VERSION.md"
   fi
-  ask "Upload 5 files to $TAG?" || die "stopped by the user"
+  ask "Upload 6 files to $TAG?" || die "stopped by the user"
+  # The .ipa must be the file that stage 6 hashed.
+  want_ipa="$(grep -F "  Daak-$VERSION.ipa" "$SUMS" | awk '{print $1}' || true)"
+  [ -n "$want_ipa" ] || die "no hash for Daak-$VERSION.ipa in $SUMS"
+  [ "$(sha "$IPA")" = "$want_ipa" ] || die "the .ipa changed after stage 6"
+  # Build source.json from the exact .ipa that this stage uploads.
+  mkdir -p "$(dirname "$SOURCE")"
+  bash scripts/gen-source.sh "$IPA" release/version.json "$SOURCE" || die "cannot build source.json"
   gh release upload "$TAG" --repo "$REPO" --clobber \
-    "$APK_ARM64" "$APK_ARM32" "$APK_UNI" "$DMG" "$IPA"
+    "$APK_ARM64" "$APK_ARM32" "$APK_UNI" "$DMG" "$IPA" "$SOURCE"
+  # Compare the GitHub digests with the local files. "gh release view" also
+  # works for a draft. The tags API does not.
+  assets="$(gh release view "$TAG" --repo "$REPO" --json assets)" || die "cannot read the release assets"
+  check_asset() {
+    local name="$1" want n digest
+    want="sha256:$(sha "$2")"
+    n="$(jq --arg n "$name" '[.assets[] | select(.name == $n)] | length' <<<"$assets")"
+    [ "$n" -eq 1 ] || die "the release has $n assets named $name, want 1"
+    digest="$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .digest' <<<"$assets")"
+    [ "$digest" = "$want" ] || die "the published $name differs from the local file (digest: ${digest:-none})"
+  }
+  check_asset "Daak-$VERSION.ipa" "$IPA"
+  check_asset "source.json" "$SOURCE"
   if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)" = true ]; then
     flags=
     ask "Mark $TAG as a pre-release?" && flags=--prerelease
     ask "Publish $TAG now?" || die "stopped by the user"
     # shellcheck disable=SC2086
     gh release edit "$TAG" --repo "$REPO" --draft=false $flags
+  fi
+  # The source URL serves the latest stable release. A pre-release or a delay
+  # can leave the older version there. Warn. Do not stop.
+  live="$(curl -fsSL "$SOURCE_URL" 2>/dev/null | jq -r '.apps[0].versions[0].version' 2>/dev/null || true)"
+  if [ "$live" != "$VERSION" ]; then
+    echo "Warning: the source URL serves '${live:-nothing}', not $VERSION."
+    echo "A pre-release does not reach SideStore users. A delay can also cause this."
   fi
 fi
 
