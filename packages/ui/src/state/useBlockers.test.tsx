@@ -328,28 +328,14 @@ describe('useBlockers, Open Settings', () => {
 });
 
 describe('useBlockers, Back on the cannot-reach screen', () => {
-  // The Devices link and the Settings route both call onCheckConnection. The
-  // hook has no other entry, so one helper drives both.
-  async function openFrom() {
+  // The Devices link and the Settings route both forward the one
+  // onCheckConnection value. SettingsScreen only passes the prop on. The hook
+  // has no other entry, so one test covers both.
+  it('back clears the alert from the check-connection screen', async () => {
     const h = await mountWithAlert(stubEngine({ devices: jest.fn(async () => []) }));
     await act(async () => {
       h.current().onCheckConnection();
     });
-    return h;
-  }
-
-  it('back clears the alert when opened from the Devices link', async () => {
-    const h = await openFrom();
-    expect(screen.getByLabelText('Back')).toBeTruthy();
-    act(() => {
-      fireEvent.press(screen.getByLabelText('Back'));
-    });
-    expect(h.current().alert).toBeUndefined();
-    expect(h.current().alertRouteToken).toBeUndefined();
-  });
-
-  it('back clears the alert when opened from Settings', async () => {
-    const h = await openFrom();
     expect(screen.getByLabelText('Back')).toBeTruthy();
     act(() => {
       fireEvent.press(screen.getByLabelText('Back'));
