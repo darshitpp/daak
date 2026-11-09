@@ -23,19 +23,25 @@ it('shows the real version and build after the host answers, and no row without 
   expect(await screen.findByText('Version 0.4.2 (build 1180)')).toBeTruthy();
   unmount();
   render(<AboutSection />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   await act(async () => {});
+  expect(screen.getByTestId('about-facts')).toBeTruthy();
   expect(screen.queryByText(/^Version /)).toBeNull();
 });
 
 it('hides the version row when the host rejects or reports unknown', async () => {
   const appInfo = jest.fn().mockRejectedValueOnce(new Error('no native module'));
   const { unmount } = render(<AboutSection appInfo={appInfo} />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   await waitFor(() => expect(appInfo).toHaveBeenCalledTimes(1));
   await act(async () => {});
+  expect(screen.getByTestId('about-facts')).toBeTruthy();
   expect(screen.queryByText(/^Version /)).toBeNull();
   unmount();
   render(<AboutSection appInfo={async () => ({ version: 'unknown', build: 'unknown' })} />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   await act(async () => {});
+  expect(screen.getByTestId('about-facts')).toBeTruthy();
   expect(screen.queryByText(/^Version /)).toBeNull();
 });
 
@@ -100,6 +106,7 @@ it('starts collapsed and shows the facts after a tap', () => {
 
 it('hides the facts and the links on a tap and sets expanded to false', () => {
   render(<AboutSection />);
+  // The section starts collapsed: the first press opens it, the second closes it.
   fireEvent.press(screen.getByTestId('about-toggle'));
   fireEvent.press(screen.getByTestId('about-toggle'));
   expect(screen.getByTestId('about-toggle').props.accessibilityState.expanded).toBe(false);
@@ -109,6 +116,7 @@ it('hides the facts and the links on a tap and sets expanded to false', () => {
 
 it('shows them again on a second tap', () => {
   render(<AboutSection />);
+  // Open, close, then open again: three presses from the collapsed start.
   fireEvent.press(screen.getByTestId('about-toggle'));
   fireEvent.press(screen.getByTestId('about-toggle'));
   fireEvent.press(screen.getByTestId('about-toggle'));
