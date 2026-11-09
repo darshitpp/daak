@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Text } from 'react-native';
+import { AppState, Text } from 'react-native';
 import { Note, Section, type DeviceNoun } from '../../components/ds';
 import { SwitchRow } from '../../components/Onboarding';
 import { useToast } from '../../components/Toast';
@@ -40,6 +40,21 @@ export function ArrivalSection({ host, deviceNoun }: { host?: SettingsHost; devi
       alive = false;
     };
   }, [load, granted]);
+
+  // The user can allow notifications in system settings and come back. Read the
+  // grant again then. A failed or unknown read keeps the value that the screen has.
+  useEffect(() => {
+    if (granted === undefined) return;
+    let alive = true;
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s !== 'active') return;
+      void granted().then((g) => alive && g !== undefined && setOs(g), () => {});
+    });
+    return () => {
+      alive = false;
+      sub.remove();
+    };
+  }, [granted]);
 
   if (store === undefined) return null;
 

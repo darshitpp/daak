@@ -1,4 +1,5 @@
 import React from 'react';
+import { AppState } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ToastProvider } from '../../components/Toast';
 import { ArrivalSection } from './ArrivalSection';
@@ -126,5 +127,75 @@ describe('ArrivalSection', () => {
     await waitFor(() => expect(load).toHaveBeenCalled());
     expect(state('Tell me when a file arrives')).toMatchObject({ checked: true });
   });
-});
 
+  // The user can allow notifications in system settings and come back. The
+  // switch must read the grant again then.
+  describe('when the app returns to the foreground', () => {
+    function spy() {
+      const remove = jest.fn();
+      let handler: (s: string) => void = () => {};
+      const add = jest.spyOn(AppState, 'addEventListener').mockImplementation(((_t: string, h: (s: string) => void) => {
+        handler = h;
+        return { remove };
+      }) as never);
+      return { remove, add, fire: (s: string) => handler(s) };
+    }
+    afterEach(() => jest.restoreAllMocks());
+
+    it('reads the grant again when the app returns to the foreground', async () => {
+      const a = spy();
+      const granted = jest.fn<Promise<boolean | undefined>, []>().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      const { h } = host({ osAlerts: { granted, openSettings: jest.fn() } });
+      render(<ArrivalSection host={h} />);
+      expect(await screen.findByTestId('notify-blocked-hint')).toBeTruthy();
+      expect(state('Tell me when a file arrives')).toMatchObject({ checked: false });
+      await act(async () => a.fire('active'));
+      await waitFor(() => expect(screen.queryByTestId('notify-blocked-hint')).toBeNull());
+      expect(state('Tell me when a file arrives')).toMatchObject({ checked: true });
+      expect(granted).toHaveBeenCalledTimes(2);
+    });
+
+    it('removes the AppState listener on unmount', async () => {
+      const a = spy();
+      const { h } = host({ osAlerts: { granted: async () => true } });
+      const view = render(<ArrivalSection host={h} />);
+      await screen.findByText('Shows a message on this device.');
+      expect(a.add).toHaveBeenCalledWith('change', expect.any(Function));
+      expect(a.remove).not.toHaveBeenCalled();
+      view.unmount();
+      expect(a.remove).toHaveBeenCalledTimes(1);
+    });
+
+    it('a rejected grant read keeps the saved value', async () => {
+      const a = spy();
+      const granted = jest.fn<Promise<boolean | undefined>, []>().mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('x'));
+      const { h } = host({ osAlerts: { granted } });
+      render(<ArrivalSection host={h} />);
+      await screen.findByTestId('notify-blocked-hint');
+      await act(async () => a.fire('active'));
+      expect(granted).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('notify-blocked-hint')).toBeTruthy();
+    });
+
+    it('an undefined grant read keeps the saved value', async () => {
+      const a = spy();
+      const granted = jest.fn<Promise<boolean | undefined>, []>().mockResolvedValueOnce(false).mockResolvedValueOnce(undefined);
+      const { h } = host({ osAlerts: { granted } });
+      render(<ArrivalSection host={h} />);
+      await screen.findByTestId('notify-blocked-hint');
+      await act(async () => a.fire('active'));
+      expect(granted).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('notify-blocked-hint')).toBeTruthy();
+    });
+
+    it('does not read the grant when the app goes to the background', async () => {
+      const a = spy();
+      const granted = jest.fn(async (): Promise<boolean | undefined> => true);
+      const { h } = host({ osAlerts: { granted } });
+      render(<ArrivalSection host={h} />);
+      await screen.findByText('Shows a message on this device.');
+      await act(async () => a.fire('background'));
+      expect(granted).toHaveBeenCalledTimes(1);
+    });
+  });
+});
