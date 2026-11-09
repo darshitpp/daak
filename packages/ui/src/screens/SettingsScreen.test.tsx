@@ -272,7 +272,7 @@ describe('SettingsScreen sections', () => {
     expect(screen.queryByTestId('toast')).toBeNull();
   });
 
-  it('shows the saved name in This device', async () => {
+  it('shows the saved name under Device name', async () => {
     const engine = fakeEngine([]);
     engine.selfProfile = async () => ({ name: 'Desk', baseName: 'Desk', deviceId: 'dd'.repeat(16) });
     await renderAsync(

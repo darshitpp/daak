@@ -235,7 +235,6 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
           </View>
         </Section>
 
-
         {downloadFolder ? (
           <DownloadFolderRow
             title="Save files to"
