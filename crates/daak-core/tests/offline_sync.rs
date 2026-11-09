@@ -386,6 +386,10 @@ async fn an_offline_to_online_change_makes_a_backed_off_row_due() {
         sent_at_ms: 0,
     };
     let first = SealedBeacon::seal(&p, &key, 1).unwrap();
+    // This test needs a single-thread runtime. `#[tokio::test]` gives one.
+    // The test does not yield between `observe_beacon` and
+    // `mark_outbox_sending`. On a multi-thread runtime the outbox worker
+    // could claim the reset row first.
     let change = engine.observe_beacon(&first, 1_000).await.unwrap();
     assert_eq!(change.map(|c| c.state), Some(Liveness::Online));
     // The reset uses the clock at the call, so ask with a later time.

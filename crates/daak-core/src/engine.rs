@@ -1292,9 +1292,16 @@ impl Engine {
                         addr,
                         paired,
                     };
+                    // `start` seeds a paired peer into `seeded` and `devices`.
+                    // Then `note_found` returns false for that peer. A seeded
+                    // peer that announces is still a peer that came online.
+                    // Read `seeded` before `note_found` removes the peer.
+                    let was_seeded = seeded.lock().await.contains(&device_id);
                     let is_new = note_found(&db, &devices, &seeded, &info).await;
                     if is_new {
                         let _ = tx.send(EngineEvent::DeviceFound(info));
+                    }
+                    if is_new || was_seeded {
                         peer_came_online(&db, &outbox, &device_id);
                     }
                     // Wake on EVERY announce, not just the first: a peer that
