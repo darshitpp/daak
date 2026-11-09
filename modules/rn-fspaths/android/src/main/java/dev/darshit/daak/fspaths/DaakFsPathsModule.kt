@@ -37,7 +37,7 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
      * declaration are pinned together by
      * apps/mobile/src/__tests__/fspathsManifest.test.ts.
      */
-    const val AUTHORITY = "dev.darshit.daak.fileprovider"
+    const val AUTHORITY_SUFFIX = ".fileprovider"
 
     /** R42p: where the chosen destination folder lives between launches. */
     private const val PREFS = "daak.fspaths"
@@ -118,7 +118,11 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     }
     val file = File(path)
     if (!file.exists()) return@resolve false
-    val uri = FileProvider.getUriForFile(reactApplicationContext, AUTHORITY, file)
+    val uri = FileProvider.getUriForFile(
+      reactApplicationContext,
+      reactApplicationContext.packageName + AUTHORITY_SUFFIX,
+      file,
+    )
     val intent = Intent(Intent.ACTION_VIEW).apply {
       setDataAndType(uri, typeFor(uri))
       addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

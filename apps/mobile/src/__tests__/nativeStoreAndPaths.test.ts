@@ -322,14 +322,12 @@ describe('fspaths reveal on Android', () => {
   // applicationId-derived on purpose: modules/rn-share already declares the
   // applicationId-derived one, and two providers cannot share an authority.
   it('declares the provider authority the module uses', () => {
-    const authority = /const val AUTHORITY = "([^"]+)"/.exec(kt)?.[1];
-    expect(authority).toBe('dev.darshit.daak.fileprovider');
-    expect(appManifest).toContain('android:authorities="dev.darshit.daak.fileprovider"');
+    const suffix = /const val AUTHORITY_SUFFIX = "([^"]+)"/.exec(kt)?.[1];
+    expect(suffix).toBe('.fileprovider');
+    // Derived from the application id, so a debug build with an id suffix
+    // installs beside the stable app.
+    expect(appManifest).toContain('android:authorities="${applicationId}.fileprovider"');
     expect(appManifest).toMatch(/androidx\.core\.content\.FileProvider/);
-    // The two providers must not collide, or the manifest merger fails the build.
-    expect(appManifest.split('${').join('DOLLAR')).not.toMatch(
-      /android:authorities="DOLLAR\{applicationId\}/,
-    );
   });
 
   // The resource name in the manifest has to exist in a merged resource set.
