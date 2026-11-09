@@ -156,6 +156,7 @@ export function Bubble({ item, onCopy, onCopyWhole, onPreview, onShare, onOpenHe
     : null;
 
   const pct = kind === 'file' || kind === 'failed' ? clampProgress(progress) : null;
+  const isDone = item.state === 'done' && item.transferState === 'done';
   const fillOn = pct !== null && item.type !== 'text';
 
   let content: React.ReactNode;
@@ -199,7 +200,7 @@ export function Bubble({ item, onCopy, onCopyWhole, onPreview, onShare, onOpenHe
           testID={`bubble-fill-${itemKey(item)}`}
           progress={pct}
           failed={kind === 'failed'}
-          done={item.state === 'done' && item.transferState === 'done'}
+          done={isDone}
         />
       ) : null}
       {content}
@@ -237,7 +238,7 @@ export function Bubble({ item, onCopy, onCopyWhole, onPreview, onShare, onOpenHe
         {kind === 'failed' && out && onRetry ? (
           <Quick label={`Retry sending ${name}`} text="Retry" onPress={() => onRetry(item)} />
         ) : null}
-        {onStopRunning && fillOn && kind === 'file' ? (
+        {onStopRunning && fillOn && kind === 'file' && !isDone ? (
           <Quick label="Stop sending" text="Stop" testID={`thread-stop-${item.transferId}`} onPress={onStopRunning} />
         ) : null}
         {kind === 'waiting' && onStop ? (

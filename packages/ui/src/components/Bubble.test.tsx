@@ -238,14 +238,21 @@ describe('bubble fill', () => {
 
   it('fill colors keep text at 4.5 to 1', () => {
     const paper = parse(colors.paper);
-    const normal = over(parse(colors.hover), paper); // the outgoing bubble is the lighter case
-    const onFill = over(parse(colors.fill), normal);
+    const incoming = paper;
+    const outgoing = over(parse(colors.hover), paper);
+    const fill = parse(colors.fill);
     const failed = over(parse(colors.warnTint), paper);
-    const failedFill = over([...parse(colors.errTint).slice(0, 3), parse(colors.errTint)[3] * FAILED_FILL_OPACITY] as Rgba, failed);
-    const r = [ratio(parse(colors.fg), normal), ratio(parse(colors.fg), onFill), ratio(parse(colors.warnInk), failedFill)];
-    // eslint-disable-next-line no-console
-    console.log('contrast ratios', r.map((x) => x.toFixed(2)).join(' '));
-    r.forEach((x) => expect(x).toBeGreaterThanOrEqual(4.5));
+    const tint = parse(colors.errTint);
+    const failedFill = over([tint[0], tint[1], tint[2], tint[3] * FAILED_FILL_OPACITY], failed);
+    const cases = {
+      'fg on outgoing': ratio(parse(colors.fg), outgoing),
+      'fg on outgoing fill': ratio(parse(colors.fg), over(fill, outgoing)),
+      'fg on incoming fill': ratio(parse(colors.fg), over(fill, incoming)),
+      'muted on outgoing fill': ratio(parse(colors.muted), over(fill, outgoing)),
+      'muted on incoming fill': ratio(parse(colors.muted), over(fill, incoming)),
+      'warnInk on failed fill': ratio(parse(colors.warnInk), failedFill),
+    };
+    for (const [name, x] of Object.entries(cases)) expect([name, x >= 4.5]).toEqual([name, true]);
   });
 
   it('progress 40 sets transform scaleX 0.4 on the fill', () => {
@@ -282,6 +289,25 @@ describe('bubble fill', () => {
     const s = StyleSheet.flatten(screen.getByTestId(`bubble-fill-${itemKey(f)}`).props.style);
     expect(s.backgroundColor).toBe(colors.errTint);
     expect(s.transform).toEqual([{ scaleX: 0.4 }]);
+  });
+  it('progress going down animates the scale back down', async () => {
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+    const timing = jest.spyOn(Animated, 'timing');
+    const view = render(<Bubble item={running()} progress={60} />);
+    await act(async () => {});
+    view.rerender(<Bubble item={running()} progress={20} />);
+    expect(timing.mock.calls.some(([, c]) => c.toValue === 0.2)).toBe(true);
+    jest.restoreAllMocks();
+  });
+  it('a done bubble hides the Stop control', () => {
+    const d = running({ state: 'done', transferState: 'done' });
+    render(<Bubble item={d} progress={100} onStopRunning={jest.fn()} />);
+    expect(screen.queryByTestId(`thread-stop-${d.transferId}`)).toBeNull();
+  });
+  it('a failed bubble hides the Stop control', () => {
+    const f = running({ transferState: 'failed' });
+    render(<Bubble item={f} progress={40} onStopRunning={jest.fn()} />);
+    expect(screen.queryByTestId(`thread-stop-${f.transferId}`)).toBeNull();
   });
   it('a normal bubble fills with colors.fill', () => {
     render(<Bubble item={running()} progress={40} />);

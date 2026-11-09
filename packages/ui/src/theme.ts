@@ -29,7 +29,7 @@ export const colors = {
   errTint: 'rgba(220, 38, 38, 0.09)',
   paper: '#fcfbf8',
   // The progress fill of a file bubble: a darker shade of the bubble colour.
-  fill: 'rgba(0, 0, 0, 0.18)',
+  fill: 'rgba(0, 0, 0, 0.10)',
 };
 
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24, xxxl: 32 };
