@@ -11,7 +11,7 @@ import { BubbleFill, Quick, fillStyles, whenLabel } from './Bubble';
  * bubbles of its files. A press on the bubble or on `Open` opens the folder
  * sheet. The bubble has no Retry: a retry is for one file, in the sheet.
  */
-export function FolderBubble({ row, savedLine, onOpen, percentOf, onStopRunning }: {
+export function FolderBubble({ row, savedLine, onOpen, percentOf, onStopRunning, meta }: {
   row: FolderRow;
   savedLine: string | null;
   onOpen: (row: FolderRow) => void;
@@ -19,6 +19,8 @@ export function FolderBubble({ row, savedLine, onOpen, percentOf, onStopRunning 
   percentOf?: (item: ThreadItem) => number | undefined;
   /** Stops a transfer that runs now. Shows the Stop sending control. */
   onStopRunning?: () => void;
+  /** The speed text. It follows the file count while the folder fills. */
+  meta?: string;
 }) {
   const out = row.direction === 'out';
   const size = humanBytes(row.bytes);
@@ -31,7 +33,7 @@ export function FolderBubble({ row, savedLine, onOpen, percentOf, onStopRunning 
   const warn = row.state === 'failed' || row.state === 'held';
   // A done received folder says where it went. A done sent folder says nothing.
   const line = word ?? (out ? null : savedLine);
-  const shown = fillOn && running ? `${doneCount} of ${row.files} files` : line;
+  const shown = fillOn && running ? [`${doneCount} of ${row.files} files`, meta].filter(Boolean).join(' · ') : line;
   const waiting = row.state === 'waiting' || row.state === 'trying';
   const label = [
     `Folder ${row.name}`,

@@ -702,6 +702,9 @@ export function ThreadScreen({
     const pct = percentFor(tid);
     const onStopRunning = stopRow.get(tid) === rowKey(row) ? () => setStopFor(tid) : undefined;
     if (row.kind === 'folder') {
+      // The folder shows the speed while one of its files fills.
+      const filling = pct && isRunning(tid) ? fillingOf(tid, pct) : null;
+      const folderMeta = speedText !== null && row.children.some((c) => itemKey(c) === filling) ? speedText : undefined;
       return (
         <FolderBubble
           key={`folder:${row.key}`}
@@ -710,6 +713,7 @@ export function ThreadScreen({
           onOpen={(r) => { Keyboard.dismiss(); setFolderKey(r.key); }}
           percentOf={pct}
           onStopRunning={onStopRunning}
+          meta={folderMeta}
         />
       );
     }

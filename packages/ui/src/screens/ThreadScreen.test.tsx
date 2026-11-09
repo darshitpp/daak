@@ -1574,6 +1574,79 @@ describe('ThreadScreen progress in the bubbles', () => {
     expect(fillOf(0)).toBeNull();
   });
 
+  // Fix round 1: a folder shows the speed of its transfer.
+  const inFolder = (items: ReturnType<typeof files3>, n = items.length) => items.map((it, i) => (i < n
+    ? { ...it, group: { name: 'album', rel: `f${i}.bin`, files: n, bytes: n * 10 * MIB } }
+    : it));
+  const withClock = async (body: (clock: { now: number }) => Promise<void>) => {
+    const clock = { now: 1_000_000 };
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try { await body(clock); } finally { spy.mockRestore(); }
+  };
+
+  it('a folder send shows the speed after the warm-up', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3())));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByTestId(`bubble-folder-${TID}:album`);
+      await warm(engine, clock);
+      expect(await screen.findByText(/^1 of 3 files · \d+\.\d MiB\/s/)).toBeTruthy();
+    });
+  });
+
+  it('a folder receive shows the speed after the warm-up', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3({ direction: 'in', state: 'receiving' }))));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByTestId(`bubble-folder-${TID}:album`);
+      await warm(engine, clock);
+      expect(await screen.findByText(/^1 of 3 files · \d+\.\d MiB\/s/)).toBeTruthy();
+    });
+  });
+
+  it('during the warm-up the folder shows the count only', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3())));
+    mount(engine);
+    await screen.findByTestId(`bubble-folder-${TID}:album`);
+    progress(engine, 15 * MIB);
+    expect(await screen.findByText('1 of 3 files')).toBeTruthy();
+    expect(screen.queryByText(/MiB\/s/)).toBeNull();
+  });
+
+  it('a mixed transfer shows the speed on the folder while the folder fills', async () => {
+    const engine = fakeEngine([peer]);
+    // Items 0 and 1 are in the folder. Item 2 is a loose file.
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3(), 2)));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByText('f2.bin');
+      await warm(engine, clock);
+      expect(await screen.findByText(/^1 of 2 files · \d+\.\d MiB\/s/)).toBeTruthy();
+      expect(screen.getAllByText(/MiB\/s/)).toHaveLength(1);
+      expect(screen.getByText('0%')).toBeTruthy();
+    });
+  });
+
+  it('a mixed transfer shows the speed on the loose file when the folder is full', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3(), 2)));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByText('f2.bin');
+      // 5 steps of 5 MiB: 25 MiB done. The folder is full, f2 fills at 50%.
+      for (let i = 1; i <= 5; i++) {
+        clock.now += 500;
+        progress(engine, i * 5 * MIB);
+      }
+      expect(await screen.findByText(/^50% · \d+\.\d MiB\/s/)).toBeTruthy();
+      expect(screen.getAllByText(/MiB\/s/)).toHaveLength(1);
+      expect(screen.getByText('2 of 2 files')).toBeTruthy();
+    });
+  });
+
   it('a done transfer from an earlier session draws no fill', async () => {
     const engine = fakeEngine([peer]);
     jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ state: 'done', transferState: 'done' })));
