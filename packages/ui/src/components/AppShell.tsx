@@ -71,7 +71,7 @@ export function AppShell({
   pickLabel,
 }: {
   background?: React.ReactNode;
-  pair?: React.ReactNode;
+  pair?: React.ReactNode | ((onPaired: () => void) => React.ReactNode);
   /**
    * A BLOCKING screen that replaces everything: update-required and
    * can't-reach. A slot, because the facts live on the host. It shows only
@@ -141,6 +141,8 @@ export function AppShell({
   const route = (b: RouteBody): Route => ({ ...b, id: (ids.current += 1) });
   const push = (b: RouteBody) => setStack((s) => [...s, route(b)]);
   const pop = () => setStack((s) => s.slice(0, -1));
+  // The pair flow calls this when pairing ends. It pops only the pair route.
+  const popPair = () => setStack((s) => (s[s.length - 1]?.name === 'pair' ? s.slice(0, -1) : s));
   const goRoot = (t: Tab) => {
     setRoot(t);
     setStack([]);
@@ -284,7 +286,7 @@ export function AppShell({
   } else if (shown !== undefined) {
     screen = (
       <View style={ui.screen}>
-        {pair}
+        {typeof pair === 'function' ? pair(popPair) : pair}
         <View style={{ padding: spacing.lg, paddingTop: 0 }}>
           <Btn variant="ghost" block testID="pair-back" label="Back to devices" onPress={pop} />
         </View>

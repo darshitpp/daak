@@ -50,6 +50,38 @@ describe('AppShell tabs', () => {
     expect(screen.getByTestId('pair-a-device')).toBeTruthy();
   });
 
+  it('pair as a function: onPaired pops to the device list', async () => {
+    let done: () => void = () => {};
+    await shell(fakeEngine([]), {
+      pair: (onPaired) => {
+        done = onPaired;
+        return <Text>pair-ui</Text>;
+      },
+    });
+    await fireEventAsync.press(await screen.findByTestId('pair-a-device'));
+    expect(screen.getByText('pair-ui')).toBeTruthy();
+    await act(async () => done());
+    expect(screen.queryByText('pair-ui')).toBeNull();
+    expect(screen.getByTestId('pair-a-device')).toBeTruthy();
+  });
+
+  it('onPaired does nothing when the top route is not pair', async () => {
+    let done: () => void = () => {};
+    await shell(fakeEngine([peer]), {
+      pair: (onPaired) => {
+        done = onPaired;
+        return <Text>pair-ui</Text>;
+      },
+    });
+    await fireEventAsync.press(await screen.findByTestId('pair-a-device'));
+    await act(async () => done());
+    expect(screen.queryByText('pair-ui')).toBeNull();
+    // The stack is empty now. A late call must not pop anything else.
+    await act(async () => done());
+    expect(screen.queryByText('pair-ui')).toBeNull();
+    expect(screen.getByTestId('pair-a-device')).toBeTruthy();
+  });
+
   it('routes a pair link into the pair slot', async () => {
     await shell(fakeEngine([]), { pair: <Text>pair-ui</Text>, pairBundle: '{"cbor":"aabb"}' });
     expect(screen.getByText('pair-ui')).toBeTruthy();

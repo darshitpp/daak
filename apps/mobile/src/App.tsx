@@ -412,12 +412,13 @@ export default function App() {
               <BackgroundSyncNotice />
             </>
           }
-          pair={
+          pair={(onPaired) => (
             <PairingFlow
               bundle={link.kind === 'pair' ? link.bundle : undefined}
               addr={link.kind === 'pair' ? link.addr : undefined}
+              onPaired={onPaired}
             />
-          }
+          )}
           // pickAttachedFiles is the real picker: iOS a
           // UIDocumentPickerViewController (asCopy: true), Android
           // ACTION_OPEN_DOCUMENT. It is INJECTED rather than called inside
