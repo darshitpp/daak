@@ -49,4 +49,16 @@ describe('itemPercents', () => {
     const items = mk([100, 100]).map((i) => ({ ...i, state: 'receiving' }));
     expect(arr(itemPercents(items, 100))).toEqual([100, 0]);
   });
+  it('a size of 100 at 29 bytes gives 29 percent', () => {
+    for (const n of [29, 57, 58]) expect(arr(itemPercents(mk([100]), n))).toEqual([n]);
+  });
+  it('a negative size does not shift later offsets back', () => {
+    expect(arr(itemPercents(mk([-50, 100]), 50))).toEqual([100, 50]);
+  });
+  it('a null size in the middle keeps the offsets right', () => {
+    expect(arr(itemPercents(mk([100, null, 100]), 150))).toEqual([100, 100, 50]);
+  });
+  it('a negative bytesDone gives 0 for every item', () => {
+    expect(arr(itemPercents(mk([100, 0, null, 50]), -10))).toEqual([0, 0, 0, 0]);
+  });
 });

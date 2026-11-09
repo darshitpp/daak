@@ -17,9 +17,9 @@ export function itemPercents(items: Part[], bytesDone: number): Map<number, numb
     const size = item.size ?? 0;
     let pct: number;
     if (size <= 0) pct = done > offset ? 100 : 0;
-    else pct = Math.min(100, Math.max(0, Math.floor(((done - offset) / size) * 100)));
+    else pct = Math.min(100, Math.max(0, Math.floor(((done - offset) * 100) / size)));
     out.set(item.itemIndex, pct);
-    offset += size;
+    offset += Math.max(0, size);
   }
   return out;
 }
