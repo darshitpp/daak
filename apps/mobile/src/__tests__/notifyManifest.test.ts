@@ -205,10 +205,17 @@ describe('the failed-send category has its own channel and its own buttons', () 
       kotlin.indexOf('private fun ensureChannel'),
       kotlin.indexOf('override fun registerCategories'),
     );
-    expect(ensure).toMatch(/"daak\.received"|CHANNEL\b/);
+    expect(kotlin).toMatch(/const val CH_RECEIVED_V2 = "daak\.received\.v2"/);
+    expect(kotlin).toMatch(/const val CH_FAILED_V2 = "daak\.failed\.v2"/);
+    expect(kotlin).toMatch(/LEGACY_CHANNELS = listOf\("daak\.received", "daak\.failed"\)/);
+    expect(ensure).toContain('setSound(');
+    expect(ensure).toContain('DEFAULT_NOTIFICATION_URI');
+    expect(ensure).toContain('USAGE_NOTIFICATION');
+    expect(ensure).toContain('IMPORTANCE_NONE');
+    expect(ensure).toContain('deleteNotificationChannel');
     expect(ensure).toContain('"Received files"');
     expect(kotlin).toMatch(/const val CHANNEL_FAILED = "daak\.failed"/);
-    expect(ensure).toContain('CHANNEL_FAILED');
+    expect(ensure).toContain('CH_FAILED_V2');
     expect(ensure).toContain('"Send failures"');
     expect(ensure).toMatch(/IMPORTANCE_DEFAULT/);
   });
@@ -221,7 +228,7 @@ describe('the failed-send category has its own channel and its own buttons', () 
     expect(register).toMatch(/ensureChannels?\(/);
     const post = kotlin.slice(kotlin.indexOf('override fun post('), kotlin.indexOf('override fun cancel('));
     expect(post).toMatch(/channelFor\(category\)/);
-    expect(kotlin).toMatch(/private fun channelFor\(category: String\)[^\n]*\n?[^\n]*CHANNEL_FAILED[^\n]*CHANNEL/);
+    expect(kotlin).toMatch(/private fun channelFor\(category: String\)[^\n]*\n?[^\n]*CH_FAILED_V2[^\n]*CH_RECEIVED_V2/);
     expect(post).not.toMatch(/category\.ifEmpty/);
     expect(post).not.toMatch(/addAction/);
   });
