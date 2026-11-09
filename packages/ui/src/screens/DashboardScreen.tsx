@@ -155,7 +155,7 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
   useEffect(() => {
     alive.current = true;
     refresh();
-    // The engine can reject selfProfile just after an app update. Try again
+    // The engine can reject selfProfile right after an app update. Try again
     // up to 5 times, 1 s apart. The warning has the error kind and no name.
     let retry: ReturnType<typeof setTimeout> | null = null;
     const readName = (tries: number) => {

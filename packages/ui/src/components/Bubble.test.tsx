@@ -239,9 +239,11 @@ describe('bubble fill', () => {
   it('fill colors keep text at 4.5 to 1', () => {
     const paper = parse(colors.paper);
     const incoming = paper;
-    const outgoing = over(parse(colors.hover), paper);
+    // The outgoing and failed bubbles are translucent. They sit on the screen colour.
+    const screenBg = parse(colors.bg);
+    const outgoing = over(parse(colors.hover), screenBg);
     const fill = parse(colors.fill);
-    const failed = over(parse(colors.warnTint), paper);
+    const failed = over(parse(colors.warnTint), screenBg);
     const tint = parse(colors.errTint);
     const failedFill = over([tint[0], tint[1], tint[2], tint[3] * FAILED_FILL_OPACITY], failed);
     const cases = {
