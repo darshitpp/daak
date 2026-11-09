@@ -59,7 +59,7 @@ export function CantReachScreen({
 
   return (
     <View style={ui.screen} testID="screen-cant-reach">
-      <AppBar title="No connection" onBack={onBack} backLabel="Back to Settings" />
+      <AppBar title="No connection" onBack={onBack} backLabel="Back" />
       <ScrollView contentContainerStyle={ui.pad}>
         <Hero
           glyph={ONB_GLYPHS.noConnection}

@@ -272,6 +272,7 @@ export function useBlockers(
         error: noDevices.startsWith('failed:') ? noDevices.slice('failed:'.length) : '',
         onRetry: retryReachability,
         onOpenSettings: openSettingsFromAlert,
+        onBack: () => setNoDevices(undefined),
         deviceNoun: host?.deviceNoun,
       })
     ) : undefined;

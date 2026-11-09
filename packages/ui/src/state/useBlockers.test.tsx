@@ -327,6 +327,39 @@ describe('useBlockers, Open Settings', () => {
   });
 });
 
+describe('useBlockers, Back on the cannot-reach screen', () => {
+  // The Devices link and the Settings route both call onCheckConnection. The
+  // hook has no other entry, so one helper drives both.
+  async function openFrom() {
+    const h = await mountWithAlert(stubEngine({ devices: jest.fn(async () => []) }));
+    await act(async () => {
+      h.current().onCheckConnection();
+    });
+    return h;
+  }
+
+  it('back clears the alert when opened from the Devices link', async () => {
+    const h = await openFrom();
+    expect(screen.getByLabelText('Back')).toBeTruthy();
+    act(() => {
+      fireEvent.press(screen.getByLabelText('Back'));
+    });
+    expect(h.current().alert).toBeUndefined();
+    expect(h.current().alertRouteToken).toBeUndefined();
+  });
+
+  it('back clears the alert when opened from Settings', async () => {
+    const h = await openFrom();
+    expect(screen.getByLabelText('Back')).toBeTruthy();
+    act(() => {
+      fireEvent.press(screen.getByLabelText('Back'));
+    });
+    expect(h.current().alert).toBeUndefined();
+    expect(h.current().alertRouteToken).toBeUndefined();
+    expect(h.current().settingsRouteToken).toBeUndefined();
+  });
+});
+
 describe('useBlockers, Update available', () => {
   const info = { version: '1.2.3', build: '45' };
 
