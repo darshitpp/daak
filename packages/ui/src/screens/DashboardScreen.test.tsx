@@ -332,6 +332,62 @@ describe('DashboardScreen (Devices)', () => {
   });
 });
 
+describe('DashboardScreen device name retry', () => {
+  const failing = (engine: ReturnType<typeof fakeEngine>, failures: number) => {
+    const ok = engine.selfProfile.bind(engine);
+    let calls = 0;
+    const spy = jest.spyOn(engine, 'selfProfile').mockImplementation(async () => {
+      calls += 1;
+      if (calls <= failures) throw new TypeError('not ready');
+      return ok();
+    });
+    return spy;
+  };
+
+  it('retries selfProfile after one rejection and shows the name', async () => {
+    jest.useFakeTimers();
+    const engine = fakeEngine([]);
+    const spy = failing(engine, 1);
+    mount(engine);
+    await act(async () => {});
+    expect(spy).toHaveBeenCalledTimes(1);
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Test Device')).toBeTruthy();
+    await act(async () => { jest.advanceTimersByTime(5000); });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after 5 tries and warns once with the error kind and no name', async () => {
+    jest.useFakeTimers();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const engine = fakeEngine([]);
+    const spy = failing(engine, 99);
+    mount(engine);
+    await act(async () => {});
+    for (let i = 0; i < 10; i += 1) await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(spy).toHaveBeenCalledTimes(5);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0].join(' ')).toContain('TypeError');
+    expect(warn.mock.calls[0].join(' ')).not.toContain('Test Device');
+    warn.mockRestore();
+  });
+
+  it('stops retrying when the screen unmounts', async () => {
+    jest.useFakeTimers();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const engine = fakeEngine([]);
+    const spy = failing(engine, 99);
+    const view = mount(engine);
+    await act(async () => {});
+    view.unmount();
+    await act(async () => { jest.advanceTimersByTime(10000); });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
 describe('DashboardScreen pending share Cancel', () => {
   it('the pending-share row shows Cancel only when onCancelShare is set', async () => {
     const onCancelShare = jest.fn();
