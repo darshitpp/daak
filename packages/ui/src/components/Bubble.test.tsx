@@ -345,6 +345,11 @@ describe('bubble fill', () => {
     render(<Bubble item={running()} progress={40} meta="1.2 MB of 4 MB" />);
     expect(screen.getByText('1.2 MB of 4 MB')).toBeTruthy();
   });
+  it('a running bubble with no fill still shows Stop', () => {
+    render(<Bubble item={running()} onStopRunning={jest.fn()} />);
+    expect(screen.queryByTestId(`bubble-fill-${itemKey(running())}`)).toBeNull();
+    expect(screen.getByTestId(`thread-stop-${running().transferId}`)).toBeTruthy();
+  });
   it('onStopRunning shows Stop sending with the transfer test id', () => {
     const stop = jest.fn();
     render(<Bubble item={running()} progress={40} onStopRunning={stop} />);

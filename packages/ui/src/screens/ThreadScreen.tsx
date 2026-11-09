@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import type { DaakEvent, DeviceInfo, ThreadItem, TransferSummary } from '@daak/core';
 import { useEngine } from '../EngineContext';
-import { Bubble } from '../components/Bubble';
+import { Bubble, bubbleKind } from '../components/Bubble';
 import { FolderBubble } from '../components/FolderBubble';
 import { FolderSheet } from '../components/FolderSheet';
 import { Sheet } from '../components/Sheet';
@@ -23,6 +23,7 @@ import type { InboxActions } from '../inbox-actions';
 import { colors, control, ui } from '../theme';
 import { humanBytes } from './quarantine-facts';
 import { useTransferSpeed } from '../state/speed';
+import { itemPercents } from '../state/progress';
 import { EMPTY_THREAD, itemKey, mergeThread, prependOlder, type ThreadView } from './thread-merge';
 import { folderPlaces, groupThread, savedLine, type FolderRow } from './thread-groups';
 
@@ -92,11 +93,14 @@ function ActiveSendCard({
   live,
   name,
   onStop,
+  stop,
 }: {
   s: TransferSummary;
   live: { done: number; total: number } | undefined;
   name: string;
   onStop: () => void;
+  /** False when a bubble of this transfer shows the Stop control. One Stop shows. */
+  stop: boolean;
 }) {
   const done = live?.done ?? s.bytesDone;
   const total = live?.total ?? s.bytesTotal;
@@ -119,9 +123,38 @@ function ActiveSendCard({
           {known ? <Text style={ui.progN}>{pct + '%'}</Text> : null}
         </View>
       </View>
-      <Btn label="Stop sending" variant="danger" block testID={`thread-stop-${s.transferId}`} onPress={onStop} />
+      {stop ? <Btn label="Stop sending" variant="danger" block testID={`thread-stop-${s.transferId}`} onPress={onStop} /> : null}
     </View>
   );
+}
+
+type PercentOf = (i: ThreadItem) => number | undefined;
+
+/**
+ * The percent of each item of one transfer. A finished transfer gives 100.
+ * A cut item list gives undefined, so no fill shows.
+ */
+function percentsOf(items: ThreadItem[], bytesDone: number, finished: boolean): PercentOf {
+  const map = itemPercents(items, bytesDone);
+  if (map === null) return () => undefined;
+  if (finished) return () => 100;
+  return (i) => map.get(i.itemIndex);
+}
+
+/**
+ * The speed of one transfer that has progress. It is a component, so the
+ * speed hook runs once for each transfer and never in a loop. The children
+ * get the speed text, or null during the warm-up.
+ */
+function TransferProgress({ transferId, done, total, running, children }: {
+  transferId: string;
+  done: number;
+  total: number;
+  running: boolean;
+  children: (speedText: string | null) => React.ReactNode;
+}) {
+  const { text } = useTransferSpeed(transferId, done, total, running);
+  return <>{children(text)}</>;
 }
 
 /**
@@ -615,6 +648,123 @@ export function ThreadScreen({
   const openFolder = folderKey === null ? undefined : rows.find((r): r is FolderRow => r.kind === 'folder' && r.key === folderKey);
   const offline = device != null && device.presence === 'offline';
 
+  // The progress of each transfer on the page. The `transfer.progress` event
+  // has no item index, so the percent of a file comes from the bytes of the
+  // whole transfer. The engine writes the `done` item rows only at the end, so
+  // the item state does not tell which file is done.
+  const byTransfer = new Map<string, ThreadItem[]>();
+  for (const it of thread.items) {
+    const list = byTransfer.get(it.transferId);
+    if (list) list.push(it);
+    else byTransfer.set(it.transferId, [it]);
+  }
+  const rowTid = (r: (typeof rows)[number]): string => (r.kind === 'folder' ? r.transferId : r.item.transferId);
+  const rowKey = (r: (typeof rows)[number]): string => (r.kind === 'folder' ? `folder:${r.key}` : itemKey(r.item));
+  const isRunning = (tid: string): boolean => byTransfer.get(tid)?.[0]?.transferState === 'active';
+  // A transfer that ran in this session keeps its fill after it ends, so the
+  // fill fades out. A transfer from an earlier session has no fill.
+  const tracked = (tid: string): boolean => isRunning(tid) || progress[tid] !== undefined;
+  const bytesOf = (tid: string): { done: number; total: number } => {
+    const s = summaries.find((x) => x.transferId === tid);
+    return { done: progress[tid]?.done ?? s?.bytesDone ?? 0, total: progress[tid]?.total ?? s?.bytesTotal ?? 0 };
+  };
+  const percentFor = (tid: string): PercentOf | undefined => {
+    const items = byTransfer.get(tid);
+    if (!items || !tracked(tid)) return undefined;
+    return percentsOf(items, bytesOf(tid).done, items[0].transferState === 'done');
+  };
+  // The file that fills now: the first file, in item order, below 100.
+  const fillingOf = (tid: string, pct: PercentOf): string | null => {
+    const files = (byTransfer.get(tid) ?? []).filter((i) => i.type === 'file').sort((a, b) => a.itemIndex - b.itemIndex);
+    const f = files.find((i) => { const p = pct(i); return p !== undefined && p < 100; });
+    return f ? itemKey(f) : null;
+  };
+  // One Stop for each running send: on the first row that can show it.
+  const stopRow = new Map<string, string>();
+  for (const r of rows) {
+    const tid = rowTid(r);
+    if (stopRow.has(tid) || !isRunning(tid)) continue;
+    const can = r.kind === 'folder'
+      ? r.direction === 'out' && r.state === 'sending'
+      : r.item.direction === 'out' && bubbleKind(r.item) === 'file';
+    if (can) stopRow.set(tid, rowKey(r));
+  }
+  // Consecutive rows of one transfer share one speed hook.
+  const runs: { tid: string; rows: { row: (typeof rows)[number]; idx: number }[] }[] = [];
+  rows.forEach((row, idx) => {
+    const last = runs[runs.length - 1];
+    if (last && last.tid === rowTid(row)) last.rows.push({ row, idx });
+    else runs.push({ tid: rowTid(row), rows: [{ row, idx }] });
+  });
+
+  const renderRow = (row: (typeof rows)[number], idx: number, speedText: string | null) => {
+    const tid = rowTid(row);
+    const pct = percentFor(tid);
+    const onStopRunning = stopRow.get(tid) === rowKey(row) ? () => setStopFor(tid) : undefined;
+    if (row.kind === 'folder') {
+      return (
+        <FolderBubble
+          key={`folder:${row.key}`}
+          row={row}
+          savedLine={savedLine(placesOf(row), library, saveFolder)}
+          onOpen={(r) => { Keyboard.dismiss(); setFolderKey(r.key); }}
+          percentOf={pct}
+          onStopRunning={onStopRunning}
+        />
+      );
+    }
+    const it = row.item;
+    const next = rows[idx + 1];
+    const p = pct?.(it);
+    // The meta line shows only while the transfer runs. The speed shows only
+    // on the file that fills now, after the warm-up of the speed hook.
+    const meta = p === undefined || !isRunning(tid) || bubbleKind(it) !== 'file' ? undefined
+      : speedText !== null && pct && fillingOf(tid, pct) === itemKey(it) ? `${p}% · ${speedText}`
+      : `${p}%`;
+    return (
+    <React.Fragment key={itemKey(it)}>
+    <Bubble
+      item={it}
+      progress={p}
+      meta={meta}
+      onStopRunning={onStopRunning}
+      onCopy={
+        actions?.copy
+          ? (t) => {
+              actions.copy?.(t);
+              toast.show('Copied');
+            }
+          : undefined
+      }
+      onCopyWhole={
+        actions?.copy
+          ? (i) => {
+              // The page cut this text. Copy the whole text, or copy nothing.
+              void engine.getItemText(i.transferId, i.itemIndex).then(
+                (whole) => {
+                  actions.copy?.(whole);
+                  say('Copied');
+                },
+                () => say('Could not copy the whole text.'),
+              );
+            }
+          : undefined
+      }
+      onPreview={preview}
+      onShare={share && canShare(it) ? share : undefined}
+      onOpenHeld={openHeld}
+      onRetry={(i) => void retry(i.transferId)}
+      onStop={(i) => void stopWaiting(i.transferId)}
+    />
+    {/* The engine cut the item list of this send. Say so once, after its
+        last kept item. A folder sheet says it for its own files. */}
+    {it.truncated === true && (next?.kind === 'folder' ? next.transferId : next?.item.transferId) !== it.transferId ? (
+      <Text style={ui.hint}>Some items of this send are not shown.</Text>
+    ) : null}
+    </React.Fragment>
+    );
+  };
+
   return (
     <View style={ui.screen}>
       {header}
@@ -638,57 +788,19 @@ export function ThreadScreen({
         {device !== undefined && thread.items.length === 0 && loadError === '' ? (
           <Empty title="Nothing here yet" body="Send the first file or note with the buttons below. It travels straight to this device over your Wi-Fi." />
         ) : null}
-        {rows.map((row, idx) => {
-          if (row.kind === 'folder') {
-            return (
-              <FolderBubble
-                key={`folder:${row.key}`}
-                row={row}
-                savedLine={savedLine(placesOf(row), library, saveFolder)}
-                onOpen={(r) => { Keyboard.dismiss(); setFolderKey(r.key); }}
-              />
-            );
-          }
-          const it = row.item;
-          const next = rows[idx + 1];
+        {runs.map((run) => {
+          if (!tracked(run.tid)) return run.rows.map(({ row, idx }) => renderRow(row, idx, null));
+          const b = bytesOf(run.tid);
           return (
-          <React.Fragment key={itemKey(it)}>
-          <Bubble
-            item={it}
-            onCopy={
-              actions?.copy
-                ? (t) => {
-                    actions.copy?.(t);
-                    toast.show('Copied');
-                  }
-                : undefined
-            }
-            onCopyWhole={
-              actions?.copy
-                ? (i) => {
-                    // The page cut this text. Copy the whole text, or copy nothing.
-                    void engine.getItemText(i.transferId, i.itemIndex).then(
-                      (whole) => {
-                        actions.copy?.(whole);
-                        say('Copied');
-                      },
-                      () => say('Could not copy the whole text.'),
-                    );
-                  }
-                : undefined
-            }
-            onPreview={preview}
-            onShare={share && canShare(it) ? share : undefined}
-            onOpenHeld={openHeld}
-            onRetry={(i) => void retry(i.transferId)}
-            onStop={(i) => void stopWaiting(i.transferId)}
-          />
-          {/* The engine cut the item list of this send. Say so once, after its
-              last kept item. A folder sheet says it for its own files. */}
-          {it.truncated === true && (next?.kind === 'folder' ? next.transferId : next?.item.transferId) !== it.transferId ? (
-            <Text style={ui.hint}>Some items of this send are not shown.</Text>
-          ) : null}
-          </React.Fragment>
+            <TransferProgress
+              key={`run:${rowKey(run.rows[0].row)}`}
+              transferId={run.tid}
+              done={b.done}
+              total={b.total}
+              running={isRunning(run.tid)}
+            >
+              {(speedText) => run.rows.map(({ row, idx }) => renderRow(row, idx, speedText))}
+            </TransferProgress>
           );
         })}
       </ScrollView>
@@ -700,6 +812,7 @@ export function ThreadScreen({
           live={progress[s.transferId]}
           name={name}
           onStop={() => setStopFor(s.transferId)}
+          stop={!stopRow.has(s.transferId)}
         />
       ))}
 
@@ -842,6 +955,7 @@ export function ThreadScreen({
           canShare={canShare}
           onOpenHeld={openHeld}
           places={placesOf(openFolder)}
+          percentOf={percentFor(openFolder.transferId)}
           library={library}
           saveFolder={saveFolder}
         />

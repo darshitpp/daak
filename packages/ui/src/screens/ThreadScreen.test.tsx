@@ -1,6 +1,6 @@
 import React from 'react';
 import { Keyboard, KeyboardAvoidingView, ScrollView, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
@@ -1386,5 +1386,199 @@ describe('ThreadScreen folder staging', () => {
     fireEvent.press(screen.getByTestId('remove-album'));
     await settle();
     expect(discardPickedCopy).not.toHaveBeenCalled();
+  });
+});
+
+// Task 11 (A1, A9): the bubbles of a running transfer are progress bars.
+describe('ThreadScreen progress in the bubbles', () => {
+  afterEach(async () => { await settle(0); });
+
+  const MIB = 1024 * 1024;
+  // Three files of 10 MiB each, in one running transfer.
+  const files3 = (p: Partial<Parameters<typeof threadItem>[0]> = {}) =>
+    [0, 1, 2].map((i) => threadItem({
+      transferId: TID, itemIndex: i, type: 'file', text: null, name: `f${i}.bin`, size: 10 * MIB,
+      direction: 'out', state: 'pending', transferState: 'active', ...p,
+    }));
+  const fillOf = (i: number) => screen.queryByTestId(`bubble-fill-${TID}:${i}`);
+  const nowOf = (i: number) => fillOf(i)?.props.accessibilityValue?.now;
+  const progress = (engine: DaakEngine, bytesDone: number, bytesTotal = 30 * MIB) =>
+    emit(engine, { type: 'transfer.progress', transferId: TID, bytesDone, bytesTotal });
+
+  it('a running send fills its bubbles from transfer.progress', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    await waitFor(() => expect(nowOf(0)).toBe(100));
+    expect(nowOf(1)).toBe(50);
+    expect(nowOf(2)).toBe(0);
+    // Bytes above the sum and a total of 0 give no NaN and no fill above 100.
+    progress(engine, 99 * MIB, 0);
+    await waitFor(() => expect(nowOf(2)).toBe(100));
+    expect(nowOf(0)).toBe(100);
+  });
+
+  it('a running receive does the same', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ direction: 'in', state: 'receiving' })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 25 * MIB);
+    await waitFor(() => expect(nowOf(2)).toBe(50));
+    expect(nowOf(0)).toBe(100);
+    expect(nowOf(1)).toBe(100);
+    // A receiver cannot stop the send of the peer.
+    expect(screen.queryByTestId('thread-stop-' + TID)).toBeNull();
+  });
+
+  it('uses the summary bytes before the first progress event', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary({ bytesDone: 5 * MIB, bytesTotal: 30 * MIB })]);
+    mount(engine);
+    await waitFor(() => expect(nowOf(0)).toBe(50));
+  });
+
+  it('during the warm-up the meta line shows the percent only', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    expect(await screen.findByText('50%')).toBeTruthy();
+    expect(screen.getByText('100%')).toBeTruthy();
+    expect(screen.queryByText(/MiB\/s/)).toBeNull();
+  });
+
+  // The hook reads Date.now. The test moves the clock by hand.
+  const warm = async (engine: DaakEngine, clock: { now: number }) => {
+    for (let i = 1; i <= 5; i++) {
+      clock.now += 500;
+      progress(engine, i * 3 * MIB);
+    }
+  };
+
+  it('the meta line shows the percent and the speed after the warm-up', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    const clock = { now: 1_000_000 };
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try {
+      mount(engine);
+      await screen.findByText('f0.bin');
+      await warm(engine, clock);
+      // 15 MiB done: f0 is full, f1 fills at 50%.
+      expect(await screen.findByText(/^50% · \d+\.\d MiB\/s/)).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('speed shows only on the bubble that is filling', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    const clock = { now: 1_000_000 };
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try {
+      mount(engine);
+      await screen.findByText('f0.bin');
+      await warm(engine, clock);
+      await screen.findByText(/MiB\/s/);
+      expect(screen.getAllByText(/MiB\/s/)).toHaveLength(1);
+      expect(screen.getByText('100%')).toBeTruthy();
+      expect(screen.getByText('0%')).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a 3-file transfer shows one Stop sending, on the first running bubble', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    // The old card is still on the screen. It must not add a second Stop.
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
+    const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
+    mount(engine);
+    await screen.findByTestId('thread-active-' + TID);
+    await screen.findByText('f0.bin');
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+    expect(within(screen.getByTestId(`bubble-${TID}:0`)).getByTestId('thread-stop-' + TID)).toBeTruthy();
+    fireEvent.press(screen.getByTestId('thread-stop-' + TID));
+    fireEvent.press(screen.getByTestId('confirm-stop'));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(TID));
+  });
+
+  it('a 40-file transfer shows one Stop sending', async () => {
+    const engine = fakeEngine([peer]);
+    const items = Array.from({ length: 40 }, (_, i) => threadItem({
+      transferId: TID, itemIndex: i, type: 'file', text: null, name: `g${i}.bin`, size: MIB,
+      direction: 'out', state: 'pending', transferState: 'active',
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(items));
+    mount(engine);
+    await screen.findByText('g39.bin');
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+  });
+
+  it('a running sent folder carries the one Stop and fills by files', async () => {
+    const engine = fakeEngine([peer]);
+    const items = files3({ group: null }).map((it, i) => ({
+      ...it, group: { name: 'album', rel: `f${i}.bin`, files: 3, bytes: 30 * MIB },
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(items));
+    mount(engine);
+    await screen.findByTestId(`bubble-folder-${TID}:album`);
+    progress(engine, 20 * MIB);
+    expect(await screen.findByText('2 of 3 files')).toBeTruthy();
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+    expect(within(screen.getByTestId(`bubble-folder-${TID}:album`)).getByTestId('thread-stop-' + TID)).toBeTruthy();
+  });
+
+  it('a cut item list draws no fill', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ truncated: true })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    await settle();
+    expect(fillOf(0)).toBeNull();
+    expect(fillOf(1)).toBeNull();
+    // Stop still shows, once.
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+  });
+
+  it('keeps the fill on a transfer that just finished, so the fill fades out', async () => {
+    const engine = fakeEngine([peer]);
+    const list = jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ direction: 'in', state: 'receiving' })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 25 * MIB);
+    await waitFor(() => expect(nowOf(2)).toBe(50));
+    list.mockResolvedValue(threadPage(files3({ direction: 'in', state: 'done', transferState: 'done' })));
+    emit(engine, { type: 'transfer.done', transferId: TID } as DaakEvent);
+    await waitFor(() => expect(nowOf(2)).toBe(100));
+    expect(screen.queryByText('100%')).toBeNull();
+  });
+
+  it('a cut item list draws no fill after the transfer ends', async () => {
+    const engine = fakeEngine([peer]);
+    const list = jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ truncated: true })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    list.mockResolvedValue(threadPage(files3({ truncated: true, state: 'done', transferState: 'done' })));
+    emit(engine, { type: 'transfer.done', transferId: TID } as DaakEvent);
+    await waitFor(() => expect(screen.queryByTestId('thread-stop-' + TID)).toBeNull());
+    expect(fillOf(0)).toBeNull();
+  });
+
+  it('a done transfer from an earlier session draws no fill', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ state: 'done', transferState: 'done' })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    expect(fillOf(0)).toBeNull();
   });
 });

@@ -238,7 +238,8 @@ export function Bubble({ item, onCopy, onCopyWhole, onPreview, onShare, onOpenHe
         {kind === 'failed' && out && onRetry ? (
           <Quick label={`Retry sending ${name}`} text="Retry" onPress={() => onRetry(item)} />
         ) : null}
-        {onStopRunning && fillOn && kind === 'file' && !isDone ? (
+        {/* A cut item list has no fill. The Stop control still shows. */}
+        {onStopRunning && kind === 'file' && !isDone ? (
           <Quick label="Stop sending" text="Stop" testID={`thread-stop-${item.transferId}`} onPress={onStopRunning} />
         ) : null}
         {kind === 'waiting' && onStop ? (
