@@ -664,21 +664,21 @@ export function ThreadScreen({
   // A transfer that ran in this session keeps its fill after it ends, so the
   // fill fades out. A transfer from an earlier session has no fill.
   const tracked = (tid: string): boolean => isRunning(tid) || progress[tid] !== undefined;
-  const bytesOf = (tid: string): { done: number; total: number } => {
+  // One pass for each tracked transfer on each render. A row reads this map.
+  // `filling` is the file that fills now: the first file, in item order, below 100.
+  type Live = { percentOf: PercentOf; filling: string | null; bytes: { done: number; total: number } };
+  const live = new Map<string, Live>();
+  for (const [tid, items] of byTransfer) {
+    if (!tracked(tid)) continue;
     const s = summaries.find((x) => x.transferId === tid);
-    return { done: progress[tid]?.done ?? s?.bytesDone ?? 0, total: progress[tid]?.total ?? s?.bytesTotal ?? 0 };
-  };
-  const percentFor = (tid: string): PercentOf | undefined => {
-    const items = byTransfer.get(tid);
-    if (!items || !tracked(tid)) return undefined;
-    return percentsOf(items, bytesOf(tid).done, items[0].transferState === 'done');
-  };
-  // The file that fills now: the first file, in item order, below 100.
-  const fillingOf = (tid: string, pct: PercentOf): string | null => {
-    const files = (byTransfer.get(tid) ?? []).filter((i) => i.type === 'file').sort((a, b) => a.itemIndex - b.itemIndex);
-    const f = files.find((i) => { const p = pct(i); return p !== undefined && p < 100; });
-    return f ? itemKey(f) : null;
-  };
+    const bytes = { done: progress[tid]?.done ?? s?.bytesDone ?? 0, total: progress[tid]?.total ?? s?.bytesTotal ?? 0 };
+    const percentOf = percentsOf(items, bytes.done, items[0].transferState === 'done');
+    const f = isRunning(tid)
+      ? items.filter((i) => i.type === 'file').sort((a, b) => a.itemIndex - b.itemIndex)
+        .find((i) => { const p = percentOf(i); return p !== undefined && p < 100; })
+      : undefined;
+    live.set(tid, { percentOf, filling: f ? itemKey(f) : null, bytes });
+  }
   // One Stop for each running send: on the first row that can show it.
   const stopRow = new Map<string, string>();
   for (const r of rows) {
@@ -699,12 +699,12 @@ export function ThreadScreen({
 
   const renderRow = (row: (typeof rows)[number], idx: number, speedText: string | null) => {
     const tid = rowTid(row);
-    const pct = percentFor(tid);
+    const lv = live.get(tid);
+    const pct = lv?.percentOf;
     const onStopRunning = stopRow.get(tid) === rowKey(row) ? () => setStopFor(tid) : undefined;
     if (row.kind === 'folder') {
       // The folder shows the speed while one of its files fills.
-      const filling = pct && isRunning(tid) ? fillingOf(tid, pct) : null;
-      const folderMeta = speedText !== null && row.children.some((c) => itemKey(c) === filling) ? speedText : undefined;
+      const folderMeta = speedText !== null && row.children.some((c) => itemKey(c) === lv?.filling) ? speedText : undefined;
       return (
         <FolderBubble
           key={`folder:${row.key}`}
@@ -723,7 +723,7 @@ export function ThreadScreen({
     // The meta line shows only while the transfer runs. The speed shows only
     // on the file that fills now, after the warm-up of the speed hook.
     const meta = p === undefined || !isRunning(tid) || bubbleKind(it) !== 'file' ? undefined
-      : speedText !== null && pct && fillingOf(tid, pct) === itemKey(it) ? `${p}% · ${speedText}`
+      : speedText !== null && lv?.filling === itemKey(it) ? `${p}% · ${speedText}`
       : `${p}%`;
     return (
     <React.Fragment key={itemKey(it)}>
@@ -793,8 +793,8 @@ export function ThreadScreen({
           <Empty title="Nothing here yet" body="Send the first file or note with the buttons below. It travels straight to this device over your Wi-Fi." />
         ) : null}
         {runs.map((run) => {
-          if (!tracked(run.tid)) return run.rows.map(({ row, idx }) => renderRow(row, idx, null));
-          const b = bytesOf(run.tid);
+          const b = live.get(run.tid)?.bytes;
+          if (!b) return run.rows.map(({ row, idx }) => renderRow(row, idx, null));
           return (
             <TransferProgress
               key={`run:${rowKey(run.rows[0].row)}`}
@@ -959,7 +959,7 @@ export function ThreadScreen({
           canShare={canShare}
           onOpenHeld={openHeld}
           places={placesOf(openFolder)}
-          percentOf={percentFor(openFolder.transferId)}
+          percentOf={live.get(openFolder.transferId)?.percentOf}
           library={library}
           saveFolder={saveFolder}
         />

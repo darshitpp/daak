@@ -8,6 +8,7 @@ import { threadItem, threadPage } from '../testing/threadFixtures';
 import { ToastProvider } from '../components/Toast';
 import { Note } from '../components/ds';
 import { ThreadScreen, splitExt } from './ThreadScreen';
+import * as progressModule from '../state/progress';
 
 const peer: DeviceInfo = {
   deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true,
@@ -1645,6 +1646,53 @@ describe('ThreadScreen progress in the bubbles', () => {
       expect(screen.getAllByText(/MiB\/s/)).toHaveLength(1);
       expect(screen.getByText('2 of 2 files')).toBeTruthy();
     });
+  });
+
+  // Fix round 1: one percent pass for each transfer, not one for each row.
+  it('computes the percents once for each transfer on each render', async () => {
+    const engine = fakeEngine([peer]);
+    const items = Array.from({ length: 50 }, (_, i) => threadItem({
+      transferId: TID, itemIndex: i, type: 'file', text: null, name: `h${i}.bin`, size: MIB,
+      direction: 'out', state: 'pending', transferState: 'active',
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(items));
+    const spy = jest.spyOn(progressModule, 'itemPercents');
+    try {
+      mount(engine);
+      await screen.findByText('h49.bin');
+      progress(engine, 10 * MIB, 50 * MIB);
+      await waitFor(() => expect(nowOf(9)).toBe(100));
+      spy.mockClear();
+      progress(engine, 20 * MIB, 50 * MIB);
+      await waitFor(() => expect(nowOf(19)).toBe(100));
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('two sends at once show 2 Stops and keep their progress apart', async () => {
+    const engine = fakeEngine([peer]);
+    const T2 = 'ee'.repeat(16);
+    const two = [0, 1].map((i) => threadItem({
+      transferId: T2, itemIndex: i, type: 'file', text: null, name: `t${i}.bin`, size: 10 * MIB,
+      direction: 'out', state: 'pending', transferState: 'active', at: 1_700_000_100,
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([...files3(), ...two]));
+    const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
+    mount(engine);
+    await screen.findByText('t1.bin');
+    progress(engine, 15 * MIB);
+    await waitFor(() => expect(nowOf(1)).toBe(50));
+    expect(screen.getByTestId(`bubble-fill-${T2}:0`).props.accessibilityValue.now).toBe(0);
+    expect(screen.getByTestId(`bubble-fill-${T2}:1`).props.accessibilityValue.now).toBe(0);
+    expect(within(screen.getByTestId(`bubble-${TID}:0`)).getByTestId('thread-stop-' + TID)).toBeTruthy();
+    expect(within(screen.getByTestId(`bubble-${T2}:0`)).getByTestId('thread-stop-' + T2)).toBeTruthy();
+    expect(screen.getAllByLabelText('Stop sending')).toHaveLength(2);
+    fireEvent.press(screen.getByTestId('thread-stop-' + T2));
+    fireEvent.press(screen.getByTestId('confirm-stop'));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(T2));
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it('a done transfer from an earlier session draws no fill', async () => {
