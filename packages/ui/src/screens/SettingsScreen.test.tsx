@@ -321,6 +321,7 @@ describe('SettingsScreen sections', () => {
         <SettingsScreen settingsHost={{ appInfo: async () => ({ version: '1.2.3', build: '45' }) }} />
       </EngineProvider>,
     );
+    fireEvent.press(screen.getByTestId('about-toggle'));
     expect(await screen.findByText('Version 1.2.3 (build 45)')).toBeTruthy();
   });
 });

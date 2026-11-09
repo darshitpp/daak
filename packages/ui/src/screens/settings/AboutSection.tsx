@@ -11,7 +11,7 @@ type Info = { version: string; build: string };
  * A reject, a sync throw, or `version: 'unknown'` (the P2 fallback) hides it.
  */
 export function AboutSection({ appInfo }: { appInfo?: () => Promise<Info> }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [info, setInfo] = useState<Info | null>(null);
   useEffect(() => {

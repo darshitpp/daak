@@ -9,6 +9,7 @@ afterEach(() => jest.restoreAllMocks());
 
 it('shows the four facts', () => {
   render(<AboutSection />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   expect(screen.getByText('This Wi-Fi only')).toBeTruthy();
   expect(screen.getByText('No account, none')).toBeTruthy();
   expect(screen.getByText('On your devices')).toBeTruthy();
@@ -17,6 +18,7 @@ it('shows the four facts', () => {
 // appInfo is async (P2). The row shows only after the host answers.
 it('shows the real version and build after the host answers, and no row without a host', async () => {
   const { unmount } = render(<AboutSection appInfo={async () => ({ version: '0.4.2', build: '1180' })} />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   expect(screen.queryByText(/^Version /)).toBeNull();
   expect(await screen.findByText('Version 0.4.2 (build 1180)')).toBeTruthy();
   unmount();
@@ -41,6 +43,7 @@ it('hides the version row when the host rejects or reports unknown', async () =>
 it.each(ABOUT_LINKS.map((l) => [l.id, l.url] as const))('opens the %s link in the system browser', (id, url) => {
   const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
   render(<AboutSection />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   fireEvent.press(screen.getByTestId('about-link-' + id));
   expect(open).toHaveBeenCalledWith(url);
 });
@@ -74,6 +77,7 @@ it('says so when the browser cannot open the link', async () => {
 
 it('keeps each link row at 44 points or more', () => {
   render(<AboutSection />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   const style = screen.getByTestId('about-link-twitter').props.style;
   const flat = Array.isArray(style) ? Object.assign({}, ...style.flat().filter(Boolean)) : style;
   expect(flat.minHeight).toBeGreaterThanOrEqual(44);
@@ -85,15 +89,18 @@ const flatStyle = (id: string) => {
   return Array.isArray(style) ? Object.assign({}, ...style.flat().filter(Boolean)) : style;
 };
 
-it('starts expanded', () => {
+it('starts collapsed and shows the facts after a tap', () => {
   render(<AboutSection />);
-  expect(screen.getByTestId('about-toggle').props.accessibilityState.expanded).toBe(true);
+  expect(screen.queryByTestId('about-facts')).toBeNull();
+  expect(screen.getByTestId('about-toggle').props.accessibilityState.expanded).toBe(false);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   expect(screen.getByTestId('about-facts')).toBeTruthy();
   expect(screen.getByTestId('about-links')).toBeTruthy();
 });
 
 it('hides the facts and the links on a tap and sets expanded to false', () => {
   render(<AboutSection />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   fireEvent.press(screen.getByTestId('about-toggle'));
   expect(screen.getByTestId('about-toggle').props.accessibilityState.expanded).toBe(false);
   expect(screen.queryByTestId('about-facts')).toBeNull();
@@ -104,6 +111,7 @@ it('shows them again on a second tap', () => {
   render(<AboutSection />);
   fireEvent.press(screen.getByTestId('about-toggle'));
   fireEvent.press(screen.getByTestId('about-toggle'));
+  fireEvent.press(screen.getByTestId('about-toggle'));
   expect(screen.getByTestId('about-toggle').props.accessibilityState.expanded).toBe(true);
   expect(screen.getByTestId('about-facts')).toBeTruthy();
   expect(screen.getByTestId('about-links')).toBeTruthy();
@@ -112,7 +120,6 @@ it('shows them again on a second tap', () => {
 it('keeps Check for updates visible and working when collapsed', () => {
   const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
   render(<AboutSection />);
-  fireEvent.press(screen.getByTestId('about-toggle'));
   expect(screen.getByText('See whether Daak needs an update')).toBeTruthy();
   fireEvent.press(screen.getByTestId('check-for-updates'));
   expect(open).toHaveBeenCalledWith(RELEASES_URL);
@@ -125,6 +132,7 @@ it('keeps the toggle at 44 points or more', () => {
 
 it('puts the facts and the links in separate views', async () => {
   render(<AboutSection appInfo={async () => ({ version: '0.4.2', build: '1180' })} />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
   const facts = screen.getByTestId('about-facts');
   const links = screen.getByTestId('about-links');
   expect(facts).not.toBe(links);
