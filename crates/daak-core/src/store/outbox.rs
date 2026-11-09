@@ -15,6 +15,10 @@ pub struct OutboxRow {
     pub updated_at: i64,
 }
 
+/// The shortest time in seconds since the last attempt on a row before
+/// `wake_outbox_for_peer` makes that row due.
+pub const WAKE_MIN_IDLE_SECS: i64 = 30;
+
 /// Exponential backoff with a 10-minute cap; jitter is caller-supplied seconds.
 pub fn backoff_delay(attempts: u32, jitter: u64) -> i64 {
     backoff_delay_with(attempts, jitter, 600)
@@ -100,6 +104,21 @@ impl Db {
         )?;
         let rows = stmt.query_map(rusqlite::params![now, &peer[..]], row_to_outbox)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Make the pending rows of ONE peer due now. The engine calls this once
+    /// for each offline-to-online change of the peer. The idle guard skips a
+    /// row that the drain tried less than `WAKE_MIN_IDLE_SECS` ago. It limits
+    /// a forged or flapping signal. This method does not change `attempts`.
+    /// It returns the number of rows changed.
+    pub fn wake_outbox_for_peer(&self, peer: &[u8; 16], now: i64) -> Result<usize> {
+        let n = self.conn().execute(
+            "UPDATE outbox SET next_attempt_at = ?2
+             WHERE state = 'pending' AND peer_device_id = ?1
+               AND next_attempt_at > ?2 AND updated_at <= ?2 - ?3",
+            rusqlite::params![&peer[..], now, WAKE_MIN_IDLE_SECS],
+        )?;
+        Ok(n)
     }
 
     /// Every row of ONE peer, in any state. Used to prove a reconnect drained
@@ -448,6 +467,75 @@ mod tests {
         db.delete_outbox(&[1u8; 16]).unwrap();
         assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
         assert!(db.list_outbox_for_peer(&[7u8; 16]).unwrap().is_empty());
+    }
+
+    fn backed_off(id: u8, peer: u8, attempts: u32, updated_at: i64) -> OutboxRow {
+        let mut r = row_for(id, peer);
+        r.attempts = attempts;
+        r.next_attempt_at = 600;
+        r.updated_at = updated_at;
+        r
+    }
+
+    #[test]
+    fn wake_makes_a_backed_off_row_due() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&backed_off(1, 3, 5, 7)).unwrap();
+        assert!(db.due_outbox_for_peer(&[3u8; 16], 100).unwrap().is_empty());
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 1);
+        let due = db.due_outbox_for_peer(&[3u8; 16], 100).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].attempts, 5);
+        assert_eq!(due[0].updated_at, 7);
+    }
+
+    #[test]
+    fn wake_leaves_other_states_alone() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        for id in 1..=4u8 {
+            db.enqueue_outbox(&row_for(id, 3)).unwrap();
+        }
+        // 1: sending. 2: awaiting_ack. 3: done. 4: terminal failed.
+        assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
+        for id in [2u8, 3] {
+            assert!(db.mark_outbox_sending(&[id; 16]).unwrap());
+            assert!(db.mark_outbox_awaiting_ack(&[id; 16]).unwrap());
+        }
+        assert!(db.mark_outbox_done(&[3u8; 16]).unwrap());
+        assert!(db.mark_outbox_terminal_failed(&[4u8; 16], "test").unwrap());
+        // The state walk stamps the real clock. Push the fields back.
+        db.conn()
+            .execute(
+                "UPDATE outbox SET next_attempt_at = 600, updated_at = 0",
+                [],
+            )
+            .unwrap();
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 0);
+        for r in db.list_outbox_for_peer(&[3u8; 16]).unwrap() {
+            assert_eq!(r.next_attempt_at, 600, "state {}", r.state);
+        }
+    }
+
+    #[test]
+    fn wake_touches_only_the_named_peer() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&backed_off(1, 3, 0, 0)).unwrap();
+        db.enqueue_outbox(&backed_off(2, 4, 0, 0)).unwrap();
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 1);
+        let other = db.get_outbox(&[2u8; 16]).unwrap().unwrap();
+        assert_eq!(other.next_attempt_at, 600);
+    }
+
+    #[test]
+    fn wake_skips_a_row_tried_less_than_30_s_ago() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&backed_off(1, 3, 1, 90)).unwrap();
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 0);
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 120).unwrap(), 1);
     }
 
     fn row_for(id: u8, peer: u8) -> OutboxRow {
