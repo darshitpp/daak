@@ -56,7 +56,12 @@ const pad = { padding: 16, gap: 24 } as const;
  * "Pairing cancelled" is the shared toast. The first-run flow renders instead of
  * the shell, so `PairingFlow` adds its own provider when it is embedded.
  */
-type PairingFlowProps = { bundle?: string; addr?: string; embedded?: boolean; onPaired?: () => void };
+type PairingFlowProps = {
+  bundle?: string;
+  addr?: string;
+  embedded?: boolean;
+  onPaired?: () => void;
+};
 
 export function PairingFlow(props: PairingFlowProps = {}) {
   const body = <PairingFlowBody {...props} />;

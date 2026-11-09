@@ -1008,7 +1008,6 @@ describe('the app flow drives code pairing', () => {
   });
 });
 
-
 describe('the flow tells the shell that pairing is done', () => {
   const renderWith = async (props: React.ComponentProps<typeof PairingFlow>) =>
     await renderAsync(
