@@ -25,7 +25,7 @@ export function FolderBubble({ row, savedLine, onOpen, percentOf, onStopRunning 
   // A cut child list has unknown percents. Then the fill and the count stay off.
   const running = row.state === 'receiving' || row.state === 'sending';
   const fillOn = percentOf !== undefined && !row.cut && row.files > 0 && (running || row.state === 'failed');
-  const doneCount = fillOn ? row.children.filter((c) => percentOf(c) === 100).length : undefined;
+  const doneCount = fillOn ? Math.min(row.files, row.children.filter((c) => percentOf(c) === 100).length) : undefined;
   const pct = doneCount === undefined ? 0 : Math.min(100, Math.floor((doneCount * 100) / row.files));
   const word = folderStateWord(row, doneCount);
   const warn = row.state === 'failed' || row.state === 'held';
@@ -58,7 +58,7 @@ export function FolderBubble({ row, savedLine, onOpen, percentOf, onStopRunning 
       </View>
       <View style={ui.msgActions}>
         <Quick label={`Open ${row.name}`} text="Open" onPress={() => onOpen(row)} />
-        {onStopRunning && fillOn && running ? (
+        {onStopRunning && running ? (
           <Quick label="Stop sending" text="Stop" testID={`thread-stop-${row.transferId}`} onPress={onStopRunning} />
         ) : null}
       </View>

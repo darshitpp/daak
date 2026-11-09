@@ -1,9 +1,10 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { humanBytes } from '../screens/quarantine-facts';
 import type { FolderRow, FolderState } from '../screens/thread-groups';
+import { colors } from '../theme';
 import { threadItem } from '../testing/threadFixtures';
-import { StyleSheet } from 'react-native';
 import { FolderBubble } from './FolderBubble';
 
 const BYTES = 34 * 1024 * 1024;
@@ -165,6 +166,43 @@ describe('FolderBubble', () => {
       expect(screen.getAllByLabelText('Stop sending')).toHaveLength(1);
       fireEvent.press(screen.getByLabelText('Stop sending'));
       expect(stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('a cut running folder still shows Stop', () => {
+      const r = running(40, { cut: true, children: kids(12), direction: 'out', state: 'sending' });
+      render(<FolderBubble row={r} savedLine={null} onOpen={jest.fn()} percentOf={() => 100} onStopRunning={jest.fn()} />);
+      expect(screen.getAllByLabelText('Stop sending')).toHaveLength(1);
+    });
+
+    it('a running folder without percentOf still shows Stop', () => {
+      const r = running(10, { direction: 'out', state: 'sending' });
+      render(<FolderBubble row={r} savedLine={null} onOpen={jest.fn()} onStopRunning={jest.fn()} />);
+      expect(screen.getAllByLabelText('Stop sending')).toHaveLength(1);
+    });
+
+    it('a stopped folder hides Stop', () => {
+      const r = running(10, { direction: 'out', state: 'stopped' });
+      render(<FolderBubble row={r} savedLine={null} onOpen={jest.fn()} onStopRunning={jest.fn()} />);
+      expect(screen.queryByLabelText('Stop sending')).toBeNull();
+    });
+
+    it('the count never exceeds the file total', () => {
+      const r = running(12, { files: 10 });
+      render(<FolderBubble row={r} savedLine={null} onOpen={jest.fn()} percentOf={() => 100} />);
+      expect(screen.getByText('10 of 10 files')).toBeTruthy();
+      expect(StyleSheet.flatten(fill(r).props.style).transform).toEqual([{ scaleX: 1 }]);
+    });
+
+    it('a failed folder draws its fill in the failed tint', () => {
+      const r = running(10, { direction: 'out', state: 'failed' });
+      render(<FolderBubble row={r} savedLine={null} onOpen={jest.fn()} percentOf={pctFor(2)} />);
+      expect(StyleSheet.flatten(fill(r).props.style).backgroundColor).toBe(colors.errTint);
+    });
+
+    it('the label keeps the state word while the fill shows', () => {
+      const r = running(40);
+      render(<FolderBubble row={r} savedLine={null} onOpen={jest.fn()} percentOf={pctFor(12)} />);
+      expect(screen.getByLabelText(`Folder album, 40 files, ${SIZE}, receiving 12 of 40`)).toBeTruthy();
     });
 
     it('a failed folder hides Stop', () => {
