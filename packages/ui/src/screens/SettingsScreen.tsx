@@ -9,7 +9,6 @@ import { ArrivalSection } from './settings/ArrivalSection';
 import { ConnectionSection } from './settings/ConnectionSection';
 import { ReportIssueSection } from './settings/ReportIssueSection';
 import { AboutSection } from './settings/AboutSection';
-import { PresenceSection } from './settings/PresenceSection';
 import { useConnection } from '../state/useConnection';
 import { useToast } from '../components/Toast';
 import type { SettingsHost } from './settings/host';
@@ -236,7 +235,6 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
           </View>
         </Section>
 
-        <PresenceSection deviceNoun={deviceNoun} />
 
         {downloadFolder ? (
           <DownloadFolderRow
