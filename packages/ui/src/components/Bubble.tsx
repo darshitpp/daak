@@ -24,14 +24,14 @@ export function bubbleKind(i: ThreadItem): BubbleKind {
 /** The error fill is drawn at this share of its tint. A full tint drops warnInk below 4.5:1. */
 export const FAILED_FILL_OPACITY = 0.3;
 
-const fillStyles = StyleSheet.create({
+export const fillStyles = StyleSheet.create({
   clip: { overflow: 'hidden' },
   fill: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: colors.fill, transformOrigin: 'left' },
   fillFailed: { backgroundColor: colors.errTint },
 });
 
 /** 0 to 100, never NaN. A value that is not a finite number gives null: no fill. */
-function clampProgress(p: number | undefined): number | null {
+export function clampProgress(p: number | undefined): number | null {
   if (p === undefined || !Number.isFinite(p)) return null;
   return Math.min(100, Math.max(0, p));
 }
@@ -41,7 +41,7 @@ function clampProgress(p: number | undefined): number | null {
  * left edge. Reduce motion sets the value with no animation. A done bubble
  * fades the fill out.
  */
-function BubbleFill({ testID, progress, failed, done }: { testID: string; progress: number; failed: boolean; done: boolean }) {
+export function BubbleFill({ testID, progress, failed, done }: { testID: string; progress: number; failed: boolean; done: boolean }) {
   const scale = useRef(new Animated.Value(progress / 100)).current;
   const fade = useRef(new Animated.Value(1)).current;
   // null until the system answers. No animation starts before then.

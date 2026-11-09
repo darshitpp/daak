@@ -13,7 +13,7 @@ import {
   type FolderRow,
   type TreeNode,
 } from '../screens/thread-groups';
-import { bubbleKind } from './Bubble';
+import { BubbleFill, bubbleKind, clampProgress, fillStyles } from './Bubble';
 import { Btn, Note } from './ds';
 import { Sheet } from './Sheet';
 
@@ -58,6 +58,7 @@ export function FolderSheet({
   onShare,
   canShare,
   onOpenHeld,
+  percentOf,
   places,
   library,
   saveFolder,
@@ -72,6 +73,8 @@ export function FolderSheet({
   /** The host can refuse to share one path. Default: every path. */
   canShare?: (item: ThreadItem) => boolean;
   onOpenHeld?: (item: ThreadItem) => void;
+  /** The percent of one file, 0 to 100. Each file row fills by its own percent. */
+  percentOf?: (item: ThreadItem) => number | undefined;
   places: FolderPlaces | null;
   library?: string;
   saveFolder?: string;
@@ -100,12 +103,14 @@ export function FolderSheet({
     const tag = tagged ? `In ${isLibraryPath(i.destPath) ? library : saveFolder}` : '';
     const line = [i.size === null ? '' : humanBytes(i.size), tag].filter(Boolean).join(' · ');
     const hasPath = kind === 'file' && i.destPath !== null;
+    const pct = kind === 'file' && !(i.state === 'done' && i.transferState === 'done') ? clampProgress(percentOf?.(i)) : null;
     return (
       <View
         key={`f:${i.itemIndex}`}
         testID={`folder-file-${i.group?.rel ?? name}`}
-        style={[ui.listRow, { paddingLeft: depth * spacing.lg }]}
+        style={[ui.listRow, { paddingLeft: depth * spacing.lg }, pct !== null ? fillStyles.clip : null]}
       >
+        {pct !== null ? <BubbleFill testID={`folder-file-fill-${i.group?.rel ?? name}`} progress={pct} failed={false} done={false} /> : null}
         <View style={ui.fill}>
           <Text style={ui.rowTitle} numberOfLines={1} ellipsizeMode="middle">{name}</Text>
           {line !== '' ? <Text style={ui.rowSub}>{line}</Text> : null}

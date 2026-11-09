@@ -194,4 +194,13 @@ describe('folderStateWord', () => {
     expect(f.state).toBe('failed');
     expect(folderStateWord(f)).toBe('2 of 3 did not arrive');
   });
+
+  it('folderStateWord uses doneCount when given', () => {
+    const kids = [child('a', { state: 'receiving' }), child('b', { state: 'receiving' }), child('c', { state: 'receiving' })];
+    const f = folderOf(groupThread(kids), 0);
+    expect(f.state).toBe('receiving');
+    expect(folderStateWord(f)).toBe('Receiving 0 of 3');
+    expect(folderStateWord(f, 2)).toBe('Receiving 2 of 3');
+    expect(folderStateWord(f, 0)).toBe('Receiving 0 of 3');
+  });
 });
