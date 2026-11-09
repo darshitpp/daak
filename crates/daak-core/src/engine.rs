@@ -1076,7 +1076,9 @@ impl Engine {
                         .filter(|p| p.state == "trusted")
                         .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
                     let secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
-                    let conn = tcp::dial(addr).await?;
+                    let conn = tokio::time::timeout(SEND_CONNECT_DEADLINE, tcp::dial(addr))
+                        .await
+                        .map_err(|_| CoreError::Protocol("connect timed out".into()))??;
                     crate::net::secure::open_secure(
                         conn,
                         &secret,
@@ -3486,6 +3488,10 @@ struct DrainCtx<T = TcpConn> {
     /// The announced protocol version of each peer, for the resume wait.
     peer_versions: PeerVersions,
 }
+
+/// The send path gives up a TCP connect after this time. The send path
+/// must not wait on a peer that does not answer.
+const SEND_CONNECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Give up on a row after this many failed delivery attempts. 8 with the 4.3
 /// backoff (15s doubling, 10min cap) spans roughly 35 minutes of retrying, which
