@@ -744,6 +744,16 @@ pub struct QuarantineReport {
     pub held_path: String,
 }
 
+/// Reset the backoff of the pending rows for a peer that came online. Then wake
+/// the outbox drain for that peer. A failed reset is not fatal.
+fn peer_came_online(db: &Db, outbox: &OutboxWorker, peer: &[u8; 16]) {
+    let now = (crate::manifest::now_ms() / 1000) as i64;
+    if let Err(e) = db.wake_outbox_for_peer(peer, now) {
+        tracing::warn!(peer = %short_id(peer), "outbox backoff reset failed: {}", log_err(&e));
+    }
+    outbox.notify_peer_online(*peer);
+}
+
 impl Engine {
     /// The ONE place a pairing becomes real, on all four paths (the joiner's
     /// `pair_with` / `pair_with_code` and the host's QR / code branches in
@@ -1283,6 +1293,7 @@ impl Engine {
                     let is_new = note_found(&db, &devices, &seeded, &info).await;
                     if is_new {
                         let _ = tx.send(EngineEvent::DeviceFound(info));
+                        peer_came_online(&db, &outbox, &device_id);
                     }
                     // Wake on EVERY announce, not just the first: a peer that
                     // dropped off the map and reappeared is exactly the
@@ -1374,6 +1385,9 @@ impl Engine {
                                 c.state == Liveness::Online,
                             )
                             .await;
+                            if c.state == Liveness::Online {
+                                peer_came_online(&db, &outbox, &c.device_id);
+                            }
                             let queued = db.count_outbox_for_peer(&c.device_id).unwrap_or(0);
                             let _ = tx.send(EngineEvent::QueueDepth {
                                 device_id: c.device_id,
@@ -1560,7 +1574,7 @@ impl Engine {
             // A peer that just came online drains its own due rows on the spot,
             // instead of waiting for the next poll tick and its backoff.
             if c.state == Liveness::Online {
-                self.outbox.notify_peer_online(p.device_id);
+                peer_came_online(&self.db, &self.outbox, &p.device_id);
             }
         }
         // A return inside the flap window emits no change, so re-announce

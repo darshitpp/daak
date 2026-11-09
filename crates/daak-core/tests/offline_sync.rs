@@ -327,3 +327,88 @@ async fn revoking_purges_queue_clean_staging_and_blocks_reconnect() {
 fn hex16(b: &[u8; 16]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
+
+// A row that backed off while the peer was away must be due the moment the
+// peer comes online again. A second change inside the idle guard must not
+// reset a row that just failed.
+#[tokio::test]
+async fn an_offline_to_online_change_makes_a_backed_off_row_due() {
+    use daak_core::manifest::Manifest;
+    use daak_core::outbox::enqueue;
+    use daak_core::staging::Staging;
+
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    db.migrate().unwrap();
+    let peer = [5u8; 16];
+    db.upsert_pairing(&Pairing {
+        peer_device_id: peer,
+        state: "trusted".into(),
+        paired_at: 0,
+        verify_key: [1u8; 32],
+        static_dh_pub: [2u8; 32],
+        label: None,
+    })
+    .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let staging = Staging::new(dir.path().to_path_buf());
+    let id = enqueue(&db, &staging, &peer, &Manifest::text("queued"), &[]).unwrap();
+
+    let real_now = (daak_core::manifest::now_ms() / 1000) as i64;
+    for _ in 0..6 {
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        db.mark_outbox_failed(&id, real_now - 100, 0).unwrap();
+    }
+    assert!(
+        db.due_outbox_for_peer(&peer, real_now).unwrap().is_empty(),
+        "the row is backing off"
+    );
+
+    let store = Arc::new(daak_core::crypto::secret_store::MemorySecretStore::default());
+    let identity = daak_core::crypto::identity::import_from_store(store.as_ref()).unwrap();
+    let engine = Engine::start(EngineConfig {
+        display_name: "self".into(),
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+        out_dir: std::env::temp_dir(),
+        identity,
+        db: db.clone(),
+    })
+    .await
+    .unwrap();
+
+    let key = pairing_presence_key(&engine.identity().static_secret().to_bytes(), &[2u8; 32]);
+    let p = Presence {
+        device_id: peer,
+        session_id: [0u8; 16],
+        name: "peer".into(),
+        state: PresenceState::Online,
+        seq: 1,
+        sent_at_ms: 0,
+    };
+    let first = SealedBeacon::seal(&p, &key, 1).unwrap();
+    let change = engine.observe_beacon(&first, 1_000).await.unwrap();
+    assert_eq!(change.map(|c| c.state), Some(Liveness::Online));
+    // The reset uses the clock at the call, so ask with a later time.
+    assert_eq!(
+        db.due_outbox_for_peer(&peer, real_now + 5).unwrap().len(),
+        1,
+        "the online change resets the backoff"
+    );
+
+    // The row fails again just now. A second offline to online change inside
+    // the idle guard must leave it backed off.
+    assert!(db.mark_outbox_sending(&id).unwrap());
+    db.mark_outbox_failed(&id, real_now, 0).unwrap();
+    let offline = engine.heartbeat(8_000).await;
+    assert_eq!(offline.len(), 1, "the peer times out");
+    let second = SealedBeacon::seal(&p, &key, 2).unwrap();
+    let change = engine.observe_beacon(&second, 10_000).await.unwrap();
+    assert_eq!(change.map(|c| c.state), Some(Liveness::Online));
+    assert!(
+        db.due_outbox_for_peer(&peer, real_now + 5)
+            .unwrap()
+            .is_empty(),
+        "a row that just failed stays backed off"
+    );
+    engine.shutdown().await.unwrap();
+}
