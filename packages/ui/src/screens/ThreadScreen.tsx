@@ -88,7 +88,13 @@ export function mediaError(e: unknown): string | null {
   if (m === 'E_PICK_BUSY') return null;
   if (m === 'E_TOO_MANY') return 'Too many items. Pick fewer.';
   if (m === 'E_SOURCE_GONE') return 'Some items can no longer be read. Pick them again.';
-  if (m.startsWith('NO_SPACE:') || m === 'NOT_DOWNLOADED') return folderPickError(e);
+  if (m.startsWith('NO_SPACE:')) {
+    const need = humanBytes(Number(m.slice('NO_SPACE:'.length)));
+    return `Not enough space to prepare these photos. Free ${need !== '' ? need : 'some space'} and try again.`;
+  }
+  if (m === 'NOT_DOWNLOADED') {
+    return 'Some photos are not downloaded yet. Open the Photos app, download them, and try again.';
+  }
   return 'Daak could not prepare a file for sending.';
 }
 
@@ -524,77 +530,94 @@ export function ThreadScreen({
     setPreparing(false);
   };
 
+  // A second press in the same tick must not start a second send.
+  const sendingRef = useRef(false);
+
   const submit = async () => {
-    if (device == null || !canSend) return;
+    if (device == null || !canSend || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     setResult(null);
+    setPickError(null);
     const note = text.trim();
+    // Take the staged photos now. A pick or a removal later does not change this send.
+    const sentRefs = mediaRefs;
+    const sentTokens = new Set(sentRefs.map((r) => r.token));
     // The copies of the picked photos. One send reads them with the plain files.
+    const made: string[] = [];
+    const dropMade = () => made.forEach(discard);
     let sendFiles = files;
-    if (mediaRefs.length > 0 && media) {
-      let ok = false;
-      try { ok = await media.fits(mediaRefs); } catch { ok = false; }
-      if (!ok) {
-        say('Large selection is not supported yet');
-        if (alive.current) setSending(false);
-        return;
-      }
-      const made: string[] = [];
-      try {
-        for (const r of mediaRefs) {
-          const path = await media.materialize(r.token);
-          copies.current.add(path);
-          made.push(path);
-        }
-      } catch (e) {
-        made.forEach(discard);
-        if (alive.current) {
-          setPickError(mediaError(e) ?? 'Daak could not prepare a file for sending.');
-          setSending(false);
-        }
-        return;
-      }
-      sendFiles = [...files, ...made];
-    }
-    // The engine reports queued: true for every send. The words come from the
-    // presence of the peer at the time of the send.
-    const waiting = presenceOf(device).rank >= 2;
     try {
-      // Files first, then the note. send() takes one kind in each call. Each
-      // part leaves the composer as soon as the engine accepts it, so a failed
-      // note does not send the files again.
-      if (sendFiles.length > 0) {
-        const sent = sendFiles.filter((p) => copies.current.has(p));
-        sent.forEach((p) => inFlight.current.add(p));
-        try {
-          await engine.send({ peerDeviceId, files: sendFiles });
-        } finally {
-          sent.forEach((p) => inFlight.current.delete(p));
-          // A closed screen cannot show the chip again, so its copies go now.
-          if (!alive.current) sent.forEach(discard);
+      if (sentRefs.length > 0 && media) {
+        let ok = false;
+        let fitError: unknown = null;
+        try { ok = await media.fits(sentRefs); } catch (e) { fitError = e ?? new Error('fits'); }
+        if (fitError !== null || !ok) {
+          say(fitError !== null ? 'Daak could not prepare a file for sending.' : 'Large selection is not supported yet');
+          if (alive.current && fitError !== null) setPickError('Daak could not prepare a file for sending.');
+          return;
         }
-        // The engine staged the files before it resolved, so the copies can go.
-        sendFiles.forEach(discard);
-        setFiles([]);
-        setMediaRefs([]);
-        setSizes({});
-        setFolders({});
+        try {
+          for (const r of sentRefs) {
+            const path = await media.materialize(r.token);
+            copies.current.add(path);
+            made.push(path);
+            if (!alive.current) {
+              dropMade();
+              return;
+            }
+          }
+        } catch (e) {
+          dropMade();
+          if (alive.current) setPickError(mediaError(e) ?? 'Daak could not prepare a file for sending.');
+          return;
+        }
+        sendFiles = [...files, ...made];
       }
-      if (note !== '') {
-        await engine.send({ peerDeviceId, text: note });
-        setText('');
+      // The engine reports queued: true for every send. The words come from the
+      // presence of the peer at the time of the send.
+      const waiting = presenceOf(device).rank >= 2;
+      try {
+        // Files first, then the note. send() takes one kind in each call. Each
+        // part leaves the composer as soon as the engine accepts it, so a failed
+        // note does not send the files again.
+        if (sendFiles.length > 0) {
+          const sent = sendFiles.filter((p) => copies.current.has(p));
+          sent.forEach((p) => inFlight.current.add(p));
+          try {
+            await engine.send({ peerDeviceId, files: sendFiles });
+          } finally {
+            sent.forEach((p) => inFlight.current.delete(p));
+            // A closed screen cannot show the chip again, so its copies go now.
+            if (!alive.current) sent.forEach(discard);
+          }
+          // The engine staged the files before it resolved, so the copies can go.
+          sendFiles.forEach(discard);
+          setFiles([]);
+          setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
+          setSizes({});
+          setFolders({});
+        }
+        if (note !== '') {
+          await engine.send({ peerDeviceId, text: note });
+          setText('');
+        }
+        say(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
+        stick.current = true;
+      } catch (e) {
+        // A failed send keeps the staged photos. The next Send makes new copies.
+        dropMade();
+        setResult({
+          title: 'That send did not go through',
+          body: errText(e, 'The engine refused the send.'),
+          retry: true,
+        });
+      } finally {
+        schedule();
       }
-      say(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
-      stick.current = true;
-    } catch (e) {
-      setResult({
-        title: 'That send did not go through',
-        body: errText(e, 'The engine refused the send.'),
-        retry: true,
-      });
-    } finally {
+      } finally {
+      sendingRef.current = false;
       if (alive.current) setSending(false);
-      schedule();
     }
   };
 
@@ -925,6 +948,7 @@ export function ThreadScreen({
                 <Pressable
                   key={r.token}
                   onPress={() => setMediaRefs((cur) => cur.filter((x) => x.token !== r.token))}
+                  disabled={sending}
                   accessibilityRole="button"
                   accessibilityLabel={`Remove ${r.name}`}
                   testID={`remove-media-${r.token}`}
