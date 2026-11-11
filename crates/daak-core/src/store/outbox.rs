@@ -33,8 +33,8 @@ pub fn backoff_delay(attempts: u32, jitter: u64) -> i64 {
 /// `attempts` is the number of the failed attempt, from 1. The jitter adds at
 /// most half of the step, so a 2 s step never waits more than 3 s.
 pub fn backoff_delay_with(attempts: u32, jitter: u64, cap_secs: i64) -> i64 {
-    // The user schedule: fast first, then slower. 100 attempts take about 35
-    // minutes.
+    // The user schedule: fast first, then slower. 100 attempts take about 37
+    // minutes of waiting, plus the dial time.
     let step: i64 = match attempts {
         0..=5 => 2,
         6..=10 => 3,
@@ -43,7 +43,10 @@ pub fn backoff_delay_with(attempts: u32, jitter: u64, cap_secs: i64) -> i64 {
         21..=39 => 15,
         _ => 30,
     };
-    (step + (jitter as i64).min(step / 2)).min(cap_secs)
+    // Bound the jitter before the cast. A u64 above i64::MAX casts to a
+    // negative value.
+    let jitter = jitter.min(step as u64 / 2) as i64;
+    (step + jitter).min(cap_secs)
 }
 
 /// Shared by `enqueue_outbox` and the atomic two-table enqueue, so both write
@@ -442,6 +445,14 @@ mod tests {
         assert_eq!(backoff_delay_with(1, 1, 600), 3);
         assert_eq!(backoff_delay_with(40, 5, 600), 35);
         assert_eq!(backoff_delay_with(40, 100, 600), 45);
+    }
+
+    #[test]
+    fn a_huge_jitter_does_not_make_the_wait_negative_or_shorter_than_the_step() {
+        // u64::MAX cast to i64 is -1. The bound must apply before the cast.
+        assert_eq!(backoff_delay_with(1, u64::MAX, 600), 3);
+        assert_eq!(backoff_delay_with(40, u64::MAX, 600), 45);
+        assert_eq!(backoff_delay_with(40, 1 << 63, 600), 45);
     }
 
     #[test]

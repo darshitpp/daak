@@ -1860,7 +1860,7 @@ impl Engine {
                 );
             }
         }
-        self.sessions.lock().await.remove(&peer_device_id);
+        self.sessions.lock().await.revoke(&peer_device_id);
         self.status.lock().await.forget(&peer_device_id);
 
         // A peer that the network showed us stays in the list as a nearby device
@@ -3351,10 +3351,6 @@ const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// session and retries exactly ONCE through `get_or_connect`, which re-dials.
 /// One retry, not a loop -- an unbounded reconnect loop against a peer that
 /// refuses connections is a DoS.
-// ponytail: the registry lock is held across a full dial + Noise handshake, so
-// a cold peer serializes every other peer's connect. N is small (a room's worth
-// of devices) and a LAN handshake is ~ms; shard the registry per peer, or dial
-// outside the lock, if that ever stops being true.
 /// The engine reports progress at most once per this interval, plus one final
 /// event for the last chunk. Without the gate, every 1 MiB chunk would cross
 /// the FFI or the IPC boundary.
@@ -3416,7 +3412,7 @@ async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     db: &Db,
     resume: Option<std::time::Duration>,
 ) -> Result<()> {
-    let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
+    let handle = SessionRegistry::get_or_connect(sessions, peer_device_id).await?;
     match send_on_session(&handle, manifest, paths, tx, db, resume).await {
         Ok(()) => return Ok(()),
         // B4: a hash mismatch is a PERMANENT verdict on bytes the receiver
@@ -3428,7 +3424,7 @@ async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     // A version 101 receiver names the chunks that it still lacks, so this
     // second attempt sends only those. A version 100 peer gets every chunk.
     sessions.lock().await.remove(&peer_device_id);
-    let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
+    let handle = SessionRegistry::get_or_connect(sessions, peer_device_id).await?;
     send_on_session(&handle, manifest, paths, tx, db, resume).await?;
     Ok(())
 }
@@ -3501,10 +3497,12 @@ struct DrainCtx<T = TcpConn> {
 const SEND_CONNECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Give up on a row after this many failed delivery attempts. 100 attempts with
-/// the schedule in `backoff_delay_with` span about 35 minutes of retrying. This
-/// covers a peer that is briefly away without pinning a staged file forever.
-// ponytail: fixed cap, no adaptive heuristics; raise it only alongside a UI
-// affordance for surfacing permanently-failed rows.
+/// the schedule in `backoff_delay_with` span about 36 to 50 minutes, with the
+/// dial time. This covers a peer that is briefly away without pinning a staged
+/// file forever.
+// The user chose 100 attempts on 2026-11-11. A send to a peer that comes
+// back must start in a few seconds. So the retries are fast, and the count is
+// high so that the rows still wait about 35 minutes or more for the peer.
 const MAX_DELIVERY_ATTEMPTS: u32 = 100;
 
 /// R-T10-3: the UPDATEs in cancel/retry match zero rows for an unknown id, so
@@ -3774,11 +3772,12 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 .staging
                 .find_staged(&row.payload_id, item.index, item.name.as_deref());
             // B3: a staged file that is NOT THERE will still not be there on
-            // the next attempt, so retrying burns all 8 attempts over ~35
-            // minutes to arrive at the same failure. The reachable way to get
-            // here is cancel (which removes staging) followed by retry, which
-            // re-arms the row -- the SEMANTICS of that pair are parked for the
-            // user, but the harm (a 35 minute silent burn) is not. Terminal on
+            // the next attempt, so retrying burns all 100 attempts over about
+            // 36 to 50 minutes to arrive at the same failure. The reachable
+            // way to get here is cancel (which removes staging) followed by
+            // retry, which re-arms the row -- the SEMANTICS of that pair are
+            // parked for the user, but the harm (a silent burn of 36 to 50
+            // minutes) is not. Terminal on
             // the first attempt, exactly like an undecodable manifest above.
             if !path.exists() {
                 // An old staged path ends in the user file name, so neither
@@ -3852,8 +3851,8 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             // B4: the receiver QUARANTINED an item. That is a verdict about
             // these exact bytes, not a transport hiccup, so it must not enter
             // the retry path: retrying re-sends the same payload, the receiver
-            // recomputes the same hash, and the sender burns all 8 attempts
-            // over ~35 minutes before a row that was never going to succeed
+            // recomputes the same hash, and the sender burns all 100 attempts
+            // over about 36 to 50 minutes before a row that cannot succeed
             // reads 'failed'. Record what the receiver said, settle once, stop.
             //
             // Only the item the ack NAMES is marked. The receiver reports the
@@ -3888,7 +3887,7 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 //    `why` below is consumed by tracing::warn! alone. The
                 //    user-visible effect of this whole branch is therefore
                 //    that a quarantined share fails IMMEDIATELY instead of
-                //    after ~35 minutes of retries -- the wording, not the
+                //    after about 36 to 50 minutes of retries -- the wording, not the
                 //    timing, is what Phase 4 has to add.
                 match manifest.items.iter().find(|i| i.index == item_index) {
                     Some(item) => {
@@ -4816,7 +4815,7 @@ mod tests {
     // 'failed', which retry accepts -- so cancel->retry on a FILE share
     // re-arms a row whose payload no longer exists. The SEMANTICS of that pair
     // are a parked user decision; the HARM is not: the drain used to burn all
-    // 8 attempts over ~35 minutes to reach the same failure. A staged path
+    // 100 attempts over about 36 to 50 minutes to reach the same failure. A staged path
     // that is absent is permanent (exactly like an undecodable manifest), so
     // it settles terminally on the FIRST attempt.
     #[tokio::test]
@@ -4981,7 +4980,7 @@ mod tests {
     // ---------------------------------------------------------------- B4 ---
     // A receiver-side QUARANTINE is a verdict, not a transport failure. The
     // old code returned the same Err for both, so the generic retry path
-    // burned the whole budget (~35 min) and the sender's UI said "failed" for
+    // burned the whole budget (about 36 to 50 min) and the sender's UI said "failed" for
     // a file the receiver deliberately held. Socket-free: a MemConn-backed
     // registry plus a stub peer answers the ack, like session.rs's own test.
     fn stub_peer_registry(

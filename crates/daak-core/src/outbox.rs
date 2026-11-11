@@ -166,6 +166,9 @@ impl OutboxWorker {
         let poll = policy.effective_poll_interval();
         let task = tokio::spawn(async move {
             let mut tick = tokio::time::interval(poll);
+            // After a long app freeze, skip the missed ticks. Do not run one
+            // due_outbox query for each missed tick.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             // consume the immediate first tick so a drain is notify-driven, not poll-driven
             tick.tick().await;
             loop {
