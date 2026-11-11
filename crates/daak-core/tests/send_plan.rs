@@ -243,8 +243,8 @@ async fn a_peer_unpair_notice_revoke_remote_removes_the_plans_of_that_peer() {
 }
 
 #[tokio::test]
-async fn a_value_with_percent_and_underscore_characters_in_a_plan_does_not_change_the_list_result()
-{
+async fn the_store_prefix_query_and_a_plan_with_percent_and_underscore_characters_keep_their_meaning(
+) {
     let (engine, db, _out) = engine().await;
     let (a, b) = ([5u8; 16], [6u8; 16]);
     pair(&db, a);
@@ -285,4 +285,35 @@ async fn the_list_holds_the_plan_as_a_string_byte_for_byte() {
     // A plan that is not JSON at all is also kept as it is.
     engine.save_send_plan(peer, SHARE_2, "not json {").unwrap();
     assert!(list(&engine, peer).contains(&(SHARE_2.into(), "not json {".into())));
+}
+
+#[tokio::test]
+async fn the_seventeenth_plan_of_a_peer_is_refused_and_a_replace_still_works() {
+    let (engine, db, _out) = engine().await;
+    let peer = [5u8; 16];
+    pair(&db, peer);
+    let share = |n: u32| format!("{n:032x}");
+    for n in 0..16 {
+        engine.save_send_plan(peer, &share(n), "p").unwrap();
+    }
+    let err = engine.save_send_plan(peer, &share(16), "p").unwrap_err();
+    assert_eq!(err.to_string(), "protocol: too many send plans");
+    assert_eq!(list(&engine, peer).len(), 16);
+    // A save for a share that exists replaces it, even at the limit.
+    engine.save_send_plan(peer, &share(3), "new").unwrap();
+    assert_eq!(list(&engine, peer).len(), 16);
+    // A delete frees a place.
+    engine.delete_send_plan(peer, &share(0)).unwrap();
+    engine.save_send_plan(peer, &share(16), "p").unwrap();
+    assert_eq!(list(&engine, peer).len(), 16);
+}
+
+#[tokio::test]
+async fn a_stored_value_that_is_not_utf8_is_skipped_by_the_list() {
+    let (engine, db, _out) = engine().await;
+    let peer = [5u8; 16];
+    pair(&db, peer);
+    let key = format!("sendplan:{}:{}", hex::encode(peer), SHARE);
+    db.set_setting(&key, &[0xff, 0xfe]).unwrap();
+    assert!(list(&engine, peer).is_empty());
 }

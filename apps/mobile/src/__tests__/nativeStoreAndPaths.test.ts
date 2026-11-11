@@ -2036,4 +2036,26 @@ describe('the send plan methods are wired through the native glue', () => {
       expect(mm).toContain('RCT_EXTERN_METHOD(' + m + ':');
     }
   });
+
+  // A Void method must end with `return nil as Void?`. Without it `run` resolves with a
+  // value that React Native cannot serialize. A syntax parse does not catch this.
+  it('the two Void Swift methods end with return nil as Void? in the iOS and macOS modules', () => {
+    for (const path of ['apps/mobile/ios/Daak.swift', 'apps/desktop/macos/Daak-macOS/Daak.swift']) {
+      const swift = read(repo + path);
+      for (const [name, call] of [
+        ['saveSendPlan', 'need().saveSendPlan('],
+        ['deleteSendPlan', 'need().deleteSendPlan('],
+      ]) {
+        const start = swift.indexOf('@objc func ' + name + '(');
+        expect(start).toBeGreaterThan(-1);
+        const end = swift.indexOf('@objc func ', start + 10);
+        const fn = swift.slice(start, end === -1 ? undefined : end);
+        expect(fn).toContain(call);
+        expect(fn).toContain('return nil as Void?');
+      }
+      // The method that returns a string must not return nil.
+      const list = swift.slice(swift.indexOf('@objc func listSendPlans('));
+      expect(list.slice(0, list.indexOf('@objc func ', 10))).not.toContain('return nil as Void?');
+    }
+  });
 });

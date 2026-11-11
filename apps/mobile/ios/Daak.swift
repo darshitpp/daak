@@ -177,7 +177,10 @@ final class Daak: RCTEventEmitter, EventSink {
   @objc func saveSendPlan(_ peerId: String, share: String, json: String,
                           resolve: @escaping RCTPromiseResolveBlock,
                           reject: @escaping RCTPromiseRejectBlock) {
-    run(resolve, reject) { try self.need().saveSendPlan(peerId: peerId, share: share, json: json) }
+    run(resolve, reject) {
+      try self.need().saveSendPlan(peerId: peerId, share: share, json: json)
+      return nil as Void?
+    }
   }
 
   @objc func listSendPlans(_ peerId: String,
@@ -189,7 +192,10 @@ final class Daak: RCTEventEmitter, EventSink {
   @objc func deleteSendPlan(_ peerId: String, share: String,
                             resolve: @escaping RCTPromiseResolveBlock,
                             reject: @escaping RCTPromiseRejectBlock) {
-    run(resolve, reject) { try self.need().deleteSendPlan(peerId: peerId, share: share) }
+    run(resolve, reject) {
+      try self.need().deleteSendPlan(peerId: peerId, share: share)
+      return nil as Void?
+    }
   }
 
   @objc func listDevices(_ resolve: @escaping RCTPromiseResolveBlock,

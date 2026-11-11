@@ -581,6 +581,8 @@ pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
 
 /// The largest saved send plan: 256 KiB.
 const SEND_PLAN_MAX_BYTES: usize = 256 * 1024;
+/// A peer can have at most this many saved plans at one time.
+const SEND_PLAN_MAX_PER_PEER: usize = 16;
 
 fn send_plan_prefix(peer: &[u8; 16]) -> String {
     format!("sendplan:{}:", hex::encode(peer))
@@ -830,6 +832,8 @@ impl Engine {
         // A new pairing replaces an undelivered unpair notice. Delivering the
         // old one later would unpair the new pairing.
         db.clear_unpair_notice(&pairing.peer_device_id)?;
+        // A new pairing is a new relationship: the plans of an older one end here.
+        delete_send_plans_of(db, &pairing.peer_device_id);
         if let Some((devices, addr)) = devices {
             // R42d: the device map is RAM and starts empty on every launch, so
             // a paired peer had no address after a restart and every send failed
@@ -2631,6 +2635,13 @@ impl Engine {
         }
         if !self.db.is_trusted(&peer) {
             return Err(CoreError::Protocol("peer is not paired".into()));
+        }
+        // A save for a share that exists replaces it. A new share counts.
+        let existing = self
+            .db
+            .list_settings_with_prefix(&send_plan_prefix(&peer))?;
+        if existing.len() >= SEND_PLAN_MAX_PER_PEER && !existing.iter().any(|(k, _)| *k == key) {
+            return Err(CoreError::Protocol("too many send plans".into()));
         }
         self.db.set_setting(&key, json.as_bytes())
     }
@@ -4705,6 +4716,43 @@ mod tests {
             .await
             .unwrap();
         assert!(!db.has_unpair_notice(&peer));
+    }
+
+    // A new pairing is a new relationship. The saved plans of an older pairing
+    // of the same peer must not carry over.
+    #[tokio::test]
+    async fn a_new_pairing_removes_the_old_send_plans_of_that_peer() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let (tx, _rx) = broadcast::channel(8);
+        let (peer, other) = ([7u8; 16], [8u8; 16]);
+        let share = "ab".repeat(16);
+        db.set_setting(&send_plan_key(&peer, &share).unwrap(), b"old")
+            .unwrap();
+        db.set_setting(&send_plan_key(&other, &share).unwrap(), b"keep")
+            .unwrap();
+
+        let pairing = Pairing {
+            peer_device_id: peer,
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [1u8; 32],
+            static_dh_pub: [2u8; 32],
+            label: Some("peer".into()),
+        };
+        Engine::commit_pairing(&db, &pairing, &tx, None, false)
+            .await
+            .unwrap();
+        assert!(db
+            .list_settings_with_prefix(&send_plan_prefix(&peer))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.list_settings_with_prefix(&send_plan_prefix(&other))
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
