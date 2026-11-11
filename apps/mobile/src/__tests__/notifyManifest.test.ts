@@ -485,3 +485,46 @@ describe('the notify modules answer appInfo from the app bundle', () => {
     expect(mac).toContain('CFBundleVersion');
   });
 });
+
+describe('the Android post can be silent and can replace a notification in place', () => {
+  const kt = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt',
+  );
+  const post = kt.slice(kt.indexOf('override fun post('), kt.indexOf('override fun cancel('));
+  const cancel = kt.slice(kt.indexOf('override fun cancel('), kt.indexOf('override fun consumePendingAction('));
+  // These pins prove that a call is present. A device must prove that the sound plays.
+
+  it('post calls setSilent with the silent flag', () => {
+    expect(post).toContain('silent: Boolean');
+    expect(post).toContain('.setSilent(silent)');
+  });
+
+  it('post uses the string id as the notification tag and 0 as the id', () => {
+    expect(post).toContain('.notify(id, 0, notification)');
+  });
+
+  it('cancel uses the same tag', () => {
+    expect(cancel).toContain('.cancel(id, 0)');
+  });
+
+  it('the file never calls setOnlyAlertOnce(true)', () => {
+    expect(kt).not.toContain('setOnlyAlertOnce(true)');
+  });
+
+  it('the received channel stays daak.received.v2', () => {
+    expect(kt).toContain('const val CH_RECEIVED_V2 = "daak.received.v2"');
+  });
+
+  it('no notify call uses hashCode as the notification id', () => {
+    expect(kt).not.toContain('notify(id.hashCode()');
+    expect(kt).not.toContain('cancel(id.hashCode()');
+  });
+});
+
+describe('the native notify spec has the silent parameter', () => {
+  const spec = read('../../../../modules/rn-notify/js/NativeDaakNotify.ts');
+
+  it('post has a sixth parameter silent: boolean', () => {
+    expect(spec).toMatch(/post\(id: string, title: string, body: string, category: string, payloadJson: string, silent: boolean\): Promise<void>/);
+  });
+});

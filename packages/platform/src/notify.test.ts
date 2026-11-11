@@ -57,6 +57,30 @@ beforeEach(() => {
 });
 
 describe('notifyReceived', () => {
+  it('notifyReceived passes options.key and options.silent to the native post', async () => {
+    await notifyReceived(entry, null, { key: 'batch:abc', silent: true });
+    expect(native.post).toHaveBeenCalledWith(
+      'batch:abc',
+      'Daak',
+      'movie.mov + 1 more',
+      DAK_RECEIVED_CATEGORY,
+      JSON.stringify(entry),
+      true,
+    );
+  });
+
+  it('without options the call is unchanged (id is payloadId, silent false)', async () => {
+    await notifyReceived(entry);
+    expect(native.post.mock.calls[0]?.[0]).toBe('p1');
+    expect(native.post.mock.calls[0]?.[5]).toBe(false);
+  });
+
+  it('the early return when arrival is off still skips the post, with options', async () => {
+    prefs.mockResolvedValue({ arrival: false });
+    await notifyReceived(entry, null, { key: 'k', silent: true });
+    expect(native.post).not.toHaveBeenCalled();
+  });
+
   it('posts under the received category with a JSON payload', async () => {
     await notifyReceived(entry);
     expect(native.post).toHaveBeenCalledWith(
@@ -65,6 +89,7 @@ describe('notifyReceived', () => {
       'movie.mov + 1 more',
       DAK_RECEIVED_CATEGORY,
       JSON.stringify(entry),
+      false,
     );
   });
 
@@ -77,12 +102,13 @@ describe('notifyReceived', () => {
       'album · 12 files',
       DAK_RECEIVED_CATEGORY,
       JSON.stringify(entry),
+      false,
     );
   });
 
   it('cleans the summary of a peer in the fallback body', async () => {
     await notifyReceived({ ...entry, summary: 'a\nb\u202E\u200B' });
-    expect(native.post).toHaveBeenCalledWith('p1', 'Daak', 'a b', DAK_RECEIVED_CATEGORY, expect.any(String));
+    expect(native.post).toHaveBeenCalledWith('p1', 'Daak', 'a b', DAK_RECEIVED_CATEGORY, expect.any(String), false);
   });
 
   it('posts nothing when the arrival preference is off', async () => {
@@ -316,7 +342,13 @@ describe('notifyFailedSend', () => {
       'Open Daak to try again.',
       DAK_FAILED_CATEGORY,
       JSON.stringify({ transferId: '11'.repeat(16), peerDeviceId: 'aa'.repeat(16) }),
+      false,
     );
+  });
+
+  it('notifyFailedSend passes silent false', async () => {
+    await notifyFailedSend(notice);
+    expect(native.post.mock.calls[0]?.[5]).toBe(false);
   });
 
   it('does not throw when the native post rejects', async () => {

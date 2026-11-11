@@ -1466,3 +1466,39 @@ describe('sendFilesTagged is wired through the native glue', () => {
     expect(read(repo + 'apps/mobile/ios/DaakModule.mm')).toContain('RCT_EXTERN_METHOD(sendFilesTagged:');
   });
 });
+
+describe('the iOS notify post can be silent and can replace a notification in place', () => {
+  const swift = read(repo + 'modules/rn-notify/ios/DaakNotify.swift');
+  const mm = read(repo + 'modules/rn-notify/ios/DaakNotify.mm');
+  const delegate = read(repo + 'apps/mobile/ios/Daak/DaakNotificationDelegate.swift');
+  // These pins prove that a call is present. A device must prove the sound and the replacement.
+
+  it('sound is nil when silent and .default otherwise', () => {
+    expect(swift).toContain('content.sound = silent ? nil : .default');
+  });
+
+  it('the request identifier is the id', () => {
+    expect(swift).toContain('UNNotificationRequest(identifier: id, content: content, trigger: nil)');
+  });
+
+  it('DaakNotify.mm declares the sixth parameter', () => {
+    const decl = mm.slice(mm.indexOf('RCT_EXTERN_METHOD(post:'), mm.indexOf('RCT_EXTERN_METHOD(cancel:'));
+    expect(decl).toContain('payloadJson:(NSString *)payloadJson');
+    expect(decl).toContain('silent:(BOOL)silent');
+    expect(decl.indexOf('silent:')).toBeGreaterThan(decl.indexOf('payloadJson:'));
+    expect(decl.indexOf('silent:')).toBeLessThan(decl.indexOf('resolve:'));
+  });
+
+  it('the Swift post takes the silent parameter after payloadJson', () => {
+    expect(swift).toMatch(/payloadJson: String,\s*silent: Bool,/);
+  });
+
+  // The app has no willPresent. So the app never shows a banner or plays a sound
+  // while it is in front. A fixed option in a future willPresent must not
+  // ignore the silent flag.
+  it('no willPresent exists, so no fixed sound option exists', () => {
+    expect(delegate).not.toContain('func userNotificationCenter(_ center: UNUserNotificationCenter,\n                              willPresent');
+    expect(delegate).not.toMatch(/\.sound/);
+    expect(swift).not.toMatch(/willPresent/);
+  });
+});

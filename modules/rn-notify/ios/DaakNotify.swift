@@ -142,6 +142,7 @@ final class DaakNotify: RCTEventEmitter {
 
   @objc func post(_ id: String, title: String, body: String, category: String,
                   payloadJson: String,
+                  silent: Bool,
                   resolve: @escaping RCTPromiseResolveBlock,
                   reject: @escaping RCTPromiseRejectBlock) {
     let center = UNUserNotificationCenter.current()
@@ -157,8 +158,9 @@ final class DaakNotify: RCTEventEmitter {
       let content = UNMutableNotificationContent()
       content.title = title
       content.body = body
-      // The default for `sound` is nil, which is silent.
-      content.sound = .default
+      // A nil `sound` is silent. The request identifier is `id`, so a second
+      // post with the same `id` replaces the delivered notification.
+      content.sound = silent ? nil : .default
       content.categoryIdentifier = category
       // userInfo must be property-list shaped, so the JSON travels as a String
       // and is handed back to JS unchanged.

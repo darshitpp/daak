@@ -246,7 +246,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
     promise.resolve(null)
   }
 
-  override fun post(id: String, title: String, body: String, category: String, payloadJson: String, promise: Promise) {
+  override fun post(id: String, title: String, body: String, category: String, payloadJson: String, silent: Boolean, promise: Promise) {
     // R36: no permission means no banner, not a broken receive. Resolving rather
     // than rejecting is what keeps a denied permission off the inbox path.
     if (!notificationsEnabled()) {
@@ -261,6 +261,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         .setContentText(body)
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         .setAutoCancel(true)
+        // A silent post makes no sound. Do NOT set the only-alert-once flag here:
+        // it would mute the sound of the last update of the same notification.
+        .setSilent(silent)
         // NO action buttons. Open did nothing whenever the app was not already
         // in front, and Share built a URI for a path the download-folder move
         // had deleted. A button is a promise, so both are withheld until they
@@ -284,7 +287,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         }
         .build()
     try {
-      NotificationManagerCompat.from(ctx).notify(id.hashCode(), notification)
+      // The string id is the tag, and the id is always 0. A second post with the
+      // same tag replaces the first notification in place.
+      NotificationManagerCompat.from(ctx).notify(id, 0, notification)
     } catch (t: Throwable) {
       // A SecurityException when an OEM lies about the grant, and a dead
       // NotificationManager: neither may take down a receive.
@@ -294,7 +299,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
   }
 
   override fun cancel(id: String, promise: Promise) {
-    NotificationManagerCompat.from(ctx).cancel(id.hashCode())
+    NotificationManagerCompat.from(ctx).cancel(id, 0)
     promise.resolve(null)
   }
 
