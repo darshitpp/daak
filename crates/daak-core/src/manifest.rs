@@ -1734,6 +1734,17 @@ mod parse_batch_tag_tests {
     }
 
     #[test]
+    fn parse_tag_ignores_a_tag_on_a_text_item_that_disagrees() {
+        let mut text = Item::text(0, "hi");
+        text.attrs
+            .insert("share".into(), ciborium::value::Value::Text("f".repeat(32)));
+        text.attrs
+            .insert("batch".into(), ciborium::value::Value::Text("1/9".into()));
+        let items = vec![text, tagged(TAG, "2/7")];
+        assert_eq!(parse_tag(&items), Some((TAG.to_string(), 2, 7)));
+    }
+
+    #[test]
     fn parse_tag_ignores_a_share_of_31_or_33_characters() {
         assert_eq!(parse_tag(&[tagged(&TAG[..31], "1/2")]), None);
         assert_eq!(parse_tag(&[tagged(&format!("{TAG}0"), "1/2")]), None);

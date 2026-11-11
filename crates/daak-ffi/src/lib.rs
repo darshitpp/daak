@@ -362,7 +362,8 @@ pub fn presence_str(p: PresenceState) -> &'static str {
 /// through as a quoted blob. A value that will not parse becomes `null`, NOT
 /// `[]`: `[]` is a real answer ("this payload saved no files") and a corrupt
 /// row must not be indistinguishable from it -- saved_paths is the one field
-/// the inbox row exists to carry. daakd mirrors this exactly.
+/// the inbox row exists to carry. daakd mirrors this, except that it does not
+/// emit the share tag (the daemon ignores the tag).
 pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Value {
     let saved_paths: serde_json::Value = match serde_json::from_str(&row.saved_paths) {
         Ok(v) => v,
