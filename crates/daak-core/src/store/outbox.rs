@@ -19,18 +19,31 @@ pub struct OutboxRow {
 /// `wake_outbox_for_peer` makes that row due.
 pub const WAKE_MIN_IDLE_SECS: i64 = 30;
 
-/// Exponential backoff with a 10-minute cap; jitter is caller-supplied seconds.
+/// The retry wait in seconds, with a 10-minute cap. The jitter is
+/// caller-supplied seconds.
 pub fn backoff_delay(attempts: u32, jitter: u64) -> i64 {
     backoff_delay_with(attempts, jitter, 600)
 }
 
-/// The same backoff curve as `backoff_delay`, with a caller-supplied cap in
+/// The same schedule as `backoff_delay`, with a caller-supplied cap in
 /// seconds. The drain uses a higher cap when the device is in battery-saver
 /// mode. `backoff_delay(attempts, jitter)` is exactly
 /// `backoff_delay_with(attempts, jitter, 600)`.
+///
+/// `attempts` is the number of the failed attempt, from 1. The jitter adds at
+/// most half of the step, so a 2 s step never waits more than 3 s.
 pub fn backoff_delay_with(attempts: u32, jitter: u64, cap_secs: i64) -> i64 {
-    let base = 15i64.saturating_mul(1i64 << attempts.min(6));
-    (base + jitter as i64).min(cap_secs)
+    // The user schedule: fast first, then slower. 100 attempts take about 35
+    // minutes.
+    let step: i64 = match attempts {
+        0..=5 => 2,
+        6..=10 => 3,
+        11..=15 => 5,
+        16..=20 => 10,
+        21..=39 => 15,
+        _ => 30,
+    };
+    (step + (jitter as i64).min(step / 2)).min(cap_secs)
 }
 
 /// Shared by `enqueue_outbox` and the atomic two-table enqueue, so both write
@@ -381,8 +394,8 @@ mod tests {
             "newly queued is immediately due"
         );
 
-        // First failure at now=100: backoff_delay(attempts+1 = 1, 0) = 15 * 2^1 = 30,
-        // so next_attempt_at = 130.
+        // First failure at now=100: backoff_delay(attempts+1 = 1, 0) = 2,
+        // so next_attempt_at = 102.
         assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
         db.mark_outbox_failed(&[1u8; 16], 100, 0).unwrap();
         assert_eq!(
@@ -390,9 +403,9 @@ mod tests {
             0,
             "not due before backoff elapses"
         );
-        assert_eq!(db.due_outbox(129).unwrap().len(), 0);
+        assert_eq!(db.due_outbox(101).unwrap().len(), 0);
         assert_eq!(
-            db.due_outbox(130).unwrap().len(),
+            db.due_outbox(102).unwrap().len(),
             1,
             "due once backoff elapses"
         );
@@ -400,6 +413,40 @@ mod tests {
 
         assert!(backoff_delay(1, 0) <= backoff_delay(2, 0));
         assert!(backoff_delay(9, 0) <= 600, "backoff must cap at 10 minutes");
+    }
+
+    #[test]
+    fn the_wait_follows_the_table() {
+        let table = [
+            (1, 2),
+            (5, 2),
+            (6, 3),
+            (10, 3),
+            (11, 5),
+            (15, 5),
+            (16, 10),
+            (20, 10),
+            (21, 15),
+            (39, 15),
+            (40, 30),
+            (100, 30),
+        ];
+        for (n, want) in table {
+            assert_eq!(backoff_delay_with(n, 0, 600), want, "attempt {n}");
+        }
+    }
+
+    #[test]
+    fn the_jitter_is_at_most_half_of_the_step() {
+        assert_eq!(backoff_delay_with(1, 5, 600), 3);
+        assert_eq!(backoff_delay_with(1, 1, 600), 3);
+        assert_eq!(backoff_delay_with(40, 5, 600), 35);
+        assert_eq!(backoff_delay_with(40, 100, 600), 45);
+    }
+
+    #[test]
+    fn the_cap_still_applies() {
+        assert_eq!(backoff_delay_with(40, 0, 20), 20);
     }
 
     #[test]

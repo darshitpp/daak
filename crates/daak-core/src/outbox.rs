@@ -115,7 +115,7 @@ pub struct DrainPolicy {
 impl Default for DrainPolicy {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(5),
+            poll_interval: Duration::from_secs(1),
             max_backoff_secs: 600,
             jitter_secs: 5,
             battery_saver: false,

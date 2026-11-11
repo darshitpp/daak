@@ -3500,12 +3500,12 @@ struct DrainCtx<T = TcpConn> {
 /// must not wait on a peer that does not answer.
 const SEND_CONNECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Give up on a row after this many failed delivery attempts. 8 with the 4.3
-/// backoff (15s doubling, 10min cap) spans roughly 35 minutes of retrying, which
+/// Give up on a row after this many failed delivery attempts. 100 attempts with
+/// the schedule in `backoff_delay_with` span about 35 minutes of retrying. This
 /// covers a peer that is briefly away without pinning a staged file forever.
 // ponytail: fixed cap, no adaptive heuristics; raise it only alongside a UI
 // affordance for surfacing permanently-failed rows.
-const MAX_DELIVERY_ATTEMPTS: u32 = 8;
+const MAX_DELIVERY_ATTEMPTS: u32 = 100;
 
 /// R-T10-3: the UPDATEs in cancel/retry match zero rows for an unknown id, so
 /// without this guard both would silently 'succeed' on garbage.

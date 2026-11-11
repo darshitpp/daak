@@ -178,7 +178,7 @@ async fn peer_offline_mid_queue_then_online_drains_without_duplication() {
         db.mark_outbox_failed(id, 0, 0).unwrap();
     }
     assert!(
-        db.due_outbox_for_peer(&peer, 29).unwrap().is_empty(),
+        db.due_outbox_for_peer(&peer, 1).unwrap().is_empty(),
         "rows are backing off"
     );
 
@@ -355,9 +355,12 @@ async fn an_offline_to_online_change_makes_a_backed_off_row_due() {
     let id = enqueue(&db, &staging, &peer, &Manifest::text("queued"), &[]).unwrap();
 
     let real_now = (daak_core::manifest::now_ms() / 1000) as i64;
-    for _ in 0..6 {
+    // The longest wait is 30 s plus 5 s of jitter. The last failure is 31 s
+    // old, so the row is still backed off (4 s left) and the idle guard of
+    // 30 s has ended.
+    for _ in 0..45 {
         assert!(db.mark_outbox_sending(&id).unwrap());
-        db.mark_outbox_failed(&id, real_now - 100, 0).unwrap();
+        db.mark_outbox_failed(&id, real_now - 31, 5).unwrap();
     }
     assert!(
         db.due_outbox_for_peer(&peer, real_now).unwrap().is_empty(),
@@ -392,9 +395,10 @@ async fn an_offline_to_online_change_makes_a_backed_off_row_due() {
     // could claim the reset row first.
     let change = engine.observe_beacon(&first, 1_000).await.unwrap();
     assert_eq!(change.map(|c| c.state), Some(Liveness::Online));
-    // The reset uses the clock at the call, so ask with a later time.
+    // The reset uses the clock at the call, so ask 2 s later. Without the
+    // reset the row is due only at real_now + 4.
     assert_eq!(
-        db.due_outbox_for_peer(&peer, real_now + 5).unwrap().len(),
+        db.due_outbox_for_peer(&peer, real_now + 2).unwrap().len(),
         1,
         "the online change resets the backoff"
     );

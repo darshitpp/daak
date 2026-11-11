@@ -116,7 +116,7 @@ async fn an_offline_queued_item_auto_delivers_when_the_peer_comes_back() {
     a.note_peer(b_id, "b", b_addr).await;
 
     // The wall clock here is the REAL retry backoff, not a sleep: the failed
-    // attempt above set next_attempt_at ~30s out (backoff_delay(1) = 15*2), and
+    // attempt above set next_attempt_at ~2s out (backoff_delay(1) = 2), and
     // a notify cannot claim a row that is not due yet. That is correct
     // production behaviour -- an unreachable peer must not be hammered -- so the
     // test waits it out rather than shortening the schedule to look fast.
