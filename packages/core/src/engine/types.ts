@@ -392,5 +392,14 @@ export interface DaakEngine {
    * returns no text.
    */
   exportDebugBundle(): Promise<string>;
+  /**
+   * Keep the plan of a batched send as opaque text. `share` is 32 lower case
+   * hex characters. The plan is at most 256 KiB. Only a paired peer can have
+   * a plan. A second save for the same share replaces the first.
+   */
+  saveSendPlan(peerDeviceId: string, share: string, json: string): Promise<void>;
+  /** The saved plans of one peer. `plan` is the saved text. */
+  listSendPlans(peerDeviceId: string): Promise<Array<{ share: string; plan: string }>>;
+  deleteSendPlan(peerDeviceId: string, share: string): Promise<void>;
   on(cb: (event: DaakEvent) => void): () => void;
 }

@@ -36,6 +36,12 @@ export interface Spec extends TurboModule {
    * string batch, u32 attempt) -> payload id hex. One batch of a larger share.
    */
   sendFilesTagged(peerId: string, paths: string[], share: string, batch: string, attempt: number): Promise<string>;
+  /** UDL: save_send_plan(string peer_id, string share, string json). Opaque plan text. */
+  saveSendPlan(peerId: string, share: string, json: string): Promise<void>;
+  /** UDL: list_send_plans(string peer_id) -> JSON text of [{share, plan}] */
+  listSendPlans(peerId: string): Promise<string>;
+  /** UDL: delete_send_plan(string peer_id, string share) */
+  deleteSendPlan(peerId: string, share: string): Promise<void>;
   /** UDL: list_devices() -> [{deviceId, name, addr}] (R11) */
   listDevices(): Promise<string>;
   /** UDL: revoke_pairing(string device_id) */

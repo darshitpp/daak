@@ -217,6 +217,19 @@ class DaakModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    override fun saveSendPlan(peerId: String, share: String, json: String, promise: Promise) =
+        // The trailing null is load-bearing, the same as revokePairing().
+        resolve(promise) { handle().saveSendPlan(peerId, share, json); null }
+
+    @ReactMethod
+    override fun listSendPlans(peerId: String, promise: Promise) =
+        resolve(promise) { handle().listSendPlans(peerId) }
+
+    @ReactMethod
+    override fun deleteSendPlan(peerId: String, share: String, promise: Promise) =
+        resolve(promise) { handle().deleteSendPlan(peerId, share); null }
+
+    @ReactMethod
     override fun listDevices(promise: Promise) = resolve(promise) { handle().listDevices() }
 
     @ReactMethod

@@ -234,6 +234,26 @@ export class InProcessEngine implements DaakEngine {
     await this.native.setPresence(state);
   }
 
+  async saveSendPlan(peerDeviceId: string, share: string, json: string): Promise<void> {
+    await this.native.saveSendPlan(peerDeviceId, share, json);
+  }
+
+  async listSendPlans(peerDeviceId: string): Promise<Array<{ share: string; plan: string }>> {
+    const parsed: unknown = JSON.parse(await this.native.listSendPlans(peerDeviceId));
+    if (!Array.isArray(parsed)) return [];
+    const out: Array<{ share: string; plan: string }> = [];
+    for (const e of parsed) {
+      if (e !== null && typeof e === 'object' && typeof e.share === 'string' && typeof e.plan === 'string') {
+        out.push({ share: e.share, plan: e.plan });
+      }
+    }
+    return out;
+  }
+
+  async deleteSendPlan(peerDeviceId: string, share: string): Promise<void> {
+    await this.native.deleteSendPlan(peerDeviceId, share);
+  }
+
   exportDebugBundle(): Promise<string> {
     // The native module returns the text itself, not JSON.
     return this.native.exportDebugBundle();

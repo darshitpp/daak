@@ -63,6 +63,21 @@ RCT_EXTERN_METHOD(sendFilesTagged:(NSString *)peerId
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(saveSendPlan:(NSString *)peerId
+                  share:(NSString *)share
+                  json:(NSString *)json
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(listSendPlans:(NSString *)peerId
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(deleteSendPlan:(NSString *)peerId
+                  share:(NSString *)share
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(listDevices:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 

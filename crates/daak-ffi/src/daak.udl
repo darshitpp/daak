@@ -131,6 +131,11 @@ interface DaakEngine {
   [Throws=FfiError] string send_files(string peer_id, sequence<string> paths);
   // One batch of a larger share. Each item carries the share tag. The payload id comes from the tag and attempt.
   [Throws=FfiError] string send_files_tagged(string peer_id, sequence<string> paths, string share, string batch, u32 attempt);
+  // The plan of a batched send, kept as opaque text so a restart can continue. A share is 32 lower case hex characters.
+  [Throws=FfiError] void save_send_plan(string peer_id, string share, string json);
+  // JSON array text: [{"share": hex, "plan": the saved text as a JSON string}].
+  [Throws=FfiError] string list_send_plans(string peer_id);
+  [Throws=FfiError] void delete_send_plan(string peer_id, string share);
   [Throws=FfiError] string list_devices();
   // Unpair a peer. Local trust: either side may revoke without asking the
   // other. The peer returns to the unpaired state, so the UI stops offering

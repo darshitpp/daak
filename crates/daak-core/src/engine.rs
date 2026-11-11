@@ -579,6 +579,41 @@ async fn note_found(
 /// accept loop hands it to `handle_inbound`. R42d.
 pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
 
+/// The largest saved send plan: 256 KiB.
+const SEND_PLAN_MAX_BYTES: usize = 256 * 1024;
+
+fn send_plan_prefix(peer: &[u8; 16]) -> String {
+    format!("sendplan:{}:", hex::encode(peer))
+}
+
+/// The settings key of a send plan. `share` must be 32 lower case hex
+/// characters. The error does not hold the value.
+fn send_plan_key(peer: &[u8; 16], share: &str) -> Result<String> {
+    if share.len() != 32
+        || !share
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(CoreError::Protocol("invalid share tag".into()));
+    }
+    Ok(format!("{}{share}", send_plan_prefix(peer)))
+}
+
+/// Remove every saved send plan of a peer. A failure is logged and does not
+/// stop the revoke.
+fn delete_send_plans_of(db: &Db, peer: &[u8; 16]) {
+    let result = db
+        .list_settings_with_prefix(&send_plan_prefix(peer))
+        .and_then(|rows| rows.iter().try_for_each(|(key, _)| db.delete_setting(key)));
+    if let Err(e) = result {
+        tracing::warn!(
+            peer = %short_id(peer),
+            "send plan delete failed during revoke: {}",
+            log_err(&e)
+        );
+    }
+}
+
 /// The protocol version that each trusted peer announced over mDNS. An
 /// untrusted or revoked peer has no entry, and the sender then sends every
 /// chunk. The send path reads it: a peer of version 101 or more gets the
@@ -1726,6 +1761,7 @@ impl Engine {
     ) -> Result<()> {
         db.revoke_pairing(&peer)?;
         forget_peer_version(versions, &peer);
+        delete_send_plans_of(db, &peer);
         db.delete_outbox_for_peer(&peer)?;
         db.cancel_outbound_transfers_for_peer(&peer)?;
         // The peer just connected to us, so it is on the network. It stays in the
@@ -1846,6 +1882,7 @@ impl Engine {
         if was_trusted && !delivered {
             self.db.add_unpair_notice(&peer_device_id)?;
         }
+        delete_send_plans_of(&self.db, &peer_device_id);
         self.db.delete_outbox_for_peer(&peer_device_id)?;
         // The transfers rows stay as history, but the open outbound ones can
         // never move now that the outbox rows are gone. Close them.
@@ -2582,6 +2619,43 @@ impl Engine {
         )?;
         self.enqueue_outbox_send(peer_device_id, manifest, sources)
             .await
+    }
+
+    /// Keep the plan of a batched send. The text is opaque: the engine does
+    /// not parse it. A second save for the same peer and share replaces the
+    /// first. Only a trusted peer can have a plan.
+    pub fn save_send_plan(&self, peer: [u8; 16], share: &str, json: &str) -> Result<()> {
+        let key = send_plan_key(&peer, share)?;
+        if json.len() > SEND_PLAN_MAX_BYTES {
+            return Err(CoreError::Protocol("send plan is too large".into()));
+        }
+        if !self.db.is_trusted(&peer) {
+            return Err(CoreError::Protocol("peer is not paired".into()));
+        }
+        self.db.set_setting(&key, json.as_bytes())
+    }
+
+    /// The saved plans of one peer as JSON text:
+    /// `[{"share":"<hex>","plan":"<plan text>"}]`. Each plan is a JSON string.
+    pub fn list_send_plans(&self, peer: [u8; 16]) -> Result<String> {
+        let prefix = send_plan_prefix(&peer);
+        let mut out = Vec::new();
+        for (key, value) in self.db.list_settings_with_prefix(&prefix)? {
+            let Some(share) = key.strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            // A value that is not UTF-8 cannot come from `save_send_plan`.
+            let Ok(plan) = String::from_utf8(value) else {
+                continue;
+            };
+            out.push(serde_json::json!({ "share": share, "plan": plan }));
+        }
+        serde_json::to_string(&out).map_err(|e| CoreError::Protocol(e.to_string()))
+    }
+
+    /// Remove the plan of one share. A missing plan is not an error.
+    pub fn delete_send_plan(&self, peer: [u8; 16], share: &str) -> Result<()> {
+        self.db.delete_setting(&send_plan_key(&peer, share)?)
     }
 
     /// A platform told the daemon to drain now: a timer, a network change or a

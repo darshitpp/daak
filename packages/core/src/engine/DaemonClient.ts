@@ -323,6 +323,19 @@ export class DaemonClientEngine implements DaakEngine {
     throw new Error('exportDebugBundle is not supported by the daemon client');
   }
 
+  // No IpcRequest keeps a send plan. The daemon shape is not on a live path.
+  async saveSendPlan(_peerDeviceId: string, _share: string, _json: string): Promise<void> {
+    throw new Error('send plans are unsupported by the daemon client');
+  }
+
+  async listSendPlans(_peerDeviceId: string): Promise<Array<{ share: string; plan: string }>> {
+    throw new Error('send plans are unsupported by the daemon client');
+  }
+
+  async deleteSendPlan(_peerDeviceId: string, _share: string): Promise<void> {
+    throw new Error('send plans are unsupported by the daemon client');
+  }
+
   on(cb: (e: DaakEvent) => void): () => void {
     this.handlers.add(cb);
     return () => { this.handlers.delete(cb); };

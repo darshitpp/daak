@@ -2018,3 +2018,22 @@ describe('iOS media pick and materialize', () => {
     );
   });
 });
+
+describe('the send plan methods are wired through the native glue', () => {
+  it('the Android module calls the uniffi methods and resolves null for the Unit ones', () => {
+    const kt = read(repo + 'apps/mobile/android/app/src/main/java/dev/darshit/daak/DaakModule.kt');
+    expect(kt).toContain('handle().saveSendPlan(peerId, share, json); null');
+    expect(kt).toContain('handle().listSendPlans(peerId)');
+    expect(kt).toContain('handle().deleteSendPlan(peerId, share); null');
+  });
+
+  it('the iOS module declares and forwards the three send plan methods', () => {
+    const swift = read(repo + 'apps/mobile/ios/Daak.swift');
+    const mm = read(repo + 'apps/mobile/ios/DaakModule.mm');
+    for (const m of ['saveSendPlan', 'listSendPlans', 'deleteSendPlan']) {
+      expect(swift).toMatch(new RegExp('@objc func ' + m + '\\('));
+      expect(swift).toContain('need().' + m + '(');
+      expect(mm).toContain('RCT_EXTERN_METHOD(' + m + ':');
+    }
+  });
+});

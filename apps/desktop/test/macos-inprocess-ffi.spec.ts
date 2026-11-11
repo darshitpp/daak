@@ -152,6 +152,9 @@ describe('macOS runs the engine in-process', () => {
       'setPresence:',
       'localPort:',
       'exportDebugBundle:',
+      'saveSendPlan:',
+      'listSendPlans:',
+      'deleteSendPlan:',
       'shutdown:',
     ]) {
       expect(mm).toContain(m);

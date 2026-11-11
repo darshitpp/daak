@@ -746,6 +746,29 @@ impl DaakEngine {
         Ok(to_hex(&id))
     }
 
+    pub fn save_send_plan(
+        &self,
+        peer_id: String,
+        share: String,
+        json: String,
+    ) -> Result<(), FfiError> {
+        self.engine()?
+            .save_send_plan(parse_id(&peer_id)?, &share, &json)
+            .map_err(engine_err)
+    }
+
+    pub fn list_send_plans(&self, peer_id: String) -> Result<String, FfiError> {
+        self.engine()?
+            .list_send_plans(parse_id(&peer_id)?)
+            .map_err(engine_err)
+    }
+
+    pub fn delete_send_plan(&self, peer_id: String, share: String) -> Result<(), FfiError> {
+        self.engine()?
+            .delete_send_plan(parse_id(&peer_id)?, &share)
+            .map_err(engine_err)
+    }
+
     pub fn list_devices(&self) -> Result<String, FfiError> {
         let views = self
             .rt
