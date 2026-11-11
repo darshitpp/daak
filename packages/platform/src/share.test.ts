@@ -164,6 +164,15 @@ describe('pickMedia', () => {
     await expect(pickMedia()).resolves.toEqual([{ token: 't1', name: 'ok', size: 0 }]);
   });
 
+  it('E_TOO_MANY is mapped to a fixed error', async () => {
+    mediaMock.pickMedia.mockRejectedValueOnce(
+      Object.assign(new Error('too many items; pick fewer'), { code: 'E_TOO_MANY' }),
+    );
+    await expect(pickMedia()).rejects.toThrow(/^E_TOO_MANY$/);
+    mediaMock.pickMedia.mockRejectedValueOnce(new Error('E_TOO_MANY'));
+    await expect(pickMedia()).rejects.toThrow(/^E_TOO_MANY$/);
+  });
+
   it('pickMedia rejects when the native module lacks the method', async () => {
     const saved = native.pickMedia;
     (native as { pickMedia?: unknown }).pickMedia = undefined;

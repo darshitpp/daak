@@ -1624,6 +1624,8 @@ describe('Android media pick and materialize', () => {
   it('a picker URI reads PickerMediaColumns.SIZE and DISPLAY_NAME; any other URI reads OpenableColumns', () => {
     const q = body(share, 'private fun queryNameAndSize(');
     expect(q).toContain('uri.authority == MediaStore.AUTHORITY');
+    expect(q).toContain('isPhotoPickerAvailable(');
+    expect(q).not.toMatch(/SDK_INT >= 33 &&/);
     expect(q).toContain('MediaStore.PickerMediaColumns.DISPLAY_NAME');
     expect(q).toContain('MediaStore.PickerMediaColumns.SIZE');
     expect(q).toContain('OpenableColumns.DISPLAY_NAME');
@@ -1640,6 +1642,8 @@ describe('Android media pick and materialize', () => {
   it('materialize opens a MediaStore-authority URI with ContentResolver.openFileDescriptor (MediaStore has no such method in API 35) and any other with ContentResolver.openInputStream, inside use', () => {
     const open = body(share, 'private fun openSource(');
     expect(open).toContain('uri.authority == MediaStore.AUTHORITY');
+    expect(open).toContain('isPhotoPickerAvailable(');
+    expect(open).not.toMatch(/SDK_INT >= 33 &&/);
     expect(open).toContain('ctx.contentResolver.openFileDescriptor(uri, "r")');
     expect(open).not.toContain('MediaStore.openFileDescriptor');
     expect(open).toContain('ctx.contentResolver.openInputStream(uri)');
@@ -1698,6 +1702,54 @@ describe('Android media pick and materialize', () => {
     ].join('\n');
     expect(media).not.toMatch(/Log\./);
     expect(media).not.toMatch(/println|printStackTrace/);
+  });
+
+  it('a second pickMedia call rejects the open one with E_PICK_BUSY before it assigns the promise', () => {
+    const pick = body(share, 'override fun pickMedia(');
+    const busy = pick.indexOf('mediaPromise?.reject("E_PICK_BUSY", "a pick is open")');
+    expect(busy).toBeGreaterThan(-1);
+    expect(busy).toBeLessThan(pick.indexOf('mediaPromise = promise'));
+    expect(body(share, 'override fun pickFolder(')).not.toContain('E_PICK_BUSY');
+    expect(body(share, 'override fun pickDocuments(')).not.toContain('E_PICK_BUSY');
+  });
+
+  it('more than MAX_MEDIA items reject E_TOO_MANY and do not cut the list', () => {
+    expect(share).toContain('promise.reject("E_TOO_MANY", "too many items; pick fewer")');
+    expect(share).toContain('clip.itemCount > MAX_MEDIA');
+    expect(share).not.toContain('minOf(clip.itemCount, MAX_MEDIA)');
+  });
+
+  it('materialize opens the source in its own try and maps only source failures to E_SOURCE_GONE', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    const open = mat.indexOf('openSource(uri)');
+    const gone = mat.indexOf('FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")');
+    expect(open).toBeGreaterThan(-1);
+    expect(gone).toBeGreaterThan(-1);
+    // The final catch deletes the slot and rethrows. It does not map a code.
+    const last = mat.slice(mat.lastIndexOf('catch (t: Throwable)'));
+    expect(last).not.toContain('E_SOURCE_GONE');
+    expect(mat).toMatch(/i\.read\(buffer\)/);
+    expect(mat).toMatch(/catch \(e: IOException\)/);
+  });
+
+  it('a write failure is E_MATERIALIZE, or NO_SPACE when the cause is ENOSPC', () => {
+    expect(share).toContain('OsConstants.ENOSPC');
+    expect(share).toContain('(e.cause as? ErrnoException)?.errno');
+    expect(body(share, 'private fun writeFailure(')).toContain('FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")');
+    expect(body(share, 'private fun writeFailure(')).toContain('"NO_SPACE:');
+  });
+
+  it('the copy counts bytes and stops above the size plus the margin', () => {
+    expect(share).toContain('MATERIALIZE_MARGIN = 16L * 1024 * 1024');
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('total > size + MATERIALIZE_MARGIN');
+    expect(mat).toContain('FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")');
+  });
+
+  it('an unknown size checks the free space after every 64 MiB', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('64L * 1024 * 1024');
+    expect(mat).toContain('requireSpace(MATERIALIZE_MARGIN)');
   });
 
   it('the Spec declares pickMedia and materialize as required', () => {

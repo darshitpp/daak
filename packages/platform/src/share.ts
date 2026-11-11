@@ -65,13 +65,21 @@ const isMediaRef = (v: unknown): v is MediaRef => {
 /**
  * Ask the user for photos and videos. Resolves references only: a token, a
  * name, and a size. Nothing is copied until `materializeMedia`. A cancelled
- * pick gives `[]`. An entry that fails validation is dropped.
+ * pick gives `[]`. More than 5000 items reject `E_TOO_MANY`. An entry that
+ * fails validation is dropped.
  */
 export async function pickMedia(): Promise<MediaRef[]> {
   if (typeof NativeDaakShare.pickMedia !== 'function') {
     throw new Error('pickMedia is not available on this platform');
   }
-  const raw = await NativeDaakShare.pickMedia();
+  let raw: unknown;
+  try {
+    raw = await NativeDaakShare.pickMedia();
+  } catch (e) {
+    const err = e as { code?: unknown; message?: unknown };
+    if (err.code === 'E_TOO_MANY' || err.message === 'E_TOO_MANY') throw new Error('E_TOO_MANY');
+    throw e;
+  }
   if (typeof raw !== 'string') return [];
   let parsed: unknown;
   try {

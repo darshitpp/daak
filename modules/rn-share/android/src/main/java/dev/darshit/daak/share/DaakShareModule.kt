@@ -9,6 +9,8 @@ import android.os.ext.SdkExtensions
 import android.os.StatFs
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.system.ErrnoException
+import android.system.OsConstants
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import androidx.core.content.FileProvider
@@ -33,8 +35,9 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     private const val PICK_MEDIA = 4713
     // The photo picker allows up to 5000 items. The JSON size follows this cap.
     private const val MAX_MEDIA = 5000
-    // Room for the file system, on top of the size of one item.
-    private const val MATERIALIZE_MARGIN = 1_048_576L
+    // Room for the file system, on top of the size of one item. A copy that
+    // grows past the reported size plus this margin stops.
+    private const val MATERIALIZE_MARGIN = 16L * 1024 * 1024
   }
 
   private var pickPromise: Promise? = null
@@ -145,6 +148,8 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
       }
     }
+    // A second call must not leave the first promise open for ever.
+    mediaPromise?.reject("E_PICK_BUSY", "a pick is open")
     mediaPromise = promise
     try {
       activity.startActivityForResult(intent, PICK_MEDIA)
@@ -155,11 +160,11 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
   }
 
   @android.annotation.SuppressLint("NewApi")
-  private fun isPhotoPickerAvailable(activity: Activity): Boolean {
+  private fun isPhotoPickerAvailable(context: android.content.Context): Boolean {
     val ok = Build.VERSION.SDK_INT >= 33 ||
       (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
         SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2)
-    return ok && Intent(MediaStore.ACTION_PICK_IMAGES).resolveActivity(activity.packageManager) != null
+    return ok && Intent(MediaStore.ACTION_PICK_IMAGES).resolveActivity(context.packageManager) != null
   }
 
   /** Copy ONE picked item into the send cache. See materializeToSlot. */
@@ -242,7 +247,9 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       if (resultCode == Activity.RESULT_OK && data != null) {
         val clip = data.clipData
         if (clip != null) {
-          for (i in 0 until minOf(clip.itemCount, MAX_MEDIA)) uris.add(clip.getItemAt(i).uri)
+          // A cut list would send fewer items than the user picked, in silence.
+          if (clip.itemCount > MAX_MEDIA) return promise.reject("E_TOO_MANY", "too many items; pick fewer")
+          for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
         } else {
           data.data?.let { uris.add(it) }
         }
@@ -349,7 +356,9 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
 
   /** The display name and the size of one URI. Each is null when missing. */
   private fun queryNameAndSize(uri: Uri): Pair<String?, Long?> {
-    val picker = Build.VERSION.SDK_INT >= 33 && uri.authority == MediaStore.AUTHORITY
+    // PickerMediaColumns needs API 33. Its strings equal the OpenableColumns strings.
+    val picker = isPhotoPickerAvailable(ctx) && uri.authority == MediaStore.AUTHORITY &&
+      Build.VERSION.SDK_INT >= 33
     val nameCol = if (picker) MediaStore.PickerMediaColumns.DISPLAY_NAME else OpenableColumns.DISPLAY_NAME
     val sizeCol = if (picker) MediaStore.PickerMediaColumns.SIZE else OpenableColumns.SIZE
     return try {
@@ -370,7 +379,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
    * call is the real one. Any other URI opens as a stream.
    */
   private fun openSource(uri: Uri): java.io.InputStream? {
-    if (Build.VERSION.SDK_INT >= 33 && uri.authority == MediaStore.AUTHORITY) {
+    if (isPhotoPickerAvailable(ctx) && uri.authority == MediaStore.AUTHORITY) {
       val fd = ctx.contentResolver.openFileDescriptor(uri, "r") ?: return null
       return android.os.ParcelFileDescriptor.AutoCloseInputStream(fd)
     }
@@ -392,24 +401,62 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     try {
       if (!slot.mkdirs()) throw IOException("could not make the copy folder")
       val out = File(slot, ShareInbox.safeLeaf(name ?: "media"))
-      val input = openSource(uri) ?: throw FileNotFoundException("no stream")
+      // E_SOURCE_GONE comes only from the source: open and read.
+      val input = try {
+        openSource(uri) ?: throw FileNotFoundException("no stream")
+      } catch (e: SecurityException) {
+        throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+      } catch (e: FileNotFoundException) {
+        throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+      }
       input.use { i ->
         FileOutputStream(out).use { o ->
           val buffer = ByteArray(64 * 1024)
+          var total = 0L
+          var sinceCheck = 0L
           while (true) {
-            val n = i.read(buffer)
+            val n = try {
+              i.read(buffer)
+            } catch (e: SecurityException) {
+              throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+            } catch (e: IOException) {
+              throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+            }
             if (n < 0) break
-            o.write(buffer, 0, n)
+            try {
+              o.write(buffer, 0, n)
+            } catch (e: IOException) {
+              throw writeFailure(e, size)
+            }
+            total += n
+            if (size != null) {
+              if (total > size + MATERIALIZE_MARGIN) throw FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")
+            } else {
+              sinceCheck += n
+              if (sinceCheck >= 64L * 1024 * 1024) {
+                requireSpace(MATERIALIZE_MARGIN)
+                sinceCheck = 0L
+              }
+            }
           }
         }
       }
       return out
     } catch (t: Throwable) {
       slot.deleteRecursively()
-      if (t is SecurityException || t is FileNotFoundException) {
-        throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
-      }
       throw t
+    }
+  }
+
+  /** A failed write of the local copy. A full disk is NO_SPACE. Any other cause is E_MATERIALIZE. */
+  private fun writeFailure(e: IOException, size: Long?): FolderPickError {
+    val full = (e.cause as? ErrnoException)?.errno == OsConstants.ENOSPC ||
+      e.message?.contains("ENOSPC") == true
+    val needed = (size ?: 0L) + MATERIALIZE_MARGIN
+    return if (full) {
+      FolderPickError("NO_SPACE", "NO_SPACE:$needed")
+    } else {
+      FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")
     }
   }
 

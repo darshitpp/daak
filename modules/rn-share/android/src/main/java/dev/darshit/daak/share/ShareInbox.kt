@@ -13,6 +13,9 @@ import java.util.UUID
 /** Filesystem handshake dir `filesDir/share-inbox`. Staging only, never crypto. */
 object ShareInbox {
   private const val DIR = "share-inbox"
+  // Most file systems allow 255 bytes for a name. 200 leaves room.
+  private const val MAX_LEAF_BYTES = 200
+  private const val MAX_EXT_CHARS = 16
 
   fun dir(ctx: Context): File = File(ctx.filesDir, DIR).apply { mkdirs() }
 
@@ -31,16 +34,31 @@ object ShareInbox {
   private fun intentSendsDir(ctx: Context): File = File(dir(ctx), "intent-sends").apply { mkdirs() }
 
   /**
-   * Refuses a URI that is not content:// or that names a provider of this app.
-   * The message holds no URI, because JavaScript can read it.
+   * Refuses a URI that is not content://, that has user info, or that names a
+   * provider of this app. A prefix such as `0@` in the authority hides the
+   * provider name from a text check, and the resolver then opens the provider
+   * of this app. The message holds no URI, because JavaScript can read it.
    */
   internal fun requireForeignContentUri(ctx: Context, uri: Uri) {
+    val authority = uri.authority
     if (uri.scheme != ContentResolver.SCHEME_CONTENT ||
-      uri.authority?.startsWith(ctx.packageName) == true
+      authority == null ||
+      uri.userInfo != null ||
+      uri.encodedAuthority?.contains('@') == true ||
+      authority.startsWith(ctx.packageName) ||
+      isOwnProvider(ctx, authority)
     ) {
       throw SecurityException("refused uri")
     }
   }
+
+  /** True when the provider of the authority is of this app. A failed lookup counts as true. */
+  private fun isOwnProvider(ctx: Context, authority: String): Boolean =
+    try {
+      ctx.packageManager.resolveContentProvider(authority, 0)?.packageName == ctx.packageName
+    } catch (_: Throwable) {
+      true
+    }
 
   fun copyToCache(ctx: Context, uri: Uri): File {
     // Another app picks this uri (the share target is exported), and the read
@@ -64,7 +82,7 @@ object ShareInbox {
     // killed the caller, and a mid-copy failure left a truncated file that
     // drainToJson would happily stage as a payload. Fail loudly, clean up.
     val input = ctx.contentResolver.openInputStream(uri)
-      ?: throw IOException("cannot open $uri")
+      ?: throw IOException("cannot open the source")
     try {
       input.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
     } catch (t: Throwable) {
@@ -99,7 +117,31 @@ object ShareInbox {
   internal fun safeLeaf(name: String): String {
     val leaf = name.substringAfterLast('/').substringAfterLast('\\')
     val cleaned = leaf.replace(Regex("[\\u0000-\\u001f/:*?\"<>|]"), "_").trim()
-    return if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") "payload" else cleaned
+    return if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") "payload" else limitLeaf(cleaned)
+  }
+
+  /**
+   * Cuts a name to MAX_LEAF_BYTES of UTF-8. The cut is at a character boundary.
+   * An extension of up to MAX_EXT_CHARS characters stays.
+   */
+  private fun limitLeaf(name: String): String {
+    if (name.toByteArray(Charsets.UTF_8).size <= MAX_LEAF_BYTES) return name
+    val dot = name.lastIndexOf('.')
+    val ext = if (dot > 0 && name.length - dot - 1 <= MAX_EXT_CHARS) name.substring(dot) else ""
+    val stem = name.substring(0, name.length - ext.length)
+    val budget = MAX_LEAF_BYTES - ext.toByteArray(Charsets.UTF_8).size
+    val out = StringBuilder()
+    var used = 0
+    var i = 0
+    while (i < stem.length) {
+      val cp = stem.codePointAt(i)
+      val n = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).size
+      if (used + n > budget) break
+      out.appendCodePoint(cp)
+      used += n
+      i += Character.charCount(cp)
+    }
+    return out.toString() + ext
   }
 
   fun stageText(ctx: Context, text: String) =

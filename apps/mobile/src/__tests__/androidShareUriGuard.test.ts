@@ -32,4 +32,43 @@ describe('ShareInbox.copyToCache input guard', () => {
   it('refuses a uri on an authority of this app', () => {
     expect(body).toContain('ctx.packageName');
   });
+
+  it('refuses a uri that has user info before the authority', () => {
+    expect(body).toContain('uri.userInfo != null');
+  });
+
+  it('refuses an encoded authority that holds an @ character', () => {
+    expect(body).toContain("uri.encodedAuthority");
+    expect(body).toContain("contains('@')");
+  });
+
+  it('refuses a uri when the provider of the authority belongs to this app', () => {
+    expect(body).toContain('resolveContentProvider(');
+    expect(body).toContain('?.packageName == ctx.packageName');
+  });
+
+  it('refuses a uri when the provider lookup fails', () => {
+    const lookup = body.slice(body.indexOf('resolveContentProvider('));
+    expect(lookup).toMatch(/catch \(_: Throwable\) \{\s*true/);
+  });
+
+  it('the refusal message holds no uri', () => {
+    expect(body).toContain('SecurityException("refused uri")');
+    expect(body).not.toMatch(/SecurityException\([^)]*\$/);
+  });
+
+  it('the source read failure message holds no uri', () => {
+    expect(src).toContain('IOException("cannot open the source")');
+    expect(src).not.toContain('cannot open $uri');
+  });
+
+  it('safeLeaf limits the name to 200 bytes and keeps a short extension', () => {
+    const leaf = src.slice(src.indexOf('fun safeLeaf('));
+    expect(src).toContain('MAX_LEAF_BYTES = 200');
+    expect(src).toContain('MAX_EXT_CHARS = 16');
+    expect(leaf).toContain('limitLeaf(');
+    const limit = src.slice(src.indexOf('fun limitLeaf('));
+    expect(limit).toContain('Charsets.UTF_8');
+    expect(limit).toContain('codePointAt(');
+  });
 });
