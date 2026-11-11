@@ -944,9 +944,10 @@ describe('iOS saves to the Photos library with add-only access', () => {
     expect(save).toMatch(/second album with the same name/);
   });
 
+  // The read key is for rn-share materialize only (a token of a restored
+  // plan). rn-fspaths still asks for add-only access.
   it('declares the add-only usage description', () => {
     expect(plist).toContain('<key>NSPhotoLibraryAddUsageDescription</key>');
-    expect(plist).not.toContain('NSPhotoLibraryUsageDescription');
   });
 });
 
@@ -1057,7 +1058,9 @@ describe('iOS folder pick, copy, and stats', () => {
     expect(share).toMatch(/\.cachesDirectory/);
     expect(share).toContain('"daak-send"');
     const copy = body(share, 'static func copyPickedFolder');
-    expect(copy).toContain('UUID().uuidString');
+    // The folder copy and materialize make the slot with the same helper.
+    expect(copy).toContain('DaakShare.newSendSlot()');
+    expect(body(share, 'static func newSendSlot(')).toContain('UUID().uuidString');
     expect(copy).toContain('lastPathComponent');
     expect(copy).toMatch(/copyItem\(at:/);
     expect(share).not.toMatch(/Data\(contentsOf: (e|entry|file|src)/);
@@ -1756,5 +1759,230 @@ describe('Android media pick and materialize', () => {
     expect(shareSpec).toMatch(/^ {2}pickMedia\(\): Promise<string>;/m);
     expect(shareSpec).toMatch(/^ {2}materialize\(token: string\): Promise<string>;/m);
     expect(shareSpec).not.toMatch(/(pickMedia|materialize)\?\(/);
+  });
+});
+
+// Photo and video pick on iOS (Part C, Task 7). The picker returns references.
+// materialize copies ONE item into <caches>/daak-send/<uuid>/. No Xcode test
+// target exists. These pins prove only that a call is present in the source.
+// A device must prove the behaviour.
+describe('iOS media pick and materialize', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+  const share = strip(read(repo + 'modules/rn-share/ios/DaakShare.swift'));
+  const shareMm = read(repo + 'modules/rn-share/ios/DaakShare.mm');
+  const plist = read(repo + 'apps/mobile/ios/Daak/Info.plist');
+  // From the function name to the next member at the same indent.
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest.slice(1).search(/\n  (@objc )?(private )?(static )?func |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+  const pick = () => body(share, '@objc func pickMedia(');
+  const finish = () => body(share, 'func picker(_ picker: PHPickerViewController, didFinishPicking');
+  const describeMedia = () => body(share, 'private func describeMedia(');
+  const mat = () => body(share, '@objc func materialize(');
+  const fromProvider = () => body(share, 'private func materializeProvider(');
+  const fromAsset = () => body(share, 'private func materializeAsset(');
+
+  it('uses PHPickerConfiguration(photoLibrary:) with selectionLimit 0 and .any(of: [.images, .videos])', () => {
+    expect(share).toContain('import PhotosUI');
+    expect(pick()).toContain('PHPickerConfiguration(photoLibrary: .shared())');
+    expect(pick()).toMatch(/\.selectionLimit = 0/);
+    expect(pick()).toContain('.filter = .any(of: [.images, .videos])');
+    expect(pick()).toMatch(/picker\.delegate = self/);
+    expect(pick()).toContain('present(picker');
+  });
+
+  it('sets preferredAssetRepresentationMode = .current and never .compatible', () => {
+    expect(pick()).toMatch(/\.preferredAssetRepresentationMode = \.current/);
+    expect(share).not.toContain('.compatible');
+  });
+
+  it('the module keeps the NSItemProvider of each pick in memory, keyed by token', () => {
+    expect(share).toContain('private var mediaProviders: [String: NSItemProvider] = [:]');
+    const d = describeMedia();
+    expect(d).toContain('r.assetIdentifier ?? "provider:" + UUID().uuidString');
+    expect(d).toContain('r.itemProvider');
+    expect(d).toContain('mediaProviders.merge(');
+    // A successful materialize forgets the token.
+    expect(fromProvider()).toContain('self.mediaProviders[token] = nil');
+  });
+
+  it('pickMedia rejects E_PICK_BUSY for a second call', () => {
+    const p = pick();
+    const busy = p.indexOf('reject("E_PICK_BUSY", "a pick is open", nil)');
+    expect(busy).toBeGreaterThan(-1);
+    expect(busy).toBeLessThan(p.indexOf('present(picker'));
+    // The NEW call rejects. The open pick keeps its promise.
+    expect(p).not.toMatch(/mediaReject\?\(/);
+    expect(p).toContain('if self.mediaResolve != nil');
+    // A swipe cannot close the sheet without a delegate call.
+    expect(p).toContain('picker.isModalInPresentation = true');
+    // A cancel resolves [] and frees the slot for the next pick.
+    const f = finish();
+    expect(f).toContain('mediaResolve = nil');
+    expect(f).toContain('resolve("[]")');
+  });
+
+  it('more than 5000 results reject E_TOO_MANY', () => {
+    expect(share).toContain('static let maxMedia = 5000');
+    const f = finish();
+    expect(f).toContain('results.count > Self.maxMedia');
+    expect(f).toContain('reject("E_TOO_MANY", "too many items; pick fewer", nil)');
+    expect(f.indexOf('E_TOO_MANY')).toBeLessThan(f.indexOf('describeMedia('));
+    expect(share).not.toMatch(/results\.prefix\(/);
+  });
+
+  it('the JSON is built with JSONSerialization', () => {
+    const d = describeMedia();
+    expect(d).toContain('JSONSerialization.data(withJSONObject: items)');
+    expect(d).toMatch(/"token": token/);
+    expect(d).toMatch(/"name": /);
+    expect(d).toMatch(/"size": /);
+    expect(d).not.toMatch(/\\"token\\"/);
+  });
+
+  it('size reads the asset resource fileSize and falls back to null', () => {
+    const size = body(share, 'static func resourceSize(');
+    expect(size).toContain('value(forKey: "fileSize")');
+    // value(forKey:) throws an Objective-C exception for an unknown key.
+    expect(size).toContain('responds(to: NSSelectorFromString("fileSize"))');
+    const d = describeMedia();
+    expect(d).toContain('NSNull()');
+    expect(d).toContain('PHPhotoLibrary.authorizationStatus(for: .readWrite)');
+    expect(d).toContain('.authorized');
+    expect(d).toContain('.limited');
+    // The pick never asks for Photos access.
+    expect(pick() + finish() + d).not.toContain('requestAuthorization');
+  });
+
+  it('the name is the suggested name plus the type extension, cleaned by safeLeaf', () => {
+    const name = body(share, 'static func mediaName(');
+    expect(name).toContain('provider.suggestedName');
+    expect(name).toContain('preferredFilenameExtension');
+    expect(name).toContain('"media"');
+    expect(name).toContain('safeLeaf(');
+    const type = body(share, 'static func mediaType(');
+    expect(type).toContain('.conforms(to: .image)');
+    expect(type).toContain('.conforms(to: .movie)');
+    const leaf = body(share, 'static func safeLeaf(');
+    expect(leaf).toContain('maxLeafBytes');
+    expect(share).toContain('static let maxLeafBytes = 200');
+  });
+
+  it('materialize uses loadFileRepresentation and moves the temp file into <caches>/daak-send/<uuid>/ for a token in memory', () => {
+    const m = mat();
+    expect(m).toContain('DispatchQueue.global(');
+    expect(m).toContain('materializeProvider(');
+    const p = fromProvider();
+    expect(p).toContain('loadFileRepresentation(forTypeIdentifier: type)');
+    expect(p).toContain('DaakShare.newSendSlot()');
+    // The move is inside the handler, because the temp file goes when it returns.
+    const handler = p.indexOf('loadFileRepresentation(');
+    const create = p.indexOf('createDirectory(at: slot');
+    const move = p.indexOf('moveItem(at: url, to: dest)');
+    expect(create).toBeGreaterThan(handler);
+    expect(move).toBeGreaterThan(create);
+    expect(p).toContain('copyItem(at: url, to: dest)');
+    const slot = body(share, 'static func newSendSlot(');
+    expect(slot).toContain('.cachesDirectory');
+    expect(slot).toContain('"daak-send"');
+    expect(slot).toContain('UUID().uuidString');
+  });
+
+  it('for a token that is not in memory it requests Photos access and uses PHAssetResourceManager.writeData with isNetworkAccessAllowed true', () => {
+    const m = mat();
+    expect(m).toContain('materializeAsset(');
+    const a = fromAsset();
+    const ask = a.indexOf('PHPhotoLibrary.requestAuthorization(for: .readWrite)');
+    expect(ask).toBeGreaterThan(-1);
+    expect(a.indexOf('.notDetermined')).toBeLessThan(ask);
+    expect(a).toContain('PHAsset.fetchAssets(withLocalIdentifiers: [token], options: nil)');
+    expect(a).toContain('options.isNetworkAccessAllowed = true');
+    expect(a).toContain('PHAssetResourceManager.default().writeData(for: resource, toFile: dest, options: options)');
+    expect(a).toContain('safeLeaf(resource.originalFilename)');
+    expect(body(share, 'static func originalResource(')).toMatch(/\.type == \.photo \|\| \$0\.type == \.video/);
+    // The free space check runs before the write.
+    expect(a.indexOf('volumeAvailableCapacityForImportantUsage')).toBeLessThan(a.indexOf('writeData('));
+    expect(a).toContain('size + Self.materializeMargin');
+    expect(share).toContain('static let materializeMargin: Int64 = 16 * 1024 * 1024');
+  });
+
+  it('a missing asset or a refused access rejects with E_SOURCE_GONE', () => {
+    const a = fromAsset();
+    expect(a).toMatch(/status == \.authorized \|\| status == \.limited/);
+    expect((a.match(/\.sourceGone/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // A provider token that is not in memory cannot come back.
+    const m = mat();
+    expect(m).toContain('token.hasPrefix("provider:")');
+    expect(m).toContain('MediaFailure.sourceGone');
+    expect(share).toContain('reject("E_SOURCE_GONE", "E_SOURCE_GONE", nil)');
+  });
+
+  it('an iCloud failure rejects with NOT_DOWNLOADED', () => {
+    const p = fromProvider();
+    expect(p).toMatch(/guard let url, error == nil else/);
+    expect(p).toContain('.notDownloaded');
+    expect(fromAsset()).toContain('other: .notDownloaded');
+    expect(share).toContain('reject("NOT_DOWNLOADED", "NOT_DOWNLOADED", nil)');
+  });
+
+  it('a full disk rejects NO_SPACE and any other failure rejects E_MATERIALIZE with a fixed message', () => {
+    const from = body(share, 'static func from(');
+    expect(from).toContain('NSFileWriteOutOfSpaceError');
+    expect(from).toContain('ENOSPC');
+    expect(share).toContain('reject("NO_SPACE", "NO_SPACE:\\(needed)", nil)');
+    expect(share).toContain(
+      'reject("E_MATERIALIZE", "Daak could not prepare a file for sending.", nil)',
+    );
+    expect(fromProvider()).toContain('other: .failed');
+  });
+
+  it('a failed materialize deletes the slot', () => {
+    expect((fromProvider().match(/try\? fm\.removeItem\(at: slot\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect((fromAsset().match(/try\? fm\.removeItem\(at: slot\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('the slot is never under Documents', () => {
+    const media = [mat(), fromProvider(), fromAsset(), body(share, 'static func newSendSlot(')].join('\n');
+    expect(media).not.toContain('documentDirectory');
+    expect(media).not.toContain('Documents');
+  });
+
+  it('no Swift log call in the new code prints a name, a token or a path', () => {
+    const media = [
+      pick(),
+      finish(),
+      describeMedia(),
+      mat(),
+      fromProvider(),
+      fromAsset(),
+      body(share, 'static func mediaName('),
+      body(share, 'static func resourceSize('),
+    ].join('\n');
+    expect(media).not.toMatch(/NSLog|print\(|os_log|Logger\(/);
+  });
+
+  it('the .mm lists both methods', () => {
+    expect(share).toMatch(/@objc func pickMedia\(_ resolve: @escaping RCTPromiseResolveBlock,\s*reject: @escaping RCTPromiseRejectBlock\)/);
+    expect(share).toMatch(/@objc func materialize\(_ token: String,\s*resolve: @escaping RCTPromiseResolveBlock,\s*reject: @escaping RCTPromiseRejectBlock\)/);
+    expect(shareMm).toContain(
+      'RCT_EXTERN_METHOD(pickMedia:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)',
+    );
+    expect(shareMm).toMatch(
+      /RCT_EXTERN_METHOD\(materialize:\(NSString \*\)token\s+resolve:\(RCTPromiseResolveBlock\)resolve reject:\(RCTPromiseRejectBlock\)reject\)/,
+    );
+  });
+
+  it('NSPhotoLibraryUsageDescription is in Info.plist', () => {
+    expect(plist).toMatch(
+      /<key>NSPhotoLibraryUsageDescription<\/key>\s*<string>Daak reads the photos and videos that you choose to send\.<\/string>/,
+    );
   });
 });

@@ -1,12 +1,33 @@
 import Foundation
+import Photos
+import PhotosUI
 import React
 import UIKit
+import UniformTypeIdentifiers
 
 private let kDarwinShareInboxChanged = "dev.darshit.daak.share.inbox.changed"
 
 @objc(DaakShare)
 class DaakShare: NSObject {
   @objc static func requiresMainQueueSetup() -> Bool { true }
+
+  /// The maximum number of items in one media pick. Android has the same cap.
+  static let maxMedia = 5000
+  /// The free space that materialize keeps above the size of one item.
+  static let materializeMargin: Int64 = 16 * 1024 * 1024
+  /// The maximum UTF-8 length of a cleaned file name. Android has the same cap.
+  static let maxLeafBytes = 200
+  /// The maximum length of an extension that safeLeaf keeps when it cuts a name.
+  static let maxExtChars = 16
+
+  /// The item provider of each picked item in this process, keyed by token.
+  /// It holds the items of the last pick and the items of earlier picks that
+  /// materialize did not copy yet. mediaLock guards it.
+  private var mediaProviders: [String: NSItemProvider] = [:]
+  private let mediaLock = NSLock()
+  /// The promise of the open media pick. Main thread only.
+  private var mediaResolve: RCTPromiseResolveBlock?
+  private var mediaReject: RCTPromiseRejectBlock?
 
   /// The share extension posts this Darwin notification when it has staged
   /// something. Registered so the cross-process wakeup is wired end to end, but
@@ -88,6 +109,253 @@ class DaakShare: NSObject {
       objc_setAssociatedObject(picker, &folderPickerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN)
       root.present(picker, animated: true)
     }
+  }
+
+  /// Ask for photos and videos. Resolves the JSON text of
+  /// `[{ token, name, size }]`. The pick copies no bytes. A cancel gives `[]`.
+  /// Rejects `E_PICK_BUSY` when a pick is open, and `E_TOO_MANY` for more than
+  /// maxMedia items. The pick does not ask for Photos access.
+  @objc func pickMedia(_ resolve: @escaping RCTPromiseResolveBlock,
+                       reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      // The new call rejects. The open pick keeps its promise.
+      if self.mediaResolve != nil {
+        reject("E_PICK_BUSY", "a pick is open", nil); return
+      }
+      guard let root = Self.rootViewController() else {
+        reject("E_NO_VC", "no root view controller", nil); return
+      }
+      var config = PHPickerConfiguration(photoLibrary: .shared())
+      config.filter = .any(of: [.images, .videos])
+      config.selectionLimit = 0
+      // .current gives the original bytes. .compatible transcodes (device test
+      // 2026-11-11: HEIC became JPEG and the videos changed).
+      config.preferredAssetRepresentationMode = .current
+      let picker = PHPickerViewController(configuration: config)
+      picker.delegate = self
+      // A swipe must not close the sheet. The delegate must get each close,
+      // or the busy state stays set.
+      picker.isModalInPresentation = true
+      // Present from the top sheet. A root with an open sheet presents
+      // nothing, and then the busy state stays set.
+      var top = root
+      while let next = top.presentedViewController { top = next }
+      self.mediaResolve = resolve
+      self.mediaReject = reject
+      top.present(picker, animated: true)
+    }
+  }
+
+  /// Copy ONE picked item into `<caches>/daak-send/<uuid>/<cleaned name>` and
+  /// resolve the absolute path of the copy. Rejects `NO_SPACE:<needed bytes>`,
+  /// `E_SOURCE_GONE`, `NOT_DOWNLOADED`, or `E_MATERIALIZE`. No reject message
+  /// holds a name, a token, or a path.
+  @objc func materialize(_ token: String,
+                         resolve: @escaping RCTPromiseResolveBlock,
+                         reject: @escaping RCTPromiseRejectBlock) {
+    // The copy can take minutes. It must not block the main thread.
+    DispatchQueue.global(qos: .userInitiated).async {
+      self.mediaLock.lock()
+      let provider = self.mediaProviders[token]
+      self.mediaLock.unlock()
+      if let provider {
+        self.materializeProvider(token, provider, resolve: resolve, reject: reject)
+      } else if token.hasPrefix("provider:") {
+        // A provider token has no asset. It cannot come back after a restart.
+        MediaFailure.sourceGone.reject(reject)
+      } else {
+        self.materializeAsset(token, resolve: resolve, reject: reject)
+      }
+    }
+  }
+
+  /// Copy an item of a pick in this process. This needs no Photos access.
+  private func materializeProvider(_ token: String, _ provider: NSItemProvider,
+                                   resolve: @escaping RCTPromiseResolveBlock,
+                                   reject: @escaping RCTPromiseRejectBlock) {
+    guard let type = Self.mediaType(provider) else {
+      MediaFailure.failed.reject(reject); return
+    }
+    let name = Self.mediaName(provider)
+    let slot = DaakShare.newSendSlot()
+    provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
+      let fm = FileManager.default
+      // A load error or a nil URL is an iCloud item that did not download.
+      guard let url, error == nil else {
+        try? fm.removeItem(at: slot)
+        MediaFailure.notDownloaded.reject(reject); return
+      }
+      // The system deletes the temp file when this handler returns. So the
+      // move must be here.
+      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map { Int64($0) }
+      let dest = slot.appendingPathComponent(name)
+      do {
+        try fm.createDirectory(at: slot, withIntermediateDirectories: true)
+        do {
+          try fm.moveItem(at: url, to: dest)
+        } catch {
+          try fm.copyItem(at: url, to: dest)
+        }
+      } catch {
+        try? fm.removeItem(at: slot)
+        MediaFailure.from(error, size: size, other: .failed).reject(reject); return
+      }
+      self.mediaLock.lock()
+      self.mediaProviders[token] = nil
+      self.mediaLock.unlock()
+      resolve(dest.path)
+    }
+  }
+
+  /// Copy an asset of a restored plan. Only this path asks for Photos access.
+  /// Under limited access an asset outside the selection does not resolve.
+  private func materializeAsset(_ token: String,
+                                resolve: @escaping RCTPromiseResolveBlock,
+                                reject: @escaping RCTPromiseRejectBlock) {
+    var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    if status == .notDetermined {
+      // This runs on a background queue, so the wait does not block the UI.
+      let done = DispatchSemaphore(value: 0)
+      PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in done.signal() }
+      done.wait()
+      status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    }
+    guard status == .authorized || status == .limited else {
+      MediaFailure.sourceGone.reject(reject); return
+    }
+    guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [token], options: nil).firstObject,
+          let resource = Self.originalResource(asset) else {
+      MediaFailure.sourceGone.reject(reject); return
+    }
+    let size = Self.resourceSize(resource)
+    let fm = FileManager.default
+    let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    let free = (try? caches.resourceValues(
+      forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+      .volumeAvailableCapacityForImportantUsage
+    // An unknown size or free space is not a refusal. A full disk fails the write.
+    if let size, let free, free < size + Self.materializeMargin {
+      MediaFailure.noSpace(size).reject(reject); return
+    }
+    let slot = DaakShare.newSendSlot()
+    let dest = slot.appendingPathComponent(Self.safeLeaf(resource.originalFilename))
+    do {
+      try fm.createDirectory(at: slot, withIntermediateDirectories: true)
+    } catch {
+      try? fm.removeItem(at: slot)
+      MediaFailure.from(error, size: size, other: .failed).reject(reject); return
+    }
+    let options = PHAssetResourceRequestOptions()
+    // The original can be in iCloud only. The download is part of the write.
+    options.isNetworkAccessAllowed = true
+    PHAssetResourceManager.default().writeData(for: resource, toFile: dest, options: options) { error in
+      if let error {
+        try? fm.removeItem(at: slot)
+        MediaFailure.from(error, size: size, other: .notDownloaded).reject(reject); return
+      }
+      resolve(dest.path)
+    }
+  }
+
+  /// Describe the picked items as JSON text. This reads no file bytes and
+  /// does not ask for Photos access.
+  private func describeMedia(_ results: [PHPickerResult]) -> String? {
+    let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    var assets: [String: PHAsset] = [:]
+    if status == .authorized || status == .limited {
+      let ids = results.compactMap { $0.assetIdentifier }
+      PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+        .enumerateObjects { asset, _, _ in assets[asset.localIdentifier] = asset }
+    }
+    var items: [[String: Any]] = []
+    var found: [String: NSItemProvider] = [:]
+    for r in results {
+      let token = r.assetIdentifier ?? "provider:" + UUID().uuidString
+      found[token] = r.itemProvider
+      var size: Any = NSNull()
+      if let asset = assets[token], let resource = Self.originalResource(asset),
+         let n = Self.resourceSize(resource) {
+        size = n
+      }
+      items.append(["token": token, "name": Self.mediaName(r.itemProvider), "size": size])
+    }
+    mediaLock.lock()
+    mediaProviders.merge(found) { _, new in new }
+    mediaLock.unlock()
+    guard let data = try? JSONSerialization.data(withJSONObject: items) else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  /// A new slot `<caches>/daak-send/<uuid>`. The caller makes the folder.
+  /// DaakFsPaths sweeps and discards under the same root.
+  static func newSendSlot() -> URL {
+    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("daak-send", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  }
+
+  /// The first registered type that is an image or a movie.
+  static func mediaType(_ provider: NSItemProvider) -> String? {
+    provider.registeredTypeIdentifiers.first { id in
+      guard let type = UTType(id) else { return false }
+      return type.conforms(to: .image) || type.conforms(to: .movie)
+    }
+  }
+
+  /// The suggested name plus the extension of the media type, cleaned.
+  static func mediaName(_ provider: NSItemProvider) -> String {
+    let base = provider.suggestedName ?? "media"
+    guard let type = mediaType(provider),
+          let ext = UTType(type)?.preferredFilenameExtension,
+          (base as NSString).pathExtension.lowercased() != ext.lowercased()
+    else { return safeLeaf(base) }
+    return safeLeaf(base + "." + ext)
+  }
+
+  /// The original photo or video of an asset.
+  static func originalResource(_ asset: PHAsset) -> PHAssetResource? {
+    PHAssetResource.assetResources(for: asset).first { $0.type == .photo || $0.type == .video }
+  }
+
+  /// The size of the original file, or nil. `fileSize` is not a documented
+  /// key. value(forKey:) raises an Objective-C exception for an unknown key,
+  /// and Swift cannot catch it. So the getter is checked first.
+  static func resourceSize(_ resource: PHAssetResource) -> Int64? {
+    guard resource.responds(to: NSSelectorFromString("fileSize")) else { return nil }
+    return (resource.value(forKey: "fileSize") as? NSNumber)?.int64Value
+  }
+
+  /// Clean one file name. The rule is the same as Android ShareInbox.safeLeaf:
+  /// keep the last path part, replace control characters and `/:*?"<>|\` with
+  /// `_`, and cut to maxLeafBytes of UTF-8. A short extension stays. An empty
+  /// result gives `media`.
+  static func safeLeaf(_ name: String) -> String {
+    let leaf = name.split(separator: "/", omittingEmptySubsequences: false).last
+      .map { $0.split(separator: "\\", omittingEmptySubsequences: false).last.map(String.init) ?? "" } ?? ""
+    let bad = Set("/:*?\"<>|\\".unicodeScalars)
+    var scalars = String.UnicodeScalarView()
+    for s in leaf.unicodeScalars {
+      scalars.append(s.value < 0x20 || bad.contains(s) ? "_" : s)
+    }
+    let cleaned = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+    if cleaned.isEmpty || cleaned == "." || cleaned == ".." { return "media" }
+    if cleaned.utf8.count <= maxLeafBytes { return cleaned }
+    var ext = ""
+    if let dot = cleaned.lastIndex(of: "."), dot > cleaned.startIndex {
+      let candidate = String(cleaned[dot...])
+      if candidate.count - 1 <= maxExtChars { ext = candidate }
+    }
+    let stem = cleaned.dropLast(ext.count)
+    let budget = maxLeafBytes - ext.utf8.count
+    var out = ""
+    var used = 0
+    for c in stem {
+      let n = String(c).utf8.count
+      if used + n > budget { break }
+      out.append(c)
+      used += n
+    }
+    return out + ext
   }
 
   // App Group drain. Moves staged bytes OUT of the share-inbox and into the
@@ -220,6 +488,58 @@ class DaakShare: NSObject {
   }
 }
 
+extension DaakShare: PHPickerViewControllerDelegate {
+  /// The system calls this on the main thread for a pick and for a cancel.
+  func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+    picker.dismiss(animated: true)
+    guard let resolve = mediaResolve, let reject = mediaReject else { return }
+    mediaResolve = nil
+    mediaReject = nil
+    if results.isEmpty { resolve("[]"); return }
+    // A cut list sends fewer items than the user picked, in silence.
+    if results.count > Self.maxMedia {
+      reject("E_TOO_MANY", "too many items; pick fewer", nil); return
+    }
+    // The size lookup reads the Photos library. It must not block the main thread.
+    DispatchQueue.global(qos: .userInitiated).async {
+      if let json = self.describeMedia(results) {
+        resolve(json)
+      } else {
+        reject("E_PICK", "the media selection could not be read", nil)
+      }
+    }
+  }
+}
+
+/// Why a media materialize stopped. JS reads the reject code and message.
+/// No message holds a name, a token, or a path.
+enum MediaFailure: Error {
+  case noSpace(Int64)
+  case sourceGone
+  case notDownloaded
+  case failed
+
+  /// A full disk gives noSpace with the item size, or 0 for an unknown size.
+  /// Any other error gives `other`.
+  static func from(_ error: Error, size: Int64?, other: MediaFailure) -> MediaFailure {
+    let e = error as NSError
+    let under = e.userInfo[NSUnderlyingErrorKey] as? NSError
+    let full = (e.domain == NSCocoaErrorDomain && e.code == NSFileWriteOutOfSpaceError)
+      || (e.domain == NSPOSIXErrorDomain && e.code == Int(ENOSPC))
+      || (under?.domain == NSPOSIXErrorDomain && under?.code == Int(ENOSPC))
+    return full ? .noSpace(size ?? 0) : other
+  }
+
+  func reject(_ reject: RCTPromiseRejectBlock) {
+    switch self {
+    case .noSpace(let needed): reject("NO_SPACE", "NO_SPACE:\(needed)", nil)
+    case .sourceGone: reject("E_SOURCE_GONE", "E_SOURCE_GONE", nil)
+    case .notDownloaded: reject("NOT_DOWNLOADED", "NOT_DOWNLOADED", nil)
+    case .failed: reject("E_MATERIALIZE", "Daak could not prepare a file for sending.", nil)
+    }
+  }
+}
+
 private var documentPickerDelegateKey: UInt8 = 0
 
 final class DocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
@@ -291,9 +611,7 @@ final class FolderPickerDelegate: NSObject, UIDocumentPickerDelegate {
     defer { if opened { folder.stopAccessingSecurityScopedResource() } }
     let fm = FileManager.default
     let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-    let slot = caches
-      .appendingPathComponent("daak-send", isDirectory: true)
-      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let slot = DaakShare.newSendSlot()
     let dest = slot.appendingPathComponent(folder.lastPathComponent, isDirectory: true)
     do {
       var entries: [Entry] = []
