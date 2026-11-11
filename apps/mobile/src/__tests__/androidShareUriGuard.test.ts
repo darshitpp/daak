@@ -39,6 +39,9 @@ describe('ShareInbox.copyToCache input guard', () => {
 
   it('refuses an encoded authority that holds an @ character', () => {
     expect(body).toContain("uri.encodedAuthority");
+    // A percent-encoded @ decodes to the user-id prefix: refuse the decoded text and the % sign.
+    expect(body).toContain("authority.contains('@')");
+    expect(body).toContain("it.contains('%')");
     expect(body).toContain("contains('@')");
   });
 

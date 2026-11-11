@@ -44,7 +44,11 @@ object ShareInbox {
     if (uri.scheme != ContentResolver.SCHEME_CONTENT ||
       authority == null ||
       uri.userInfo != null ||
-      uri.encodedAuthority?.contains('@') == true ||
+      // The decoded authority too: `0%40pkg.fileprovider` decodes to `0@pkg...`, and
+      // the resolver strips the prefix and opens the provider of this app. A real
+      // authority holds no `@` and no `%`.
+      authority.contains('@') ||
+      uri.encodedAuthority?.let { it.contains('@') || it.contains('%') } == true ||
       authority.startsWith(ctx.packageName) ||
       isOwnProvider(ctx, authority)
     ) {
