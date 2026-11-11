@@ -5,7 +5,8 @@
 export const GIB = 1024 ** 3;
 /** Size that counts for an item with an unknown size. */
 export const DEFAULT_ITEM_BYTES = 64 * 1024 * 1024;
-const MAX_BATCHES = 1000;
+/** The tag allows at most 1000 batches. The driver uses the same limit. */
+export const MAX_BATCHES = 1000;
 
 export type BatchRef = { token: string; size: number | null };
 export type Batch = { index: number; of: number; tokens: string[]; bytes: number };

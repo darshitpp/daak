@@ -1,6 +1,7 @@
 // Fakes for the batch driver tests. The fake engine keeps its rows and its
-// plans in maps. A send with the same share, batch, and attempt returns the
-// row that exists, as the derived payload id does in the real engine.
+// plans in maps. A send with the same peer, share, batch index k, and attempt
+// returns the row that exists, as the derived payload id does in the real
+// engine. The batch total m is not part of the key, as in the real engine.
 import { vi } from 'vitest';
 import type { SendRequest, TransferSummary } from '@daak/core';
 import { createBatchDriver, type BatchDriverDeps } from '../src/batchDriver';
@@ -16,7 +17,7 @@ export function fakeEngine() {
   const rows = new Map<string, Row>();
   const plans = new Map<string, string>();
   let n = 0;
-  const key = (r: SendRequest) => `${r.peerDeviceId}|${r.share}|${r.batch}|${r.attempt}`;
+  const key = (r: SendRequest) => `${r.peerDeviceId}|${r.share}|${r.batch?.split('/')[0]}|${r.attempt}`;
   const engine = {
     send: vi.fn(async (req: SendRequest) => {
       const found = [...rows.values()].find((r) => key(r.req) === key(req));

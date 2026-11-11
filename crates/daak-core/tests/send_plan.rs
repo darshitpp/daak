@@ -14,7 +14,7 @@ use daak_core::store::Db;
 
 const SHARE: &str = "00112233445566778899aabbccddeeff";
 const SHARE_2: &str = "ffeeddccbbaa99887766554433221100";
-const LIMIT: usize = 256 * 1024;
+const LIMIT: usize = 1024 * 1024;
 
 async fn engine() -> (Engine, Arc<Db>, tempfile::TempDir) {
     let out = tempfile::tempdir().unwrap();
@@ -112,7 +112,7 @@ async fn an_invalid_share_is_refused_and_nothing_is_stored() {
 }
 
 #[tokio::test]
-async fn a_plan_over_256_kib_is_refused_and_a_plan_of_exactly_256_kib_is_accepted() {
+async fn a_plan_over_1_mib_is_refused_and_a_plan_of_exactly_1_mib_is_accepted() {
     let (engine, db, _out) = engine().await;
     let peer = [5u8; 16];
     pair(&db, peer);
@@ -288,24 +288,24 @@ async fn the_list_holds_the_plan_as_a_string_byte_for_byte() {
 }
 
 #[tokio::test]
-async fn the_seventeenth_plan_of_a_peer_is_refused_and_a_replace_still_works() {
+async fn the_fifth_plan_of_a_peer_is_refused_and_a_replace_still_works() {
     let (engine, db, _out) = engine().await;
     let peer = [5u8; 16];
     pair(&db, peer);
     let share = |n: u32| format!("{n:032x}");
-    for n in 0..16 {
+    for n in 0..4 {
         engine.save_send_plan(peer, &share(n), "p").unwrap();
     }
-    let err = engine.save_send_plan(peer, &share(16), "p").unwrap_err();
+    let err = engine.save_send_plan(peer, &share(4), "p").unwrap_err();
     assert_eq!(err.to_string(), "protocol: too many send plans");
-    assert_eq!(list(&engine, peer).len(), 16);
+    assert_eq!(list(&engine, peer).len(), 4);
     // A save for a share that exists replaces it, even at the limit.
     engine.save_send_plan(peer, &share(3), "new").unwrap();
-    assert_eq!(list(&engine, peer).len(), 16);
+    assert_eq!(list(&engine, peer).len(), 4);
     // A delete frees a place.
     engine.delete_send_plan(peer, &share(0)).unwrap();
-    engine.save_send_plan(peer, &share(16), "p").unwrap();
-    assert_eq!(list(&engine, peer).len(), 16);
+    engine.save_send_plan(peer, &share(4), "p").unwrap();
+    assert_eq!(list(&engine, peer).len(), 4);
 }
 
 #[tokio::test]

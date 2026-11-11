@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GIB } from './planBatches';
+import { PLAN_MAX_BYTES } from './batchDriver';
 import { PEER, PEER2, SHARE, deferred, flush, ref, setup } from '../test/batchDriverFakes';
 
 beforeEach(() => {
@@ -330,19 +331,21 @@ describe('the batch driver', () => {
       ],
       cursor: 1,
       inflight: { transferId: 't1', attempt: 0 },
+      sending: null,
       paused: null,
       attempt: 0,
     });
     s.driver.dispose();
   });
 
-  it('the plan is saved after the plan is computed, after send, and after each end', async () => {
+  it('the plan is saved after the plan is computed, before and after send, and after each end', async () => {
     const s = setup();
     const order: string[] = [];
     const save = s.fe.engine.saveSendPlan.getMockImplementation()!;
     s.fe.engine.saveSendPlan.mockImplementation(async (p, sh, json) => {
       const j = JSON.parse(json);
-      order.push(`save c${j.cursor} ${j.inflight ? j.inflight.transferId : '-'}`);
+      const mark = j.sending === null || j.sending === undefined ? '' : ` s${j.sending}`;
+      order.push(`save c${j.cursor} ${j.inflight ? j.inflight.transferId : '-'}${mark}`);
       return save(p, sh, json);
     });
     const send = s.fe.engine.send.getMockImplementation()!;
@@ -352,7 +355,16 @@ describe('the batch driver', () => {
     });
     await s.driver.start(PEER, twoBatches);
     await finish(s, 't1');
-    expect(order).toEqual(['save c1 -', 'send 1/2', 'save c1 t1', 'save c2 -', 'send 2/2', 'save c2 t2']);
+    expect(order).toEqual([
+      'save c1 -',
+      'save c1 - s0',
+      'send 1/2',
+      'save c1 t1',
+      'save c2 -',
+      'save c2 - s0',
+      'send 2/2',
+      'save c2 t2',
+    ]);
     s.driver.dispose();
   });
 
@@ -425,6 +437,257 @@ describe('the batch driver', () => {
     const text = s.log.mock.calls.map((c) => String(c[0])).join('\n');
     expect(s.log).toHaveBeenCalled();
     for (const bad of [SHARE, '/cache/', 'a.jpg', PEER]) expect(text).not.toContain(bad);
+    s.driver.dispose();
+  });
+});
+
+/** Batch 1 is x (3 GiB). Batch 2 is a (2 GiB) and b (1 GiB). */
+const laterSplit = [ref('x', 3), ref('a', 2), ref('b', 1)];
+
+/** The batch total m of each send, in send order. */
+const totals = (s: ReturnType<typeof setup>) =>
+  s.fe.engine.send.mock.calls.map((c) => c[0].batch!.split('/')[1]);
+
+describe('the batch driver after the review', () => {
+  it('a free-space failure discards the copies and pauses FAILED', async () => {
+    const s = setup();
+    // start, then before b.
+    s.media.freeBytes.mockResolvedValueOnce(100 * GIB).mockRejectedValueOnce(new Error('statfs'));
+    await s.driver.start(PEER, [ref('a', 1), ref('b', 1)]);
+    expect(s.media.discard).toHaveBeenCalledWith('/cache/a');
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).paused).toEqual({ error: 'FAILED' });
+    s.driver.dispose();
+  });
+
+  it('a throw during the send step discards the copies and pauses FAILED', async () => {
+    const s = setup();
+    // The split happens before c. The redraw after the split save throws once.
+    s.media.freeBytes
+      .mockResolvedValueOnce(100 * GIB)
+      .mockResolvedValueOnce(100 * GIB)
+      .mockResolvedValueOnce(GIB);
+    s.media.materialize.mockImplementation(async (t: string) => {
+      if (t === 'b') {
+        s.onChange.mockImplementationOnce(() => {
+          throw new Error('redraw');
+        });
+      }
+      return `/cache/${t}`;
+    });
+    await s.driver.start(PEER, [ref('a', 1), ref('b', 1), ref('c', 1), ref('d', 3)]);
+    expect(s.media.discard.mock.calls.map((c) => c[0]).sort()).toEqual(['/cache/a', '/cache/b']);
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    s.driver.dispose();
+  });
+
+  it('a low-space condition in batch 2 pauses NO_SPACE with the needed size and does not split', async () => {
+    // The free-space check before b.
+    const s = setup();
+    await s.driver.start(PEER, laterSplit);
+    s.media.freeBytes.mockResolvedValueOnce(GIB);
+    await finish(s, 't1');
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(1);
+    expect(s.media.discard).toHaveBeenCalledWith('/cache/a');
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 2, of: 2, paused: true, error: 'NO_SPACE', neededBytes: 4 * GIB });
+    const saved = JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!);
+    expect(saved.batches.map((b: { tokens: string[] }) => b.tokens)).toEqual([['x'], ['a', 'b']]);
+    expect(saved.paused).toEqual({ error: 'NO_SPACE', neededBytes: 4 * GIB });
+    s.driver.dispose();
+
+    // NO_SPACE from the copy of b.
+    const t = setup();
+    await t.driver.start(PEER, laterSplit);
+    t.media.materialize.mockImplementation(async (tok: string) => {
+      if (tok === 'b') throw new Error('NO_SPACE:99');
+      return `/cache/${tok}`;
+    });
+    await finish(t, 't1');
+    expect(t.fe.engine.send).toHaveBeenCalledTimes(1);
+    expect(t.media.discard).toHaveBeenCalledWith('/cache/a');
+    expect(t.driver.status(PEER)).toMatchObject({ batch: 2, of: 2, paused: true, error: 'NO_SPACE', neededBytes: 99 });
+    t.driver.dispose();
+  });
+
+  it('retry sends the same batch again with attempt + 1', async () => {
+    const s = setup();
+    await s.driver.start(PEER, laterSplit);
+    s.media.freeBytes.mockResolvedValueOnce(GIB);
+    await finish(s, 't1');
+    await s.driver.retry(PEER);
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(2);
+    expect(s.fe.engine.send.mock.calls[1][0]).toMatchObject({
+      batch: '2/2',
+      attempt: 1,
+      files: ['/cache/a', '/cache/b'],
+    });
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 2, of: 2, paused: false });
+    s.driver.dispose();
+  });
+
+  it('the first batch may be split and the plan total stays at or below 1000', async () => {
+    const s = setup();
+    // Batch 1 is a and b. 998 more batches of one item each: 999 batches.
+    const refs = [ref('a', 1), ref('b', 1), ...Array.from({ length: 998 }, (_, i) => ref(`t${i}`, 3))];
+    // start, then before b.
+    s.media.freeBytes.mockResolvedValueOnce(100 * GIB).mockResolvedValueOnce(GIB);
+    await s.driver.start(PEER, refs);
+    expect(s.fe.engine.send.mock.calls[0][0]).toMatchObject({ files: ['/cache/a'], batch: '1/1000' });
+    const saved = JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!);
+    expect(saved.batches).toHaveLength(1000);
+    expect(saved.batches[1]).toMatchObject({ index: 2, of: 1000, tokens: ['b'] });
+    s.driver.dispose();
+  });
+
+  it('a split that would make more than 1000 batches pauses NO_SPACE', async () => {
+    const s = setup();
+    // Batch 1 is a and b. 999 more batches of one item each: 1000 batches.
+    const refs = [ref('a', 1), ref('b', 1), ...Array.from({ length: 999 }, (_, i) => ref(`t${i}`, 3))];
+    s.media.freeBytes.mockResolvedValueOnce(100 * GIB).mockResolvedValueOnce(GIB);
+    await s.driver.start(PEER, refs);
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
+    expect(s.media.discard).toHaveBeenCalledWith('/cache/a');
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 1, of: 1000, paused: true, error: 'NO_SPACE' });
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).batches).toHaveLength(1000);
+    s.driver.dispose();
+  });
+
+  it('m never changes once batch 1 was sent', async () => {
+    const s = setup();
+    await s.driver.start(PEER, [ref('x', 3), ref('a', 2), ref('b', 1), ref('c', 3)]);
+    // Batch 2: low space before b.
+    s.media.freeBytes.mockResolvedValueOnce(GIB);
+    await finish(s, 't1');
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'NO_SPACE' });
+    // The retry of batch 2: NO_SPACE from the copy of b.
+    s.media.materialize.mockImplementationOnce(async () => '/cache/a').mockRejectedValueOnce(new Error('NO_SPACE:5'));
+    await s.driver.retry(PEER);
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'NO_SPACE' });
+    await s.driver.retry(PEER);
+    await finish(s, 't2');
+    await finish(s, 't3');
+    expect(s.driver.status(PEER)).toBeNull();
+    expect(new Set(totals(s))).toEqual(new Set(['3']));
+    expect(s.fe.engine.send.mock.calls.map((c) => c[0].batch)).toEqual(['1/3', '2/3', '3/3']);
+    s.driver.dispose();
+  });
+
+  it('a plan over 1 MiB rejects PLAN_TOO_LARGE before the first save', async () => {
+    const small = (token: string) => ({ token, name: 'n', size: 1024 });
+    // 5000 tokens of 150 two-byte characters: 750 000 UTF-16 units, 1.5 MB as UTF-8.
+    const s = setup();
+    const big = Array.from({ length: 5000 }, (_, i) => small(`${i}`.padStart(4, '0') + 'é'.repeat(150)));
+    expect(JSON.stringify(big.map((r) => r.token)).length).toBeLessThan(PLAN_MAX_BYTES);
+    await expect(s.driver.start(PEER, big)).rejects.toThrow(/^PLAN_TOO_LARGE$/);
+    expect(s.fe.engine.saveSendPlan).not.toHaveBeenCalled();
+    expect(s.media.materialize).not.toHaveBeenCalled();
+    expect(s.driver.status(PEER)).toBeNull();
+    // 5000 Android photo-picker URIs of about 81 characters fit.
+    const t = setup();
+    const uris = Array.from({ length: 5000 }, (_, i) =>
+      small(`content://media/picker/0/com.android.providers.media.photopicker/media/${1000000 + i}`),
+    );
+    await expect(t.driver.start(PEER, uris)).resolves.toEqual({ share: SHARE });
+    t.driver.dispose();
+  });
+
+  it('stop during the split save sends nothing', async () => {
+    const s = setup();
+    s.media.freeBytes
+      .mockResolvedValueOnce(100 * GIB)
+      .mockResolvedValueOnce(100 * GIB)
+      .mockResolvedValueOnce(GIB);
+    const gate = deferred<void>();
+    const save = s.fe.engine.saveSendPlan.getMockImplementation()!;
+    s.fe.engine.saveSendPlan.mockImplementation(async (p, sh, json) => {
+      if (JSON.parse(json).batches.length === 3) await gate.promise;
+      return save(p, sh, json);
+    });
+    const started = s.driver.start(PEER, [ref('a', 1), ref('b', 1), ref('c', 1), ref('d', 3)]);
+    await flush();
+    const stopped = s.driver.stop(PEER);
+    gate.resolve();
+    await started;
+    await stopped;
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
+    expect(s.media.discard.mock.calls.map((c) => c[0]).sort()).toEqual(['/cache/a', '/cache/b']);
+    expect(s.fe.plans.size).toBe(0);
+    s.driver.dispose();
+  });
+
+  it('a hung listTransfers does not block stop', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.engine.listTransfers.mockImplementation(() => new Promise(() => {}));
+    await vi.advanceTimersByTimeAsync(15_000);
+    let done = false;
+    const stopped = s.driver.stop(PEER).then(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flush();
+    expect(done).toBe(true);
+    await stopped;
+    expect(s.fe.engine.cancel).toHaveBeenCalledWith('t1');
+    expect(s.fe.plans.size).toBe(0);
+    s.driver.dispose();
+  });
+
+  it('a hung listTransfers is no information: the batch is not sent again', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.engine.listTransfers.mockImplementationOnce(() => new Promise(() => {}));
+    await vi.advanceTimersByTimeAsync(15_000 + 30_000);
+    await flush();
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(1);
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 1, paused: false });
+    s.driver.dispose();
+  });
+
+  it('the poll does not queue a second check while one is pending', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    const gate = deferred<Awaited<ReturnType<typeof s.fe.engine.listTransfers>>>();
+    s.fe.engine.listTransfers.mockClear();
+    s.fe.engine.listTransfers.mockImplementationOnce(() => gate.promise);
+    // The tick at 15 s starts a check. The tick at 30 s finds it pending.
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(s.fe.engine.listTransfers).toHaveBeenCalledTimes(1);
+    gate.resolve([...s.fe.rows.values()]);
+    await flush();
+    expect(s.fe.engine.listTransfers).toHaveBeenCalledTimes(1);
+    s.driver.dispose();
+  });
+
+  it('a done event clears a pause and advances', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    // The user taps Retry on the thread row. The transfer ends done.
+    await finish(s, 't1');
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 2, paused: false });
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).paused).toBeNull();
+    s.driver.dispose();
+  });
+
+  it('retry falls back to attempt + 1 when engine.retry rejects', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    s.fe.engine.retry.mockRejectedValueOnce(new Error('staged file gone'));
+    await s.driver.retry(PEER);
+    expect(s.fe.engine.retry).toHaveBeenCalledWith('t1');
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(2);
+    expect(s.fe.engine.send.mock.calls[1][0]).toMatchObject({ batch: '1/2', attempt: 1, files: ['/cache/a'] });
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 1, paused: false });
     s.driver.dispose();
   });
 });

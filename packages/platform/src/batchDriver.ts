@@ -11,7 +11,7 @@
 // the state of the transfer with `listTransfers`. A poll every 15 s does the
 // same read, because a cancel and a revoke send no event.
 import type { DaakEngine, DaakEvent } from '@daak/core';
-import { DEFAULT_ITEM_BYTES, GIB, planBatches, type Batch } from './planBatches';
+import { DEFAULT_ITEM_BYTES, GIB, MAX_BATCHES, planBatches, type Batch } from './planBatches';
 import type { MediaRef } from './share';
 
 type PauseError = 'NO_SPACE' | 'PLAN_LOST' | 'FAILED' | 'CANCELED';
@@ -46,6 +46,9 @@ export type BatchDriverDeps = {
   randomShare(): string;
   setInterval(fn: () => void, ms: number): unknown;
   clearInterval(handle: unknown): void;
+  /** The time limit of a `listTransfers` read. The globals are the default. */
+  setTimeout?(fn: () => void, ms: number): unknown;
+  clearTimeout?(handle: unknown): void;
   onChange?(peerId: string): void;
   /** Do not give a name, a token, a path, or a share to this function. */
   log?(msg: string): void;
@@ -70,6 +73,13 @@ type SavedPlan = {
   /** The 1-based index of the batch to send or in flight. */
   cursor: number;
   inflight: { transferId: string; attempt: number } | null;
+  /**
+   * The attempt of a `send` that started and has no saved result. A plan with
+   * `sending` and no `inflight` sends the same batch with this attempt again,
+   * with no split. The derived id then returns the row of the first send.
+   * Optional in the saved text: an older plan parses as null.
+   */
+  sending: number | null;
   paused: null | { error: PauseError; neededBytes?: number };
   /** The attempt counter of the current batch. */
   attempt: number;
@@ -81,13 +91,35 @@ type Entry = {
   /** The steps of one plan run in this order. */
   chain: Promise<void>;
   stopped: boolean;
+  /** True while a poll check of this plan is queued or runs. */
+  polling: boolean;
 };
 
 export const POLL_MS = 15_000;
+/** The time limit of one `listTransfers` read. */
+export const LIST_TIMEOUT_MS = 30_000;
+/** The largest saved plan. The engine refuses a larger one (`SEND_PLAN_MAX_BYTES`). */
+export const PLAN_MAX_BYTES = 1024 * 1024;
+/**
+ * Room for the fields that a later save adds to the plan of `start`: one more
+ * batch from a split, a longer `of` in each batch, `inflight`, and `sending`.
+ */
+const PLAN_GROWTH_BYTES = 8 * 1024;
+/** The receiver refuses a batch tag with a total over 1000 (`parse_batch_tag`). */
 const SHARE_RE = /^[0-9a-f]{32}$/;
 const PAUSE_ERRORS: readonly string[] = ['NO_SPACE', 'PLAN_LOST', 'FAILED', 'CANCELED'];
 
 const isCount = (n: unknown, min: number): n is number => Number.isInteger(n) && (n as number) >= min;
+
+/** The UTF-8 length of a text. */
+function utf8Bytes(text: string): number {
+  let n = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
 
 /** The saved plan, or null when the text is not a valid version 1 plan. */
 function parsePlan(text: string, peerId: string, share: string): SavedPlan | null {
@@ -123,12 +155,13 @@ function parsePlan(text: string, peerId: string, share: string): SavedPlan | nul
     const f = o.inflight as Record<string, unknown> | undefined;
     if (typeof f !== 'object' || typeof f.transferId !== 'string' || !isCount(f.attempt, 0)) return null;
   }
+  if (o.sending !== undefined && o.sending !== null && !isCount(o.sending, 0)) return null;
   if (o.paused !== null) {
     const q = o.paused as Record<string, unknown> | undefined;
     if (typeof q !== 'object' || typeof q.error !== 'string' || !PAUSE_ERRORS.includes(q.error)) return null;
     if (q.neededBytes !== undefined && !isCount(q.neededBytes, 0)) return null;
   }
-  return p as SavedPlan;
+  return { ...(p as SavedPlan), sending: (o.sending as number | null | undefined) ?? null };
 }
 
 const allTokens = (p: SavedPlan) => p.batches.flatMap((b) => b.tokens);
@@ -149,9 +182,13 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     if (need && poll === null && !disposed) {
       poll = deps.setInterval(() => {
         for (const e of entries.values()) {
-          if (!waiting(e)) continue;
+          // A check that is queued or runs is enough. Do not queue more.
+          if (!waiting(e) || e.polling) continue;
+          e.polling = true;
           const id = e.plan!.inflight!.transferId;
-          void step(e, () => check(e, id));
+          void step(e, () => check(e, id)).then(() => {
+            e.polling = false;
+          });
         }
       }, POLL_MS);
     } else if (!need && poll !== null) {
@@ -228,56 +265,75 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
   // the copies. Every copy is deleted on every path.
   async function runBatch(e: Entry): Promise<void> {
     const p = e.plan!;
-    const b = p.batches[p.cursor - 1];
+    // A saved `sending` with no `inflight`: an earlier send has no saved
+    // result. Send the same items with the same attempt.
+    const resend = p.sending !== null;
+    if (resend) p.attempt = p.sending!;
     const attempt = p.attempt;
+    const b = p.batches[p.cursor - 1];
+    // A split changes the total m of every batch. The receiver keeps the first
+    // m that it gets. So only the first batch can split, before any send.
+    const canSplit = !resend && p.cursor === 1 && attempt === 0 && p.batches.length < MAX_BATCHES;
     const paths: string[] = [];
-    let at = b.tokens.length;
-    for (let i = 0; i < b.tokens.length; i++) {
-      if (i > 0 && (await media.freeBytes()) < GIB + DEFAULT_ITEM_BYTES) {
-        at = i;
-        break;
-      }
-      try {
-        paths.push(await media.materialize(b.tokens[i]));
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '';
-        if (msg.startsWith('NO_SPACE') && i > 0) {
+    let transferId: string;
+    try {
+      let at = b.tokens.length;
+      for (let i = 0; i < b.tokens.length; i++) {
+        if (i > 0 && (await media.freeBytes()) < GIB + DEFAULT_ITEM_BYTES) {
+          if (!canSplit) {
+            await discardAll(paths);
+            return await pause(p, 'NO_SPACE', b.bytes + GIB);
+          }
           at = i;
           break;
         }
-        await discardAll(paths);
-        if (msg.startsWith('NO_SPACE')) {
-          const n = Number(msg.slice('NO_SPACE:'.length));
-          return pause(p, 'NO_SPACE', Number.isSafeInteger(n) && n > 0 ? n : undefined);
+        try {
+          paths.push(await media.materialize(b.tokens[i]));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : '';
+          if (msg.startsWith('NO_SPACE') && i > 0 && canSplit) {
+            at = i;
+            break;
+          }
+          await discardAll(paths);
+          if (msg.startsWith('NO_SPACE')) {
+            const n = Number(msg.slice('NO_SPACE:'.length));
+            return await pause(p, 'NO_SPACE', Number.isSafeInteger(n) && n > 0 ? n : undefined);
+          }
+          return await pause(p, msg === 'E_SOURCE_GONE' ? 'PLAN_LOST' : 'FAILED');
         }
-        return pause(p, msg === 'E_SOURCE_GONE' ? 'PLAN_LOST' : 'FAILED');
+        if (e.stopped) return await discardAll(paths);
       }
-      if (e.stopped) return discardAll(paths);
-    }
-    if (at < b.tokens.length) {
-      split(p, at);
+      if (at < b.tokens.length) split(p, at);
+      // One save holds the split and the mark of the send.
+      p.sending = attempt;
       await save(p);
       changed(p.peerId);
-    }
-    const cur = p.batches[p.cursor - 1];
-    let transferId: string;
-    try {
-      ({ transferId } = await engine.send({
-        peerDeviceId: p.peerId,
-        files: [...paths],
-        share: p.share,
-        batch: `${cur.index}/${cur.of}`,
-        attempt,
-      }));
+      if (e.stopped) return await discardAll(paths);
+      const cur = p.batches[p.cursor - 1];
+      try {
+        ({ transferId } = await engine.send({
+          peerDeviceId: p.peerId,
+          files: [...paths],
+          share: p.share,
+          batch: `${cur.index}/${cur.of}`,
+          attempt,
+        }));
+      } catch {
+        await discardAll(paths);
+        p.sending = null;
+        return await pause(p, 'FAILED');
+      }
+      // The engine staged the files. The copies are not needed now.
+      await discardAll(paths);
+      p.sending = null;
+      p.inflight = { transferId, attempt };
+      await save(p);
+      changed(p.peerId);
     } catch {
       await discardAll(paths);
       return pause(p, 'FAILED');
     }
-    // The engine staged the files. The copies are not needed now.
-    await discardAll(paths);
-    p.inflight = { transferId, attempt };
-    await save(p);
-    changed(p.peerId);
     // A repeated send can return a row that already ended.
     if (!e.stopped) await check(e, transferId);
   }
@@ -294,20 +350,44 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     changed(p.peerId);
   }
 
-  async function stateOf(p: SavedPlan, transferId: string): Promise<string | null> {
-    const rows = await engine.listTransfers({ peerDeviceId: p.peerId });
-    return rows.find((r) => r.transferId === transferId)?.state ?? null;
+  // The state of a transfer, null when the row is not found, or undefined when
+  // the read failed or took more than LIST_TIMEOUT_MS. Undefined is no
+  // information: the caller does nothing.
+  async function stateOf(p: SavedPlan, transferId: string): Promise<string | null | undefined> {
+    const setT = deps.setTimeout ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+    const clearT = deps.clearTimeout ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
+    let timer: unknown = null;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setT(() => resolve(undefined), LIST_TIMEOUT_MS);
+    });
+    try {
+      const rows = await Promise.race([engine.listTransfers({ peerDeviceId: p.peerId }), late]);
+      if (rows === undefined) {
+        log('batch driver: the transfer list timed out');
+        return undefined;
+      }
+      return rows.find((r) => r.transferId === transferId)?.state ?? null;
+    } catch {
+      log('batch driver: the transfer list failed');
+      return undefined;
+    } finally {
+      clearT(timer);
+    }
   }
 
-  // Read the state of the in-flight transfer and act on it. `done` advances.
-  // `failed` and `canceled` pause. A row that is not found runs the batch
-  // again with the same attempt: the derived id makes this send safe. Any
-  // other state is a wait.
+  // Read the state of the in-flight transfer and act on it. `done` advances,
+  // also from a pause (the user can retry the row in the thread). `failed`
+  // and `canceled` pause. A row that is not found runs the batch again with
+  // the same attempt: the derived id makes this send safe. Any other state is
+  // a wait.
   async function check(e: Entry, transferId: string): Promise<void> {
     const p = e.plan!;
-    if (p.paused !== null || p.inflight?.transferId !== transferId) return;
+    if (p.inflight?.transferId !== transferId) return;
     const state = await stateOf(p, transferId);
+    if (state === undefined) return;
+    if (p.paused !== null && state !== 'done') return;
     if (state === 'done') {
+      p.paused = null;
       p.inflight = null;
       p.attempt = 0;
       p.cursor += 1;
@@ -319,6 +399,7 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     if (state === 'failed') return pause(p, 'FAILED');
     if (state === 'canceled') return pause(p, 'CANCELED');
     if (state === null) {
+      p.sending = p.inflight.attempt;
       p.inflight = null;
       return runBatch(e);
     }
@@ -326,7 +407,7 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
 
   async function start(peerId: string, refs: MediaRef[]): Promise<{ share: string }> {
     if (entries.has(peerId)) throw new Error('PLAN_BUSY');
-    const e: Entry = { plan: null, chain: Promise.resolve(), stopped: false };
+    const e: Entry = { plan: null, chain: Promise.resolve(), stopped: false, polling: false };
     entries.set(peerId, e);
     const share = deps.randomShare();
     try {
@@ -344,10 +425,13 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
         batches,
         cursor: 1,
         inflight: null,
+        sending: null,
         paused: null,
         attempt: 0,
       };
-      await engine.saveSendPlan(peerId, share, JSON.stringify(e.plan));
+      const text = JSON.stringify(e.plan);
+      if (utf8Bytes(text) + PLAN_GROWTH_BYTES > PLAN_MAX_BYTES) throw new Error('PLAN_TOO_LARGE');
+      await engine.saveSendPlan(peerId, share, text);
     } catch (err) {
       entries.delete(peerId);
       throw err;
@@ -374,23 +458,30 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
       if (p.paused === null) return;
       const id = p.inflight?.transferId;
       const state = id === undefined ? null : await stateOf(p, id);
+      // No information: the plan stays paused. The user can tap Retry again.
+      if (state === undefined) return;
       p.paused = null;
       if (id !== undefined && state === 'failed') {
-        // The row still holds its staged file.
-        await engine.retry(id);
-        await save(p);
-        changed(peerId);
-        return;
-      }
-      if (id !== undefined && state !== null && state !== 'canceled') {
+        try {
+          // The row still holds its staged file.
+          await engine.retry(id);
+          await save(p);
+          changed(peerId);
+          return;
+        } catch {
+          // The staged file can be gone. Send the batch again below.
+          log('batch driver: the engine retry failed');
+        }
+      } else if (id !== undefined && state !== null && state !== 'canceled') {
         // The row is alive again. Read it as a poll does.
         await save(p);
         changed(peerId);
         return check(e, id);
       }
-      // No row to retry: run the same batch with a new derived id.
       p.inflight = null;
-      p.attempt += 1;
+      // A send with no saved result keeps its attempt: the derived id finds
+      // that row. Otherwise run the same batch with a new derived id.
+      if (p.sending === null) p.attempt += 1;
       return runBatch(e);
     });
   }
@@ -472,7 +563,7 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
       }
     }
     if (entries.has(peerId)) return;
-    const e: Entry = { plan: keep, chain: Promise.resolve(), stopped: false };
+    const e: Entry = { plan: keep, chain: Promise.resolve(), stopped: false, polling: false };
     entries.set(peerId, e);
     changed(peerId);
     if (keep.paused !== null) return;

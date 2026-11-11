@@ -579,10 +579,12 @@ async fn note_found(
 /// accept loop hands it to `handle_inbound`. R42d.
 pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
 
-/// The largest saved send plan: 256 KiB.
-const SEND_PLAN_MAX_BYTES: usize = 256 * 1024;
-/// A peer can have at most this many saved plans at one time.
-const SEND_PLAN_MAX_PER_PEER: usize = 16;
+/// The largest saved send plan: 1 MiB. A pick of 5000 Android photo-picker
+/// URIs makes a plan of about 450 KB.
+const SEND_PLAN_MAX_BYTES: usize = 1024 * 1024;
+/// A peer can have at most this many saved plans at one time. So the list of
+/// one peer holds at most 4 MiB.
+const SEND_PLAN_MAX_PER_PEER: usize = 4;
 
 fn send_plan_prefix(peer: &[u8; 16]) -> String {
     format!("sendplan:{}:", hex::encode(peer))

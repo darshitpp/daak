@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GIB } from './planBatches';
-import { PEER, PEER2, SHARE, flush, setup } from '../test/batchDriverFakes';
+import { createBatchDriver } from './batchDriver';
+import { PEER, PEER2, SHARE, fakeMedia, flush, ref, setup } from '../test/batchDriverFakes';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -241,5 +242,74 @@ describe('resume of a saved plan', () => {
     expect(s.fe.plans.size).toBe(0);
     expect(s.media.release).toHaveBeenCalledWith(['a', 'b', 'c']);
     s.driver.dispose();
+  });
+  it('a crash after send and before the save resumes the same batch with the same attempt and without a split even when space is low', async () => {
+    // Life 1: batch 1 is a and b, batch 2 is c. The save after send never ends.
+    const s = setup();
+    let crashed = false;
+    const save = s.fe.engine.saveSendPlan.getMockImplementation()!;
+    s.fe.engine.saveSendPlan.mockImplementation(async (p, sh, json) => {
+      if (crashed) return new Promise<void>(() => {});
+      return save(p, sh, json);
+    });
+    const send = s.fe.engine.send.getMockImplementation()!;
+    s.fe.engine.send.mockImplementation(async (req) => {
+      const r = await send(req);
+      crashed = true;
+      return r;
+    });
+    void s.driver.start(PEER, [ref('a', 1), ref('b', 1), ref('c', 3)]);
+    await flush();
+    expect(s.fe.rows.size).toBe(1);
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).inflight).toBeNull();
+
+    // Life 2: the same engine data. Free space is low before b.
+    crashed = false;
+    s.fe.engine.send.mockImplementation(send);
+    const media = fakeMedia();
+    media.freeBytes.mockResolvedValueOnce(GIB);
+    const life2 = createBatchDriver({ ...s.deps, media });
+    await life2.resume([PEER]);
+    await flush();
+    expect(life2.status(PEER)).toMatchObject({ batch: 1, of: 2, paused: true, error: 'NO_SPACE' });
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).batches).toHaveLength(2);
+    // The user frees space and taps Retry. The same attempt finds the row of life 1.
+    await life2.retry(PEER);
+    const resent = s.fe.engine.send.mock.calls.at(-1)![0];
+    expect(resent).toMatchObject({ batch: '1/2', attempt: 0 });
+    expect(s.fe.rows.size).toBe(1);
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).inflight).toEqual({ transferId: 't1', attempt: 0 });
+    s.fe.setState('t1', 'done');
+    life2.onEvent({ type: 'transfer.done', transferId: 't1' });
+    await flush();
+    s.fe.setState('t2', 'done');
+    life2.onEvent({ type: 'transfer.done', transferId: 't2' });
+    await flush();
+    expect(life2.status(PEER)).toBeNull();
+    // Each file is in exactly one transfer, across both lives.
+    const files = s.fe.sent().flatMap((r) => r.req.files ?? []);
+    expect(files.sort()).toEqual(['/cache/a', '/cache/b', '/cache/c']);
+    expect(s.fe.engine.send.mock.calls.every((c) => c[0].batch!.endsWith('/2'))).toBe(true);
+    life2.dispose();
+    s.driver.dispose();
+  });
+
+  it('a saved plan without the sending field parses as sending null', async () => {
+    const s = setup();
+    seed(s, plan({ cursor: 2 }));
+    await s.driver.resume([PEER]);
+    await flush();
+    expect(s.fe.engine.send.mock.calls[0][0]).toMatchObject({ batch: '2/3', attempt: 0 });
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).sending).toBeNull();
+    s.driver.dispose();
+  });
+
+  it('a saved plan with an invalid sending field is deleted', async () => {
+    const s = setup();
+    seed(s, plan({ sending: -1 }));
+    await s.driver.resume([PEER]);
+    await flush();
+    expect(s.fe.engine.deleteSendPlan).toHaveBeenCalledWith(PEER, SHARE);
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
   });
 });
