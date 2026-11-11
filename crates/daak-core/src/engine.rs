@@ -3602,10 +3602,11 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
         db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
     } else {
         // The row was already done (delivered) or awaiting_ack. Cancel did
-        // not win, so the outbox is the authority and the staged copy is
-        // still wanted: a delivered share's staging is what a later retry
-        // would re-send from. Deleting it here would turn a no-op cancel into
-        // silent data loss while the row still reads `done`.
+        // not win, so the outbox is the authority. A row in `awaiting_ack`
+        // can still fail, so its staged copy stays. A `done` row never
+        // retries, because `retry_outbox_now` accepts only `pending` and
+        // `failed`. The drain already deleted the staged copy of a `done`
+        // row, so this cancel has nothing to delete.
         return Ok(());
     }
     staging.cleanup(&row.payload_id)
@@ -3893,6 +3894,16 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                     target: "outbox".into(),
                     message: format!("drain delivered {}", hex::encode(row.id)),
                 });
+                // The peer has the data and the row is done. A done row never
+                // sends again, so the staged copy is not needed. Without this
+                // step, delivered sends fill the disk until the next start.
+                // A failed cleanup must not change the result of the send.
+                if let Err(e) = ctx.staging.cleanup(&row.payload_id) {
+                    tracing::warn!(
+                        "staging cleanup after a delivered send failed: {}",
+                        log_err(&e)
+                    );
+                }
                 // F4: the transfers row enqueue wrote has to follow the row to
                 // its end, or a delivered share stays "queued" in the UI
                 // forever. Same best-effort treatment as the settles beside it:
