@@ -30,15 +30,23 @@ object ShareInbox {
    */
   private fun intentSendsDir(ctx: Context): File = File(dir(ctx), "intent-sends").apply { mkdirs() }
 
+  /**
+   * Refuses a URI that is not content:// or that names a provider of this app.
+   * The message holds no URI, because JavaScript can read it.
+   */
+  internal fun requireForeignContentUri(ctx: Context, uri: Uri) {
+    if (uri.scheme != ContentResolver.SCHEME_CONTENT ||
+      uri.authority?.startsWith(ctx.packageName) == true
+    ) {
+      throw SecurityException("refused uri")
+    }
+  }
+
   fun copyToCache(ctx: Context, uri: Uri): File {
     // Another app picks this uri (the share target is exported), and the read
     // runs in this process. A file:// uri, or a uri on a provider of this app,
     // would copy a private Daak file into the share inbox.
-    if (uri.scheme != ContentResolver.SCHEME_CONTENT ||
-      uri.authority?.startsWith(ctx.packageName) == true
-    ) {
-      throw SecurityException("refused uri: $uri")
-    }
+    requireForeignContentUri(ctx, uri)
     // R42m: the name used to come from `uri.lastPathSegment`, which for a
     // content URI is `image:1000196782`. No extension travelled with it, so the
     // receiving device stored an unopenable file. The provider knows the real
@@ -88,7 +96,7 @@ object ShareInbox {
    * about to become a file name on THIS device and on the peer, so separators
    * and traversal are removed here rather than at the far end.
    */
-  private fun safeLeaf(name: String): String {
+  internal fun safeLeaf(name: String): String {
     val leaf = name.substringAfterLast('/').substringAfterLast('\\')
     val cleaned = leaf.replace(Regex("[\\u0000-\\u001f/:*?\"<>|]"), "_").trim()
     return if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") "payload" else cleaned

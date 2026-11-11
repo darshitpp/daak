@@ -13,8 +13,16 @@ const file = join(
 
 describe('ShareInbox.copyToCache input guard', () => {
   const src = readFileSync(file, 'utf8');
-  const start = src.indexOf('fun copyToCache(');
-  const body = src.slice(start, src.indexOf('openInputStream', start));
+  // The refusal lives in requireForeignContentUri. copyToCache and materialize
+  // both call it, so the text exists once.
+  const start = src.indexOf('fun requireForeignContentUri(');
+  const body = src.slice(start, src.indexOf('fun copyToCache(', start));
+  const copyStart = src.indexOf('fun copyToCache(');
+  const copyBody = src.slice(copyStart, src.indexOf('openInputStream', copyStart));
+
+  it('copyToCache calls the refusal before it opens the stream', () => {
+    expect(copyBody).toContain('requireForeignContentUri(ctx, uri)');
+  });
 
   it('refuses a uri that is not a content uri before it opens the stream', () => {
     expect(body).toContain('SCHEME_CONTENT');

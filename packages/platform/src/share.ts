@@ -50,6 +50,62 @@ export async function pickFolder(): Promise<string | null> {
   }
 }
 
+export type MediaRef = { token: string; name: string; size: number | null };
+
+const isMediaRef = (v: unknown): v is MediaRef => {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as { token?: unknown; name?: unknown; size?: unknown };
+  return (
+    typeof r.token === 'string' &&
+    typeof r.name === 'string' &&
+    (r.size === null || (typeof r.size === 'number' && Number.isFinite(r.size) && r.size >= 0))
+  );
+};
+
+/**
+ * Ask the user for photos and videos. Resolves references only: a token, a
+ * name, and a size. Nothing is copied until `materializeMedia`. A cancelled
+ * pick gives `[]`. An entry that fails validation is dropped.
+ */
+export async function pickMedia(): Promise<MediaRef[]> {
+  if (typeof NativeDaakShare.pickMedia !== 'function') {
+    throw new Error('pickMedia is not available on this platform');
+  }
+  const raw = await NativeDaakShare.pickMedia();
+  if (typeof raw !== 'string') return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  return Array.isArray(parsed) ? parsed.filter(isMediaRef) : [];
+}
+
+/**
+ * Copy one picked item into the send cache and resolve the path of the copy.
+ * Rejects with an `Error` whose message is `NO_SPACE:<needed bytes>`,
+ * `E_SOURCE_GONE`, or `E_MATERIALIZE`. The message holds no name and no URI.
+ */
+export async function materializeMedia(token: string): Promise<string> {
+  if (typeof NativeDaakShare.materialize !== 'function') {
+    throw new Error('materialize is not available on this platform');
+  }
+  try {
+    return await NativeDaakShare.materialize(token);
+  } catch (e) {
+    const err = e as { code?: unknown; message?: unknown };
+    const message = typeof err.message === 'string' ? err.message : '';
+    if (message.startsWith('NO_SPACE:') && /^NO_SPACE:\d+$/.test(message)) throw new Error(message);
+    if (err.code === 'NO_SPACE') throw new Error(`NO_SPACE:${message.replace(/\D/g, '')}`);
+    if (err.code === 'E_SOURCE_GONE' || message === 'E_SOURCE_GONE') {
+      throw new Error('E_SOURCE_GONE');
+    }
+    // Any other error gets a fixed message, so no name or URI can pass through.
+    throw new Error('E_MATERIALIZE');
+  }
+}
+
 /** Raw JSON array of staged inbound items; `inbound.ts` (Task 5) parses it. */
 export async function consumePendingInbox(): Promise<string> {
   return NativeDaakShare.consumePendingInbox();

@@ -47,6 +47,8 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     openFile: jest.fn(async () => true),
     fileSizes: jest.fn(async (p: string[]) => p.map(() => null)),
     pickFolder: jest.fn(async () => null),
+    pickMedia: jest.fn(async () => []),
+    materializeMedia: jest.fn(async () => ''),
     folderStats: jest.fn(async () => null),
     freeBytes: jest.fn(async () => 10 * 1024 ** 3),
     discardPickedCopy: jest.fn(async () => undefined),

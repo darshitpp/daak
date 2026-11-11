@@ -1229,15 +1229,18 @@ describe('Android folder pick, copy, and stats', () => {
     const copy = body(share, 'private fun copyPickedFolder(');
     const list = copy.indexOf('listTree(');
     const empty = copy.indexOf('FolderPickError("EMPTY"');
-    const space = copy.indexOf('StatFs(');
+    const space = copy.indexOf('requireSpace(needed)');
     const write = copy.indexOf('mkdirs()');
     expect(list).toBeGreaterThan(-1);
     expect(empty).toBeGreaterThan(list);
     expect(space).toBeGreaterThan(empty);
     expect(write).toBeGreaterThan(space);
-    expect(copy).toContain('availableBytes');
     expect(copy).toMatch(/\* 1\.1/);
-    expect(copy).toContain('"NO_SPACE:$needed"');
+    // The check lives in requireSpace, which pickFolder and materialize share.
+    const req = body(share, 'private fun requireSpace(');
+    expect(req).toContain('StatFs(');
+    expect(req).toContain('availableBytes');
+    expect(req).toContain('"NO_SPACE:$needed"');
   });
 
   it('rejects with the codes the facade reads', () => {
@@ -1556,5 +1559,150 @@ describe('the fspaths module reports the free space of the send cache', () => {
     expect(macos).toMatch(/@objc func freeBytes\(/);
     const mm = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.mm');
     expect(mm).toMatch(/RCT_EXTERN_METHOD\(freeBytes:/);
+  });
+});
+
+// Photo and video pick on Android (Part C, Task 6). The picker returns
+// references. materialize copies ONE item into <cacheDir>/daak-send/<uuid>/.
+// No JVM test source set exists. These pins prove only that a call is present
+// in the source. A device must prove the behaviour.
+describe('Android media pick and materialize', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+  const dir = repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/';
+  const share = strip(read(dir + 'DaakShareModule.kt'));
+  const inbox = strip(read(dir + 'ShareInbox.kt'));
+  const shareSpec = read(repo + 'modules/rn-share/js/NativeDaakShare.ts');
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest
+      .slice(1)
+      .search(/\n  (@ReactMethod\n  )?(override |private |internal )?(inline )?fun |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  it('uses MediaStore.ACTION_PICK_IMAGES when the photo picker is available, with EXTRA_PICK_IMAGES_MAX = getPickImagesMaxLimit()', () => {
+    const pick = body(share, 'override fun pickMedia(');
+    expect(pick).toContain('isPhotoPickerAvailable(');
+    expect(pick).toContain('MediaStore.ACTION_PICK_IMAGES');
+    expect(pick).toMatch(/putExtra\(MediaStore\.EXTRA_PICK_IMAGES_MAX, MediaStore\.getPickImagesMaxLimit\(\)\)/);
+    expect(pick).toContain('PICK_MEDIA');
+    expect(share).toMatch(/PICK_MEDIA = \d+/);
+    expect(share).not.toContain('com.google.android.gms');
+  });
+
+  it('isPhotoPickerAvailable checks SDK 33 or R extension 2 and resolveActivity', () => {
+    const fn = body(share, 'private fun isPhotoPickerAvailable(');
+    expect(fn).toMatch(/SDK_INT >= (33|Build\.VERSION_CODES\.TIRAMISU)/);
+    expect(fn).toContain('SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2');
+    expect(fn).toContain('resolveActivity(');
+  });
+
+  it('otherwise ACTION_OPEN_DOCUMENT with image/* and video/*, EXTRA_ALLOW_MULTIPLE and the persistable flag', () => {
+    const pick = body(share, 'override fun pickMedia(');
+    expect(pick).toContain('Intent.ACTION_OPEN_DOCUMENT');
+    expect(pick).toContain('Intent.CATEGORY_OPENABLE');
+    expect(pick).toContain('"image/*"');
+    expect(pick).toContain('"video/*"');
+    expect(pick).toContain('Intent.EXTRA_MIME_TYPES');
+    expect(pick).toMatch(/Intent\.EXTRA_ALLOW_MULTIPLE, true/);
+    expect(pick).toContain('FLAG_GRANT_PERSISTABLE_URI_PERMISSION');
+  });
+
+  it('every picked URI gets takePersistableUriPermission inside try/catch', () => {
+    const read = body(share, 'private fun describePicked(');
+    expect(read).toMatch(
+      /try \{\s*ctx\.contentResolver\.takePersistableUriPermission\(uri, Intent\.FLAG_GRANT_READ_URI_PERMISSION\)\s*\} catch \(_: Throwable\)/,
+    );
+  });
+
+  it('a picker URI reads PickerMediaColumns.SIZE and DISPLAY_NAME; any other URI reads OpenableColumns', () => {
+    const q = body(share, 'private fun queryNameAndSize(');
+    expect(q).toContain('uri.authority == MediaStore.AUTHORITY');
+    expect(q).toContain('MediaStore.PickerMediaColumns.DISPLAY_NAME');
+    expect(q).toContain('MediaStore.PickerMediaColumns.SIZE');
+    expect(q).toContain('OpenableColumns.DISPLAY_NAME');
+    expect(q).toContain('OpenableColumns.SIZE');
+  });
+
+  it('a null size stays null', () => {
+    const q = body(share, 'private fun queryNameAndSize(');
+    expect(q).toMatch(/isNull\(\w+\)\) null/);
+    const d = body(share, 'private fun describePicked(');
+    expect(d).toContain('JSONObject.NULL');
+  });
+
+  it('materialize opens a MediaStore-authority URI with ContentResolver.openFileDescriptor (MediaStore has no such method in API 35) and any other with ContentResolver.openInputStream, inside use', () => {
+    const open = body(share, 'private fun openSource(');
+    expect(open).toContain('uri.authority == MediaStore.AUTHORITY');
+    expect(open).toContain('ctx.contentResolver.openFileDescriptor(uri, "r")');
+    expect(open).not.toContain('MediaStore.openFileDescriptor');
+    expect(open).toContain('ctx.contentResolver.openInputStream(uri)');
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('openSource(uri)');
+    expect(mat).toMatch(/input\.use \{/);
+  });
+
+  it('materialize refuses a URI that is not content:// or that has the app\'s own authority', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('ShareInbox.requireForeignContentUri(ctx, uri)');
+    const check = body(inbox, 'internal fun requireForeignContentUri(');
+    expect(check).toContain('ContentResolver.SCHEME_CONTENT');
+    expect(check).toContain('ctx.packageName');
+    // copyToCache uses the same check and has no copy of the text.
+    expect(body(inbox, 'fun copyToCache(')).toContain('requireForeignContentUri(ctx, uri)');
+  });
+
+  it('materialize and pickFolder both call requireSpace', () => {
+    expect(body(share, 'private fun materializeToSlot(')).toContain('requireSpace(');
+    expect(body(share, 'private fun copyPickedFolder(')).toContain('requireSpace(needed)');
+    expect(body(share, 'private fun requireSpace(')).toContain('FolderPickError("NO_SPACE", "NO_SPACE:$needed")');
+  });
+
+  it('a failed copy deletes the slot directory', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toMatch(/catch \(t: Throwable\) \{\s*slot\.deleteRecursively\(\)/);
+  });
+
+  it('the slot is under cacheDir/daak-send', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('File(File(ctx.cacheDir, "daak-send"), UUID.randomUUID().toString())');
+  });
+
+  it('a source that no longer reads rejects E_SOURCE_GONE', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('SecurityException');
+    expect(mat).toContain('FileNotFoundException');
+    expect(mat).toContain('FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")');
+    expect(share).toContain('promise.reject("E_MATERIALIZE", "Daak could not prepare a file for sending.")');
+  });
+
+  it('safeLeaf is used for the file name', () => {
+    expect(body(share, 'private fun materializeToSlot(')).toContain('ShareInbox.safeLeaf(');
+    expect(inbox).toMatch(/internal fun safeLeaf\(/);
+  });
+
+  it('no log call contains the name or the uri', () => {
+    const media = [
+      body(share, 'override fun pickMedia('),
+      body(share, 'private fun describePicked('),
+      body(share, 'private fun queryNameAndSize('),
+      body(share, 'private fun openSource('),
+      body(share, 'private fun materializeToSlot('),
+      body(share, 'override fun materialize('),
+    ].join('\n');
+    expect(media).not.toMatch(/Log\./);
+    expect(media).not.toMatch(/println|printStackTrace/);
+  });
+
+  it('the Spec declares pickMedia and materialize as required', () => {
+    expect(shareSpec).toMatch(/^ {2}pickMedia\(\): Promise<string>;/m);
+    expect(shareSpec).toMatch(/^ {2}materialize\(token: string\): Promise<string>;/m);
+    expect(shareSpec).not.toMatch(/(pickMedia|materialize)\?\(/);
   });
 });

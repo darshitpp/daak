@@ -5,6 +5,8 @@ vi.mock('@daak/rn-share', () => ({
     present: vi.fn(async () => {}),
     pickDocuments: vi.fn(async () => ['/tmp/a.pdf']),
     pickFolder: vi.fn(async () => '/tmp/dir'),
+    pickMedia: vi.fn(async () => '[]'),
+    materialize: vi.fn(async () => '/cache/daak-send/U1/a.mp4'),
     consumePendingInbox: vi.fn(async () => '[]'),
     addListener: () => {},
     removeListeners: () => {},
@@ -12,12 +14,23 @@ vi.mock('@daak/rn-share', () => ({
 }));
 
 import DaakShare from '@daak/rn-share';
-import { consumePendingInbox, pickFiles, pickFolder, presentShare } from './share';
+import {
+  consumePendingInbox,
+  materializeMedia,
+  pickFiles,
+  pickFolder,
+  pickMedia,
+  presentShare,
+} from './share';
 
 const native = vi.mocked(DaakShare);
 // The folder method is a plain mock at run time. This view gives the test the
 // mock API. macOS does not register this module, so a test still removes it.
 const folderMock = native as unknown as { pickFolder: ReturnType<typeof vi.fn> };
+const mediaMock = native as unknown as {
+  pickMedia: ReturnType<typeof vi.fn>;
+  materialize: ReturnType<typeof vi.fn>;
+};
 
 describe('share facade', () => {
   it('forwards text and urls to the native presenter', async () => {
@@ -112,5 +125,94 @@ describe('pickFolder', () => {
     (native as { pickFolder?: unknown }).pickFolder = undefined;
     await expect(pickFolder()).rejects.toThrow(/pickFolder/);
     (native as { pickFolder?: unknown }).pickFolder = saved;
+  });
+});
+
+describe('pickMedia', () => {
+  it('pickMedia parses the JSON into refs', async () => {
+    mediaMock.pickMedia.mockResolvedValueOnce(
+      JSON.stringify([
+        { token: 'content://media/1', name: 'a.mp4', size: 10 },
+        { token: 'content://media/2', name: 'b.jpg', size: null },
+      ]),
+    );
+    await expect(pickMedia()).resolves.toEqual([
+      { token: 'content://media/1', name: 'a.mp4', size: 10 },
+      { token: 'content://media/2', name: 'b.jpg', size: null },
+    ]);
+  });
+
+  it('a cancelled pick gives an empty list', async () => {
+    mediaMock.pickMedia.mockResolvedValueOnce('[]');
+    await expect(pickMedia()).resolves.toEqual([]);
+    mediaMock.pickMedia.mockResolvedValueOnce(undefined);
+    await expect(pickMedia()).resolves.toEqual([]);
+  });
+
+  it('an invalid entry is dropped', async () => {
+    mediaMock.pickMedia.mockResolvedValueOnce(
+      JSON.stringify([
+        { token: 't1', name: 'ok', size: 0 },
+        { token: 1, name: 'bad token', size: 1 },
+        { token: 't3', name: 4, size: 1 },
+        { token: 't4', name: 'negative', size: -1 },
+        { token: 't5', name: 'missing size' },
+        null,
+        'text',
+      ]),
+    );
+    await expect(pickMedia()).resolves.toEqual([{ token: 't1', name: 'ok', size: 0 }]);
+  });
+
+  it('pickMedia rejects when the native module lacks the method', async () => {
+    const saved = native.pickMedia;
+    (native as { pickMedia?: unknown }).pickMedia = undefined;
+    await expect(pickMedia()).rejects.toThrow(/pickMedia/);
+    (native as { pickMedia?: unknown }).pickMedia = saved;
+  });
+});
+
+describe('materializeMedia', () => {
+  it('materializeMedia returns the path', async () => {
+    await expect(materializeMedia('content://media/1')).resolves.toBe('/cache/daak-send/U1/a.mp4');
+    expect(native.materialize).toHaveBeenLastCalledWith('content://media/1');
+  });
+
+  it('NO_SPACE:<n> and E_SOURCE_GONE are mapped like pickFolder maps its codes', async () => {
+    mediaMock.materialize.mockRejectedValueOnce(Object.assign(new Error('123'), { code: 'NO_SPACE' }));
+    await expect(materializeMedia('t')).rejects.toThrow(/^NO_SPACE:123$/);
+    mediaMock.materialize.mockRejectedValueOnce(new Error('NO_SPACE:456'));
+    await expect(materializeMedia('t')).rejects.toThrow(/^NO_SPACE:456$/);
+    mediaMock.materialize.mockRejectedValueOnce(
+      Object.assign(new Error('x'), { code: 'E_SOURCE_GONE' }),
+    );
+    await expect(materializeMedia('t')).rejects.toThrow(/^E_SOURCE_GONE$/);
+    mediaMock.materialize.mockRejectedValueOnce(
+      Object.assign(new Error('x'), { code: 'E_MATERIALIZE' }),
+    );
+    await expect(materializeMedia('t')).rejects.toThrow(/^E_MATERIALIZE$/);
+  });
+
+  it('an error message contains no uri', async () => {
+    mediaMock.materialize.mockRejectedValueOnce(
+      Object.assign(new Error('failed on content://media/external/video/media/7 (a.mp4)'), {
+        code: 'E_SOURCE_GONE',
+      }),
+    );
+    await expect(materializeMedia('content://media/external/video/media/7')).rejects.toThrow(
+      /^E_SOURCE_GONE$/,
+    );
+    mediaMock.materialize.mockRejectedValueOnce(
+      Object.assign(new Error('boom content://media/9'), { code: 'E_MATERIALIZE' }),
+    );
+    const err = await materializeMedia('content://media/9').catch((e) => e as Error);
+    expect((err as Error).message).not.toContain('content://');
+  });
+
+  it('rejects when the native module lacks the method', async () => {
+    const saved = native.materialize;
+    (native as { materialize?: unknown }).materialize = undefined;
+    await expect(materializeMedia('t')).rejects.toThrow(/materialize/);
+    (native as { materialize?: unknown }).materialize = saved;
   });
 });
