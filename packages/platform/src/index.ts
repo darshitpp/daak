@@ -1,5 +1,6 @@
 export * from './engine';
 export * from './appinfo';
+export * from './batchDriver';
 export * from './bgsched';
 export * from './clipboard';
 export * from './daemon';
