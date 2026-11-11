@@ -29,7 +29,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   inboxActions?: InboxActions;
   // The pairing route's content, for the same reason. The shell below is
   // where that route renders it.
-  pair?: React.ReactNode;
+  pair?: React.ReactNode | ((onPaired: () => void) => React.ReactNode);
   /* See DaakUiApp. These four reach AppShell unchanged; this layer only adds
      the EngineProvider the screens read from. */
   alert?: React.ReactNode;

@@ -44,7 +44,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
    * draws no "Pair a device" button -- which is what the desktop shipped, and
    * the reason it could not pair and so could not send.
    */
-  pair?: React.ReactNode;
+  pair?: React.ReactNode | ((onPaired: () => void) => React.ReactNode);
   /* The two BLOCKING screens, plus the tokens that route to them. They are
      threaded rather than built here for the reason `pair` is a slot in
      AppShell: the facts live on the host, which owns the engine, and

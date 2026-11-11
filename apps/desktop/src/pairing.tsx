@@ -35,7 +35,7 @@ type Phase =
  * Leaving the route is "Does not match". `pendingRef` holds the peer id of a
  * number that is on screen and that the user has not answered.
  */
-export function DesktopPairing({ engine }: { engine: DaakEngine }) {
+export function DesktopPairing({ engine, onPaired }: { engine: DaakEngine; onPaired?: () => void }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [sas, setSas] = useState('');
   const [peerId, setPeerId] = useState('');
@@ -135,6 +135,8 @@ export function DesktopPairing({ engine }: { engine: DaakEngine }) {
         setSas('');
         setPeerId('');
         setPhase({ kind: 'idle' });
+        // The shell leaves the pair route. Without this call, the user stays here.
+        onPaired?.();
       },
       (e: unknown) => {
         pendingRef.current = id;

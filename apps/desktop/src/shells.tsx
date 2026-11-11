@@ -249,7 +249,7 @@ export function DaakDashboardShell({ engine, runtime }: {
           // user reaches from Devices, and the popover has no route that could
           // carry one. Supplied on BOTH would render a second live engine.on
           // subscription for a screen nobody opens.
-          pair={<DesktopPairing engine={engine} />}
+          pair={(onPaired) => <DesktopPairing engine={engine} onPaired={onPaired} />}
           alert={blockers.alert}
           alertRouteToken={blockers.alertRouteToken}
           settingsRouteToken={blockers.settingsRouteToken}
