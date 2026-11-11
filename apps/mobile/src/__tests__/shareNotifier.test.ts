@@ -106,15 +106,60 @@ describe('onReceived', () => {
 
   it('at most 32 open shares and the oldest is dropped', async () => {
     const id = (n: number) => n.toString(16).padStart(32, '0');
-    for (let n = 0; n < 33; n += 1) await onReceived(tagged(1, 2, { share: id(n) }), 1, 0);
+    // 5 peers, so no peer reaches its own cap of 8 shares.
+    const peer = (n: number) => `p${n % 5}`;
+    for (let n = 0; n < 33; n += 1) {
+      await onReceived(tagged(1, 2, { share: id(n), peerDeviceId: peer(n) }), 1, 0);
+    }
     expect(post).toHaveBeenCalledTimes(33);
     expect(jest.getTimerCount()).toBe(32);
     // The oldest share lost its state, so its batch 2 counts as a new share.
-    await onReceived(tagged(2, 2, { share: id(0) }), 1, 1);
+    await onReceived(tagged(2, 2, { share: id(0), peerDeviceId: peer(0) }), 1, 1);
     expect(body(33)).toContain('Received 1 file from');
     // A kept share still holds its count.
-    await onReceived(tagged(2, 2, { share: id(5) }), 1, 1);
+    await onReceived(tagged(2, 2, { share: id(5), peerDeviceId: peer(5) }), 1, 1);
     expect(body(34)).toContain('Received 2 files');
+  });
+
+  it('a peer with 9 open shares loses only its own oldest share', async () => {
+    const id = (n: number) => n.toString(16).padStart(32, '0');
+    await onReceived(tagged(1, 2, { share: id(100), peerDeviceId: 'b' }), 1, 0);
+    for (let n = 0; n < 9; n += 1) {
+      await onReceived(tagged(1, 2, { share: id(n), peerDeviceId: 'a' }), 1, 0);
+    }
+    // 1 share of b and 8 shares of a. The first share of a was dropped.
+    expect(jest.getTimerCount()).toBe(9);
+    await onReceived(tagged(2, 2, { share: id(100), peerDeviceId: 'b' }), 1, 1);
+    expect(body(10)).toContain('Received 2 files');
+    await onReceived(tagged(2, 2, { share: id(0), peerDeviceId: 'a' }), 1, 1);
+    expect(body(11)).toContain('Received 1 file from');
+  });
+
+  it('the payload holds at most 200 paths and the count line stays exact', async () => {
+    const paths = (n: number) => Array.from({ length: 150 }, (_, i) => `/x/${n}-${i}.jpg`);
+    await onReceived(tagged(1, 3, { savedPaths: paths(1) }), 150, 0);
+    await onReceived(tagged(2, 3, { savedPaths: paths(2) }), 150, 1);
+    await onReceived(tagged(3, 3, { savedPaths: paths(3) }), 150, 2);
+    const last = post.mock.calls[2][0];
+    expect(last.savedPaths.length).toBeLessThanOrEqual(200);
+    expect(body(2)).toContain('Received 450 files');
+  });
+
+  it('a forged m of 1000 with one batch gives the sound after 3 minutes with the true count', async () => {
+    await onReceived(tagged(1, 1000), 2, 0, { deviceName: 'Pixel' });
+    expect(opts(0)?.silent).toBe(true);
+    await jest.advanceTimersByTimeAsync(3 * 60_000);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(opts(1)?.silent).toBe(false);
+    expect(body(1)).toBe('Received 2 files from Pixel');
+  });
+
+  it('a batch with k above m is treated as untagged', async () => {
+    const e = tagged(5, 3);
+    await onReceived(e, 1, 0, { text: null });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith(e, null);
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   it('a missing last batch plays the sound after 3 minutes', async () => {

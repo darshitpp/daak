@@ -12,6 +12,11 @@ import { safeName } from '@daak/rn-notify/js/actions';
 const TIMEOUT_MS = 3 * 60_000;
 const SOUND_GAP_MS = 10_000;
 const MAX_OPEN_SHARES = 32;
+const MAX_OPEN_PER_PEER = 8;
+// The notification payload goes into 3 Android PendingIntent extras (Binder).
+// A share of thousands of files would overflow it. The count line is exact.
+// The Share button acts on at most this many files.
+const MAX_PATHS = 200;
 
 interface Text {
   title: string;
@@ -93,11 +98,23 @@ export async function onReceived(
   const key = `share:${id}`;
   let s = open.get(id);
   if (!s) {
-    if (open.size >= MAX_OPEN_SHARES) {
-      const oldest = open.keys().next().value as string;
-      clearTimeout(open.get(oldest)?.timer);
-      open.delete(oldest);
+    const evict = (id: string) => {
+      clearTimeout(open.get(id)?.timer);
+      open.delete(id);
+    };
+    // A peer cannot push out the open shares of another peer: its own oldest
+    // share goes first.
+    let mine = 0;
+    for (const x of open.values()) if (x.peer === entry.peerDeviceId) mine += 1;
+    if (mine >= MAX_OPEN_PER_PEER) {
+      for (const [k, x] of open) {
+        if (x.peer === entry.peerDeviceId) {
+          evict(k);
+          break;
+        }
+      }
     }
+    if (open.size >= MAX_OPEN_SHARES) evict(open.keys().next().value as string);
     s = {
       m: tag.m,
       ks: new Set(),
@@ -113,7 +130,9 @@ export async function onReceived(
   }
   s.ks.add(tag.k);
   s.count += savedCount;
-  s.paths.push(...(entry.savedPaths ?? []));
+  if (s.paths.length < MAX_PATHS) {
+    s.paths.push(...(entry.savedPaths ?? []).slice(0, MAX_PATHS - s.paths.length));
+  }
   s.entry = entry;
   s.deviceName = extra.deviceName ?? s.deviceName;
   clearTimeout(s.timer);
