@@ -213,13 +213,17 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     return next;
   }
 
-  async function save(p: SavedPlan): Promise<void> {
+  // True when the engine saved the plan. A failed save is safe only after the
+  // `sending` marker is saved: a resume then sends the same batch with the same
+  // attempt, and the derived payload id returns the existing row. The marker
+  // save itself must succeed before `send`, so the caller checks the result.
+  async function save(p: SavedPlan): Promise<boolean> {
     try {
       await engine.saveSendPlan(p.peerId, p.share, JSON.stringify(p));
+      return true;
     } catch {
-      // A plan that is not saved sends the batch again after a restart. The
-      // derived payload id makes that send return the existing row.
       log('batch driver: the plan save failed');
+      return false;
     }
   }
 
@@ -305,9 +309,14 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
         if (e.stopped) return await discardAll(paths);
       }
       if (at < b.tokens.length) split(p, at);
-      // One save holds the split and the mark of the send.
+      // One save holds the split and the mark of the send. Without this save a
+      // resume can split the batch again and send an item twice: do not send.
+      // `sending` stays in memory, so a retry uses the same attempt.
       p.sending = attempt;
-      await save(p);
+      if (!(await save(p))) {
+        await discardAll(paths);
+        return await pause(p, 'FAILED');
+      }
       changed(p.peerId);
       if (e.stopped) return await discardAll(paths);
       const cur = p.batches[p.cursor - 1];
@@ -320,8 +329,9 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
           attempt,
         }));
       } catch {
+        // The engine can make the row and then reject. Keep `sending`: the
+        // retry uses the same attempt, so it finds that row or makes it once.
         await discardAll(paths);
-        p.sending = null;
         return await pause(p, 'FAILED');
       }
       // The engine staged the files. The copies are not needed now.
@@ -407,7 +417,13 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
 
   async function start(peerId: string, refs: MediaRef[]): Promise<{ share: string }> {
     if (entries.has(peerId)) throw new Error('PLAN_BUSY');
-    const e: Entry = { plan: null, chain: Promise.resolve(), stopped: false, polling: false };
+    // The chain opens when the first save ends. A stop before that waits, then
+    // deletes the saved plan. Otherwise the save comes last and leaves the plan.
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const e: Entry = { plan: null, chain: gate, stopped: false, polling: false };
     entries.set(peerId, e);
     const share = deps.randomShare();
     try {
@@ -435,8 +451,11 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     } catch (err) {
       entries.delete(peerId);
       throw err;
+    } finally {
+      open();
     }
     changed(peerId);
+    // A stop step that waits on the gate runs first. Then this step does not run.
     await step(e, () => runBatch(e));
     return { share };
   }

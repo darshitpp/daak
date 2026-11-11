@@ -691,3 +691,75 @@ describe('the batch driver after the review', () => {
     s.driver.dispose();
   });
 });
+
+describe('the batch driver after the second review', () => {
+  it('a failed marker save sends nothing, discards the copies and pauses FAILED', async () => {
+    const s = setup();
+    const save = s.fe.engine.saveSendPlan.getMockImplementation()!;
+    s.fe.engine.saveSendPlan.mockImplementation(async (p, sh, json) => {
+      if (JSON.parse(json).sending !== null) throw new Error('disk');
+      return save(p, sh, json);
+    });
+    await s.driver.start(PEER, [ref('a', 1), ref('b', 1)]);
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
+    expect(s.media.discard.mock.calls.map((c) => c[0]).sort()).toEqual(['/cache/a', '/cache/b']);
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    // The save works again. Retry sends the same batch with the same attempt.
+    s.fe.engine.saveSendPlan.mockImplementation(save);
+    await s.driver.retry(PEER);
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(1);
+    expect(s.fe.engine.send.mock.calls[0][0]).toMatchObject({ batch: '1/1', attempt: 0 });
+    s.driver.dispose();
+  });
+
+  it('a send that rejects keeps sending set and the retry sends the same batch once', async () => {
+    const s = setup();
+    // The engine makes the row and then the send rejects.
+    const send = s.fe.engine.send.getMockImplementation()!;
+    s.fe.engine.send.mockImplementationOnce(async (req) => {
+      await send(req);
+      throw new Error('late');
+    });
+    await s.driver.start(PEER, twoBatches);
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).sending).toBe(0);
+    await s.driver.retry(PEER);
+    expect(s.fe.engine.send.mock.calls[1][0]).toMatchObject({ batch: '1/2', attempt: 0 });
+    expect(s.fe.rows.size).toBe(1);
+    await finish(s, 't1');
+    await finish(s, 't2');
+    expect(s.driver.status(PEER)).toBeNull();
+    // Each file path is in exactly one transfer.
+    const files = s.fe.sent().flatMap((r) => r.req.files ?? []);
+    expect(files.sort()).toEqual(['/cache/a', '/cache/b']);
+    s.driver.dispose();
+  });
+
+  it('a stop during the first plan save leaves no plan and sends nothing', async () => {
+    const s = setup();
+    const gate = deferred<void>();
+    const save = s.fe.engine.saveSendPlan.getMockImplementation()!;
+    s.fe.engine.saveSendPlan.mockImplementationOnce(async (p, sh, json) => {
+      await gate.promise;
+      return save(p, sh, json);
+    });
+    const started = s.driver.start(PEER, twoBatches);
+    await flush();
+    expect(s.driver.status(PEER)).not.toBeNull();
+    const stopped = s.driver.stop(PEER);
+    await flush();
+    gate.resolve();
+    await expect(started).resolves.toEqual({ share: SHARE });
+    await stopped;
+    expect(s.fe.plans.size).toBe(0);
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
+    expect(s.media.materialize).not.toHaveBeenCalled();
+    expect(s.media.release).toHaveBeenCalledTimes(1);
+    expect(s.media.release).toHaveBeenCalledWith(['a', 'b']);
+    expect(s.driver.status(PEER)).toBeNull();
+    // A new start for the peer works.
+    await expect(s.driver.start(PEER, twoBatches)).resolves.toEqual({ share: SHARE });
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(1);
+    s.driver.dispose();
+  });
+});

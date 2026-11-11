@@ -294,6 +294,75 @@ describe('resume of a saved plan', () => {
     s.driver.dispose();
   });
 
+  it('after a failed marker save and a crash the resume keeps one batch total and sends each file once', async () => {
+    // Life 1: batch 1 is a and b, batch 2 is c. Every save after the first save fails.
+    const s = setup();
+    const save = s.fe.engine.saveSendPlan.getMockImplementation()!;
+    s.fe.engine.saveSendPlan.mockImplementation(async (p, sh, json) => {
+      if (s.fe.plans.size > 0) throw new Error('disk');
+      return save(p, sh, json);
+    });
+    await s.driver.start(PEER, [ref('a', 1), ref('b', 1), ref('c', 3)]);
+    s.driver.dispose();
+    // The engine holds the plan of start: cursor 1, attempt 0, sending null.
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!)).toMatchObject({ cursor: 1, attempt: 0, sending: null });
+
+    // Life 2: the same engine data, the saves work, and free space is low before b.
+    s.fe.engine.saveSendPlan.mockImplementation(save);
+    const media = fakeMedia();
+    media.freeBytes.mockResolvedValueOnce(GIB);
+    const life2 = createBatchDriver({ ...s.deps, media });
+    await life2.resume([PEER]);
+    await flush();
+    for (let i = 0; i < 3 && life2.status(PEER) !== null; i++) {
+      const id = JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).inflight.transferId;
+      s.fe.setState(id, 'done');
+      life2.onEvent({ type: 'transfer.done', transferId: id });
+      await flush();
+    }
+    expect(life2.status(PEER)).toBeNull();
+    // Every tag has the same total m, and each file is in exactly one transfer.
+    const totals = new Set(s.fe.sent().map((r) => r.req.batch!.split('/')[1]));
+    expect(totals.size).toBe(1);
+    const files = s.fe.sent().flatMap((r) => r.req.files ?? []);
+    expect(files.sort()).toEqual(['/cache/a', '/cache/b', '/cache/c']);
+    life2.dispose();
+  });
+
+  it('a saved sending marker with no transfer row resends the saved batch once with the same attempt and no split', async () => {
+    // The crash came after the marker save and before send.
+    const s = setup();
+    seed(
+      s,
+      plan({
+        batches: [
+          { index: 1, of: 2, tokens: ['a', 'b'], bytes: 2 * GIB },
+          { index: 2, of: 2, tokens: ['c'], bytes: GIB },
+        ],
+        // The first send of batch 1: only the marker forbids a split.
+        attempt: 0,
+        sending: 0,
+      }),
+    );
+    // Free space is low before b. A split is not allowed: the plan pauses.
+    s.media.freeBytes.mockResolvedValueOnce(GIB);
+    await s.driver.resume([PEER]);
+    await flush();
+    expect(s.fe.engine.send).not.toHaveBeenCalled();
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 1, of: 2, paused: true, error: 'NO_SPACE' });
+    expect(JSON.parse(s.fe.plans.get(`${PEER}|${SHARE}`)!).batches).toHaveLength(2);
+    // The user frees space and taps Retry.
+    await s.driver.retry(PEER);
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(1);
+    expect(s.fe.engine.send.mock.calls[0][0]).toMatchObject({
+      batch: '1/2',
+      attempt: 0,
+      files: ['/cache/a', '/cache/b'],
+    });
+    expect(s.fe.rows.size).toBe(1);
+    s.driver.dispose();
+  });
+
   it('a saved plan without the sending field parses as sending null', async () => {
     const s = setup();
     seed(s, plan({ cursor: 2 }));
