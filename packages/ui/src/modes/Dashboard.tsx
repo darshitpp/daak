@@ -7,6 +7,7 @@ import { AppShell } from '../components/AppShell';
 import type { DeviceNoun } from '../components/ds';
 import type { PhotosHost } from '../components/PhotosAccessRow';
 import type { SettingsHost } from '../screens/settings/host';
+import type { MediaHost } from '../screens/ThreadScreen';
 import { EngineProvider } from '../EngineContext';
 import { ui } from '../theme';
 
@@ -23,7 +24,7 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel, media }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
@@ -65,6 +66,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   discardPickedCopy?: (path: string) => Promise<void>;
   /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
   pickLabel?: string;
+  media?: MediaHost;
 }) {
   void state;
   return (
@@ -78,6 +80,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           folderStats={folderStats}
           discardPickedCopy={discardPickedCopy}
           pickLabel={pickLabel}
+          media={media}
           inboxActions={inboxActions}
           pair={pair}
           alert={alert}

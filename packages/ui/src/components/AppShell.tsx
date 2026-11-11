@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import type { DeviceInfo } from '@daak/core';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
-import { ThreadScreen } from '../screens/ThreadScreen';
+import { ThreadScreen, type MediaHost } from '../screens/ThreadScreen';
 import { QuarantineScreen } from '../screens/QuarantineScreen';
 import type { InboxActions } from '../inbox-actions';
 import type { PhotosHost } from './PhotosAccessRow';
@@ -69,6 +69,7 @@ export function AppShell({
   folderStats,
   discardPickedCopy,
   pickLabel,
+  media,
 }: {
   background?: React.ReactNode;
   pair?: React.ReactNode | ((onPaired: () => void) => React.ReactNode);
@@ -133,6 +134,7 @@ export function AppShell({
   discardPickedCopy?: (path: string) => Promise<void>;
   /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
   pickLabel?: string;
+  media?: MediaHost;
 }) {
   const [root, setRoot] = useState<Tab>('devices');
   const [stack, setStack] = useState<Route[]>([]);
@@ -282,6 +284,7 @@ export function AppShell({
         folderStats={folderStats}
         discardPickedCopy={discardPickedCopy}
         pickLabel={pickLabel}
+        media={media}
       />
     );
   } else if (shown !== undefined) {

@@ -8,6 +8,7 @@ export { Avatar, Btn, Empty, Note, ProgressBar, Section, Status, Wordmark, byPre
 export { DashboardScreen } from './screens/DashboardScreen';
 export { PairingScreen } from './screens/PairingScreen';
 export { ThreadScreen } from './screens/ThreadScreen';
+export type { MediaHost, MediaRef } from './screens/ThreadScreen';
 export type { InboxActions } from './inbox-actions';
 export type { SettingsHost, NotifyPrefsLike } from './screens/settings/host';
 export { ABOUT_LINKS, RELEASES_URL } from './screens/about-links';

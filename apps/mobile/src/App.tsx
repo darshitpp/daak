@@ -36,7 +36,7 @@ import {
 import { OnboardingFlow } from './OnboardingFlow';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
-import { pickAttachedFiles, pickAttachedFolder } from './SendFlow';
+import { attachedMedia, pickAttachedFiles, pickAttachedFolder } from './SendFlow';
 import { mobileInboxActions } from './inbox-actions';
 import { onDeepLink, type DeepLink } from './deeplink';
 import { peerOfPayload } from './notification-route';
@@ -431,6 +431,7 @@ export default function App() {
           // The paperclip menu: Files or Folder. A folder is copied first, and
           // the composer discards the copy after the send.
           onPickFolder={pickAttachedFolder}
+          media={attachedMedia}
           folderStats={folderStats}
           discardPickedCopy={discardPickedCopy}
           inboxActions={mobileInboxActions}

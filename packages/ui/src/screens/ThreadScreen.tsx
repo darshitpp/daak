@@ -72,6 +72,26 @@ export function folderPickError(e: unknown): string {
   return "Couldn't prepare this folder. Check that every file in it is on this device and try again.";
 }
 
+/** One picked photo or video, by reference. The host makes the copy at send time. */
+export type MediaRef = { token: string; name: string; size: number | null };
+
+/** The photo picker of the host. `fits` tells if the whole selection fits the free space. */
+export type MediaHost = {
+  pick: () => Promise<MediaRef[]>;
+  materialize: (token: string) => Promise<string>;
+  fits: (refs: MediaRef[]) => Promise<boolean>;
+};
+
+/** The inline warning for a photo selection that failed to pick or to prepare. Null shows nothing. */
+export function mediaError(e: unknown): string | null {
+  const m = e instanceof Error ? e.message : '';
+  if (m === 'E_PICK_BUSY') return null;
+  if (m === 'E_TOO_MANY') return 'Too many items. Pick fewer.';
+  if (m === 'E_SOURCE_GONE') return 'Some items can no longer be read. Pick them again.';
+  if (m.startsWith('NO_SPACE:') || m === 'NOT_DOWNLOADED') return folderPickError(e);
+  return 'Daak could not prepare a file for sending.';
+}
+
 /** The composer, inside a keyboard avoiding view only when the host asks. */
 function ComposerWrap({ avoid, children }: { avoid: boolean; children: React.ReactNode }) {
   return avoid ? (
@@ -183,6 +203,7 @@ export function ThreadScreen({
   folderStats,
   discardPickedCopy,
   pickLabel = 'Add files',
+  media,
 }: {
   peerDeviceId: string;
   onBack: () => void;
@@ -211,6 +232,8 @@ export function ThreadScreen({
   discardPickedCopy?: (path: string) => Promise<void>;
   /** The label of the add button when there is no folder menu. */
   pickLabel?: string;
+  /** The photo picker. When it is set, the add menu has an Add photos row. */
+  media?: MediaHost;
 }) {
   const engine = useEngine();
   const toast = useToast();
@@ -223,6 +246,8 @@ export function ThreadScreen({
   const [paging, setPaging] = useState(false);
   const [text, setText] = useState(initialText);
   const [files, setFiles] = useState<string[]>(initialFiles);
+  // The picked photos and videos. The copies are made at send time.
+  const [mediaRefs, setMediaRefs] = useState<MediaRef[]>([]);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<Result>(null);
   const [stopFor, setStopFor] = useState<string | null>(null);
@@ -357,7 +382,7 @@ export function ThreadScreen({
   };
 
   const name = device ? deviceLabel(device) : 'this device';
-  const canSend = device != null && (files.length > 0 || text.trim() !== '') && !sending && !preparing;
+  const canSend = device != null && (files.length > 0 || mediaRefs.length > 0 || text.trim() !== '') && !sending && !preparing;
 
   // The review state ends when no file is left. Staging files again then shows the chip.
   useEffect(() => {
@@ -444,6 +469,20 @@ export function ThreadScreen({
       .catch(() => {});
   };
 
+  const pickMedia = () => {
+    setMenuOpen(false);
+    if (!media) return;
+    setPickError(null);
+    void media.pick()
+      .then((picked) => {
+        setMediaRefs((cur) => {
+          const next = [...cur, ...picked.filter((r) => !cur.some((c) => c.token === r.token))];
+          return next.length === cur.length ? cur : next;
+        });
+      })
+      .catch((e) => { if (alive.current) setPickError(mediaError(e)); });
+  };
+
   // The phone copies the folder first (design F4). Send waits for the copy.
   const pickFolder = () => {
     setMenuOpen(false);
@@ -490,6 +529,33 @@ export function ThreadScreen({
     setSending(true);
     setResult(null);
     const note = text.trim();
+    // The copies of the picked photos. One send reads them with the plain files.
+    let sendFiles = files;
+    if (mediaRefs.length > 0 && media) {
+      let ok = false;
+      try { ok = await media.fits(mediaRefs); } catch { ok = false; }
+      if (!ok) {
+        say('Large selection is not supported yet');
+        if (alive.current) setSending(false);
+        return;
+      }
+      const made: string[] = [];
+      try {
+        for (const r of mediaRefs) {
+          const path = await media.materialize(r.token);
+          copies.current.add(path);
+          made.push(path);
+        }
+      } catch (e) {
+        made.forEach(discard);
+        if (alive.current) {
+          setPickError(mediaError(e) ?? 'Daak could not prepare a file for sending.');
+          setSending(false);
+        }
+        return;
+      }
+      sendFiles = [...files, ...made];
+    }
     // The engine reports queued: true for every send. The words come from the
     // presence of the peer at the time of the send.
     const waiting = presenceOf(device).rank >= 2;
@@ -497,19 +563,20 @@ export function ThreadScreen({
       // Files first, then the note. send() takes one kind in each call. Each
       // part leaves the composer as soon as the engine accepts it, so a failed
       // note does not send the files again.
-      if (files.length > 0) {
-        const sent = files.filter((p) => copies.current.has(p));
+      if (sendFiles.length > 0) {
+        const sent = sendFiles.filter((p) => copies.current.has(p));
         sent.forEach((p) => inFlight.current.add(p));
         try {
-          await engine.send({ peerDeviceId, files });
+          await engine.send({ peerDeviceId, files: sendFiles });
         } finally {
           sent.forEach((p) => inFlight.current.delete(p));
           // A closed screen cannot show the chip again, so its copies go now.
           if (!alive.current) sent.forEach(discard);
         }
         // The engine staged the files before it resolved, so the copies can go.
-        files.forEach(discard);
+        sendFiles.forEach(discard);
         setFiles([]);
+        setMediaRefs([]);
         setSizes({});
         setFolders({});
       }
@@ -838,7 +905,7 @@ export function ThreadScreen({
 
       <ComposerWrap avoid={keyboardAvoiding}>
       <View style={ui.composer}>
-        {files.length > 0 || preparing ? (
+        {files.length > 0 || mediaRefs.length > 0 || preparing ? (
           <View style={ui.stackSm}>
             <View style={[ui.row, { flexWrap: 'wrap' }]}>
               {files.length > MAX_CHIPS ? (
@@ -854,6 +921,19 @@ export function ThreadScreen({
               ) : (
                 files.map((p) => removeChip(p))
               )}
+              {mediaRefs.map((r) => (
+                <Pressable
+                  key={r.token}
+                  onPress={() => setMediaRefs((cur) => cur.filter((x) => x.token !== r.token))}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${r.name}`}
+                  testID={`remove-media-${r.token}`}
+                  style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
+                >
+                  <Text style={ui.chipLabel} numberOfLines={1}>{r.name}</Text>
+                  <Text style={ui.chipLabelOn}>×</Text>
+                </Pressable>
+              ))}
               {preparing ? (
                 <View style={ui.chip} testID="prepare-chip">
                   <Text style={ui.chipLabel}>Preparing…</Text>
@@ -898,6 +978,7 @@ export function ThreadScreen({
         <View style={ui.stackSm}>
           <Btn label="Files" variant="quiet" block onPress={pick} testID="pick-menu-files" />
           <Btn label="Folder" variant="quiet" block onPress={pickFolder} testID="pick-menu-folder" />
+          {media ? <Btn label="Add photos" variant="quiet" block onPress={pickMedia} testID="pick-menu-photos" /> : null}
         </View>
       </Sheet>
 

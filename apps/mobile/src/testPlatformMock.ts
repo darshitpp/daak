@@ -51,6 +51,8 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     materializeMedia: jest.fn(async () => ''),
     folderStats: jest.fn(async () => null),
     freeBytes: jest.fn(async () => 10 * 1024 ** 3),
+    fits: jest.fn(() => true),
+    DEFAULT_ITEM_BYTES: 50 * 1024 ** 2,
     discardPickedCopy: jest.fn(async () => undefined),
     sweepPickedCopies: jest.fn(async () => undefined),
     presentShare: jest.fn(async () => true),

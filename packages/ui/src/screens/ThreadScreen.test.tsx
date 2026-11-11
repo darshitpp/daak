@@ -7,7 +7,7 @@ import { fakeEngine } from '../testing/fakeEngine';
 import { threadItem, threadPage } from '../testing/threadFixtures';
 import { ToastProvider } from '../components/Toast';
 import { Note } from '../components/ds';
-import { ThreadScreen, splitExt } from './ThreadScreen';
+import { ThreadScreen, splitExt, type MediaRef } from './ThreadScreen';
 import * as progressModule from '../state/progress';
 
 const peer: DeviceInfo = {
@@ -1701,5 +1701,162 @@ describe('ThreadScreen progress in the bubbles', () => {
     mount(engine);
     await screen.findByText('f0.bin');
     expect(fillOf(0)).toBeNull();
+  });
+});
+
+// Task 8: Add photos and the simple path.
+describe('ThreadScreen add photos', () => {
+  afterEach(async () => { await settle(0); });
+
+  const refs = (...names: string[]) => names.map((n) => ({ token: `t-${n}`, name: n, size: 10 }));
+  const host = () => {
+    const media = {
+      pick: jest.fn<Promise<MediaRef[]>, []>(async () => refs('a.jpg', 'b.mov')),
+      materialize: jest.fn<Promise<string>, [string]>(async (t) => `/cache/daak-send/${t}`),
+      fits: jest.fn<Promise<boolean>, [MediaRef[]]>(async () => true),
+    };
+    return {
+      media,
+      onPickFiles: jest.fn(async () => [] as string[]),
+      onPickFolder: jest.fn(async (): Promise<string | null> => null),
+      discardPickedCopy: jest.fn(async () => {}),
+    };
+  };
+  const stage = async () => {
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    return screen.findByText('a.jpg');
+  };
+
+  it('the sheet shows Add photos only when media is set', async () => {
+    mount(fakeEngine([peer]), host());
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(screen.getByTestId('pick-menu-photos')).toBeTruthy();
+    expect(screen.getByText('Add photos')).toBeTruthy();
+  });
+
+  it('no media prop shows no Add photos button', async () => {
+    const { media: _unused, ...rest } = host();
+    mount(fakeEngine([peer]), rest);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(screen.queryByTestId('pick-menu-photos')).toBeNull();
+  });
+
+  it('picking refs shows them in the composer and a second pick appends and drops a repeated token', async () => {
+    const h = host();
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    expect(screen.getByText('b.mov')).toBeTruthy();
+    h.media.pick.mockResolvedValueOnce([...refs('b.mov'), ...refs('c.png')]);
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    expect(await screen.findByText('c.png')).toBeTruthy();
+    expect(screen.getAllByText('b.mov')).toHaveLength(1);
+    expect(screen.getByTestId('send')).not.toBeDisabled();
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    expect(screen.queryByText('a.jpg')).toBeNull();
+  });
+
+  it('a selection that fits is materialized one at a time and sent with one engine.send call', async () => {
+    const h = host();
+    const order: string[] = [];
+    let open = 0;
+    let most = 0;
+    h.media.materialize.mockImplementation(async (t: string) => {
+      open += 1; most = Math.max(most, open);
+      await new Promise((r) => setTimeout(r, 5));
+      order.push(t);
+      open -= 1;
+      return `/cache/daak-send/${t}`;
+    });
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, initialFiles: ['/Users/d/x.pdf'] });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send).toHaveBeenCalledWith({
+      peerDeviceId: peer.deviceId,
+      files: ['/Users/d/x.pdf', '/cache/daak-send/t-a.jpg', '/cache/daak-send/t-b.mov'],
+    });
+    expect(order).toEqual(['t-a.jpg', 't-b.mov']);
+    expect(most).toBe(1);
+  });
+
+  it('the copies are discarded only after engine.send resolves', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    let finish: (v: { transferId: string; queued: boolean }) => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(() => new Promise((r) => { finish = r; }));
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(h.discardPickedCopy).not.toHaveBeenCalled();
+    await act(async () => { finish({ transferId: TID, queued: false }); });
+    await waitFor(() => expect(h.discardPickedCopy).toHaveBeenCalledTimes(2));
+    expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-a.jpg');
+    expect(screen.queryByText('a.jpg')).toBeNull();
+  });
+
+  it('a selection that does not fit shows the large-selection text and sends nothing', async () => {
+    const h = host();
+    h.media.fits.mockResolvedValue(false);
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Large selection is not supported yet')).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(h.media.materialize).not.toHaveBeenCalled();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('NO_SPACE:<n> shows the existing no-space text and discards the copies already made', async () => {
+    const h = host();
+    h.media.materialize
+      .mockResolvedValueOnce('/cache/daak-send/t-a.jpg')
+      .mockRejectedValueOnce(new Error('NO_SPACE:2254857830'));
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Not enough space to prepare this folder. Free 2.1 GB and try again.')).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-a.jpg');
+    expect(screen.getByText('b.mov')).toBeTruthy();
+  });
+
+  it('E_SOURCE_GONE shows its text', async () => {
+    const h = host();
+    h.media.materialize.mockRejectedValueOnce(new Error('E_SOURCE_GONE'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Some items can no longer be read. Pick them again.')).toBeTruthy();
+  });
+
+  it('a cancelled pick changes nothing', async () => {
+    const h = host();
+    h.media.pick.mockResolvedValue([]);
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    await waitFor(() => expect(h.media.pick).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.getByTestId('send')).toBeDisabled();
+    expect(screen.queryByTestId('pick-error')).toBeNull();
   });
 });

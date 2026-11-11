@@ -64,6 +64,18 @@ describe('Dashboard (window mode)', () => {
     await waitFor(() => expect(sent).toEqual([{ peerDeviceId: peer.deviceId, files: ['/Users/d/Documents/a.pdf'] }]));
   });
 
+  it('media is passed through to the thread', async () => {
+    const { engine } = spyEngine();
+    const media = { pick: jest.fn(async () => []), materialize: jest.fn(async () => ''), fits: jest.fn(async () => true) };
+    await renderAsync(
+      <Dashboard state={initialUiState} engine={engine} peerDeviceId={peer.deviceId}
+        onPickFiles={async () => []} onPickFolder={async () => null} media={media} />,
+    );
+    await fireEventAsync.press(await screen.findByTestId('pick-files'));
+    await fireEventAsync.press(screen.getByTestId('pick-menu-photos'));
+    await waitFor(() => expect(media.pick).toHaveBeenCalledTimes(1));
+  });
+
   // Frame F3 on macOS: the label and the folder stats reach the thread composer.
   it('hands the add button label and the folder stats to the thread', async () => {
     const { engine } = spyEngine();
