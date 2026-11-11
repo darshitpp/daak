@@ -1982,3 +1982,138 @@ describe('ThreadScreen add photos', () => {
     expect(screen.queryByTestId('pick-error')).toBeNull();
   });
 });
+
+// Task 10c: a selection that does not fit starts a large send.
+describe('ThreadScreen large selection', () => {
+  afterEach(async () => { await settle(0); });
+
+  const refs = (...names: string[]) => names.map((n) => ({ token: `t-${n}`, name: n, size: 10 }));
+  const host = () => {
+    const media = {
+      pick: jest.fn<Promise<MediaRef[]>, []>(async () => refs('a.jpg', 'b.mov')),
+      materialize: jest.fn<Promise<string>, [string]>(async (t) => `/cache/daak-send/${t}`),
+      fits: jest.fn<Promise<boolean>, [MediaRef[]]>(async () => false),
+      startLarge: jest.fn<Promise<void>, [string, MediaRef[]]>(async () => {}),
+    };
+    return {
+      media,
+      onPickFiles: jest.fn(async () => [] as string[]),
+      onPickFolder: jest.fn(async (): Promise<string | null> => null),
+      discardPickedCopy: jest.fn(async () => {}),
+    };
+  };
+  const stage = async () => {
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    return screen.findByText('a.jpg');
+  };
+
+  it('a selection that does not fit calls startLarge with the staged refs and removes them', async () => {
+    const h = host();
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    expect(h.media.startLarge).toHaveBeenCalledWith(peer.deviceId, refs('a.jpg', 'b.mov'));
+    expect(h.media.materialize).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText('a.jpg')).toBeNull());
+    expect(screen.queryByText('b.mov')).toBeNull();
+  });
+
+  it('a large selection also sends the plain files and the note once', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, initialFiles: ['/Users/d/x.pdf'] });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, files: ['/Users/d/x.pdf'] });
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, text: 'hello' });
+  });
+
+  it('PLAN_BUSY shows its text and keeps the refs', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('PLAN_BUSY'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('A large send is already running for this device.')).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+    expect(screen.getByText('b.mov')).toBeTruthy();
+  });
+
+  it('PLAN_TOO_LARGE shows its text', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('PLAN_TOO_LARGE'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Too many photos for one send. Pick fewer.')).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('a NO_SPACE error shows the photo no-space text', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('NO_SPACE:2254857830'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(
+      await screen.findByText('Not enough space to prepare these photos. Free some space and try again.'),
+    ).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('any other error shows the generic text', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('boom'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Daak could not prepare a file for sending.')).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('without startLarge the toast is unchanged', async () => {
+    const h = host();
+    const { startLarge: _unused, ...media } = h.media;
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, media });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Large selection is not supported yet')).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('a refs list picked while startLarge runs stays staged', async () => {
+    const h = host();
+    let finish: () => void = () => {};
+    h.media.startLarge.mockImplementation(() => new Promise<void>((r) => { finish = r; }));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    let pickDone: (r: MediaRef[]) => void = () => {};
+    h.media.pick.mockImplementationOnce(() => new Promise<MediaRef[]>((r) => { pickDone = r; }));
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    await act(async () => { pickDone(refs('c.png')); });
+    await screen.findByText('c.png');
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.queryByText('a.jpg')).toBeNull());
+    expect(screen.getByText('c.png')).toBeTruthy();
+  });
+});

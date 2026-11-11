@@ -192,6 +192,9 @@ describe('a void UniFFI method must not resolve its promise with Unit', () => {
       // The SAS gate: void in the UDL, overridden on all three native modules.
       'confirmPairing',
       'deleteQuarantined',
+      // Part C Task 9: the plan of a batched send. Void in the UDL, overridden on all
+      // three native modules. Each must end with `return nil as Void?` on Swift.
+      'deleteSendPlan',
       'offerPairing',
       // R42p: void in the UDL, and overridden on all three native modules.
       'replaceInboxPaths',
@@ -200,6 +203,7 @@ describe('a void UniFFI method must not resolve its promise with Unit', () => {
       // R42f: revoke_pairing is void in the UDL and overridden on the native
       // modules, so it belongs in the same pin as the other void engine verbs.
       'revokePairing',
+      'saveSendPlan',
       'setDisplayName',
       'setPresence',
       'shutdown',

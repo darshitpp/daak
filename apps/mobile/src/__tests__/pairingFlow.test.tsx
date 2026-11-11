@@ -34,6 +34,7 @@ jest.mock('@daak/platform', () => {
     notifyReceived: jest.fn(async () => {}),
     routeInboxEntry: jest.fn(async () => {}),
     realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
+    createBatchDriver: jest.fn(() => ({ start: jest.fn(), onEvent: jest.fn(), retry: jest.fn(), stop: jest.fn(), status: jest.fn(() => null), resume: jest.fn(async () => {}), dispose: jest.fn() })),
     pairingBundle: jest.fn(async () =>
       JSON.stringify({ cbor: 'aabb', name: 'me', device_id: 'bb'.repeat(16) }),
     ),

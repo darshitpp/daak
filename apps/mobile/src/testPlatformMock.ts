@@ -86,6 +86,8 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     formatAppInfo: jest.fn(
       (i: { version: string; build: string }) => `Version ${i.version} (build ${i.build})`,
     ),
+    // The batch driver of bootstrap. A test about a large send replaces it.
+    createBatchDriver: jest.fn(() => ({ start: jest.fn(), onEvent: jest.fn(), retry: jest.fn(), stop: jest.fn(), status: jest.fn(() => null), resume: jest.fn(async () => {}), dispose: jest.fn() })),
     ...overrides,
   };
 }

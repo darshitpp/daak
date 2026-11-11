@@ -80,7 +80,21 @@ export type MediaHost = {
   pick: () => Promise<MediaRef[]>;
   materialize: (token: string) => Promise<string>;
   fits: (refs: MediaRef[]) => Promise<boolean>;
+  /**
+   * Start a send in batches for a selection that does not fit. It resolves when the
+   * first batch is copied. Without it the composer shows a toast for such a selection.
+   */
+  startLarge?: (peerId: string, refs: MediaRef[]) => Promise<void>;
 };
+
+/** The inline warning for a large send that did not start. */
+export function largeSendError(e: unknown): string {
+  const m = e instanceof Error ? e.message : '';
+  if (m === 'PLAN_BUSY') return 'A large send is already running for this device.';
+  if (m === 'PLAN_TOO_LARGE') return 'Too many photos for one send. Pick fewer.';
+  if (m.startsWith('NO_SPACE')) return 'Not enough space to prepare these photos. Free some space and try again.';
+  return 'Daak could not prepare a file for sending.';
+}
 
 /** The inline warning for a photo selection that failed to pick or to prepare. Null shows nothing. */
 export function mediaError(e: unknown): string | null {
@@ -547,17 +561,21 @@ export function ThreadScreen({
     const made: string[] = [];
     const dropMade = () => made.forEach(discard);
     let sendFiles = files;
+    // True when the photos go to startLarge after the plain files and the note.
+    let large = false;
     try {
       if (sentRefs.length > 0 && media) {
         let ok = false;
         let fitError: unknown = null;
         try { ok = await media.fits(sentRefs); } catch (e) { fitError = e ?? new Error('fits'); }
-        if (fitError !== null || !ok) {
+        if (fitError === null && !ok && media.startLarge) {
+          large = true;
+        } else if (fitError !== null || !ok) {
           say(fitError !== null ? 'Daak could not prepare a file for sending.' : 'Large selection is not supported yet');
           if (alive.current && fitError !== null) setPickError('Daak could not prepare a file for sending.');
           return;
         }
-        try {
+        if (!large) try {
           for (const r of sentRefs) {
             const path = await media.materialize(r.token);
             copies.current.add(path);
@@ -572,7 +590,7 @@ export function ThreadScreen({
           if (alive.current) setPickError(mediaError(e) ?? 'Daak could not prepare a file for sending.');
           return;
         }
-        sendFiles = [...files, ...made];
+        if (!large) sendFiles = [...files, ...made];
       }
       // The engine reports queued: true for every send. The words come from the
       // presence of the peer at the time of the send.
@@ -601,6 +619,15 @@ export function ThreadScreen({
         if (note !== '') {
           await engine.send({ peerDeviceId, text: note });
           setText('');
+        }
+        if (large && media?.startLarge) {
+          try {
+            await media.startLarge(peerDeviceId, sentRefs);
+          } catch (e) {
+            if (alive.current) setPickError(largeSendError(e));
+            return;
+          }
+          setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
         }
         say(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
         stick.current = true;

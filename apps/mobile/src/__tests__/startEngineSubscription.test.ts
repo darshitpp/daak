@@ -40,6 +40,7 @@ jest.mock('@daak/platform', () => {
     // would throw before the router under test ever ran.
     relocateReceivedFiles: jest.fn(async () => undefined),
     realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
+    createBatchDriver: jest.fn(() => ({ start: jest.fn(), onEvent: jest.fn(), retry: jest.fn(), stop: jest.fn(), status: jest.fn(() => null), resume: jest.fn(async () => {}), dispose: jest.fn() })),
   };
 });
 

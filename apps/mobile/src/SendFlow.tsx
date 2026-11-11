@@ -10,6 +10,7 @@
  */
 import { DEFAULT_ITEM_BYTES, fits, freeBytes, materializeMedia, pickFiles, pickFolder, pickMedia } from '@daak/platform';
 import type { MediaHost } from '@daak/ui';
+import { batchDriver, onBatchChange } from './bootstrap';
 
 export const pickAttachedFiles = (): Promise<string[]> => pickFiles(true);
 
@@ -21,4 +22,16 @@ export const attachedMedia: MediaHost = {
   pick: pickMedia,
   materialize: materializeMedia,
   fits: async (refs) => fits(refs.reduce((n, r) => n + (r.size ?? DEFAULT_ITEM_BYTES), 0), await freeBytes()),
+  // A selection that does not fit goes to the driver. The screen maps the errors.
+  startLarge: async (peerId, refs) => {
+    await batchDriver().start(peerId, refs);
+  },
+};
+
+/** The state of a large send, for the waiting row of the next task. The screens do not use it yet. */
+export const batchHost = {
+  batchStatus: (peerId: string) => batchDriver().status(peerId),
+  onRetryBatch: (peerId: string) => batchDriver().retry(peerId),
+  onStopBatch: (peerId: string) => batchDriver().stop(peerId),
+  subscribeBatch: onBatchChange,
 };
