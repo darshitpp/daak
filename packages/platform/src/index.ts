@@ -10,6 +10,7 @@ export * from './notify-prefs';
 export * from './onboarding';
 export * from './permission-rows';
 export * from './pairing';
+export * from './planBatches';
 export * from './qr';
 export * from './receive';
 export * from './securestore';
