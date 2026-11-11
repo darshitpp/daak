@@ -7,6 +7,8 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.StatFs
+import android.os.storage.StorageManager
 import android.provider.MediaStore
 import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
@@ -176,6 +178,32 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
    */
   @ReactMethod
   override fun openFile(path: String, promise: Promise) = reveal(path, promise)
+
+  /**
+   * The free bytes for the send cache. `getAllocatableBytes` counts cache that
+   * the system can clear, so it is the right value for a decision about disk.
+   * It can block, so it runs off the main thread. When it fails, `StatFs` gives
+   * the plain free bytes. When both fail, the message has no path.
+   */
+  @ReactMethod
+  override fun freeBytes(promise: Promise) {
+    thread(name = "daak-free-bytes") {
+      try {
+        val cacheDir = reactApplicationContext.cacheDir
+        val bytes = try {
+          val storageManager =
+              reactApplicationContext.getSystemService(StorageManager::class.java)
+          storageManager.getAllocatableBytes(storageManager.getUuidForPath(cacheDir))
+        } catch (_: Throwable) {
+          StatFs(cacheDir.path).availableBytes
+        }
+        // A Long can exceed 2^53 in theory. A real disk does not.
+        promise.resolve(bytes.coerceAtLeast(0L).toDouble())
+      } catch (_: Throwable) {
+        promise.reject("E_FSPATHS", "the free space could not be read")
+      }
+    }
+  }
 
   /**
    * The file count and total bytes of a folder tree. Hidden files count. A

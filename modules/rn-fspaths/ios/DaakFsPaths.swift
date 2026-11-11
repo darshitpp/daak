@@ -181,6 +181,22 @@ class DaakFsPaths: NSObject, UIDocumentPickerDelegate {
     resolve(sizes)
   }
 
+  /// The free bytes for the send cache. The value counts space that the system
+  /// can clear. Rejects when the OS gives no value. The message has no path.
+  @objc func freeBytes(_ resolve: @escaping RCTPromiseResolveBlock,
+                       reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+      let values = try? caches.resourceValues(
+        forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+      guard let bytes = values?.volumeAvailableCapacityForImportantUsage, bytes >= 0 else {
+        reject("E_FSPATHS", "the free space could not be read", nil)
+        return
+      }
+      resolve(NSNumber(value: bytes))
+    }
+  }
+
   /// The file count and the byte count of the regular files below `path`.
   /// Hidden files count. A symlink does not count. Resolves NSNull for a path
   /// that is not a folder, or for a tree that has an unreadable part.

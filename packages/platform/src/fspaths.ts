@@ -509,6 +509,19 @@ export async function folderStats(path: string): Promise<{ files: number; bytes:
 }
 
 /**
+ * The free bytes for the send cache. A native failure rejects. This function
+ * does not hide it, because the caller decides what to do. A value that is not
+ * a finite number of 0 or more also rejects.
+ */
+export async function freeBytes(): Promise<number> {
+  const bytes: unknown = await NativeDaakFsPaths.freeBytes();
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
+    throw new Error('the native free space is not a number of 0 or more');
+  }
+  return bytes;
+}
+
+/**
  * Delete the private copy that `pickFolder` made. Never rejects: it is cleanup
  * and runs from a handler that must not die. A copy that stays is removed by
  * `sweepPickedCopies` at the next start.

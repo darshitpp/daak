@@ -1502,3 +1502,59 @@ describe('the iOS notify post can be silent and can replace a notification in pl
     expect(swift).not.toMatch(/willPresent/);
   });
 });
+
+// Task 5: freeBytes. These pins prove only that the calls are in the source.
+// They do not run Kotlin or Swift. The Gradle and Xcode builds check the rest.
+describe('the fspaths module reports the free space of the send cache', () => {
+  const kt = read(
+    repo +
+      'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const macos = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift');
+  const spec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const body = kt.slice(kt.indexOf('override fun freeBytes'));
+  const fn = body.slice(0, body.indexOf('\n  }\n') + 5);
+
+  it('declares freeBytes as a required member of the Spec', () => {
+    expect(spec).toMatch(/^\s+freeBytes\(\): Promise<number>;/m);
+  });
+
+  it('uses StorageManager.getAllocatableBytes with getUuidForPath(cacheDir)', () => {
+    expect(fn).toMatch(/getAllocatableBytes\(/);
+    expect(fn).toMatch(/getUuidForPath\(cacheDir\)/);
+    expect(fn).toMatch(/reactApplicationContext\.cacheDir/);
+  });
+
+  it('falls back to StatFs availableBytes', () => {
+    expect(fn).toMatch(/StatFs\(cacheDir\.path\)\.availableBytes/);
+  });
+
+  it('runs off the main thread', () => {
+    expect(fn).toMatch(/thread\(name = "daak-free-bytes"\)/);
+  });
+
+  it('rejects without a path in the message', () => {
+    const rejects = fn.match(/promise\.reject\([^\n]*\)/g) ?? [];
+    expect(rejects.length).toBeGreaterThan(0);
+    for (const r of rejects) expect(r).not.toMatch(/\$|cacheDir|path/);
+  });
+
+  it('uses volumeAvailableCapacityForImportantUsageKey on iOS', () => {
+    expect(ios).toMatch(/volumeAvailableCapacityForImportantUsageKey/);
+    expect(ios).toMatch(/@objc func freeBytes\(/);
+    expect(ios).toMatch(/cachesDirectory/);
+  });
+
+  it('lists freeBytes in the iOS .mm method table', () => {
+    const mm = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.mm');
+    expect(mm).toMatch(/RCT_EXTERN_METHOD\(freeBytes:/);
+  });
+
+  it('implements freeBytes on macOS and lists it in the .mm', () => {
+    expect(macos).toMatch(/volumeAvailableCapacityForImportantUsageKey/);
+    expect(macos).toMatch(/@objc func freeBytes\(/);
+    const mm = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.mm');
+    expect(mm).toMatch(/RCT_EXTERN_METHOD\(freeBytes:/);
+  });
+});

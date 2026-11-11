@@ -14,6 +14,8 @@ RCT_EXTERN_METHOD(fileSizes:(NSArray<NSString *> *)paths
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(folderStats:(NSString *)path
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(freeBytes:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(discardPickedCopy:(NSString *)path
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(sweepPickedCopies:(RCTPromiseResolveBlock)resolve
