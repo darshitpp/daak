@@ -44,6 +44,12 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     private const val KEY_TREE = "downloadFolderTree"
     private const val KEY_NAME = "downloadFolderName"
     private const val REQUEST_TREE = 47011
+
+    /** The public folder for a document when the user chose no folder. */
+    const val DEFAULT_FOLDER = "Download/Daak"
+
+    /** The longest file name, in characters, that a MediaStore insert gets. */
+    const val MAX_NAME = 200
   }
 
   init {
@@ -342,7 +348,11 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
   override fun downloadFolderName(promise: Promise) =
       // The TREE URI, not the display name: on Android the location of a SAF
       // folder IS the URI, and a bare name would not say where the files go.
-      resolve(promise) { prefs().getString(KEY_TREE, null) ?: prefs().getString(KEY_NAME, null) }
+      resolve(promise) {
+        prefs().getString(KEY_TREE, null) ?: prefs().getString(KEY_NAME, null)
+            // No folder chosen: API 29 and later save documents to Download/Daak.
+            ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) DEFAULT_FOLDER else null
+      }
 
   @ReactMethod
   override fun clearDownloadFolder(promise: Promise) = resolve(promise) {
@@ -380,7 +390,12 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
     // becomes "", so the answer count always equals the input count.
     val input = (0 until paths.size()).map { paths.getString(it) ?: "" }
     val treeUri = prefs().getString(KEY_TREE, null)?.let(Uri::parse)
-    if (treeUri == null) return@resolve writable(input)
+    if (treeUri == null) {
+      // No folder chosen. Below API 29 the input comes back unchanged. From
+      // API 29, a document goes to Download/Daak in MediaStore.
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@resolve writable(input)
+      return@resolve writable(saveDocuments(input, subdirs))
+    }
     val resolver = reactApplicationContext.contentResolver
     val root =
         DocumentsContract.buildDocumentUriUsingTree(
@@ -612,6 +627,80 @@ class DaakFsPathsModule(reactContext: ReactApplicationContext) :
       if (updated != 1) throw IllegalStateException("pending not cleared")
       if (!src.delete()) {
         android.util.Log.w("DaakFsPaths", "saved item but could not delete source")
+      }
+      uri.toString()
+    } catch (_: Throwable) {
+      try { resolver.delete(uri, null, null) } catch (_: Throwable) {}
+      path
+    }
+  }
+
+  /**
+   * True for a file below `<data_dir>/downloads/quarantine`. A file that failed
+   * the hash check stays there. Only an item in state `done` is moved.
+   */
+  private fun isQuarantined(src: File): Boolean =
+      src.canonicalFile.toPath().startsWith(
+          File(dataDir(), "downloads/quarantine").canonicalFile.toPath())
+
+  /**
+   * A file name that is safe for a MediaStore insert. A path separator and a
+   * control character become `_`. A name of `.` or `..` or a blank name becomes
+   * `file`. A name over MAX_NAME characters is cut, and the extension stays.
+   */
+  private fun cleanName(name: String): String {
+    val flat = name.map { if (it == '/' || it == '\\' || Character.isISOControl(it)) '_' else it }
+        .joinToString("").trim()
+    val base = if (flat.isEmpty() || flat == "." || flat == "..") "file" else flat
+    if (base.length <= MAX_NAME) return base
+    val dot = base.lastIndexOf('.')
+    val ext = if (dot > 0 && base.length - dot <= 16) base.substring(dot) else ""
+    return base.substring(0, MAX_NAME - ext.length) + ext
+  }
+
+  /** Save each document to Download/Daak, then remove the empty source folders. */
+  private fun saveDocuments(input: List<String>, subdirs: ReadableArray): List<String> {
+    val saved = input.mapIndexed { i, path ->
+      try { saveDocument(path, parallelAt(subdirs, i)) } catch (_: Throwable) { path }
+    }
+    // Best effort. A throw here must not reject the promise.
+    runCatching { pruneEmptyDirs(input) }.onFailure {
+      android.util.Log.w("DaakFsPaths", "the empty folders could not be removed: ${it.javaClass.simpleName}")
+    }
+    return saved
+  }
+
+  /**
+   * One document, saved to `Download/Daak[/subdir]` in MediaStore. It has the
+   * same steps as saveOne: pending row, copy, clear pending, check 1 row, delete
+   * the source. A failure removes the row and answers the original path. An
+   * image or a video stays for saveToLibrary. A quarantined file never moves.
+   */
+  private fun saveDocument(path: String, subdir: String): String {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return path
+    val src = File(path)
+    if (path.isEmpty() || !src.isFile) return path
+    if (isQuarantined(src)) return path
+    val mime = guessMime(src.name)
+    if (mime.startsWith("image/") || mime.startsWith("video/")) return path
+    val resolver = reactApplicationContext.contentResolver
+    val dirs = safeParts(subdir.split("/")).map { cleanName(it) }.joinToString("/")
+    val values = ContentValues().apply {
+      put(MediaStore.MediaColumns.DISPLAY_NAME, cleanName(src.name))
+      put(MediaStore.MediaColumns.MIME_TYPE, mime)
+      put(MediaStore.MediaColumns.RELATIVE_PATH, if (dirs.isEmpty()) DEFAULT_FOLDER else "$DEFAULT_FOLDER/$dirs")
+      put(MediaStore.MediaColumns.IS_PENDING, 1)
+    }
+    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return path
+    return try {
+      val out = resolver.openOutputStream(uri) ?: throw IllegalStateException("no output stream")
+      out.use { o -> src.inputStream().use { it.copyTo(o) } }
+      val updated = resolver.update(uri, ContentValues().apply {
+        put(MediaStore.MediaColumns.IS_PENDING, 0)
+      }, null, null)
+      if (updated != 1) throw IllegalStateException("pending not cleared")
+      if (!src.delete()) {
+        android.util.Log.w("DaakFsPaths", "saved document but could not delete source")
       }
       uri.toString()
     } catch (_: Throwable) {

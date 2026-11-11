@@ -1355,3 +1355,92 @@ describe('cleanup C native pins', () => {
     expect(line).not.toMatch(/\.path|\bpath\b/);
   });
 });
+
+// Task 19: with no chosen folder, Android documents go to Download/Daak. No
+// Kotlin test target exists, so these are source-text pins in the style of the
+// tests above. They cannot run the Kotlin code.
+describe('Android documents go to Download/Daak when no folder is chosen', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\/?\*)/.test(l))
+      .join('\n');
+  const kt = strip(
+    read(repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt'),
+  );
+  const from = (name: string) => {
+    const at = kt.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    return kt.slice(at);
+  };
+
+  it('a user with no chosen folder gets Download/Daak', () => {
+    const name = from('override fun downloadFolderName(');
+    const body = name.slice(0, name.indexOf('override fun clearDownloadFolder('));
+    expect(kt).toContain('const val DEFAULT_FOLDER = "Download/Daak"');
+    expect(body).toMatch(/Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.Q/);
+    expect(body).toContain('DEFAULT_FOLDER');
+    const move = from('override fun moveReceivedFiles(');
+    expect(move.indexOf('saveDocuments(')).toBeGreaterThan(move.indexOf('treeUri == null'));
+    const doc = from('private fun saveDocument(');
+    expect(doc).toContain('MediaStore.Downloads.EXTERNAL_CONTENT_URI');
+    expect(doc).toMatch(/RELATIVE_PATH, if \(dirs\.isEmpty\(\)\) DEFAULT_FOLDER else "\$DEFAULT_FOLDER\/\$dirs"\)/);
+    expect(doc).toContain('if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return path');
+  });
+
+  it('a user with a chosen folder keeps it', () => {
+    const name = from('override fun downloadFolderName(');
+    const body = name.slice(0, name.indexOf('override fun clearDownloadFolder('));
+    expect(body).toContain('prefs().getString(KEY_TREE, null) ?: prefs().getString(KEY_NAME, null)');
+    // The default is only for a call with no saved tree.
+    const move = from('override fun moveReceivedFiles(');
+    const head = move.slice(0, move.indexOf('val resolver'));
+    expect(head).toMatch(
+      /if \(treeUri == null\) \{[\s\S]*SDK_INT < Build\.VERSION_CODES\.Q\) return@resolve writable\(input\)/,
+    );
+    expect(head).toContain('saveDocuments(');
+  });
+
+  it('a quarantined item is never relocated', () => {
+    const doc = from('private fun saveDocument(');
+    expect(doc).toContain('isQuarantined(src)');
+    const q = from('private fun isQuarantined(');
+    expect(q).toContain('File(dataDir(), "downloads/quarantine")');
+    expect(q).toContain('startsWith(');
+  });
+
+  it('a hostile name (.., 300 characters, a control character) is cleaned before the MediaStore insert', () => {
+    const doc = from('private fun saveDocument(');
+    expect(doc.indexOf('cleanName(')).toBeGreaterThan(-1);
+    expect(doc.indexOf('cleanName(')).toBeLessThan(doc.indexOf('resolver.insert('));
+    expect(doc).toContain('safeParts(subdir.split("/"))');
+    const clean = from('private fun cleanName(');
+    const body = clean.slice(0, clean.indexOf('private fun saveDocument('));
+    expect(body).toMatch(/isISOControl/);
+    expect(body).toContain("'\\\\'");
+    expect(body).toMatch(/== "\.\."/);
+    expect(body).toMatch(/MAX_NAME/);
+    expect(kt).toMatch(/const val MAX_NAME = \d+/);
+  });
+
+  it('a non-media file keeps application/octet-stream', () => {
+    const doc = from('private fun saveDocument(');
+    expect(doc).toContain('val mime = guessMime(src.name)');
+    expect(doc).toMatch(/mime\.startsWith\("image\/"\) \|\| mime\.startsWith\("video\/"\)\) return path/);
+    expect(doc).toContain('MediaStore.MediaColumns.MIME_TYPE, mime');
+    expect(kt).toContain('else -> "application/octet-stream"');
+  });
+
+  it('writes pending, clears it, requires 1 row, then deletes the source or the row', () => {
+    const doc = from('private fun saveDocument(');
+    const pending = doc.indexOf('IS_PENDING, 1');
+    const clear = doc.indexOf('IS_PENDING, 0');
+    const check = doc.indexOf('updated != 1', clear);
+    const del = doc.indexOf('src.delete()');
+    expect(pending).toBeGreaterThan(-1);
+    expect(clear).toBeGreaterThan(pending);
+    expect(check).toBeGreaterThan(clear);
+    expect(del).toBeGreaterThan(check);
+    expect(doc.indexOf('resolver.delete(uri, null, null)')).toBeGreaterThan(doc.indexOf('catch'));
+  });
+});
