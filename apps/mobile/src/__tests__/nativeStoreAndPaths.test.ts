@@ -1449,13 +1449,20 @@ describe('sendFilesTagged is wired through the native glue', () => {
   it('the Android module calls the uniffi send_files_tagged with a bounded attempt', () => {
     const kt = read(repo + 'apps/mobile/android/app/src/main/java/dev/darshit/daak/DaakModule.kt');
     expect(kt).toMatch(/override fun sendFilesTagged\(/);
-    expect(kt).toContain('handle().sendFilesTagged(peerId, list, share, batch, itemIndexArg(attempt))');
+    expect(kt).toContain('handle().sendFilesTagged(peerId, list, share, batch, attemptArg(attempt))');
+    expect(kt).toContain('attempt must be a whole number from 0 to 4294967295');
+    expect(kt).toContain('private fun attemptArg(');
   });
 
   it('the iOS module declares and forwards sendFilesTagged', () => {
     const swift = read(repo + 'apps/mobile/ios/Daak.swift');
     expect(swift).toMatch(/@objc func sendFilesTagged\(/);
     expect(swift).toContain('need().sendFilesTagged(');
+    expect(swift).toContain('attempt must be a whole number from 0 to 4294967295');
+    expect(swift).toContain('DaakArgumentError(');
+    const desktop = read(repo + 'apps/desktop/macos/Daak-macOS/Daak.swift');
+    expect(desktop).toContain('attempt must be a whole number from 0 to 4294967295');
+    expect(desktop).toContain('DaakArgumentError(');
     expect(read(repo + 'apps/mobile/ios/DaakModule.mm')).toContain('RCT_EXTERN_METHOD(sendFilesTagged:');
   });
 });

@@ -657,6 +657,8 @@ pub struct Engine {
     /// then disagree, and the next launch would advertise a name no peer has
     /// ever seen. crates/daak-core/tests/display_name_persist.rs pins it.
     rename_lock: tokio::sync::Mutex<()>,
+    /// Serialises `send_files_tagged`, so one id gives one outbox row.
+    tagged_send_lock: tokio::sync::Mutex<()>,
     identity: Arc<Identity>,
     db: Arc<Db>,
     staging: Arc<Staging>,
@@ -1500,6 +1502,7 @@ impl Engine {
             devices,
             profile,
             rename_lock: Mutex::new(()),
+            tagged_send_lock: Mutex::new(()),
             browser,
             accept_task,
             discovery_task,
@@ -2533,9 +2536,15 @@ impl Engine {
     }
 
     /// Queue a send of one batch of a larger share. Each item carries the
-    /// share tag. The payload id comes from the tag and `attempt`. A repeated
-    /// call with the same tag and `attempt` returns the id of the existing row
-    /// and adds no second row and no second staged copy.
+    /// share tag. The payload id comes from the peer, the tag, and `attempt`.
+    /// The text of `share` can be in upper case. The engine stores it in lower
+    /// case.
+    ///
+    /// A row for the id can already exist in any state: pending, sending,
+    /// failed, canceled, or done. Then the call returns `Ok(id)` and adds no
+    /// second row and no second staged copy. To send the batch again after a
+    /// cancel or a failure, call with `attempt + 1`, or retry the transfer.
+    /// Two calls with the same id at the same time give one row.
     pub async fn send_files_tagged(
         &self,
         peer_device_id: [u8; 16],
@@ -2544,7 +2553,19 @@ impl Engine {
         batch: String,
         attempt: u32,
     ) -> Result<[u8; 16]> {
+        let share = share.to_ascii_lowercase();
         let (k, m) = crate::manifest::parse_batch_tag(&share, &batch)?;
+        let id = crate::manifest::tagged_payload_id(&peer_device_id, &share, k, attempt)?;
+        // One tagged send at a time. The check, the staging, and the enqueue
+        // are one step. Without the guard, two calls can both see no row.
+        let _guard = self.tagged_send_lock.lock().await;
+        if self.db.get_outbox(&id)?.is_some() {
+            return Ok(id);
+        }
+        // No row: a staged directory for this id is an orphan from a crash.
+        if let Err(e) = self.staging.cleanup(&id) {
+            tracing::warn!("orphan staging cleanup failed: {}", log_err(&e));
+        }
         let sender = crate::manifest::DeviceRef {
             device_id: self.identity.device_id(),
             name: self.display_name().await,
@@ -2553,15 +2574,12 @@ impl Engine {
             sender,
             &paths,
             crate::manifest::CHUNK_SIZE_DEFAULT,
+            &peer_device_id,
             &share,
             k,
             m,
             attempt,
         )?;
-        let id = manifest.payload_id;
-        if self.db.get_outbox(&id)?.is_some() {
-            return Ok(id);
-        }
         self.enqueue_outbox_send(peer_device_id, manifest, sources)
             .await
     }

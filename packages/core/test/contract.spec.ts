@@ -486,7 +486,9 @@ describe('InProcessEngine', () => {
     expect(await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's', batch: '1/2', attempt: 3 }))
       .toEqual({ transferId: 'ee55ff66', queued: true });
     await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's', batch: '1/2' });
-    await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's' });
+    await engine.send({ peerDeviceId: 'd1', files: ['/a'] });
+    await expect(engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's' })).rejects.toThrow(/set together/);
+    await expect(engine.send({ peerDeviceId: 'd1', files: ['/a'], batch: '1/2' })).rejects.toThrow(/set together/);
     expect(calls).toEqual(['tagged:d1:/a:s:1/2:3', 'tagged:d1:/a:s:1/2:0', 'files:d1:/a']);
   });
 

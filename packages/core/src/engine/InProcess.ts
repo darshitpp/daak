@@ -120,6 +120,9 @@ export class InProcessEngine implements DaakEngine {
       return { transferId: await this.native.sendText(req.peerDeviceId, req.text as string), queued: true };
     }
     const files = req.files ?? [];
+    const hasShare = typeof req.share === 'string';
+    const hasBatch = typeof req.batch === 'string';
+    if (hasShare !== hasBatch) throw new Error('share and batch must be set together');
     if (typeof req.share === 'string' && typeof req.batch === 'string') {
       const id = await this.native.sendFilesTagged(req.peerDeviceId, files, req.share, req.batch, req.attempt ?? 0);
       return { transferId: id, queued: true };

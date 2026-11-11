@@ -6,6 +6,11 @@
 import Foundation
 import daak_ffiFFI
 
+/// An argument that the native module refuses. `run` rejects it with E_DAAK.
+private struct DaakArgumentError: Error, CustomStringConvertible {
+  let description: String
+}
+
 @objc(Daak)
 final class Daak: RCTEventEmitter, EventSink {
   // One serial queue owns the engine for the promise-returning methods: start,
@@ -158,9 +163,14 @@ final class Daak: RCTEventEmitter, EventSink {
                              resolve: @escaping RCTPromiseResolveBlock,
                              reject: @escaping RCTPromiseRejectBlock) {
     run(resolve, reject) {
-      try self.need().sendFilesTagged(
+      // A bad attempt is an error. A clamp would send the wrong batch id.
+      guard attempt.isFinite, attempt >= 0, attempt <= 4294967295,
+            attempt == attempt.rounded(.down) else {
+        throw DaakArgumentError(description: "attempt must be a whole number from 0 to 4294967295")
+      }
+      return try self.need().sendFilesTagged(
         peerId: peerId, paths: paths, share: share, batch: batch,
-        attempt: UInt32(min(max(0, attempt.isFinite ? attempt : 0), 4294967295)))
+        attempt: UInt32(attempt))
     }
   }
 

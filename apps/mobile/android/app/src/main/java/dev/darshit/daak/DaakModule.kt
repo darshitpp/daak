@@ -213,7 +213,7 @@ class DaakModule(reactContext: ReactApplicationContext) :
         promise: Promise,
     ) {
         val list = List(paths.size()) { paths.getString(it)!! }
-        resolve(promise) { handle().sendFilesTagged(peerId, list, share, batch, itemIndexArg(attempt)) }
+        resolve(promise) { handle().sendFilesTagged(peerId, list, share, batch, attemptArg(attempt)) }
     }
 
     @ReactMethod
@@ -381,6 +381,18 @@ class DaakModule(reactContext: ReactApplicationContext) :
             "itemIndex must be a whole number in 0..$UINT_MAX, got $itemIndex"
         }
         return itemIndex.toInt().toUInt()
+    }
+
+    // The attempt is a whole number from 0 to 4294967295. Any other value is
+    // rejected, because a clamp would send the wrong batch id.
+    private fun attemptArg(attempt: Double): UInt {
+        require(
+            attempt.isFinite() && attempt >= 0.0 &&
+                attempt == Math.floor(attempt) && attempt <= UINT_MAX
+        ) {
+            "attempt must be a whole number from 0 to 4294967295"
+        }
+        return attempt.toLong().toUInt()
     }
 
     // 4294967295.0. Spelled out rather than UInt.MAX_VALUE.toDouble() because

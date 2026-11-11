@@ -523,48 +523,69 @@ pub fn from_picked_paths(
     from_picked_paths_inner(sender, picked, chunk_size, None)
 }
 
-/// Check a share tag. `share` is 32 hex characters. `batch` is `k/m` with
-/// `1 <= k <= m <= 1000`. Returns `(k, m)`. The error text holds no value,
-/// because a log line must not carry data from a peer or a user.
+/// Check a share tag. Only the canonical form is valid. `share` is exactly
+/// 32 lower case hex characters. `batch` is `k/m`. Each number is decimal,
+/// has no sign, and has no leading zero. `1 <= k <= m <= 1000`. Returns
+/// `(k, m)`. The error text holds no value, because a log line must not carry
+/// data from a peer or a user.
 pub fn parse_batch_tag(share: &str, batch: &str) -> Result<(u32, u32)> {
     let bad = || CoreError::Protocol("invalid share tag".into());
-    if share.len() != 32 || !share.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if share.len() != 32
+        || !share
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err(bad());
     }
     let (k, m) = batch.split_once('/').ok_or_else(bad)?;
-    let digits = |t: &str| !t.is_empty() && t.len() <= 4 && t.bytes().all(|b| b.is_ascii_digit());
-    if !digits(k) || !digits(m) {
+    let number = |t: &str| {
+        !t.is_empty()
+            && t.len() <= 4
+            && !t.starts_with('0')
+            && t.bytes().all(|b| b.is_ascii_digit())
+    };
+    if !number(k) || !number(m) {
         return Err(bad());
     }
     let (k, m): (u32, u32) = (k.parse().map_err(|_| bad())?, m.parse().map_err(|_| bad())?);
-    if k < 1 || k > m || m > 1000 {
+    if k > m || m > 1000 {
         return Err(bad());
     }
     Ok((k, m))
 }
 
-/// The payload id of a tagged send: the first 16 bytes of a keyed BLAKE2s
-/// over `share`, `k`, and `attempt`. The same input gives the same id.
-fn tagged_payload_id(share: &str, k: u32, attempt: u32) -> [u8; 16] {
+/// The payload id of a tagged send: the first 16 bytes of a keyed BLAKE2s.
+/// The input is the peer id (16 bytes), the share (16 decoded bytes), `k`
+/// (4 bytes), and `attempt` (4 bytes). The same input gives the same id. Two
+/// peers give two ids. `share` must be a canonical share tag.
+pub fn tagged_payload_id(peer: &[u8; 16], share: &str, k: u32, attempt: u32) -> Result<[u8; 16]> {
+    let share_bytes =
+        hex::decode(share).map_err(|_| CoreError::Protocol("invalid share tag".into()))?;
+    if share_bytes.len() != 16 {
+        return Err(CoreError::Protocol("invalid share tag".into()));
+    }
     let mut base = [0u8; 32];
     let label = b"daak/share-batch-id/v1";
     base[..label.len()].copy_from_slice(label);
-    let mut info = share.to_ascii_lowercase().into_bytes();
+    let mut info = peer.to_vec();
+    info.extend_from_slice(&share_bytes);
     info.extend_from_slice(&k.to_be_bytes());
     info.extend_from_slice(&attempt.to_be_bytes());
     let key = crate::crypto::keys::derive_key(&base, &info, 0);
     let mut id = [0u8; 16];
     id.copy_from_slice(&key[..16]);
-    id
+    Ok(id)
 }
 
 /// Like `from_picked_paths`. Each binary item also gets `attrs["share"]` and
-/// `attrs["batch"]` (`k/m`), and the payload id comes from `share`, `k`, and
-/// `attempt`. A repeated call with the same input gives the same id.
+/// `attrs["batch"]` (`k/m`), and the payload id comes from `peer`, `share`,
+/// `k`, and `attempt`. A repeated call with the same input gives the same id.
+#[allow(clippy::too_many_arguments)]
 pub fn from_picked_paths_tagged(
     sender: DeviceRef,
     picked: &[PathBuf],
     chunk_size: u32,
+    peer: &[u8; 16],
     share: &str,
     k: u32,
     m: u32,
@@ -573,12 +594,8 @@ pub fn from_picked_paths_tagged(
     let batch = format!("{k}/{m}");
     let (pk, pm) = parse_batch_tag(share, &batch)?;
     debug_assert_eq!((pk, pm), (k, m));
-    from_picked_paths_inner(
-        sender,
-        picked,
-        chunk_size,
-        Some((share, &batch, tagged_payload_id(share, k, attempt))),
-    )
+    let id = tagged_payload_id(peer, share, k, attempt)?;
+    from_picked_paths_inner(sender, picked, chunk_size, Some((share, &batch, id)))
 }
 
 fn from_picked_paths_inner(
@@ -1621,6 +1638,18 @@ mod parse_batch_tag_tests {
         assert!(parse_batch_tag(&SHARE[..31], "1/3").is_err());
         assert!(parse_batch_tag(&format!("{SHARE}0"), "1/3").is_err());
         assert!(parse_batch_tag("0011223344556677889900aabbccddeg", "1/3").is_err());
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_an_upper_case_share() {
+        assert!(parse_batch_tag(&SHARE.to_ascii_uppercase(), "1/3").is_err());
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_a_leading_zero_and_a_zero_k() {
+        for b in ["01/03", "0001/0003", "1/03", "01/3", "0/3"] {
+            assert!(parse_batch_tag(SHARE, b).is_err(), "{b}");
+        }
     }
 
     #[test]
