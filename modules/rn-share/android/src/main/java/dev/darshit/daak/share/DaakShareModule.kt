@@ -135,6 +135,8 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
    */
   override fun pickMedia(promise: Promise) {
     val activity = currentActivity ?: return promise.reject("E_NO_ACTIVITY", "no foreground activity")
+    // A second call gets the error and the open picker stays, as on iOS.
+    if (mediaPromise != null) return promise.reject("E_PICK_BUSY", "a pick is open")
     val intent = if (isPhotoPickerAvailable(activity)) {
       Intent(MediaStore.ACTION_PICK_IMAGES).apply {
         putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit())
@@ -148,8 +150,6 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
       }
     }
-    // A second call must not leave the first promise open for ever.
-    mediaPromise?.reject("E_PICK_BUSY", "a pick is open")
     mediaPromise = promise
     try {
       activity.startActivityForResult(intent, PICK_MEDIA)

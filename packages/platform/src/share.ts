@@ -65,7 +65,8 @@ const isMediaRef = (v: unknown): v is MediaRef => {
 /**
  * Ask the user for photos and videos. Resolves references only: a token, a
  * name, and a size. Nothing is copied until `materializeMedia`. A cancelled
- * pick gives `[]`. More than 5000 items reject `E_TOO_MANY`. An entry that
+ * pick gives `[]`. More than 5000 items reject `E_TOO_MANY`. A second pick while
+ * one is open rejects `E_PICK_BUSY`. An entry that
  * fails validation is dropped.
  */
 export async function pickMedia(): Promise<MediaRef[]> {
@@ -78,6 +79,7 @@ export async function pickMedia(): Promise<MediaRef[]> {
   } catch (e) {
     const err = e as { code?: unknown; message?: unknown };
     if (err.code === 'E_TOO_MANY' || err.message === 'E_TOO_MANY') throw new Error('E_TOO_MANY');
+    if (err.code === 'E_PICK_BUSY' || err.message === 'a pick is open') throw new Error('E_PICK_BUSY');
     throw e;
   }
   if (typeof raw !== 'string') return [];
@@ -93,7 +95,7 @@ export async function pickMedia(): Promise<MediaRef[]> {
 /**
  * Copy one picked item into the send cache and resolve the path of the copy.
  * Rejects with an `Error` whose message is `NO_SPACE:<needed bytes>`,
- * `E_SOURCE_GONE`, or `E_MATERIALIZE`. The message holds no name and no URI.
+ * `E_SOURCE_GONE`, `NOT_DOWNLOADED`, or `E_MATERIALIZE`. The message holds no name and no URI.
  */
 export async function materializeMedia(token: string): Promise<string> {
   if (typeof NativeDaakShare.materialize !== 'function') {
@@ -108,6 +110,10 @@ export async function materializeMedia(token: string): Promise<string> {
     if (err.code === 'NO_SPACE') throw new Error(`NO_SPACE:${message.replace(/\D/g, '')}`);
     if (err.code === 'E_SOURCE_GONE' || message === 'E_SOURCE_GONE') {
       throw new Error('E_SOURCE_GONE');
+    }
+    // An iCloud item that did not download keeps its own code: the screen has its text.
+    if (err.code === 'NOT_DOWNLOADED' || message === 'NOT_DOWNLOADED') {
+      throw new Error('NOT_DOWNLOADED');
     }
     // Any other error gets a fixed message, so no name or URI can pass through.
     throw new Error('E_MATERIALIZE');

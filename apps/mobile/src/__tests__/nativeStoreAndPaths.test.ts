@@ -1707,11 +1707,15 @@ describe('Android media pick and materialize', () => {
     expect(media).not.toMatch(/println|printStackTrace/);
   });
 
-  it('a second pickMedia call rejects the open one with E_PICK_BUSY before it assigns the promise', () => {
+  it('a second pickMedia call gets E_PICK_BUSY and the open picker stays, as on iOS', () => {
     const pick = body(share, 'override fun pickMedia(');
-    const busy = pick.indexOf('mediaPromise?.reject("E_PICK_BUSY", "a pick is open")');
+    const busy = pick.indexOf('if (mediaPromise != null) return promise.reject("E_PICK_BUSY", "a pick is open")');
     expect(busy).toBeGreaterThan(-1);
+    // The check runs before the intent is built and before the promise is stored.
+    expect(busy).toBeLessThan(pick.indexOf('val intent'));
     expect(busy).toBeLessThan(pick.indexOf('mediaPromise = promise'));
+    // The open promise is never rejected by a second call.
+    expect(pick).not.toContain('mediaPromise?.reject');
     expect(body(share, 'override fun pickFolder(')).not.toContain('E_PICK_BUSY');
     expect(body(share, 'override fun pickDocuments(')).not.toContain('E_PICK_BUSY');
   });

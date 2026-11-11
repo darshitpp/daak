@@ -202,6 +202,20 @@ describe('materializeMedia', () => {
     await expect(materializeMedia('t')).rejects.toThrow(/^E_MATERIALIZE$/);
   });
 
+  it('NOT_DOWNLOADED keeps its own code and drops the native message', async () => {
+    mediaMock.materialize.mockRejectedValueOnce(
+      Object.assign(new Error('could not download IMG_1234.HEIC'), { code: 'NOT_DOWNLOADED' }),
+    );
+    await expect(materializeMedia('t')).rejects.toThrow(/^NOT_DOWNLOADED$/);
+  });
+
+  it('E_PICK_BUSY is mapped to a fixed error', async () => {
+    mediaMock.pickMedia.mockRejectedValueOnce(
+      Object.assign(new Error('a pick is open'), { code: 'E_PICK_BUSY' }),
+    );
+    await expect(pickMedia()).rejects.toThrow(/^E_PICK_BUSY$/);
+  });
+
   it('an error message contains no uri', async () => {
     mediaMock.materialize.mockRejectedValueOnce(
       Object.assign(new Error('failed on content://media/external/video/media/7 (a.mp4)'), {
