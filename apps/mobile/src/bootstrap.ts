@@ -8,7 +8,6 @@ import {
   handleNotificationAction,
   initNotifications,
   notifyFailedSend,
-  notifyReceived,
   onNotificationAction,
   presentShare,
   realReceiveDeps,
@@ -26,6 +25,7 @@ import type { InboundShareItem } from '@daak/platform';
 import { failedSendNotice, failureKey, receivedFolders, receivedText } from '@daak/rn-notify/js/actions';
 import type { ReceivedPlaces } from '@daak/rn-notify/js/actions';
 import { isLibraryPath } from '@daak/ui';
+import { onReceived } from './shareNotifier';
 import { libraryOf, photosHost } from './photosHost';
 
 export const engine: DaakEngine = createEngine();
@@ -156,7 +156,21 @@ async function notifyAfterRelocate(engine: DaakEngine, entry: InboxEntry): Promi
   // The places line reads the paths after the move.
   const places = receivedFolders(entry).length > 0 ? await receivedPlaces() : undefined;
   const text = receivedText(entry, moved ?? entry.savedPaths, places);
-  await notifyReceived(moved ? { ...entry, savedPaths: moved } : entry, text);
+  const count = (moved ?? entry.savedPaths ?? []).length;
+  await onReceived(moved ? { ...entry, savedPaths: moved } : entry, count, Date.now(), {
+    text,
+    // Only a tagged entry shows the name, so only it pays for the lookup.
+    deviceName: entry.share ? await senderName(engine, entry.peerDeviceId) : undefined,
+  });
+}
+
+/** The name of the sender, for the line of a batched share. Never throws. */
+async function senderName(engine: DaakEngine, peerDeviceId: string): Promise<string | undefined> {
+  try {
+    return (await engine.devices()).find((d) => d.deviceId === peerDeviceId)?.name;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

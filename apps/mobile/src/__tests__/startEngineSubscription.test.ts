@@ -367,3 +367,31 @@ describe('startEngine failed-send notification', () => {
     expect(posted).not.toHaveBeenCalled();
   });
 });
+
+// The batch folding lives in shareNotifier and is called from the one handler.
+// A second engine.on would post a banner twice for each receive.
+describe('startEngine batched share subscription', () => {
+  it('keeps exactly one engine.on after a tagged inbox event', async () => {
+    const engine = createEngine();
+    const handlers = (engine as unknown as { __handlers: Set<(e: DaakEvent) => void> }).__handlers;
+    await startEngine();
+    expect(live).toBe(1);
+    const entry: InboxEntry = {
+      payloadId: 'p9',
+      transferId: 't9',
+      peerDeviceId: 'd9',
+      kind: 'media',
+      itemCount: 1,
+      summary: 'a.jpg',
+      receivedAt: 1,
+      savedPaths: ['/tmp/a.jpg'],
+      share: 'ab'.repeat(16),
+      batch: '1/2',
+    };
+    for (const handler of handlers) handler({ type: 'inbox.received', payload: entry });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(live).toBe(1);
+    expect(handlers.size).toBe(1);
+    expect(jest.mocked(notifyReceived).mock.calls.some((c) => c[2]?.silent === true)).toBe(true);
+  });
+});
