@@ -87,6 +87,40 @@ export type MediaHost = {
   startLarge?: (peerId: string, refs: MediaRef[]) => Promise<void>;
 };
 
+/** The state of a large send. The fields are the same as the fields of the platform plan status. */
+export type BatchRowStatus = {
+  share: string;
+  batch: number;
+  of: number;
+  paused: boolean;
+  error?: 'NO_SPACE' | 'PLAN_LOST' | 'FAILED' | 'CANCELED';
+  neededBytes?: number;
+  /** The items after the current batch. */
+  remaining: number;
+  bytesDone: number;
+  bytesTotal: number;
+};
+
+/** The host side of the batch row. The host owns the driver. */
+export type BatchHost = {
+  status: (peerId: string) => BatchRowStatus | null;
+  retry: (peerId: string) => Promise<void> | void;
+  stop: (peerId: string) => Promise<void> | void;
+  /** Calls `cb` with a peer id when the plan of that peer changes. Returns the unsubscribe function. */
+  subscribe: (cb: (peerId: string) => void) => () => void;
+};
+
+/** The body of a batch row that is paused. */
+function batchBody(st: BatchRowStatus): string {
+  if (st.error === 'NO_SPACE') {
+    const need = st.neededBytes === undefined ? '' : humanBytes(st.neededBytes);
+    return `Not enough space for this batch. Free ${need !== '' ? need : 'some space'} and tap Retry.`;
+  }
+  if (st.error === 'PLAN_LOST') return 'Some items can no longer be read. Pick them again.';
+  if (st.error === 'CANCELED') return 'This batch was canceled.';
+  return 'Daak could not send this batch.';
+}
+
 /** The inline warning for a large send that did not start. */
 export function largeSendError(e: unknown): string {
   const m = e instanceof Error ? e.message : '';
@@ -224,6 +258,7 @@ export function ThreadScreen({
   discardPickedCopy,
   pickLabel = 'Add files',
   media,
+  batch,
 }: {
   peerDeviceId: string;
   onBack: () => void;
@@ -254,6 +289,8 @@ export function ThreadScreen({
   pickLabel?: string;
   /** The photo picker. When it is set, the add menu has an Add photos row. */
   media?: MediaHost;
+  /** The state of a large send. When it is absent, the thread draws no batch row. */
+  batch?: BatchHost;
 }) {
   const engine = useEngine();
   const toast = useToast();
@@ -287,6 +324,26 @@ export function ThreadScreen({
   const inFlight = useRef<Set<string>>(new Set());
 
   const alive = useRef(true);
+
+  // The batch row. The counter makes the screen read the status again.
+  const [, setBatchTick] = useState(0);
+  const [batchBusy, setBatchBusy] = useState(false);
+  useEffect(() => {
+    if (!batch) return undefined;
+    return batch.subscribe((id) => { if (id === peerDeviceId) setBatchTick((n) => n + 1); });
+  }, [batch, peerDeviceId]);
+  const batchSt = batch ? batch.status(peerDeviceId) : null;
+  const batchRunning = batchSt !== null && !batchSt.paused;
+  const batchSpeed = useTransferSpeed(batchSt?.share ?? '', batchSt?.bytesDone ?? 0, batchSt?.bytesTotal ?? 0, batchRunning).text;
+  const batchPct = batchSt !== null && batchSt.bytesTotal > 0
+    ? Math.round(Math.max(0, Math.min(1, batchSt.bytesDone / batchSt.bytesTotal)) * 100)
+    : null;
+  const batchCall = async (fn: ((peerId: string) => Promise<void> | void) | undefined) => {
+    if (!fn || batchBusy) return;
+    setBatchBusy(true);
+    try { await fn(peerDeviceId); } catch { /* The status shows the result. */ }
+    if (alive.current) { setBatchBusy(false); setBatchTick((n) => n + 1); }
+  };
 
   // A closed screen has no toast. The provider is gone and its timer would never clear.
 
@@ -924,6 +981,42 @@ export function ThreadScreen({
             </TransferProgress>
           );
         })}
+        {batchSt === null ? null : batchSt.paused ? (
+          <View style={ui.stackSm}>
+            <Note
+              tone="warn"
+              title={`Batch ${batchSt.batch} did not send`}
+              body={batchBody(batchSt)}
+              testID="batch-row"
+              accessibilityLabel={`Batch ${batchSt.batch} did not send. ${batchBody(batchSt)}`}
+            />
+            <View style={ui.row}>
+              <Btn label="Retry" variant="quiet" disabled={batchBusy} onPress={() => void batchCall(batch?.retry)} testID="batch-retry" />
+              <Btn label="Stop" variant="danger" disabled={batchBusy} onPress={() => void batchCall(batch?.stop)} testID="batch-stop" />
+            </View>
+          </View>
+        ) : (
+          <View
+            style={[ui.card, { marginBottom: 8 }]}
+            testID="batch-row"
+            accessibilityLabel={batchSt.remaining > 0 ? `${batchSt.remaining} more waiting - batch ${batchSt.batch} of ${batchSt.of}` : `Sending batch ${batchSt.batch} of ${batchSt.of}`}
+          >
+            <Text style={ui.h3}>
+              {batchSt.remaining > 0 ? `${batchSt.remaining} more waiting - batch ${batchSt.batch} of ${batchSt.of}` : `Sending batch ${batchSt.batch} of ${batchSt.of}`}
+            </Text>
+            {batchPct === null ? null : (
+              <View
+                style={ui.barTrack}
+                testID="batch-bar"
+                accessibilityRole="progressbar"
+                accessibilityValue={{ min: 0, max: 100, now: batchPct }}
+              >
+                <View style={[ui.barFill, { width: `${batchPct}%` }]} />
+              </View>
+            )}
+            {batchSpeed === null ? null : <Text style={ui.hint} numberOfLines={1}>{batchSpeed}</Text>}
+          </View>
+        )}
       </ScrollView>
 
       {active.map((s) => (

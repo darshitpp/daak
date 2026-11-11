@@ -36,7 +36,7 @@ import {
 import { OnboardingFlow } from './OnboardingFlow';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
-import { attachedMedia, pickAttachedFiles, pickAttachedFolder } from './SendFlow';
+import { attachedMedia, batchHost, pickAttachedFiles, pickAttachedFolder } from './SendFlow';
 import { mobileInboxActions } from './inbox-actions';
 import { onDeepLink, type DeepLink } from './deeplink';
 import { peerOfPayload } from './notification-route';
@@ -432,6 +432,7 @@ export default function App() {
           // the composer discards the copy after the send.
           onPickFolder={pickAttachedFolder}
           media={attachedMedia}
+          batch={batchHost}
           folderStats={folderStats}
           discardPickedCopy={discardPickedCopy}
           inboxActions={mobileInboxActions}

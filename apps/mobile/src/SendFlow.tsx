@@ -9,7 +9,7 @@
  * imports below keep working while that is a separate concern.
  */
 import { DEFAULT_ITEM_BYTES, fits, freeBytes, materializeMedia, pickFiles, pickFolder, pickMedia } from '@daak/platform';
-import type { MediaHost } from '@daak/ui';
+import type { BatchHost, MediaHost } from '@daak/ui';
 import { batchDriver, onBatchChange } from './bootstrap';
 
 export const pickAttachedFiles = (): Promise<string[]> => pickFiles(true);
@@ -28,10 +28,18 @@ export const attachedMedia: MediaHost = {
   },
 };
 
-/** The state of a large send, for the waiting row of the next task. The screens do not use it yet. */
-export const batchHost = {
-  batchStatus: (peerId: string) => batchDriver().status(peerId),
-  onRetryBatch: (peerId: string) => batchDriver().retry(peerId),
-  onStopBatch: (peerId: string) => batchDriver().stop(peerId),
-  subscribeBatch: onBatchChange,
+/** The state of a large send, for the waiting row in the thread. */
+export const batchHost: BatchHost = {
+  // The driver does not exist before the engine starts. No plan shows until then.
+  status: (peerId) => {
+    try {
+      return batchDriver().status(peerId);
+    } catch (e) {
+      if (e instanceof Error && e.message === 'NOT_READY') return null;
+      throw e;
+    }
+  },
+  retry: (peerId) => batchDriver().retry(peerId),
+  stop: (peerId) => batchDriver().stop(peerId),
+  subscribe: onBatchChange,
 };

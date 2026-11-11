@@ -27,6 +27,9 @@ jest.mock('../PairingFlow', () => ({
 // under Jest. Swap in the in-memory engine; that is the whole point of a smoke
 // test -- the shell renders, the Rust edge is not exercised here.
 jest.mock('../bootstrap', () => ({
+  // The driver does not exist before the engine starts. The thread shows no batch row.
+  batchDriver: () => { throw new Error('NOT_READY'); },
+  onBatchChange: jest.fn(() => () => {}),
   engine: jest.requireActual('@daak/ui').fakeEngine(),
   startEngine: async () => {},
   startEngineOnce: jest.fn(async () => {}),

@@ -76,6 +76,20 @@ describe('Dashboard (window mode)', () => {
     await waitFor(() => expect(media.pick).toHaveBeenCalledTimes(1));
   });
 
+  it('batch is passed through to the thread', async () => {
+    const { engine } = spyEngine();
+    const batch = {
+      status: jest.fn(() => ({ share: 'cc'.repeat(16), batch: 1, of: 3, paused: false, remaining: 20, bytesDone: 0, bytesTotal: 100 })),
+      retry: jest.fn(), stop: jest.fn(), subscribe: jest.fn(() => () => {}),
+    };
+    await renderAsync(
+      <Dashboard state={initialUiState} engine={engine} peerDeviceId={peer.deviceId}
+        onPickFiles={async () => []} batch={batch} />,
+    );
+    expect(await screen.findByText('20 more waiting - batch 1 of 3')).toBeTruthy();
+    expect(batch.status).toHaveBeenCalledWith(peer.deviceId);
+  });
+
   // Frame F3 on macOS: the label and the folder stats reach the thread composer.
   it('hands the add button label and the folder stats to the thread', async () => {
     const { engine } = spyEngine();

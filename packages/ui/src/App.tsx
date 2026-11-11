@@ -8,7 +8,7 @@ import { SheetProvider } from './components/Sheet';
 import type { DeviceNoun } from './components/ds';
 import type { PhotosHost } from './components/PhotosAccessRow';
 import type { SettingsHost } from './screens/settings/host';
-import type { MediaHost } from './screens/ThreadScreen';
+import type { BatchHost, MediaHost } from './screens/ThreadScreen';
 import { Popover } from './modes/Popover';
 import { Dashboard } from './modes/Dashboard';
 
@@ -29,7 +29,7 @@ import { Dashboard } from './modes/Dashboard';
  * (prototype: pick a device, pick a file, send), so it takes the same picker and
  * the same engine rather than rendering a Send button wired to nothing.
  */
-export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel, media }: {
+export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, toastBottomOffset, toastLayout, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel, media, batch }: {
   mode: AppMode;
   engine: DaakEngine;
   runtime: UiRuntime;
@@ -90,6 +90,8 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
   /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
   pickLabel?: string;
   media?: MediaHost;
+  /** The state of a large send. Absent when the host has no batch driver. */
+  batch?: BatchHost;
 }) {
   // Keyed on [runtime]: an inline arrow is a new function every render, so
   // useSyncExternalStore resubscribes on every event it just delivered.
@@ -126,6 +128,7 @@ export function DaakUiApp({ mode, engine, runtime, onExpand = () => {}, peerDevi
             discardPickedCopy={discardPickedCopy}
             pickLabel={pickLabel}
             media={media}
+            batch={batch}
             inboxActions={inboxActions}
             pair={pair}
             alert={alert}

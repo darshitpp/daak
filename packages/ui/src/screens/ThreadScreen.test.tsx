@@ -8,6 +8,7 @@ import { threadItem, threadPage } from '../testing/threadFixtures';
 import { ToastProvider } from '../components/Toast';
 import { Note } from '../components/ds';
 import { ThreadScreen, splitExt, type MediaRef } from './ThreadScreen';
+import type { BatchRowStatus } from './ThreadScreen';
 import * as progressModule from '../state/progress';
 
 const peer: DeviceInfo = {
@@ -2115,5 +2116,135 @@ describe('ThreadScreen large selection', () => {
     await act(async () => { finish(); });
     await waitFor(() => expect(screen.queryByText('a.jpg')).toBeNull());
     expect(screen.getByText('c.png')).toBeTruthy();
+  });
+});
+
+describe('ThreadScreen batch row', () => {
+  const plan = (p: Partial<BatchRowStatus> = {}): BatchRowStatus => ({
+    share: 'cc'.repeat(16), batch: 2, of: 5, paused: false, remaining: 30, bytesDone: 50, bytesTotal: 200, ...p,
+  });
+  function mountBatch(initial: BatchRowStatus | null, extra: { retry?: () => Promise<void> | void; stop?: () => Promise<void> | void } = {}) {
+    let current = initial;
+    const subs = new Set<(peerId: string) => void>();
+    const unsub = jest.fn();
+    const batch = {
+      status: jest.fn((_id: string) => current),
+      retry: jest.fn(extra.retry ?? (async () => {})),
+      stop: jest.fn(extra.stop ?? (async () => {})),
+      subscribe: jest.fn((cb: (peerId: string) => void) => { subs.add(cb); return () => { subs.delete(cb); unsub(); }; }),
+    };
+    const utils = mount(fakeEngine([peer]), { batch });
+    const set = (n: BatchRowStatus | null, peerId = peer.deviceId) => {
+      current = n;
+      act(() => { subs.forEach((cb) => cb(peerId)); });
+    };
+    return { batch, subs, unsub, set, ...utils };
+  }
+
+  it('no row without a plan', async () => {
+    mountBatch(null);
+    await screen.findByText('Nothing here yet');
+    expect(screen.queryByTestId('batch-row')).toBeNull();
+  });
+
+  it('the running row shows remaining, batch and of', async () => {
+    mountBatch(plan());
+    expect(await screen.findByText('30 more waiting - batch 2 of 5')).toBeTruthy();
+    expect(screen.getByTestId('batch-row').props.accessibilityLabel).toBe('30 more waiting - batch 2 of 5');
+    expect(screen.queryByTestId('batch-retry')).toBeNull();
+  });
+
+  it('a last batch with no remaining items shows Sending batch k of m', async () => {
+    mountBatch(plan({ batch: 5, remaining: 0 }));
+    expect(await screen.findByText('Sending batch 5 of 5')).toBeTruthy();
+  });
+
+  it('the bar value follows bytesDone over bytesTotal and a total of 0 draws no bar', async () => {
+    const { set } = mountBatch(plan({ bytesDone: 50, bytesTotal: 200 }));
+    const bar = await screen.findByTestId('batch-bar');
+    expect(bar.props.accessibilityValue).toEqual({ min: 0, max: 100, now: 25 });
+    set(plan({ bytesDone: 500, bytesTotal: 200 }));
+    expect(screen.getByTestId('batch-bar').props.accessibilityValue.now).toBe(100);
+    set(plan({ bytesDone: 0, bytesTotal: 0 }));
+    expect(screen.queryByTestId('batch-bar')).toBeNull();
+    expect(screen.getByTestId('batch-row')).toBeTruthy();
+  });
+
+  it('the paused row shows the title and the body for NO_SPACE with the size', async () => {
+    mountBatch(plan({ paused: true, error: 'NO_SPACE', neededBytes: 3 * 1024 ** 3 }));
+    expect(await screen.findByText('Batch 2 did not send')).toBeTruthy();
+    expect(screen.getByText('Not enough space for this batch. Free 3.0 GB and tap Retry.')).toBeTruthy();
+    expect(screen.queryByTestId('batch-bar')).toBeNull();
+  });
+
+  it('the paused row says some space when neededBytes is missing', async () => {
+    mountBatch(plan({ paused: true, error: 'NO_SPACE' }));
+    expect(await screen.findByText('Not enough space for this batch. Free some space and tap Retry.')).toBeTruthy();
+  });
+
+  it('the paused row shows the PLAN_LOST text', async () => {
+    mountBatch(plan({ paused: true, error: 'PLAN_LOST' }));
+    expect(await screen.findByText('Some items can no longer be read. Pick them again.')).toBeTruthy();
+  });
+
+  it('the paused row shows the CANCELED and FAILED texts', async () => {
+    const { set } = mountBatch(plan({ paused: true, error: 'CANCELED' }));
+    expect(await screen.findByText('This batch was canceled.')).toBeTruthy();
+    set(plan({ paused: true, error: 'FAILED' }));
+    expect(screen.getByText('Daak could not send this batch.')).toBeTruthy();
+  });
+
+  it('Retry and Stop call their props with the peer id and are disabled while the call runs', async () => {
+    let finish: () => void = () => {};
+    const { batch } = mountBatch(plan({ paused: true, error: 'FAILED' }), {
+      retry: () => new Promise<void>((r) => { finish = r; }),
+    });
+    fireEvent.press(await screen.findByTestId('batch-retry'));
+    expect(batch.retry).toHaveBeenCalledWith(peer.deviceId);
+    fireEvent.press(screen.getByTestId('batch-retry'));
+    fireEvent.press(screen.getByTestId('batch-stop'));
+    expect(batch.retry).toHaveBeenCalledTimes(1);
+    expect(batch.stop).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    await act(async () => { fireEvent.press(screen.getByTestId('batch-stop')); });
+    expect(batch.stop).toHaveBeenCalledWith(peer.deviceId);
+  });
+
+  it('the row updates when the subscribe callback fires and unsubscribes on unmount', async () => {
+    const { set, unsub, subs, unmount } = mountBatch(plan());
+    await screen.findByText('30 more waiting - batch 2 of 5');
+    set(plan({ batch: 3, remaining: 10 }));
+    expect(screen.getByText('10 more waiting - batch 3 of 5')).toBeTruthy();
+    set(plan({ batch: 4, remaining: 1 }), 'ff'.repeat(16));
+    expect(screen.getByText('10 more waiting - batch 3 of 5')).toBeTruthy();
+    unmount();
+    expect(unsub).toHaveBeenCalledTimes(1);
+    expect(subs.size).toBe(0);
+  });
+
+  it('the row disappears when the status becomes null', async () => {
+    const { set } = mountBatch(plan({ paused: true, error: 'FAILED' }));
+    await screen.findByTestId('batch-row');
+    set(null);
+    expect(screen.queryByTestId('batch-row')).toBeNull();
+  });
+
+  it('the row has no file names', async () => {
+    const engine = fakeEngine([peer]);
+    mount(engine, {
+      batch: {
+        status: () => plan({ paused: true, error: 'NO_SPACE', neededBytes: 1024 ** 3 }),
+        retry: jest.fn(), stop: jest.fn(), subscribe: () => () => {},
+      },
+    });
+    const row = await screen.findByTestId('batch-row');
+    const text = JSON.stringify(row.props.accessibilityLabel) + JSON.stringify(within(row).queryAllByText(/\.(jpg|png|mov|heic)/i));
+    expect(text).not.toMatch(/\.(jpg|png|mov|heic)/i);
+  });
+
+  it('no batch prop shows no row (desktop)', async () => {
+    mount(fakeEngine([peer]));
+    await screen.findByText('Nothing here yet');
+    expect(screen.queryByTestId('batch-row')).toBeNull();
   });
 });
