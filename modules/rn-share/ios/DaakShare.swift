@@ -14,20 +14,26 @@ class DaakShare: NSObject {
   /// The maximum number of items in one media pick. Android has the same cap.
   static let maxMedia = 5000
   /// The free space that materialize keeps above the size of one item.
-  static let materializeMargin: Int64 = 16 * 1024 * 1024
+  /// A NO_SPACE code holds the size plus this margin. Android adds the same margin.
+  static let mediaMargin: Int64 = 16 * 1024 * 1024
   /// The maximum UTF-8 length of a cleaned file name. Android has the same cap.
   static let maxLeafBytes = 200
   /// The maximum length of an extension that safeLeaf keeps when it cuts a name.
   static let maxExtChars = 16
 
   /// The item provider of each picked item in this process, keyed by token.
-  /// It holds the items of the last pick and the items of earlier picks that
-  /// materialize did not copy yet. mediaLock guards it.
+  /// It holds the items of each pick in this process. A success does not
+  /// remove a provider. So a second materialize of the same token does not go
+  /// to the asset path, which can show the Photos prompt. A provider is small.
+  /// mediaLock guards it.
   private var mediaProviders: [String: NSItemProvider] = [:]
   private let mediaLock = NSLock()
   /// The promise of the open media pick. Main thread only.
   private var mediaResolve: RCTPromiseResolveBlock?
   private var mediaReject: RCTPromiseRejectBlock?
+  /// The picker of the open media pick. Main thread only. It is weak, so a
+  /// picker that closed without a delegate call becomes nil.
+  private weak var mediaPicker: PHPickerViewController?
 
   /// The share extension posts this Darwin notification when it has staged
   /// something. Registered so the cross-process wakeup is wired end to end, but
@@ -118,9 +124,19 @@ class DaakShare: NSObject {
   @objc func pickMedia(_ resolve: @escaping RCTPromiseResolveBlock,
                        reject: @escaping RCTPromiseRejectBlock) {
     DispatchQueue.main.async {
-      // The new call rejects. The open pick keeps its promise.
       if self.mediaResolve != nil {
-        reject("E_PICK_BUSY", "a pick is open", nil); return
+        // A picker on the screen: the new call rejects. The open pick keeps its promise.
+        let open = self.mediaPicker.map { $0.presentingViewController != nil || $0.isBeingPresented } ?? false
+        if open {
+          reject("E_PICK_BUSY", "a pick is open", nil); return
+        }
+        // The old picker closed without a delegate call. A sheet under it
+        // can close it, or UIKit can refuse the presentation. The old promise
+        // gets an empty pick, and the new call continues.
+        self.mediaResolve?("[]")
+        self.mediaResolve = nil
+        self.mediaReject = nil
+        self.mediaPicker = nil
       }
       guard let root = Self.rootViewController() else {
         reject("E_NO_VC", "no root view controller", nil); return
@@ -142,7 +158,19 @@ class DaakShare: NSObject {
       while let next = top.presentedViewController { top = next }
       self.mediaResolve = resolve
       self.mediaReject = reject
-      top.present(picker, animated: true)
+      self.mediaPicker = picker
+      // UIKit can refuse the presentation in silence, for example during a
+      // dismiss transition. Then this call rejects. When UIKit does not run
+      // this completion, the busy check of the next call frees the state.
+      top.present(picker, animated: true) {
+        // mediaPicker === picker: the state still belongs to this call.
+        guard picker.presentingViewController == nil, self.mediaPicker === picker,
+              self.mediaReject != nil else { return }
+        self.mediaResolve = nil
+        self.mediaReject = nil
+        self.mediaPicker = nil
+        reject("E_PICK", "the media picker did not open", nil)
+      }
     }
   }
 
@@ -181,9 +209,11 @@ class DaakShare: NSObject {
     provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
       let fm = FileManager.default
       // A load error or a nil URL is an iCloud item that did not download.
+      // A full disk during the system temp copy gives NO_SPACE.
       guard let url, error == nil else {
         try? fm.removeItem(at: slot)
-        MediaFailure.notDownloaded.reject(reject); return
+        let failure = error.map { MediaFailure.from($0, size: nil, other: .notDownloaded) } ?? .notDownloaded
+        failure.reject(reject); return
       }
       // The system deletes the temp file when this handler returns. So the
       // move must be here.
@@ -200,9 +230,8 @@ class DaakShare: NSObject {
         try? fm.removeItem(at: slot)
         MediaFailure.from(error, size: size, other: .failed).reject(reject); return
       }
-      self.mediaLock.lock()
-      self.mediaProviders[token] = nil
-      self.mediaLock.unlock()
+      // The provider stays in mediaProviders. A later load of it works,
+      // because loadFileRepresentation makes a new temp copy each time.
       resolve(dest.path)
     }
   }
@@ -234,8 +263,8 @@ class DaakShare: NSObject {
       forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
       .volumeAvailableCapacityForImportantUsage
     // An unknown size or free space is not a refusal. A full disk fails the write.
-    if let size, let free, free < size + Self.materializeMargin {
-      MediaFailure.noSpace(size).reject(reject); return
+    if let size, let free, free < size + Self.mediaMargin {
+      MediaFailure.noSpace(size + Self.mediaMargin).reject(reject); return
     }
     let slot = DaakShare.newSendSlot()
     let dest = slot.appendingPathComponent(Self.safeLeaf(resource.originalFilename))
@@ -312,17 +341,25 @@ class DaakShare: NSObject {
     return safeLeaf(base + "." + ext)
   }
 
-  /// The original photo or video of an asset.
+  /// The current photo or video of an asset. An edited asset has a full size
+  /// render, and the provider path with .current sends that render. So the
+  /// render comes first. An unedited asset has only .photo or .video.
   static func originalResource(_ asset: PHAsset) -> PHAssetResource? {
-    PHAssetResource.assetResources(for: asset).first { $0.type == .photo || $0.type == .video }
+    let all = PHAssetResource.assetResources(for: asset)
+    let order: [PHAssetResourceType] = [.fullSizePhoto, .fullSizeVideo, .photo, .video]
+    for type in order {
+      if let found = all.first(where: { $0.type == type }) { return found }
+    }
+    return nil
   }
 
-  /// The size of the original file, or nil. `fileSize` is not a documented
+  /// The size of the file, or nil. A size of 0 gives nil, so the plan counts
+  /// its default size. `fileSize` is not a documented
   /// key. value(forKey:) raises an Objective-C exception for an unknown key,
   /// and Swift cannot catch it. So the getter is checked first.
   static func resourceSize(_ resource: PHAssetResource) -> Int64? {
     guard resource.responds(to: NSSelectorFromString("fileSize")) else { return nil }
-    return (resource.value(forKey: "fileSize") as? NSNumber)?.int64Value
+    return ((resource.value(forKey: "fileSize") as? NSNumber)?.int64Value).flatMap { $0 > 0 ? $0 : nil }
   }
 
   /// Clean one file name. The rule is the same as Android ShareInbox.safeLeaf:
@@ -492,6 +529,7 @@ extension DaakShare: PHPickerViewControllerDelegate {
   /// The system calls this on the main thread for a pick and for a cancel.
   func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
     picker.dismiss(animated: true)
+    mediaPicker = nil
     guard let resolve = mediaResolve, let reject = mediaReject else { return }
     mediaResolve = nil
     mediaReject = nil
@@ -519,15 +557,15 @@ enum MediaFailure: Error {
   case notDownloaded
   case failed
 
-  /// A full disk gives noSpace with the item size, or 0 for an unknown size.
-  /// Any other error gives `other`.
+  /// A full disk gives noSpace with the item size plus mediaMargin, or 0 for
+  /// an unknown size. Any other error gives `other`.
   static func from(_ error: Error, size: Int64?, other: MediaFailure) -> MediaFailure {
     let e = error as NSError
     let under = e.userInfo[NSUnderlyingErrorKey] as? NSError
     let full = (e.domain == NSCocoaErrorDomain && e.code == NSFileWriteOutOfSpaceError)
       || (e.domain == NSPOSIXErrorDomain && e.code == Int(ENOSPC))
       || (under?.domain == NSPOSIXErrorDomain && under?.code == Int(ENOSPC))
-    return full ? .noSpace(size ?? 0) : other
+    return full ? .noSpace(size.map { $0 + DaakShare.mediaMargin } ?? 0) : other
   }
 
   func reject(_ reject: RCTPromiseRejectBlock) {

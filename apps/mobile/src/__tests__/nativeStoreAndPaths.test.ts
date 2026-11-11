@@ -1814,8 +1814,10 @@ describe('iOS media pick and materialize', () => {
     expect(d).toContain('r.assetIdentifier ?? "provider:" + UUID().uuidString');
     expect(d).toContain('r.itemProvider');
     expect(d).toContain('mediaProviders.merge(');
-    // A successful materialize forgets the token.
-    expect(fromProvider()).toContain('self.mediaProviders[token] = nil');
+    // A success keeps the provider. A second materialize of the same token
+    // must not go to the asset path, because that path can show the Photos prompt.
+    expect(share).not.toContain('mediaProviders[token] = nil');
+    expect(share).not.toMatch(/mediaProviders\.removeValue/);
   });
 
   it('pickMedia rejects E_PICK_BUSY for a second call', () => {
@@ -1832,6 +1834,22 @@ describe('iOS media pick and materialize', () => {
     const f = finish();
     expect(f).toContain('mediaResolve = nil');
     expect(f).toContain('resolve("[]")');
+    expect(f).toContain('mediaPicker = nil');
+  });
+
+  it('a picker that closed without a delegate call does not keep the busy state', () => {
+    expect(share).toContain('private weak var mediaPicker: PHPickerViewController?');
+    const p = pick();
+    // The busy reject is only for a picker that is still on the screen.
+    expect(p).toContain('$0.presentingViewController != nil || $0.isBeingPresented');
+    const gone = p.indexOf('self.mediaResolve?("[]")');
+    expect(gone).toBeGreaterThan(-1);
+    expect(gone).toBeLessThan(p.indexOf('present(picker'));
+    expect(p).toContain('self.mediaPicker = picker');
+    // A presentation that did not open rejects E_PICK for this call.
+    expect(p).toContain('present(picker, animated: true) {');
+    expect(p).toContain('picker.presentingViewController == nil');
+    expect(p).toContain('reject("E_PICK", "the media picker did not open", nil)');
   });
 
   it('more than 5000 results reject E_TOO_MANY', () => {
@@ -1857,6 +1875,8 @@ describe('iOS media pick and materialize', () => {
     expect(size).toContain('value(forKey: "fileSize")');
     // value(forKey:) throws an Objective-C exception for an unknown key.
     expect(size).toContain('responds(to: NSSelectorFromString("fileSize"))');
+    // A size of 0 is unknown, so the plan counts the default.
+    expect(size).toContain('.flatMap { $0 > 0 ? $0 : nil }');
     const d = describeMedia();
     expect(d).toContain('NSNull()');
     expect(d).toContain('PHPhotoLibrary.authorizationStatus(for: .readWrite)');
@@ -1911,11 +1931,16 @@ describe('iOS media pick and materialize', () => {
     expect(a).toContain('options.isNetworkAccessAllowed = true');
     expect(a).toContain('PHAssetResourceManager.default().writeData(for: resource, toFile: dest, options: options)');
     expect(a).toContain('safeLeaf(resource.originalFilename)');
-    expect(body(share, 'static func originalResource(')).toMatch(/\.type == \.photo \|\| \$0\.type == \.video/);
+    // An edited asset sends the current version, as the provider path does.
+    expect(body(share, 'static func originalResource(')).toContain(
+      'let order: [PHAssetResourceType] = [.fullSizePhoto, .fullSizeVideo, .photo, .video]',
+    );
     // The free space check runs before the write.
     expect(a.indexOf('volumeAvailableCapacityForImportantUsage')).toBeLessThan(a.indexOf('writeData('));
-    expect(a).toContain('size + Self.materializeMargin');
-    expect(share).toContain('static let materializeMargin: Int64 = 16 * 1024 * 1024');
+    expect(a).toContain('free < size + Self.mediaMargin');
+    // The code holds the size plus the margin, as on Android.
+    expect(a).toContain('MediaFailure.noSpace(size + Self.mediaMargin)');
+    expect(share).toContain('static let mediaMargin: Int64 = 16 * 1024 * 1024');
   });
 
   it('a missing asset or a refused access rejects with E_SOURCE_GONE', () => {
@@ -1933,6 +1958,8 @@ describe('iOS media pick and materialize', () => {
     const p = fromProvider();
     expect(p).toMatch(/guard let url, error == nil else/);
     expect(p).toContain('.notDownloaded');
+    // A full disk in the system temp copy gives NO_SPACE, not NOT_DOWNLOADED.
+    expect(p).toContain('MediaFailure.from($0, size: nil, other: .notDownloaded)');
     expect(fromAsset()).toContain('other: .notDownloaded');
     expect(share).toContain('reject("NOT_DOWNLOADED", "NOT_DOWNLOADED", nil)');
   });
@@ -1941,6 +1968,7 @@ describe('iOS media pick and materialize', () => {
     const from = body(share, 'static func from(');
     expect(from).toContain('NSFileWriteOutOfSpaceError');
     expect(from).toContain('ENOSPC');
+    expect(from).toContain('size.map { $0 + DaakShare.mediaMargin } ?? 0');
     expect(share).toContain('reject("NO_SPACE", "NO_SPACE:\\(needed)", nil)');
     expect(share).toContain(
       'reject("E_MATERIALIZE", "Daak could not prepare a file for sending.", nil)',
