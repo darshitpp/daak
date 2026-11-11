@@ -74,6 +74,9 @@ export async function chooseDownloadFolder(): Promise<string | null> {
   return raw === null ? null : friendlyFolderName(raw);
 }
 
+// Resolves the name of the folder that receives files. It resolves null when
+// the platform has no public folder to name. It does not mean "not chosen":
+// Android API 29 and later returns the default public folder after a reset.
 export async function downloadFolderName(): Promise<string | null> {
   const raw = (await NativeDaakFsPaths.downloadFolderName()) ?? null;
   return raw === null ? null : friendlyFolderName(raw);

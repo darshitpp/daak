@@ -34,7 +34,7 @@ it('adopts a chosen folder and can reset it', async () => {
   fireEvent.press(screen.getByTestId('download-folder-choose'));
   expect(await screen.findByText('Photos')).toBeTruthy();
   // The design button uses a plain ASCII apostrophe (index.html:701).
-  expect(screen.getByText("Use the app's own storage")).toBeTruthy();
+  expect(screen.getByText('Use the default folder')).toBeTruthy();
   // The design button is "btn-quiet", which is the default quiet variant.
   expect(StyleSheet.flatten(screen.getByTestId('download-folder-reset').props.style).borderColor).toBe(colors.border);
   fireEvent.press(screen.getByTestId('download-folder-reset'));
@@ -134,4 +134,36 @@ it('the reset button shows for a name the user chose', async () => {
   );
   expect(await screen.findByText('Photos')).toBeTruthy();
   expect(screen.getByTestId('download-folder-reset')).toBeTruthy();
+});
+
+// On Android API 29 and later, load returns the default public folder after a
+// reset. The row must print that name and not the own-storage fallback.
+it('after a reset the row shows the name that load returns again', async () => {
+  let stored: string | null = 'Photos';
+  const load = jest.fn(async () => stored);
+  const reset = async () => {
+    stored = 'Download / Daak';
+  };
+  render(<DownloadFolderRow load={load} choose={async () => null} reset={reset} />);
+  expect(await screen.findByText('Photos')).toBeTruthy();
+  fireEvent.press(screen.getByTestId('download-folder-reset'));
+  expect(await screen.findByText('Download / Daak')).toBeTruthy();
+  expect(screen.queryByText('This app\u2019s own storage')).toBeNull();
+});
+
+it('after a reset with load returning null the row shows the fallback', async () => {
+  let stored: string | null = 'Photos';
+  const load = jest.fn(async () => stored);
+  const reset = async () => {
+    stored = null;
+  };
+  render(<DownloadFolderRow load={load} choose={async () => null} reset={reset} />);
+  expect(await screen.findByText('Photos')).toBeTruthy();
+  fireEvent.press(screen.getByTestId('download-folder-reset'));
+  expect(await screen.findByText('This app\u2019s own storage')).toBeTruthy();
+});
+
+it('the reset button reads "Use the default folder"', async () => {
+  render(<DownloadFolderRow load={async () => 'Photos'} choose={async () => null} reset={async () => {}} />);
+  expect(await screen.findByText('Use the default folder')).toBeTruthy();
 });

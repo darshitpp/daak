@@ -47,8 +47,8 @@ export function DownloadFolderRow({ load, choose, reset, canReset, title, choose
       (stored) => {
         if (!cancelled) setName(stored);
       },
-      // A read that fails leaves the row saying the app's own storage, which is
-      // true whenever no folder is remembered.
+      // A read that fails leaves the row saying the app's own storage. The
+      // host can return null when it has no public folder to name.
       () => {
         if (!cancelled) setName(null);
       },
@@ -111,10 +111,14 @@ export function DownloadFolderRow({ load, choose, reset, canReset, title, choose
       {name && reset && (canReset === undefined || canReset(name)) ? (
         <Btn
           block
-          label="Use the app's own storage"
+          label="Use the default folder"
           testID="download-folder-reset"
           onPress={() => {
-            void reset().then(() => setName(null), () => {});
+            // After a reset the host can name a default folder. Read the name
+            // again. Do not assume null.
+            void reset()
+              .then(() => load().then((n) => n, () => null))
+              .then((n) => setName(n), () => {});
           }}
         />
       ) : null}
