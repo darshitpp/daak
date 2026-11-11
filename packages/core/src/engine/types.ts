@@ -76,6 +76,14 @@ export interface InboxEntry {
    * After a move to Photos or Gallery, `listInbox` returns `[]` for a folder.
    */
   groupRoots?: string[];
+  /**
+   * The share tag of a tagged send, 32 lowercase hex characters. Present only
+   * on the `inbox.received` event, when every file carried the same valid tag.
+   * `listInbox` never returns it.
+   */
+  share?: string;
+  /** The batch position as `k/m` text. It goes with `share`. */
+  batch?: string;
 }
 
 export type DaakEvent =

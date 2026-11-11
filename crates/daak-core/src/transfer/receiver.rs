@@ -2249,6 +2249,8 @@ mod tests {
             received_at: 1,
             saved_paths: "[]".into(),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         })
         .unwrap();
         assert!(db.payload_seen(&manifest.payload_id).unwrap());
@@ -2296,6 +2298,8 @@ mod tests {
             received_at: 1,
             saved_paths: "[]".into(),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         })
         .unwrap();
         assert!(db.payload_seen(&manifest.payload_id).unwrap());
@@ -4218,6 +4222,8 @@ mod tests {
                 received_at: 1,
                 saved_paths: "[]".into(),
                 group_roots: Vec::new(),
+                share: None,
+                batch: None,
             })
             .unwrap();
             let real = dst.path().join("f0.bin");

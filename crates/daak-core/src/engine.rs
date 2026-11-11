@@ -2853,6 +2853,8 @@ impl Engine {
             // of an item that was remapped into quarantine.
             saved_paths: json_string_array(saved_paths),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         };
         // The roots are read now, before any move. The UI gets them in the
         // event. A later list_inbox reads the paths after the move.
@@ -2865,10 +2867,18 @@ impl Engine {
             );
             Vec::new()
         });
+        // The tag is computed here from the manifest. It is not stored. Only
+        // the event row carries it.
+        let (share, batch) = match crate::manifest::parse_tag(&manifest.items) {
+            Some((share, k, m)) => (Some(share), Some(format!("{k}/{m}"))),
+            None => (None, None),
+        };
         if db.add_inbox_once(&row)? {
             return Ok((
                 InboxRow {
                     group_roots: roots,
+                    share,
+                    batch,
                     ..row
                 },
                 true,
@@ -2880,6 +2890,8 @@ impl Engine {
             Some(merged) => Ok((
                 InboxRow {
                     group_roots: roots,
+                    share,
+                    batch,
                     ..merged
                 },
                 true,
@@ -2887,6 +2899,8 @@ impl Engine {
             None => Ok((
                 InboxRow {
                     group_roots: roots,
+                    share,
+                    batch,
                     ..row
                 },
                 false,

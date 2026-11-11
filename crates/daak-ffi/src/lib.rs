@@ -370,7 +370,7 @@ pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::
         // signal. Matches daakd's identical function exactly.
         Err(_) => serde_json::Value::Null,
     };
-    serde_json::json!({
+    let mut json = serde_json::json!({
         "payloadId": to_hex(&row.id),
         "transferId": to_hex(&row.transfer_id),
         "peerDeviceId": to_hex(&row.peer_device_id),
@@ -380,7 +380,14 @@ pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::
         "receivedAt": row.received_at,
         "savedPaths": saved_paths,
         "groupRoots": row.group_roots,
-    })
+    });
+    // The tag is computed on receive and is not stored. Leave the keys out
+    // when it is absent.
+    if let (Some(share), Some(batch)) = (&row.share, &row.batch) {
+        json["share"] = serde_json::json!(share);
+        json["batch"] = serde_json::json!(batch);
+    }
+    json
 }
 
 /// The identity store: one 0600 file per key under <data_dir>/keys, so the

@@ -666,6 +666,32 @@ describe('InProcessEngine', () => {
     expect(roots).toEqual(['/out/album']);
   });
 
+  it('parses the optional share and batch tag', async () => {
+    const base = {
+      payloadId: 'aa'.repeat(16),
+      transferId: 'aa'.repeat(16),
+      peerDeviceId: 'bb'.repeat(16),
+      kind: 'media',
+      itemCount: 1,
+      summary: '1 file(s)',
+      receivedAt: 0,
+      savedPaths: ['/out/a.bin'],
+    };
+    const share = '00112233445566778899aabbccddeeff';
+    const engine = new InProcessEngine(
+      fakeNative({
+        listInbox: async () => JSON.stringify([{ ...base, share, batch: '2/7' }, base]),
+      }),
+      () => () => {},
+    );
+    const [tagged, plain] = await engine.listInbox();
+    const tag: { share?: string; batch?: string } = tagged;
+    expect(tag.share).toBe(share);
+    expect(tag.batch).toBe('2/7');
+    expect(plain.share).toBeUndefined();
+    expect(plain.batch).toBeUndefined();
+  });
+
   it('rejects a list payload that is not an array instead of returning it typed', async () => {
     const engine = new InProcessEngine(
       fakeNative({ listTransfers: async () => '{}', listInbox: async () => 'null' }),

@@ -480,6 +480,8 @@ async fn a_100_sender_against_a_101_receiver_with_a_done_item_finishes() {
         received_at: 0,
         saved_paths: "[]".into(),
         group_roots: Vec::new(),
+        share: None,
+        batch: None,
     })
     .unwrap();
 
