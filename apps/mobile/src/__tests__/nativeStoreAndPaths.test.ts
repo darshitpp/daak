@@ -1444,3 +1444,18 @@ describe('Android documents go to Download/Daak when no folder is chosen', () =>
     expect(doc.indexOf('resolver.delete(uri, null, null)')).toBeGreaterThan(doc.indexOf('catch'));
   });
 });
+
+describe('sendFilesTagged is wired through the native glue', () => {
+  it('the Android module calls the uniffi send_files_tagged with a bounded attempt', () => {
+    const kt = read(repo + 'apps/mobile/android/app/src/main/java/dev/darshit/daak/DaakModule.kt');
+    expect(kt).toMatch(/override fun sendFilesTagged\(/);
+    expect(kt).toContain('handle().sendFilesTagged(peerId, list, share, batch, itemIndexArg(attempt))');
+  });
+
+  it('the iOS module declares and forwards sendFilesTagged', () => {
+    const swift = read(repo + 'apps/mobile/ios/Daak.swift');
+    expect(swift).toMatch(/@objc func sendFilesTagged\(/);
+    expect(swift).toContain('need().sendFilesTagged(');
+    expect(read(repo + 'apps/mobile/ios/DaakModule.mm')).toContain('RCT_EXTERN_METHOD(sendFilesTagged:');
+  });
+});

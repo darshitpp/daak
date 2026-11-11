@@ -187,6 +187,8 @@ export class DaemonClientEngine implements DaakEngine {
     const hasFiles = (req.files?.length ?? 0) > 0;
     if (hasText && hasFiles) throw new Error('send takes text or files, not both');
     if (!hasText && !hasFiles) throw new Error('refusing an empty send');
+    // The share tag fields (share, batch, attempt) are ignored here: the
+    // daemon protocol has no tag, so a tagged request goes out as a plain send.
     const r = JSON.parse(
       await this.json({ Send: { peer_device_id: req.peerDeviceId, text: req.text ?? null, files: req.files ?? [] } }),
     ) as { transferId?: string; queued?: boolean };

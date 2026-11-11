@@ -140,6 +140,7 @@ describe('macOS runs the engine in-process', () => {
       'cancelCodePairing:',
       'sendText:',
       'sendFiles:',
+      'sendFilesTagged:',
       'listDevices:',
       'cancel:',
       'retry:',

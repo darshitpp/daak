@@ -204,6 +204,19 @@ class DaakModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    override fun sendFilesTagged(
+        peerId: String,
+        paths: ReadableArray,
+        share: String,
+        batch: String,
+        attempt: Double,
+        promise: Promise,
+    ) {
+        val list = List(paths.size()) { paths.getString(it)!! }
+        resolve(promise) { handle().sendFilesTagged(peerId, list, share, batch, itemIndexArg(attempt)) }
+    }
+
+    @ReactMethod
     override fun listDevices(promise: Promise) = resolve(promise) { handle().listDevices() }
 
     @ReactMethod

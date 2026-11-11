@@ -119,7 +119,12 @@ export class InProcessEngine implements DaakEngine {
     if (hasText) {
       return { transferId: await this.native.sendText(req.peerDeviceId, req.text as string), queued: true };
     }
-    return { transferId: await this.native.sendFiles(req.peerDeviceId, req.files ?? []), queued: true };
+    const files = req.files ?? [];
+    if (typeof req.share === 'string' && typeof req.batch === 'string') {
+      const id = await this.native.sendFilesTagged(req.peerDeviceId, files, req.share, req.batch, req.attempt ?? 0);
+      return { transferId: id, queued: true };
+    }
+    return { transferId: await this.native.sendFiles(req.peerDeviceId, files), queued: true };
   }
 
   async cancel(transferId: string): Promise<void> {

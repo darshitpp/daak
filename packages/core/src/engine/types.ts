@@ -115,6 +115,12 @@ export interface SendRequest {
   peerDeviceId: string;
   text?: string;
   files?: string[];
+  /** Share tag (32 hex characters) of a batch. Only the in-process engine uses it. */
+  share?: string;
+  /** Batch position as `k/m`. Set with `share`. */
+  batch?: string;
+  /** Retry count of the batch. It changes the payload id. Default 0. */
+  attempt?: number;
 }
 
 export interface TransferSummary {

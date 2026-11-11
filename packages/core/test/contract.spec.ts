@@ -75,6 +75,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   acceptPairing: true,
   sendText: true,
   sendFiles: true,
+  sendFilesTagged: true,
   listDevices: true,
   revokePairing: true,
   confirmPairing: true,
@@ -177,7 +178,8 @@ describe('contract types', () => {
     // method and a TurboModule override on all three native modules.
     // export_debug_bundle is the 35th: a UDL method and a TurboModule
     // override on all three native modules. It works before start.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(35);
+    // send_files_tagged (Part C) is the 36th, on all three native modules.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(36);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -469,6 +471,23 @@ describe('InProcessEngine', () => {
     expect(sent.transferId).toBe('aa11bb22');
     expect(await engine.send({ peerDeviceId: 'd1', files: ['/a', '/b'] })).toEqual({ transferId: 'cc33dd44', queued: true });
     expect(calls).toEqual(['text:d1:hi', 'files:d1:/a,/b']);
+  });
+
+  it('routes a send with share and batch to sendFilesTagged and keeps the plain send otherwise', async () => {
+    const calls: string[] = [];
+    const native = fakeNative({
+      sendFiles: async (peer: string, paths: string[]) => { calls.push(`files:${peer}:${paths.join()}`); return 'cc33dd44'; },
+      sendFilesTagged: async (peer: string, paths: string[], share: string, batch: string, attempt: number) => {
+        calls.push(`tagged:${peer}:${paths.join()}:${share}:${batch}:${attempt}`);
+        return 'ee55ff66';
+      },
+    });
+    const engine = new InProcessEngine(native, () => () => {});
+    expect(await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's', batch: '1/2', attempt: 3 }))
+      .toEqual({ transferId: 'ee55ff66', queued: true });
+    await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's', batch: '1/2' });
+    await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's' });
+    expect(calls).toEqual(['tagged:d1:/a:s:1/2:3', 'tagged:d1:/a:s:1/2:0', 'files:d1:/a']);
   });
 
   it('refuses a send that carries both text and files (I2)', async () => {

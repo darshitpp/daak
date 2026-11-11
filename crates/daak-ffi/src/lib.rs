@@ -716,6 +716,28 @@ impl DaakEngine {
         Ok(to_hex(&id))
     }
 
+    pub fn send_files_tagged(
+        &self,
+        peer_id: String,
+        paths: Vec<String>,
+        share: String,
+        batch: String,
+        attempt: u32,
+    ) -> Result<String, FfiError> {
+        let picked: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+        let id = self
+            .rt
+            .block_on(self.engine()?.send_files_tagged(
+                parse_id(&peer_id)?,
+                picked,
+                share,
+                batch,
+                attempt,
+            ))
+            .map_err(engine_err)?;
+        Ok(to_hex(&id))
+    }
+
     pub fn list_devices(&self) -> Result<String, FfiError> {
         let views = self
             .rt

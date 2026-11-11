@@ -153,6 +153,17 @@ final class Daak: RCTEventEmitter, EventSink {
     run(resolve, reject) { try self.need().sendFiles(peerId: peerId, paths: paths) }
   }
 
+  @objc func sendFilesTagged(_ peerId: String, paths: [String], share: String,
+                             batch: String, attempt: Double,
+                             resolve: @escaping RCTPromiseResolveBlock,
+                             reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().sendFilesTagged(
+        peerId: peerId, paths: paths, share: share, batch: batch,
+        attempt: UInt32(min(max(0, attempt.isFinite ? attempt : 0), 4294967295)))
+    }
+  }
+
   @objc func listDevices(_ resolve: @escaping RCTPromiseResolveBlock,
                          reject: @escaping RCTPromiseRejectBlock) {
     run(resolve, reject) { try self.need().listDevices() }

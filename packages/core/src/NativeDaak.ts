@@ -31,6 +31,11 @@ export interface Spec extends TurboModule {
   sendText(peerId: string, text: string): Promise<string>;
   /** UDL: send_files(string peer_id, sequence<string> paths) -> payload id hex */
   sendFiles(peerId: string, paths: string[]): Promise<string>;
+  /**
+   * UDL: send_files_tagged(string peer_id, sequence<string> paths, string share,
+   * string batch, u32 attempt) -> payload id hex. One batch of a larger share.
+   */
+  sendFilesTagged(peerId: string, paths: string[], share: string, batch: string, attempt: number): Promise<string>;
   /** UDL: list_devices() -> [{deviceId, name, addr}] (R11) */
   listDevices(): Promise<string>;
   /** UDL: revoke_pairing(string device_id) */

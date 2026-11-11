@@ -34,6 +34,7 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     acceptPairing: async () => '123456',
     sendText: async (peer, text) => { calls.push(['sendText', peer, text]); return 'aa'.repeat(16); },
     sendFiles: async (peer, paths) => { calls.push(['sendFiles', peer, paths]); return 'bb'.repeat(16); },
+    sendFilesTagged: async (peer, paths, share, batch, attempt) => { calls.push(['sendFilesTagged', peer, paths, share, batch, attempt]); return 'cc'.repeat(16); },
     listInbox: async () => '[]',
     listTransfers: async () => '[]',
     listThread: async () => JSON.stringify({ items: [], olderCursor: null }),

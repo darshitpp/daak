@@ -2532,6 +2532,40 @@ impl Engine {
         Ok(payload_id)
     }
 
+    /// Queue a send of one batch of a larger share. Each item carries the
+    /// share tag. The payload id comes from the tag and `attempt`. A repeated
+    /// call with the same tag and `attempt` returns the id of the existing row
+    /// and adds no second row and no second staged copy.
+    pub async fn send_files_tagged(
+        &self,
+        peer_device_id: [u8; 16],
+        paths: Vec<PathBuf>,
+        share: String,
+        batch: String,
+        attempt: u32,
+    ) -> Result<[u8; 16]> {
+        let (k, m) = crate::manifest::parse_batch_tag(&share, &batch)?;
+        let sender = crate::manifest::DeviceRef {
+            device_id: self.identity.device_id(),
+            name: self.display_name().await,
+        };
+        let (manifest, sources) = crate::manifest::from_picked_paths_tagged(
+            sender,
+            &paths,
+            crate::manifest::CHUNK_SIZE_DEFAULT,
+            &share,
+            k,
+            m,
+            attempt,
+        )?;
+        let id = manifest.payload_id;
+        if self.db.get_outbox(&id)?.is_some() {
+            return Ok(id);
+        }
+        self.enqueue_outbox_send(peer_device_id, manifest, sources)
+            .await
+    }
+
     /// A platform told the daemon to drain now: a timer, a network change or a
     /// SIGUSR1. The trigger drains every due row.
     pub fn background_wake(&self) {

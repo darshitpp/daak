@@ -520,6 +520,73 @@ pub fn from_picked_paths(
     picked: &[PathBuf],
     chunk_size: u32,
 ) -> Result<(Manifest, Vec<PathBuf>)> {
+    from_picked_paths_inner(sender, picked, chunk_size, None)
+}
+
+/// Check a share tag. `share` is 32 hex characters. `batch` is `k/m` with
+/// `1 <= k <= m <= 1000`. Returns `(k, m)`. The error text holds no value,
+/// because a log line must not carry data from a peer or a user.
+pub fn parse_batch_tag(share: &str, batch: &str) -> Result<(u32, u32)> {
+    let bad = || CoreError::Protocol("invalid share tag".into());
+    if share.len() != 32 || !share.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(bad());
+    }
+    let (k, m) = batch.split_once('/').ok_or_else(bad)?;
+    let digits = |t: &str| !t.is_empty() && t.len() <= 4 && t.bytes().all(|b| b.is_ascii_digit());
+    if !digits(k) || !digits(m) {
+        return Err(bad());
+    }
+    let (k, m): (u32, u32) = (k.parse().map_err(|_| bad())?, m.parse().map_err(|_| bad())?);
+    if k < 1 || k > m || m > 1000 {
+        return Err(bad());
+    }
+    Ok((k, m))
+}
+
+/// The payload id of a tagged send: the first 16 bytes of a keyed BLAKE2s
+/// over `share`, `k`, and `attempt`. The same input gives the same id.
+fn tagged_payload_id(share: &str, k: u32, attempt: u32) -> [u8; 16] {
+    let mut base = [0u8; 32];
+    let label = b"daak/share-batch-id/v1";
+    base[..label.len()].copy_from_slice(label);
+    let mut info = share.to_ascii_lowercase().into_bytes();
+    info.extend_from_slice(&k.to_be_bytes());
+    info.extend_from_slice(&attempt.to_be_bytes());
+    let key = crate::crypto::keys::derive_key(&base, &info, 0);
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&key[..16]);
+    id
+}
+
+/// Like `from_picked_paths`. Each binary item also gets `attrs["share"]` and
+/// `attrs["batch"]` (`k/m`), and the payload id comes from `share`, `k`, and
+/// `attempt`. A repeated call with the same input gives the same id.
+pub fn from_picked_paths_tagged(
+    sender: DeviceRef,
+    picked: &[PathBuf],
+    chunk_size: u32,
+    share: &str,
+    k: u32,
+    m: u32,
+    attempt: u32,
+) -> Result<(Manifest, Vec<PathBuf>)> {
+    let batch = format!("{k}/{m}");
+    let (pk, pm) = parse_batch_tag(share, &batch)?;
+    debug_assert_eq!((pk, pm), (k, m));
+    from_picked_paths_inner(
+        sender,
+        picked,
+        chunk_size,
+        Some((share, &batch, tagged_payload_id(share, k, attempt))),
+    )
+}
+
+fn from_picked_paths_inner(
+    sender: DeviceRef,
+    picked: &[PathBuf],
+    chunk_size: u32,
+    tag: Option<(&str, &str, [u8; 16])>,
+) -> Result<(Manifest, Vec<PathBuf>)> {
     let mut items: Vec<Item> = Vec::new();
     let mut sources: Vec<PathBuf> = Vec::new();
     // B1/F2: item names are unique per MANIFEST, not per folder. Loose files
@@ -621,7 +688,20 @@ pub fn from_picked_paths(
             "nothing to send: the picked paths hold no files".into(),
         ));
     }
-    let manifest = Manifest::batch(sender, items)?;
+    let mut payload_id = None;
+    if let Some((share, batch, id)) = tag {
+        for item in items.iter_mut().filter(|i| i.is_binary()) {
+            item.attrs
+                .insert("share".into(), ciborium::value::Value::Text(share.into()));
+            item.attrs
+                .insert("batch".into(), ciborium::value::Value::Text(batch.into()));
+        }
+        payload_id = Some(id);
+    }
+    let mut manifest = Manifest::batch(sender, items)?;
+    if let Some(id) = payload_id {
+        manifest.payload_id = id;
+    }
     Ok((manifest, sources))
 }
 
@@ -1520,5 +1600,43 @@ mod tests {
             !text.contains("private-diary"),
             "the error names the path: {text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod parse_batch_tag_tests {
+    use super::parse_batch_tag;
+
+    const SHARE: &str = "00112233445566778899aabbccddeeff";
+
+    #[test]
+    fn parse_batch_tag_accepts_a_valid_tag() {
+        assert_eq!(parse_batch_tag(SHARE, "2/7").unwrap(), (2, 7));
+        assert_eq!(parse_batch_tag(SHARE, "1000/1000").unwrap(), (1000, 1000));
+        assert_eq!(parse_batch_tag(SHARE, "1/1").unwrap(), (1, 1));
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_a_bad_share() {
+        assert!(parse_batch_tag(&SHARE[..31], "1/3").is_err());
+        assert!(parse_batch_tag(&format!("{SHARE}0"), "1/3").is_err());
+        assert!(parse_batch_tag("0011223344556677889900aabbccddeg", "1/3").is_err());
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_a_bad_batch() {
+        for b in [
+            "0/3", "4/3", "1/1001", "", "1", "a/b", "1/3/4", "+1/3", "-1/3", " 1/3",
+        ] {
+            assert!(parse_batch_tag(SHARE, b).is_err(), "{b}");
+        }
+    }
+
+    #[test]
+    fn parse_batch_tag_error_does_not_hold_the_values() {
+        let err = parse_batch_tag("secretvalue", "9/1")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("secretvalue") && !err.contains("9/1"));
     }
 }
