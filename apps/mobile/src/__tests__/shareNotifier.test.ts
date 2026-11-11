@@ -141,7 +141,8 @@ describe('onReceived', () => {
     await onReceived(tagged(2, 3, { savedPaths: paths(2) }), 150, 1);
     await onReceived(tagged(3, 3, { savedPaths: paths(3) }), 150, 2);
     const last = post.mock.calls[2][0];
-    expect(last.savedPaths.length).toBeLessThanOrEqual(200);
+    expect(last.savedPaths?.length ?? 0).toBeLessThanOrEqual(200);
+    expect(last.savedPaths?.length ?? 0).toBeGreaterThan(0);
     expect(body(2)).toContain('Received 450 files');
   });
 
