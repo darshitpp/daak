@@ -98,3 +98,40 @@ it('keeps the note by default', async () => {
   expect(await screen.findByText('Files are moved, not copied')).toBeTruthy();
 });
 
+
+// The host can name a default folder. The native module returns that name, and
+// the row prints it. The fallback text shows only when the module returns null.
+it('the fallback text shows only when the native module returns null', async () => {
+  const { unmount } = render(<DownloadFolderRow load={async () => 'Download / Daak'} choose={async () => null} />);
+  expect(await screen.findByText('Download / Daak')).toBeTruthy();
+  expect(screen.queryByText('This app’s own storage')).toBeNull();
+  unmount();
+  render(<DownloadFolderRow load={async () => null} choose={async () => null} />);
+  expect(await screen.findByText('This app’s own storage')).toBeTruthy();
+});
+
+it('the reset button is hidden when canReset says the name is the default', async () => {
+  render(
+    <DownloadFolderRow
+      load={async () => 'Download / Daak'}
+      choose={async () => null}
+      reset={async () => {}}
+      canReset={(n) => n !== 'Download / Daak'}
+    />,
+  );
+  expect(await screen.findByText('Download / Daak')).toBeTruthy();
+  expect(screen.queryByTestId('download-folder-reset')).toBeNull();
+});
+
+it('the reset button shows for a name the user chose', async () => {
+  render(
+    <DownloadFolderRow
+      load={async () => 'Photos'}
+      choose={async () => null}
+      reset={async () => {}}
+      canReset={(n) => n !== 'Download / Daak'}
+    />,
+  );
+  expect(await screen.findByText('Photos')).toBeTruthy();
+  expect(screen.getByTestId('download-folder-reset')).toBeTruthy();
+});

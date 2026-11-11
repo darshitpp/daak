@@ -41,6 +41,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
     load: () => Promise<string | null>;
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
+    canReset?: (name: string) => boolean;
   };
   photos?: PhotosHost;
   /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */

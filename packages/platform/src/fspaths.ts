@@ -152,6 +152,14 @@ export function friendlyFolderName(raw: string): string {
   return capMiddle(parts.slice(-2).join(' / '));
 }
 
+/**
+ * The name of the default public folder on Android 29 and later. The native
+ * module returns the raw value `Download/Daak` when the user chose no folder.
+ * The host uses this label to see that default. It comes from
+ * `friendlyFolderName`, so the two cannot differ.
+ */
+export const DEFAULT_PUBLIC_FOLDER_LABEL = friendlyFolderName('Download/Daak');
+
 export async function clearDownloadFolder(): Promise<void> {
   return NativeDaakFsPaths.clearDownloadFolder();
 }

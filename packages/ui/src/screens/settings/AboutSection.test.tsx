@@ -174,3 +174,15 @@ it('hides the chevron from accessibility', () => {
   expect(chevron.props.accessibilityElementsHidden).toBe(true);
   expect(chevron.props.importantForAccessibility).toBe('no-hide-descendants');
 });
+
+it('the About text says that apps with storage access can read received files', () => {
+  render(<AboutSection />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
+  expect(screen.getByText(/apps with storage access can read/i)).toBeTruthy();
+});
+
+it('the About text says that Documents is in the device backup on iOS', () => {
+  render(<AboutSection />);
+  fireEvent.press(screen.getByTestId('about-toggle'));
+  expect(screen.getByText(/On iOS, the Documents folder is in the device backup/)).toBeTruthy();
+});

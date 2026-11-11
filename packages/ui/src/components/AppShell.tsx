@@ -93,6 +93,7 @@ export function AppShell({
     load: () => Promise<string | null>;
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
+    canReset?: (name: string) => boolean;
   };
   /** The Photos verbs for the Settings row. Injected: access is a platform call. */
   photos?: PhotosHost;

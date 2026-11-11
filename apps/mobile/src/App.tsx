@@ -15,6 +15,7 @@ import { askForPhotosIfUndetermined, libraryOf, photosHost } from './photosHost'
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
+  DEFAULT_PUBLIC_FOLDER_LABEL,
   downloadFolderName,
   discardPickedCopy,
   folderStats,
@@ -88,6 +89,8 @@ export default function App() {
     load: downloadFolderName,
     choose: chooseDownloadFolder,
     reset: clearDownloadFolder,
+    // A reset does not change the default public folder, so no button shows.
+    canReset: (name: string) => name !== DEFAULT_PUBLIC_FOLDER_LABEL,
   };
   // The Settings inputs that packages/ui may not import. The OS grant is the
   // answer onboarding stored (readOnboarding().alerts). It does not change

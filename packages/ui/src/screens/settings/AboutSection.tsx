@@ -71,6 +71,9 @@ export function AboutSection({ appInfo }: { appInfo?: () => Promise<Info> }) {
                 </View>
               ) : null}
             </View>
+            <Text style={ui.hint}>
+              Apps with storage access can read the files that you receive. On iOS, the Documents folder is in the device backup.
+            </Text>
             <View style={ui.cardTight} testID="about-links">
               {ABOUT_LINKS.map((l, i) => (
                 <Pressable
