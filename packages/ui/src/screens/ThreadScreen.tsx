@@ -669,7 +669,8 @@ export function ThreadScreen({
           // The engine staged the files before it resolved, so the copies can go.
           sendFiles.forEach(discard);
           setFiles([]);
-          setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
+          // In large mode the refs leave only after startLarge works (below).
+          if (!large) setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
           setSizes({});
           setFolders({});
         }

@@ -2049,6 +2049,22 @@ describe('ThreadScreen large selection', () => {
     expect(screen.getByText('b.mov')).toBeTruthy();
   });
 
+  it('a failed startLarge keeps the refs even when plain files were sent first', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('PLAN_BUSY'));
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, initialFiles: ['/Users/d/x.pdf'] });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('A large send is already running for this device.')).toBeTruthy();
+    // The plain file went out. The photo refs stay staged, so the user can try again.
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, files: ['/Users/d/x.pdf'] });
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+    expect(screen.getByText('b.mov')).toBeTruthy();
+  });
+
   it('PLAN_TOO_LARGE shows its text', async () => {
     const h = host();
     h.media.startLarge.mockRejectedValue(new Error('PLAN_TOO_LARGE'));
