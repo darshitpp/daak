@@ -27,6 +27,18 @@ describe('Android notification body tap', () => {
     expect(body).not.toContain('getBroadcast');
   });
 
+  // D4: a share notification is posted again under the same id with a new
+  // count and new paths. Without FLAG_UPDATE_CURRENT Android keeps the extras
+  // of the first PendingIntent, so a tap opens the data of the first batch.
+  it('each PendingIntent updates the extras of an earlier one with the same request code', () => {
+    for (const name of ['private fun openPending(', 'private fun actionPending(']) {
+      const start = module.indexOf(name);
+      expect(start).toBeGreaterThan(-1);
+      const body = module.slice(start, module.indexOf('\n  }\n', start));
+      expect(body).toMatch(/, IMMUTABLE or PendingIntent\.FLAG_UPDATE_CURRENT\)/);
+    }
+  });
+
   it('delivers the open event from the activity, or stashes it', () => {
     expect(activity).toContain('DaakNotifyModule.emitToJs(action, payload)');
     expect(activity).toContain('NotifyStash.put(this, action, payload)');

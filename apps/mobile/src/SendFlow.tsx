@@ -8,8 +8,18 @@
  * ponytail: delete this file with the shell's next rename. It exists so the
  * imports below keep working while that is a separate concern.
  */
-import { DEFAULT_ITEM_BYTES, fits, freeBytes, materializeMedia, pickFiles, pickFolder, pickMedia } from '@daak/platform';
+import {
+  DEFAULT_ITEM_BYTES,
+  fits,
+  freeBytes,
+  materializeMedia,
+  pickFiles,
+  pickFolder,
+  pickMedia,
+  releaseMedia,
+} from '@daak/platform';
 import type { BatchHost, MediaHost } from '@daak/ui';
+import { Platform } from 'react-native';
 import { batchDriver, onBatchChange } from './bootstrap';
 
 export const pickAttachedFiles = (): Promise<string[]> => pickFiles(true);
@@ -17,11 +27,20 @@ export const pickAttachedFiles = (): Promise<string[]> => pickFiles(true);
 /** The folder picker of the composer menu. It copies the folder and resolves the path of the copy. */
 export const pickAttachedFolder = (): Promise<string | null> => pickFolder();
 
-/** The photo picker of the composer menu. `fits` compares the picked sizes with the free space. */
+/**
+ * The photo picker of the composer menu. `fits` compares the picked sizes with
+ * the free space. Android denies the hard link, so staging copies each file and
+ * a send needs about twice its size there. iOS stages with a hard link.
+ */
 export const attachedMedia: MediaHost = {
   pick: pickMedia,
   materialize: materializeMedia,
-  fits: async (refs) => fits(refs.reduce((n, r) => n + (r.size ?? DEFAULT_ITEM_BYTES), 0), await freeBytes()),
+  // Gives back the Android read grants of refs that left the composer.
+  release: releaseMedia,
+  fits: async (refs) => {
+    const total = refs.reduce((n, r) => n + (r.size ?? DEFAULT_ITEM_BYTES), 0);
+    return fits(total * (Platform.OS === 'android' ? 2 : 1), await freeBytes());
+  },
   // A selection that does not fit goes to the driver. The screen maps the errors.
   startLarge: async (peerId, refs) => {
     await batchDriver().start(peerId, refs);

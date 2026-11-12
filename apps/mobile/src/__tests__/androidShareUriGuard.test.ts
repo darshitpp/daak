@@ -33,16 +33,47 @@ describe('ShareInbox.copyToCache input guard', () => {
     expect(body).toContain('ctx.packageName');
   });
 
-  it('refuses a uri that has user info before the authority', () => {
-    expect(body).toContain('uri.userInfo != null');
+  // The final review (M1): Android adds a user prefix (`10@`) to the uri of a
+  // share from another profile. A digits-only prefix is allowed. The checks for
+  // this app then apply to the host after the prefix. The regex of the source
+  // runs here on the encoded authority.
+  const authorityRule = (() => {
+    const m = /FOREIGN_AUTHORITY = Regex\("{3}(.+?)"{3}\)/.exec(src);
+    if (!m) throw new Error('ShareInbox.kt has no FOREIGN_AUTHORITY regex');
+    return new RegExp(`^(?:${m[1]})$`);
+  })();
+  const own = 'dev.darshit.daak';
+  // The JavaScript form of the guard: the regex, then the own-package check on the host.
+  const allowed = (encoded: string) => {
+    const m = authorityRule.exec(encoded);
+    return m !== null && !m[1].startsWith(own);
+  };
+
+  it('allows a digits-only user prefix of another app: 10@com.example.provider', () => {
+    expect(allowed('10@com.example.provider')).toBe(true);
+    expect(allowed('com.example.provider')).toBe(true);
   });
 
-  it('refuses an encoded authority that holds an @ character', () => {
-    expect(body).toContain("uri.encodedAuthority");
-    // A percent-encoded @ decodes to the user-id prefix: refuse the decoded text and the % sign.
-    expect(body).toContain("authority.contains('@')");
-    expect(body).toContain("it.contains('%')");
-    expect(body).toContain("contains('@')");
+  it('refuses the own package after a user prefix: 0@dev.darshit.daak.fileprovider', () => {
+    expect(allowed('0@dev.darshit.daak.fileprovider')).toBe(false);
+    expect(allowed('dev.darshit.daak.fileprovider')).toBe(false);
+  });
+
+  it('refuses a percent-encoded prefix and any other user info', () => {
+    expect(allowed('0%40dev.darshit.daak.fileprovider')).toBe(false);
+    expect(allowed('0%40com.example.provider')).toBe(false);
+    expect(allowed('user@com.example.provider')).toBe(false);
+    expect(allowed('1@2@com.example.provider')).toBe(false);
+    expect(allowed('')).toBe(false);
+  });
+
+  it('applies the regex to the encoded authority and the own checks to the host', () => {
+    expect(body).toContain('FOREIGN_AUTHORITY.matchEntire(');
+    expect(body).toContain('uri.encodedAuthority');
+    expect(body).toContain('host == null');
+    expect(body).toContain('host.startsWith(ctx.packageName)');
+    expect(body).toContain('isOwnProvider(ctx, host)');
+    expect(body).not.toContain('uri.userInfo != null');
   });
 
   it('refuses a uri when the provider of the authority belongs to this app', () => {

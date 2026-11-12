@@ -21,7 +21,10 @@ jest.mock('@daak/platform', () => {
       g.__batchEngine ??= jest.requireActual('@daak/ui').fakeEngine();
       return g.__batchEngine;
     },
-    createBatchDriver: jest.fn(() => g.__batchDriver),
+    createBatchDriver: jest.fn((deps: unknown) => {
+      (g as { __batchDeps?: unknown }).__batchDeps = deps;
+      return g.__batchDriver;
+    }),
     consumePendingShare: jest.fn(async () => []),
     consumeIntentSends: jest.fn(async () => []),
     syncShortcutTargets: jest.fn(async () => {}),
@@ -38,6 +41,7 @@ jest.mock('@daak/platform', () => {
     sweepPickedCopies: jest.fn(() => (globalThis as unknown as { __sweep: { run: () => Promise<void> } }).__sweep.run()),
     materializeMedia: jest.fn(async () => ''),
     discardPickedCopy: jest.fn(async () => undefined),
+    releaseMedia: jest.fn(async () => undefined),
     freeBytes: jest.fn(async () => 0),
     fits: jest.fn(() => true),
     pickMedia: jest.fn(async () => []),
@@ -47,7 +51,8 @@ jest.mock('@daak/platform', () => {
   };
 });
 
-import { createBatchDriver } from '@daak/platform';
+import { createBatchDriver, fits, releaseMedia } from '@daak/platform';
+import { Platform } from 'react-native';
 import type { DaakEngine, DaakEvent } from '@daak/core';
 
 const g = globalThis as unknown as {
@@ -133,5 +138,28 @@ describe('the batch driver wiring', () => {
     const refs = [{ token: 't1', name: 'a.jpg', size: 10 }];
     await attachedMedia.startLarge?.(A, refs);
     expect(driver().start).toHaveBeenCalledWith(A, refs);
+  });
+
+  it('fits counts twice the size on Android, because staging copies each file', async () => {
+    jest.replaceProperty(Platform, 'OS', 'android');
+    await attachedMedia.fits([{ token: 't1', name: 'a.jpg', size: 10 }]);
+    expect(fits).toHaveBeenLastCalledWith(20, 0);
+  });
+
+  it('fits counts the size once on iOS, because staging makes a hard link', async () => {
+    jest.replaceProperty(Platform, 'OS', 'ios');
+    await attachedMedia.fits([{ token: 't1', name: 'a.jpg', size: 10 }]);
+    expect(fits).toHaveBeenLastCalledWith(10, 0);
+  });
+
+  it('the driver gets releaseMedia as media.release', async () => {
+    // One driver for the process: the deps are kept from the first start.
+    await startEngine();
+    const deps = (globalThis as unknown as { __batchDeps?: { media: { release?: unknown } } }).__batchDeps;
+    expect(deps?.media.release).toBe(releaseMedia);
+  });
+
+  it('the composer media host releases through releaseMedia', () => {
+    expect(attachedMedia.release).toBe(releaseMedia);
   });
 });

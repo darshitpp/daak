@@ -1499,6 +1499,18 @@ describe('the iOS notify post can be silent and can replace a notification in pl
     expect(swift).toMatch(/payloadJson: String,\s*silent: Bool,/);
   });
 
+  // D1: the notifications of one share form one thread in Notification Center.
+  it('the post takes a thread after silent and sets threadIdentifier when it is not empty', () => {
+    expect(swift).toMatch(/silent: Bool,\s*thread: String,/);
+    expect(swift).toMatch(/if !thread\.isEmpty \{ content\.threadIdentifier = thread \}/);
+    const decl = mm.slice(mm.indexOf('RCT_EXTERN_METHOD(post:'), mm.indexOf('RCT_EXTERN_METHOD(cancel:'));
+    expect(decl).toMatch(/silent:\(BOOL\)silent\s+thread:\(NSString \*\)thread\s+resolve:/);
+    const spec = read(repo + 'modules/rn-notify/js/NativeDaakNotify.ts');
+    expect(spec).toMatch(/payloadJson: string, silent: boolean, thread: string\): Promise<void>;/);
+    const kt = read(repo + 'modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt');
+    expect(kt).toMatch(/override fun post\(id: String, title: String, body: String, category: String, payloadJson: String, silent: Boolean, thread: String, promise: Promise\)/);
+  });
+
   // The app has no willPresent. So the app never shows a banner or plays a sound
   // while it is in front. A fixed option in a future willPresent must not
   // ignore the silent flag.
@@ -1526,14 +1538,13 @@ describe('the fspaths module reports the free space of the send cache', () => {
     expect(spec).toMatch(/^\s+freeBytes\(\): Promise<number>;/m);
   });
 
-  it('uses StorageManager.getAllocatableBytes with getUuidForPath(cacheDir)', () => {
-    expect(fn).toMatch(/getAllocatableBytes\(/);
-    expect(fn).toMatch(/getUuidForPath\(cacheDir\)/);
-    expect(fn).toMatch(/reactApplicationContext\.cacheDir/);
-  });
-
-  it('falls back to StatFs availableBytes', () => {
+  // The final review: getAllocatableBytes counts cache that the system can
+  // clear, but requireSpace in rn-share uses StatFs. The send must use the
+  // same conservative value, so freeBytes reads StatFs only.
+  it('uses StatFs availableBytes of the cache folder and not getAllocatableBytes', () => {
     expect(fn).toMatch(/StatFs\(cacheDir\.path\)\.availableBytes/);
+    expect(fn).toMatch(/reactApplicationContext\.cacheDir/);
+    expect(fn).not.toMatch(/getAllocatableBytes\(/);
   });
 
   it('runs off the main thread', () => {
@@ -2057,5 +2068,62 @@ describe('the send plan methods are wired through the native glue', () => {
       const list = swift.slice(swift.indexOf('@objc func listSendPlans('));
       expect(list.slice(0, list.indexOf('@objc func ', 10))).not.toContain('return nil as Void?');
     }
+  });
+});
+
+// The final review (I3): a picked item keeps a persisted read grant. Android
+// prunes the oldest grants above its limit, and the oldest grant is often the
+// download-folder tree. releaseMedia gives the grants of sent media back. These
+// pins prove only that the calls are in the source. The Gradle and Xcode builds
+// check the rest.
+describe('releaseMedia gives the persisted media grants back', () => {
+  const dir = repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/';
+  const kt = read(dir + 'DaakShareModule.kt');
+  const spec = read(repo + 'modules/rn-share/js/NativeDaakShare.ts');
+  const swift = read(repo + 'modules/rn-share/ios/DaakShare.swift');
+  const mm = read(repo + 'modules/rn-share/ios/DaakShare.mm');
+  const fnOf = (src: string, name: string) => {
+    const rest = src.slice(src.indexOf(name));
+    const end = rest.slice(1).search(/\n  (@ReactMethod\n  )?(@objc )?(override |private )?(fun|func) /);
+    return end === -1 ? rest : rest.slice(0, end + 1);
+  };
+  const code = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+
+  it('the Spec lists releaseMedia as a required member', () => {
+    expect(spec).toMatch(/^\s+releaseMedia\(tokensJson: string\): Promise<void>;/m);
+  });
+
+  it('Android releases each token in its own try and catch', () => {
+    const fn = code(fnOf(kt, 'override fun releaseMedia('));
+    expect(fn).toContain('JSONArray(tokensJson)');
+    expect(fn).toMatch(
+      /try \{[^}]*releasePersistableUriPermission\(uri, Intent\.FLAG_GRANT_READ_URI_PERMISSION\)[^}]*\} catch/,
+    );
+    expect(fn).toMatch(/for \(i in 0 until /);
+  });
+
+  it('Android releases only a held grant that is not a tree uri', () => {
+    const fn = code(fnOf(kt, 'override fun releaseMedia('));
+    expect(fn).toContain('persistedUriPermissions');
+    expect(fn).toContain('DocumentsContract.isTreeUri(uri)');
+    expect(fn).toMatch(/scheme != "content"/);
+  });
+
+  it('Android runs off the main thread, resolves null and logs no token', () => {
+    const fn = code(fnOf(kt, 'override fun releaseMedia('));
+    expect(fn).toMatch(/thread\(name = "daak-release-media"\)/);
+    expect(fn).toContain('promise.resolve(null)');
+    expect(fn).not.toMatch(/Log\.|println|promise\.reject/);
+  });
+
+  it('iOS has a stub that resolves nil at once and the .mm lists it', () => {
+    const fn = fnOf(swift, '@objc func releaseMedia(');
+    expect(fn).toContain('resolve(nil)');
+    expect(fn).not.toContain('reject(');
+    expect(mm).toMatch(/RCT_EXTERN_METHOD\(releaseMedia:\(NSString \*\)tokensJson/);
   });
 });

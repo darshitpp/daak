@@ -63,6 +63,16 @@ describe('the batch driver', () => {
     s.driver.dispose();
   });
 
+  // D7: the waiting row reads the live progress of the batch on the wire.
+  it('status gives the transferId of the batch on the wire, and none between batches', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 1, transferId: 't1' });
+    await finish(s, 't1');
+    expect(s.driver.status(PEER)).toMatchObject({ batch: 2, transferId: 't2' });
+    s.driver.dispose();
+  });
+
   it('a done event for another transferId does not advance', async () => {
     const s = setup();
     await s.driver.start(PEER, twoBatches);
@@ -692,6 +702,163 @@ describe('the batch driver after the review', () => {
   });
 });
 
+describe('the batch driver and a full disk while the engine stages (D2)', () => {
+  it('a NO_SPACE send error pauses NO_SPACE with a size, and Retry sends the same batch with the same attempt', async () => {
+    // The engine cannot stage the copy of batch 1.
+    const t = setup();
+    t.fe.engine.send.mockRejectedValueOnce(new Error('transfer: NO_SPACE: the staged copy does not fit'));
+    await t.driver.start(PEER, twoBatches);
+    await flush();
+    const st = t.driver.status(PEER);
+    expect(st).toMatchObject({ paused: true, error: 'NO_SPACE', batch: 1 });
+    expect(st?.neededBytes).toBeGreaterThan(0);
+    // The copies of the batch are gone.
+    expect(t.media.discard).toHaveBeenCalledWith('/cache/a');
+    await t.driver.retry(PEER);
+    expect(t.fe.engine.send).toHaveBeenCalledTimes(2);
+    expect(t.fe.engine.send.mock.calls[1][0]).toMatchObject({ batch: '1/2', attempt: 0 });
+    expect(t.driver.status(PEER)).toMatchObject({ paused: false, batch: 1 });
+    t.driver.dispose();
+  });
+
+  it('another send error still pauses FAILED', async () => {
+    const t = setup();
+    t.fe.engine.send.mockRejectedValueOnce(new Error('io: permission denied'));
+    await t.driver.start(PEER, twoBatches);
+    await flush();
+    expect(t.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    t.driver.dispose();
+  });
+});
+
+describe('the batch driver and a peer that is offline for a long time (D5)', () => {
+  const offline = (s: ReturnType<typeof setup>) =>
+    s.fe.engine.devices.mockResolvedValue([
+      { deviceId: PEER, name: 'p', addr: '', paired: true, online: false, presence: 'offline' },
+    ]);
+  const online = (s: ReturnType<typeof setup>) =>
+    s.fe.engine.devices.mockResolvedValue([
+      { deviceId: PEER, name: 'p', addr: '', paired: true, online: true, presence: 'online' },
+    ]);
+
+  it('a batch that the outbox gave up while the peer is offline waits and does not pause', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    offline(s);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'gave up after 100 attempts' });
+    await flush();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: false, batch: 1, transferId: 't1' });
+    // The poll goes on. No retry while the peer is offline.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(s.fe.engine.retry).not.toHaveBeenCalled();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: false });
+    s.driver.dispose();
+  });
+
+  it('when the peer comes online the poll re-arms the failed row once and the plan goes on', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    offline(s);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    online(s);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(s.fe.engine.retry).toHaveBeenCalledWith('t1');
+    expect(s.fe.engine.retry).toHaveBeenCalledTimes(1);
+    expect(s.driver.status(PEER)).toMatchObject({ paused: false, batch: 1 });
+    await finish(s, 't1');
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(2);
+    s.driver.dispose();
+  });
+
+  it('a device.state online event re-arms the row without a wait for the poll', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    offline(s);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    online(s);
+    s.driver.onEvent({ type: 'device.state', deviceId: PEER, state: 'online' });
+    await flush();
+    expect(s.fe.engine.retry).toHaveBeenCalledWith('t1');
+    s.driver.dispose();
+  });
+
+  it('a second failure while the peer is online after the re-arm pauses FAILED', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    offline(s);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    online(s);
+    s.driver.onEvent({ type: 'device.state', deviceId: PEER, state: 'online' });
+    await flush();
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    expect(s.fe.engine.retry).toHaveBeenCalledTimes(1);
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    s.driver.dispose();
+  });
+
+  it('a failure while the peer is online pauses FAILED, as before', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    expect(s.fe.engine.retry).not.toHaveBeenCalled();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    s.driver.dispose();
+  });
+
+  it('a devices() failure keeps the batch waiting and does not pause', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.engine.devices.mockRejectedValue(new Error('down'));
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: false });
+    s.driver.dispose();
+  });
+});
+
+describe('the batch driver retry fallback (D3)', () => {
+  it('cancels the old failed row so the engine removes its staged batch, then sends again', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    s.fe.engine.retry.mockRejectedValueOnce(new Error('db busy'));
+    await s.driver.retry(PEER);
+    expect(s.fe.engine.cancel).toHaveBeenCalledWith('t1');
+    const cancelAt = s.fe.engine.cancel.mock.invocationCallOrder[0];
+    const sendAt = s.fe.engine.send.mock.invocationCallOrder[1];
+    expect(cancelAt).toBeLessThan(sendAt);
+    expect(s.fe.engine.send.mock.calls[1][0]).toMatchObject({ batch: '1/2', attempt: 1 });
+    s.driver.dispose();
+  });
+
+  it('a cancel that rejects does not stop the new send', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    s.fe.engine.retry.mockRejectedValueOnce(new Error('db busy'));
+    s.fe.engine.cancel.mockRejectedValueOnce(new Error('gone'));
+    await s.driver.retry(PEER);
+    expect(s.fe.engine.send).toHaveBeenCalledTimes(2);
+    s.driver.dispose();
+  });
+});
+
 describe('the batch driver after the second review', () => {
   it('a failed marker save sends nothing, discards the copies and pauses FAILED', async () => {
     const s = setup();
@@ -761,5 +928,20 @@ describe('the batch driver after the second review', () => {
     await expect(s.driver.start(PEER, twoBatches)).resolves.toEqual({ share: SHARE });
     expect(s.fe.engine.send).toHaveBeenCalledTimes(1);
     s.driver.dispose();
+  });
+});
+
+// D6: the driver limit and the engine limit must be equal. A smaller engine
+// limit makes a plan that the driver accepts fail at the first save.
+describe('the plan size limit', () => {
+  it('PLAN_MAX_BYTES equals SEND_PLAN_MAX_BYTES in crates/daak-core/src/engine.rs', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const src = readFileSync(join(__dirname, '../../../crates/daak-core/src/engine.rs'), 'utf8');
+    const m = /const SEND_PLAN_MAX_BYTES: usize = ([\d_ *]+);/.exec(src);
+    expect(m).not.toBeNull();
+    const terms = (m?.[1] ?? '').split('*').map((t) => Number(t.trim().replace(/_/g, '')));
+    expect(terms.every((t) => Number.isInteger(t) && t > 0)).toBe(true);
+    expect(terms.reduce((a, b) => a * b, 1)).toBe(PLAN_MAX_BYTES);
   });
 });

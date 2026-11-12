@@ -394,7 +394,7 @@ export interface DaakEngine {
   exportDebugBundle(): Promise<string>;
   /**
    * Keep the plan of a batched send as opaque text. `share` is 32 lower case
-   * hex characters. The plan is at most 256 KiB. Only a paired peer can have
+   * hex characters. The plan is at most 1 MiB. Only a paired peer can have
    * a plan. A second save for the same share replaces the first.
    */
   saveSendPlan(peerDeviceId: string, share: string, json: string): Promise<void>;

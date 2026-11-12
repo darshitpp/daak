@@ -27,6 +27,12 @@ export interface Spec extends TurboModule {
    * `NO_SPACE:<needed bytes>`), `E_SOURCE_GONE`, or `E_MATERIALIZE`.
    */
   materialize(token: string): Promise<string>;
+  /**
+   * Give back the persisted read grants of picked media. `tokensJson` is JSON
+   * text of `string[]` (the tokens of `pickMedia`). A bad entry is ignored.
+   * Android only: iOS holds no URI grants and resolves at once. Never rejects.
+   */
+  releaseMedia(tokensJson: string): Promise<void>;
   consumePendingInbox(): Promise<string>;
   /** Drains ONLY `share-inbox/intent-sends/`. Never touches `batches/`. */
   consumeIntentSends(): Promise<string>;

@@ -120,6 +120,21 @@ export async function materializeMedia(token: string): Promise<string> {
   }
 }
 
+/**
+ * Give back the persisted read grants of picked media (Android). A grant that
+ * is not needed must go back: Android prunes the oldest grants above its limit,
+ * and that can be the download-folder grant. iOS and macOS have nothing to
+ * release. Best effort: this never throws.
+ */
+export async function releaseMedia(tokens: string[]): Promise<void> {
+  if (tokens.length === 0 || typeof NativeDaakShare.releaseMedia !== 'function') return;
+  try {
+    await NativeDaakShare.releaseMedia(JSON.stringify(tokens));
+  } catch {
+    // A grant that stays is a small cost. The send must not fail for it.
+  }
+}
+
 /** Raw JSON array of staged inbound items; `inbound.ts` (Task 5) parses it. */
 export async function consumePendingInbox(): Promise<string> {
   return NativeDaakShare.consumePendingInbox();

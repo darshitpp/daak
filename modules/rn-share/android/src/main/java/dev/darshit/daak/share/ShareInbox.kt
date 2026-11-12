@@ -34,23 +34,29 @@ object ShareInbox {
   private fun intentSendsDir(ctx: Context): File = File(dir(ctx), "intent-sends").apply { mkdirs() }
 
   /**
-   * Refuses a URI that is not content://, that has user info, or that names a
-   * provider of this app. A prefix such as `0@` in the authority hides the
-   * provider name from a text check, and the resolver then opens the provider
-   * of this app. The message holds no URI, because JavaScript can read it.
+   * The encoded authority of a foreign URI: an optional user prefix of digits
+   * only (Android adds `10@` to a share from another profile), then the host.
+   * No other `@` and no `%` can occur. `0%40pkg` decodes to `0@pkg`, and the
+   * resolver then strips the prefix and opens the provider of this app.
+   */
+  private val FOREIGN_AUTHORITY = Regex("""(?:\d+@)?([^@%]+)""")
+
+  /**
+   * Refuses a URI that is not content://, that has user info other than a
+   * digits-only user prefix, or that names a provider of this app. The checks
+   * for this app apply to the host after the prefix, because the resolver
+   * opens the provider of the host. The message holds no URI, because
+   * JavaScript can read it.
    */
   internal fun requireForeignContentUri(ctx: Context, uri: Uri) {
-    val authority = uri.authority
+    val match = uri.encodedAuthority?.let { FOREIGN_AUTHORITY.matchEntire(it) }
+    val host = uri.host
     if (uri.scheme != ContentResolver.SCHEME_CONTENT ||
-      authority == null ||
-      uri.userInfo != null ||
-      // The decoded authority too: `0%40pkg.fileprovider` decodes to `0@pkg...`, and
-      // the resolver strips the prefix and opens the provider of this app. A real
-      // authority holds no `@` and no `%`.
-      authority.contains('@') ||
-      uri.encodedAuthority?.let { it.contains('@') || it.contains('%') } == true ||
-      authority.startsWith(ctx.packageName) ||
-      isOwnProvider(ctx, authority)
+      match == null ||
+      host == null ||
+      match.groupValues[1] != host ||
+      host.startsWith(ctx.packageName) ||
+      isOwnProvider(ctx, host)
     ) {
       throw SecurityException("refused uri")
     }

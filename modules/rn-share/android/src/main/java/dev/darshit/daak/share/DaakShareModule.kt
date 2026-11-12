@@ -181,6 +181,36 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     }
   }
 
+  /**
+   * Give back the persisted read grants of sent media. Android keeps a limited
+   * count of grants and prunes the oldest. The oldest is often the tree grant of
+   * the download folder, so a grant that is not needed must go back.
+   * rn-share cannot read the download-folder setting of rn-fspaths. So this
+   * releases a token only when it is a content URI, the system lists it as a
+   * persisted grant, and it is not a tree URI. A tree URI is never a media token.
+   * A bad entry is ignored. Nothing is logged, because a token is user data.
+   */
+  override fun releaseMedia(tokensJson: String, promise: Promise) {
+    thread(name = "daak-release-media") {
+      try {
+        val tokens = JSONArray(tokensJson)
+        val held = ctx.contentResolver.persistedUriPermissions.map { it.uri }.toSet()
+        for (i in 0 until tokens.length()) {
+          try {
+            val uri = Uri.parse(tokens.get(i) as String)
+            if (uri.scheme != "content" || DocumentsContract.isTreeUri(uri) || uri !in held) continue
+            ctx.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          } catch (_: Throwable) {
+            // A bad entry or a grant that is already gone. The next token goes on.
+          }
+        }
+      } catch (_: Throwable) {
+        // The text is not a JSON array. Nothing is released.
+      }
+      promise.resolve(null)
+    }
+  }
+
   override fun consumePendingInbox(promise: Promise) = promise.resolve(ShareInbox.drainToJson(ctx))
 
   override fun consumeIntentSends(promise: Promise) =

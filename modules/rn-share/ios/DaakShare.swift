@@ -397,6 +397,14 @@ class DaakShare: NSObject {
 
   // App Group drain. Moves staged bytes OUT of the share-inbox and into the
   // app's Documents dir. It does NOT send: the engine outbox owns sending.
+  /// iOS holds no URI grants for picked media, so nothing is released. The
+  /// Spec is a shared contract, so the method must exist.
+  @objc func releaseMedia(_ tokensJson: String,
+                          resolve: @escaping RCTPromiseResolveBlock,
+                          reject: @escaping RCTPromiseRejectBlock) {
+    resolve(nil)
+  }
+
   @objc func consumePendingInbox(_ resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
     let fm = FileManager.default
     guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.darshit.daak") else {

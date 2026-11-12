@@ -21,6 +21,7 @@ RCT_EXTERN_METHOD(post:(NSString *)id
                   category:(NSString *)category
                   payloadJson:(NSString *)payloadJson
                   silent:(BOOL)silent
+                  thread:(NSString *)thread
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 

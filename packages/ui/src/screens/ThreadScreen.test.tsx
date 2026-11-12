@@ -1895,6 +1895,74 @@ describe('ThreadScreen add photos', () => {
     expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-a.jpg');
   });
 
+  // The final review (I3): Android keeps a read grant for each picked item.
+  // The grant must go back when the composer no longer needs the ref.
+  it('release is called with the sent tokens after a simple send resolves, not before', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    let finish: (v: { transferId: string; queued: boolean }) => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(() => new Promise((r) => { finish = r; }));
+    mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(release).not.toHaveBeenCalled();
+    await act(async () => { finish({ transferId: TID, queued: false }); });
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+  });
+
+  it('a rejected simple send releases nothing', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'send').mockRejectedValue(new Error('no'));
+    mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await screen.findByText('That send did not go through');
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('removing a staged ref releases it', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    expect(release).toHaveBeenCalledWith(['t-a.jpg']);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('unmounting with staged refs releases them', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    unmount();
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+  });
+
+  it('a release that rejects or throws breaks nothing', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(() => { throw new Error('sync'); });
+    mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    expect(screen.queryByText('a.jpg')).toBeNull();
+    release.mockRejectedValue(new Error('async'));
+    fireEvent.press(screen.getByTestId('remove-media-t-b.mov'));
+    await settle();
+    expect(screen.queryByText('b.mov')).toBeNull();
+  });
+
   it('a photo picked during the send stays staged after the send', async () => {
     const h = host();
     const engine = fakeEngine([peer]);
@@ -2020,6 +2088,22 @@ describe('ThreadScreen large selection', () => {
     expect(h.media.materialize).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByText('a.jpg')).toBeNull());
     expect(screen.queryByText('b.mov')).toBeNull();
+  });
+
+  it('a large send does not release the refs: the driver owns them, also after an unmount', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    let finish: () => void = () => {};
+    h.media.startLarge.mockImplementation(() => new Promise<void>((r) => { finish = r; }));
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => { finish(); });
+    await settle();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it('a large selection also sends the plain files and the note once', async () => {
@@ -2149,12 +2233,13 @@ describe('ThreadScreen batch row', () => {
       stop: jest.fn(extra.stop ?? (async () => {})),
       subscribe: jest.fn((cb: (peerId: string) => void) => { subs.add(cb); return () => { subs.delete(cb); unsub(); }; }),
     };
-    const utils = mount(fakeEngine([peer]), { batch });
+    const engine = fakeEngine([peer]);
+    const utils = mount(engine, { batch });
     const set = (n: BatchRowStatus | null, peerId = peer.deviceId) => {
       current = n;
       act(() => { subs.forEach((cb) => cb(peerId)); });
     };
-    return { batch, subs, unsub, set, ...utils };
+    return { batch, subs, unsub, set, engine, ...utils };
   }
 
   it('no row without a plan', async () => {
@@ -2224,6 +2309,52 @@ describe('ThreadScreen batch row', () => {
     await act(async () => { finish(); });
     await act(async () => { fireEvent.press(screen.getByTestId('batch-stop')); });
     expect(batch.stop).toHaveBeenCalledWith(peer.deviceId);
+  });
+
+  // D7: the bytes of the batch on the wire move the bar, and the row says why
+  // when it has no speed.
+  it('the running row adds the live bytes of the batch transfer to the bar', async () => {
+    const { engine } = mountBatch(plan({ bytesDone: 50, bytesTotal: 200, transferId: TID }));
+    await screen.findByTestId('batch-bar');
+    expect(screen.getByTestId('batch-bar').props.accessibilityValue.now).toBe(25);
+    emit(engine, { type: 'transfer.progress', transferId: TID, bytesDone: 50, bytesTotal: 100 } as DaakEvent);
+    expect(screen.getByTestId('batch-bar').props.accessibilityValue.now).toBe(50);
+  });
+
+  it('a running row with no transfer on the wire says that the next batch is in preparation', async () => {
+    mountBatch(plan());
+    expect(await screen.findByText('Daak prepares the next batch.')).toBeTruthy();
+  });
+
+  it('a running row with a transfer and no speed yet says so', async () => {
+    mountBatch(plan({ transferId: TID }));
+    expect(await screen.findByText('No speed yet.')).toBeTruthy();
+  });
+
+  it('a running row with a transfer and an offline peer says that Daak waits for the peer', async () => {
+    const off: DeviceInfo = { ...peer, online: false, presence: 'offline' };
+    const batch = {
+      status: jest.fn(() => plan({ transferId: TID })),
+      retry: jest.fn(async () => {}),
+      stop: jest.fn(async () => {}),
+      subscribe: jest.fn(() => () => {}),
+    };
+    mount(fakeEngine([off]), { batch });
+    expect(await screen.findByText('Daak waits for Pixel 9.')).toBeTruthy();
+  });
+
+  it('the running row has a Stop that calls stop with the peer id and is disabled while the call runs', async () => {
+    let finish: () => void = () => {};
+    const { batch } = mountBatch(plan(), { stop: () => new Promise<void>((r) => { finish = r; }) });
+    const btn = await screen.findByTestId('batch-stop-running');
+    expect(screen.queryByTestId('batch-retry')).toBeNull();
+    fireEvent.press(btn);
+    expect(batch.stop).toHaveBeenCalledWith(peer.deviceId);
+    expect(screen.getByTestId('batch-stop-running')).toBeDisabled();
+    fireEvent.press(screen.getByTestId('batch-stop-running'));
+    expect(batch.stop).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(); });
+    expect(screen.getByTestId('batch-stop-running')).not.toBeDisabled();
   });
 
   it('the row updates when the subscribe callback fires and unsubscribes on unmount', async () => {

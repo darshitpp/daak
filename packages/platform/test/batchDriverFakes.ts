@@ -3,7 +3,7 @@
 // returns the row that exists, as the derived payload id does in the real
 // engine. The batch total m is not part of the key, as in the real engine.
 import { vi } from 'vitest';
-import type { SendRequest, TransferSummary } from '@daak/core';
+import type { DeviceInfo, SendRequest, TransferSummary } from '@daak/core';
 import { createBatchDriver, type BatchDriverDeps } from '../src/batchDriver';
 import { GIB } from '../src/planBatches';
 
@@ -48,9 +48,11 @@ export function fakeEngine() {
       const r = rows.get(id);
       if (r) r.state = 'canceled';
     }),
-    devices: vi.fn(async () => [
-      { deviceId: PEER, name: 'p', addr: '', paired: true },
-      { deviceId: PEER2, name: 'q', addr: '', paired: true },
+    // Both peers are online unless a test says other. A failed batch of an
+    // offline peer waits for the peer (D5).
+    devices: vi.fn(async (): Promise<DeviceInfo[]> => [
+      { deviceId: PEER, name: 'p', addr: '', paired: true, online: true, presence: 'online' },
+      { deviceId: PEER2, name: 'q', addr: '', paired: true, online: true, presence: 'online' },
     ]),
     saveSendPlan: vi.fn(async (peer: string, share: string, json: string) => {
       plans.set(`${peer}|${share}`, json);

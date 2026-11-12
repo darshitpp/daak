@@ -4,7 +4,9 @@ import { safeName } from '@daak/rn-notify/js/actions';
 
 // A large selection is sent as several batches. Each batch is one transfer. This
 // module shows ONE notification for the whole share. The notification is silent
-// while batches arrive. It plays the sound once, at the end.
+// while batches arrive. It plays the sound once: at the end, or when the
+// 3-minute timer fires first. A batch can be up to 4 GiB, so a gap above
+// 3 minutes is normal. The timer does not end the share: the count goes on.
 //
 // The sender is not trusted. `m` comes from the first batch only. The count
 // comes from the files that this device saved, never from the tag.
@@ -13,6 +15,8 @@ const TIMEOUT_MS = 3 * 60_000;
 const SOUND_GAP_MS = 10_000;
 const MAX_OPEN_SHARES = 32;
 const MAX_OPEN_PER_PEER = 8;
+// A batch that comes again after its share closed (a lost ACK) is ignored.
+const MAX_CLOSED = 32;
 // The notification payload goes into 3 Android PendingIntent extras (Binder).
 // A share of thousands of files would overflow it. The count line is exact.
 // The Share button acts on at most this many files.
@@ -36,17 +40,22 @@ interface Open {
   peer: string;
   entry: InboxEntry;
   deviceName?: string;
-  timer: ReturnType<typeof setTimeout>;
+  /** True after the sound played. Then no new timer starts. */
+  sounded: boolean;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 // A Map keeps the order of insertion, so the first key is the oldest share.
 const open = new Map<string, Open>();
 const lastSound = new Map<string, number>();
+// A Set keeps the order of insertion, so the first value is the oldest id.
+const closed = new Set<string>();
 
 export function resetShareNotifierForTests(): void {
   for (const s of open.values()) clearTimeout(s.timer);
   open.clear();
   lastSound.clear();
+  closed.clear();
 }
 
 function parseTag(entry: InboxEntry): { k: number; m: number } | null {
@@ -73,7 +82,7 @@ async function postShare(key: string, s: Open, wantSound: boolean, now: number):
     }
   }
   try {
-    await notifyReceived({ ...s.entry, savedPaths: s.paths }, line(s.count, s.deviceName), { key, silent });
+    await notifyReceived({ ...s.entry, savedPaths: s.paths }, line(s.count, s.deviceName), { key, silent, thread: key });
   } catch {
     // The facade logs a failed post. A lost banner must not break the pipeline.
   }
@@ -96,6 +105,7 @@ export async function onReceived(
   }
   const id = `${entry.peerDeviceId}:${entry.share}`;
   const key = `share:${id}`;
+  if (closed.has(id)) return;
   let s = open.get(id);
   if (!s) {
     const evict = (id: string) => {
@@ -122,7 +132,7 @@ export async function onReceived(
       paths: [],
       peer: entry.peerDeviceId,
       entry,
-      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+      sounded: false,
     };
     open.set(id, s);
   } else if (tag.m !== s.m || s.ks.has(tag.k)) {
@@ -136,17 +146,25 @@ export async function onReceived(
   s.entry = entry;
   s.deviceName = extra.deviceName ?? s.deviceName;
   clearTimeout(s.timer);
+  s.timer = undefined;
   if (s.ks.size >= s.m) {
     open.delete(id);
-    await postShare(key, s, true, now);
+    closed.add(id);
+    if (closed.size > MAX_CLOSED) closed.delete(closed.values().next().value as string);
+    // The sound plays once for each share. The timer can play it first.
+    await postShare(key, s, !s.sounded, now);
     return;
   }
-  const state = s;
-  state.timer = setTimeout(() => {
-    // The last batch did not come. Play the sound with the count so far.
-    if (open.get(id) !== state) return;
-    open.delete(id);
-    void postShare(key, state, true, Date.now());
-  }, TIMEOUT_MS);
+  if (!s.sounded) {
+    const state = s;
+    state.timer = setTimeout(() => {
+      // The next batch did not come in 3 minutes. Play the sound with the
+      // count so far. Keep the state: a later batch adds to the count.
+      state.timer = undefined;
+      if (open.get(id) !== state) return;
+      state.sounded = true;
+      void postShare(key, state, true, Date.now());
+    }, TIMEOUT_MS);
+  }
   await postShare(key, s, false, now);
 }

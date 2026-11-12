@@ -143,6 +143,7 @@ final class DaakNotify: RCTEventEmitter {
   @objc func post(_ id: String, title: String, body: String, category: String,
                   payloadJson: String,
                   silent: Bool,
+                  thread: String,
                   resolve: @escaping RCTPromiseResolveBlock,
                   reject: @escaping RCTPromiseRejectBlock) {
     let center = UNUserNotificationCenter.current()
@@ -162,6 +163,8 @@ final class DaakNotify: RCTEventEmitter {
       // post with the same `id` replaces the delivered notification.
       content.sound = silent ? nil : .default
       content.categoryIdentifier = category
+      // The batches of one share form one thread in Notification Center.
+      if !thread.isEmpty { content.threadIdentifier = thread }
       // userInfo must be property-list shaped, so the JSON travels as a String
       // and is handed back to JS unchanged.
       content.userInfo = ["payload": payloadJson]

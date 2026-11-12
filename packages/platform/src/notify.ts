@@ -93,7 +93,8 @@ export async function initNotifications(known?: boolean): Promise<boolean> {
 export async function notifyReceived(
   entry: InboxEntry,
   text?: { title: string; body: string } | null,
-  options?: { key?: string; silent?: boolean },
+  /** `thread` groups the posts of one share on iOS. */
+  options?: { key?: string; silent?: boolean; thread?: string },
 ): Promise<void> {
   // `loadNotifyPrefs` never rejects. A pref that is off posts nothing, which
   // costs a banner and never a transfer (R36). The OS permission is a second,
@@ -109,8 +110,10 @@ export async function notifyReceived(
     DAK_RECEIVED_CATEGORY,
     JSON.stringify(entry),
     options?.silent ?? false,
-  ).catch((err: unknown) => {
-    console.warn(`daak: no notification for ${key}: ${String(err)}`);
+    options?.thread ?? '',
+  ).catch(() => {
+    // A fixed text. The key names a peer and a share, and the error can hold more.
+    console.warn('daak: a received notification was not posted');
   });
 }
 
@@ -133,6 +136,7 @@ export async function notifyFailedSend(notice: FailedSendNotice): Promise<void> 
     DAK_FAILED_CATEGORY,
     JSON.stringify({ transferId: notice.transferId, peerDeviceId: notice.peerDeviceId }),
     false,
+    '',
   ).catch((err: unknown) => {
     console.warn(`daak: no notification for ${id}: ${String(err)}`);
   });

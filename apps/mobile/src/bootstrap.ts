@@ -15,6 +15,7 @@ import {
   onNotificationAction,
   presentShare,
   realReceiveDeps,
+  releaseMedia,
   relocateReceivedFiles,
   routeInboxEntry,
   startTransferForeground,
@@ -314,8 +315,8 @@ export async function startEngine(): Promise<void> {
   const inFlight = new Set<string>();
   driver ??= createBatchDriver({
     engine,
-    // The native `release` comes later. Without it the driver keeps the access to the sources.
-    media: { materialize: materializeMedia, discard: discardPickedCopy, freeBytes },
+    // `release` gives back the Android read grants of the sources when a plan ends.
+    media: { materialize: materializeMedia, discard: discardPickedCopy, freeBytes, release: releaseMedia },
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
     randomShare,
     setInterval: (fn, ms) => setInterval(fn, ms),

@@ -7,6 +7,7 @@ vi.mock('@daak/rn-share', () => ({
     pickFolder: vi.fn(async () => '/tmp/dir'),
     pickMedia: vi.fn(async () => '[]'),
     materialize: vi.fn(async () => '/cache/daak-send/U1/a.mp4'),
+    releaseMedia: vi.fn(async () => {}),
     consumePendingInbox: vi.fn(async () => '[]'),
     addListener: () => {},
     removeListeners: () => {},
@@ -21,6 +22,7 @@ import {
   pickFolder,
   pickMedia,
   presentShare,
+  releaseMedia,
 } from './share';
 
 const native = vi.mocked(DaakShare);
@@ -237,5 +239,32 @@ describe('materializeMedia', () => {
     (native as { materialize?: unknown }).materialize = undefined;
     await expect(materializeMedia('t')).rejects.toThrow(/materialize/);
     (native as { materialize?: unknown }).materialize = saved;
+  });
+});
+
+describe('releaseMedia', () => {
+  const releaseMock = native as unknown as { releaseMedia: ReturnType<typeof vi.fn> };
+
+  it('passes the tokens to the native module as JSON text', async () => {
+    await releaseMedia(['content://media/1', 'content://media/2']);
+    expect(releaseMock.releaseMedia).toHaveBeenLastCalledWith('["content://media/1","content://media/2"]');
+  });
+
+  it('calls nothing for an empty list', async () => {
+    releaseMock.releaseMedia.mockClear();
+    await releaseMedia([]);
+    expect(releaseMock.releaseMedia).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the native call rejects', async () => {
+    releaseMock.releaseMedia.mockRejectedValueOnce(new Error('no'));
+    await expect(releaseMedia(['content://media/1'])).resolves.toBeUndefined();
+  });
+
+  it('resolves when the native module lacks the method', async () => {
+    const saved = releaseMock.releaseMedia;
+    (native as { releaseMedia?: unknown }).releaseMedia = undefined;
+    await expect(releaseMedia(['t'])).resolves.toBeUndefined();
+    (native as { releaseMedia?: unknown }).releaseMedia = saved;
   });
 });

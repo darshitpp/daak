@@ -524,7 +524,8 @@ describe('the Android post can be silent and can replace a notification in place
 describe('the native notify spec has the silent parameter', () => {
   const spec = read('../../../../modules/rn-notify/js/NativeDaakNotify.ts');
 
-  it('post has a sixth parameter silent: boolean', () => {
-    expect(spec).toMatch(/post\(id: string, title: string, body: string, category: string, payloadJson: string, silent: boolean\): Promise<void>/);
+  // D1 added a seventh parameter, thread: string, after silent.
+  it('post has a sixth parameter silent: boolean and a seventh parameter thread: string', () => {
+    expect(spec).toMatch(/post\(id: string, title: string, body: string, category: string, payloadJson: string, silent: boolean, thread: string\): Promise<void>/);
   });
 });

@@ -27,6 +27,8 @@ export type PlanStatus = {
   remaining: number;
   bytesDone: number;
   bytesTotal: number;
+  /** The transfer of the current batch while it is on the wire. Its progress events give the live bytes. */
+  transferId?: string;
 };
 
 export type BatchDriverDeps = {
@@ -93,6 +95,12 @@ type Entry = {
   stopped: boolean;
   /** True while a poll check of this plan is queued or runs. */
   polling: boolean;
+  /**
+   * True while a failed batch waits for its peer. The outbox gives up after
+   * about 37 minutes of failed attempts. A batch must not need a Retry only
+   * because the peer was away. In memory only: a resume reads the state again.
+   */
+  waitPeer?: boolean;
 };
 
 export const POLL_MS = 15_000;
@@ -328,10 +336,14 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
           batch: `${cur.index}/${cur.of}`,
           attempt,
         }));
-      } catch {
+      } catch (err) {
         // The engine can make the row and then reject. Keep `sending`: the
         // retry uses the same attempt, so it finds that row or makes it once.
         await discardAll(paths);
+        // A full disk while the engine stages the copy (STAGE_NO_SPACE in
+        // daak-core). The user frees space and taps Retry.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/\bNO_SPACE\b/.test(msg)) return await pause(p, 'NO_SPACE', cur.bytes + GIB);
         return await pause(p, 'FAILED');
       }
       // The engine staged the files. The copies are not needed now.
@@ -397,6 +409,7 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     if (state === undefined) return;
     if (p.paused !== null && state !== 'done') return;
     if (state === 'done') {
+      e.waitPeer = false;
       p.paused = null;
       p.inflight = null;
       p.attempt = 0;
@@ -406,13 +419,54 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
       changed(p.peerId);
       return runBatch(e);
     }
-    if (state === 'failed') return pause(p, 'FAILED');
+    if (state === 'failed') return failed(e, transferId);
     if (state === 'canceled') return pause(p, 'CANCELED');
     if (state === null) {
       p.sending = p.inflight.attempt;
       p.inflight = null;
       return runBatch(e);
     }
+  }
+
+  // True when the peer is online, false when it is not, undefined when the
+  // engine does not answer.
+  async function peerOnline(peerId: string): Promise<boolean | undefined> {
+    try {
+      const d = (await engine.devices()).find((x) => x.deviceId === peerId);
+      if (!d) return false;
+      return d.presence !== undefined ? d.presence === 'online' : d.online === true;
+    } catch {
+      log('batch driver: the device list failed');
+      return undefined;
+    }
+  }
+
+  // A failed batch. While the peer is not online the batch waits: the poll and
+  // the online event check it again. When the peer comes online after a wait,
+  // the row is re-armed once. A failure while the peer is online pauses FAILED.
+  async function failed(e: Entry, transferId: string): Promise<void> {
+    const p = e.plan!;
+    const on = await peerOnline(p.peerId);
+    if (on === undefined) return;
+    if (!on) {
+      if (!e.waitPeer) {
+        e.waitPeer = true;
+        log('batch driver: a failed batch waits for its peer');
+        changed(p.peerId);
+      }
+      return;
+    }
+    if (e.waitPeer) {
+      e.waitPeer = false;
+      try {
+        await engine.retry(transferId);
+        changed(p.peerId);
+        return;
+      } catch {
+        log('batch driver: the re-arm after the wait failed');
+      }
+    }
+    return pause(p, 'FAILED');
   }
 
   async function start(peerId: string, refs: MediaRef[]): Promise<{ share: string }> {
@@ -461,6 +515,16 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
   }
 
   function onEvent(event: DaakEvent): void {
+    // A peer that comes online ends the wait of a failed batch at once.
+    if (
+      (event.type === 'device.state' && event.state === 'online') ||
+      (event.type === 'device.presence' && event.presence === 'online')
+    ) {
+      const e = entries.get(event.deviceId);
+      const id = e?.plan?.inflight?.transferId;
+      if (e && e.waitPeer && id !== undefined) void step(e, () => check(e, id));
+      return;
+    }
     if (event.type !== 'transfer.done' && event.type !== 'transfer.failed') return;
     for (const e of entries.values()) {
       if (e.plan?.inflight?.transferId === event.transferId) {
@@ -490,6 +554,13 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
         } catch {
           // The staged file can be gone. Send the batch again below.
           log('batch driver: the engine retry failed');
+          // The new send has a new id. The cancel makes the engine remove the
+          // staged batch of the old failed row. Best effort.
+          try {
+            await engine.cancel(id);
+          } catch {
+            log('batch driver: the cancel of the old row failed');
+          }
         }
       } else if (id !== undefined && state !== null && state !== 'canceled') {
         // The row is alive again. Read it as a poll does.
@@ -542,6 +613,7 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
       bytesDone: sum(p.batches.slice(0, p.cursor - 1)),
       bytesTotal: sum(p.batches),
     };
+    if (p.inflight !== null) s.transferId = p.inflight.transferId;
     if (p.paused) {
       s.error = p.paused.error;
       if (p.paused.neededBytes !== undefined) s.neededBytes = p.paused.neededBytes;

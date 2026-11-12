@@ -246,7 +246,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
     promise.resolve(null)
   }
 
-  override fun post(id: String, title: String, body: String, category: String, payloadJson: String, silent: Boolean, promise: Promise) {
+  // `thread` is for iOS only. Android replaces the notification of a share in
+  // place under the same id, so a share has one notification and no group.
+  override fun post(id: String, title: String, body: String, category: String, payloadJson: String, silent: Boolean, thread: String, promise: Promise) {
     // R36: no permission means no banner, not a broken receive. Resolving rather
     // than rejecting is what keeps a denied permission off the inbox path.
     if (!notificationsEnabled()) {
@@ -332,6 +334,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
   // The body tap launches an activity directly. A receiver that a notification
   // tap triggers cannot start an activity when the app targets Android 12 or
   // higher. The old broadcast route therefore left the app closed.
+  // FLAG_UPDATE_CURRENT: a share notification is posted again under the same
+  // id with a new count and new paths. Without the flag Android keeps the
+  // extras of the first PendingIntent. The creator can update an IMMUTABLE one.
   private fun openPending(id: String, payload: String): PendingIntent {
     val intent = Intent(ctx, ShareTrampolineActivity::class.java).apply {
       action = ACTION_OPEN
@@ -340,7 +345,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
       putExtra(EXTRA_PAYLOAD, payload)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    return PendingIntent.getActivity(ctx, (id + ":" + ACTION_OPEN).hashCode(), intent, IMMUTABLE)
+    return PendingIntent.getActivity(ctx, (id + ":" + ACTION_OPEN).hashCode(), intent, IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   }
 
   private fun actionPending(id: String, action: String, payload: String): PendingIntent {
@@ -350,7 +355,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
       putExtra(EXTRA_ID, id)
       putExtra(EXTRA_PAYLOAD, payload)
     }
-    return PendingIntent.getBroadcast(ctx, (id + ":" + action).hashCode(), intent, IMMUTABLE)
+    return PendingIntent.getBroadcast(ctx, (id + ":" + action).hashCode(), intent, IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   }
 
   /**

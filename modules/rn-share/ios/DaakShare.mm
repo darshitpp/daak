@@ -9,6 +9,8 @@ RCT_EXTERN_METHOD(pickFolder:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseR
 RCT_EXTERN_METHOD(pickMedia:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(materialize:(NSString *)token
                   resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(releaseMedia:(NSString *)tokensJson
+                  resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(consumePendingInbox:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(consumeIntentSends:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(updateShortcutTargets:(NSString *)devicesJson

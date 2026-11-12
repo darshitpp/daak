@@ -85,6 +85,12 @@ export type MediaHost = {
    * first batch is copied. Without it the composer shows a toast for such a selection.
    */
   startLarge?: (peerId: string, refs: MediaRef[]) => Promise<void>;
+  /**
+   * Give back the access to the sources of refs that left the composer
+   * (Android read grants). Best effort. A large send does not call it: the
+   * driver releases its refs when the plan ends.
+   */
+  release?: (tokens: string[]) => Promise<void>;
 };
 
 /** The state of a large send. The fields are the same as the fields of the platform plan status. */
@@ -99,6 +105,8 @@ export type BatchRowStatus = {
   remaining: number;
   bytesDone: number;
   bytesTotal: number;
+  /** The transfer of the current batch while it is on the wire. */
+  transferId?: string;
 };
 
 /** The host side of the batch row. The host owns the driver. */
@@ -334,9 +342,13 @@ export function ThreadScreen({
   }, [batch, peerDeviceId]);
   const batchSt = batch ? batch.status(peerDeviceId) : null;
   const batchRunning = batchSt !== null && !batchSt.paused;
-  const batchSpeed = useTransferSpeed(batchSt?.share ?? '', batchSt?.bytesDone ?? 0, batchSt?.bytesTotal ?? 0, batchRunning).text;
+  // The status counts the finished batches only. The progress events of the
+  // batch on the wire add the live bytes, so the bar and the speed move.
+  const batchLive = batchSt?.transferId !== undefined ? progress[batchSt.transferId]?.done ?? 0 : 0;
+  const batchDone = (batchSt?.bytesDone ?? 0) + batchLive;
+  const batchSpeed = useTransferSpeed(batchSt?.share ?? '', batchDone, batchSt?.bytesTotal ?? 0, batchRunning).text;
   const batchPct = batchSt !== null && batchSt.bytesTotal > 0
-    ? Math.round(Math.max(0, Math.min(1, batchSt.bytesDone / batchSt.bytesTotal)) * 100)
+    ? Math.round(Math.max(0, Math.min(1, batchDone / batchSt.bytesTotal)) * 100)
     : null;
   const batchCall = async (fn: ((peerId: string) => Promise<void> | void) | undefined) => {
     if (!fn || batchBusy) return;
@@ -410,11 +422,28 @@ export function ThreadScreen({
     discardPickedCopy(path).catch(() => {});
   }, [discardPickedCopy]);
 
-  // The staged copies go with the composer.
+  // Best effort. A host error must not break the composer.
+  const release = (tokens: string[]) => {
+    if (tokens.length === 0 || !media?.release) return;
+    try {
+      media.release(tokens).catch(() => {});
+    } catch {
+      // See above.
+    }
+  };
+
+  // The staged copies go with the composer. The staged refs give back their
+  // access, except the refs of a large send that is starting: the driver owns them.
   const discardRef = useRef(discard);
   discardRef.current = discard;
+  const releaseRef = useRef(release);
+  releaseRef.current = release;
+  const refsNow = useRef<MediaRef[]>([]);
+  refsNow.current = mediaRefs;
+  const largeTokens = useRef<Set<string>>(new Set());
   useEffect(() => () => {
     for (const p of [...copies.current]) if (!inFlight.current.has(p)) discardRef.current(p);
+    releaseRef.current(refsNow.current.map((r) => r.token).filter((t) => !largeTokens.current.has(t)));
   }, []);
 
   const loadOlder = async () => {
@@ -670,7 +699,11 @@ export function ThreadScreen({
           sendFiles.forEach(discard);
           setFiles([]);
           // In large mode the refs leave only after startLarge works (below).
-          if (!large) setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
+          if (!large) {
+            setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
+            // The engine has its own copies now. The sources are not needed.
+            release([...sentTokens]);
+          }
           setSizes({});
           setFolders({});
         }
@@ -679,11 +712,16 @@ export function ThreadScreen({
           setText('');
         }
         if (large && media?.startLarge) {
+          sentTokens.forEach((t) => largeTokens.current.add(t));
           try {
             await media.startLarge(peerDeviceId, sentRefs);
           } catch (e) {
             if (alive.current) setPickError(largeSendError(e));
+            // A closed screen keeps no refs, so their access goes now.
+            else release([...sentTokens]);
             return;
+          } finally {
+            sentTokens.forEach((t) => largeTokens.current.delete(t));
           }
           setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
         }
@@ -1015,7 +1053,17 @@ export function ThreadScreen({
                 <View style={[ui.barFill, { width: `${batchPct}%` }]} />
               </View>
             )}
-            {batchSpeed === null ? null : <Text style={ui.hint} numberOfLines={1}>{batchSpeed}</Text>}
+            <Text style={ui.hint} numberOfLines={1} testID="batch-speed">
+              {batchSpeed
+                ?? (batchSt.transferId === undefined
+                  ? 'Daak prepares the next batch.'
+                  : device && presenceOf(device).rank >= 2
+                    ? `Daak waits for ${name}.`
+                    : 'No speed yet.')}
+            </Text>
+            <View style={ui.row}>
+              <Btn label="Stop" variant="danger" disabled={batchBusy} onPress={() => void batchCall(batch?.stop)} testID="batch-stop-running" />
+            </View>
           </View>
         )}
       </ScrollView>
@@ -1068,7 +1116,10 @@ export function ThreadScreen({
               {mediaRefs.map((r) => (
                 <Pressable
                   key={r.token}
-                  onPress={() => setMediaRefs((cur) => cur.filter((x) => x.token !== r.token))}
+                  onPress={() => {
+                    setMediaRefs((cur) => cur.filter((x) => x.token !== r.token));
+                    release([r.token]);
+                  }}
                   disabled={sending}
                   accessibilityRole="button"
                   accessibilityLabel={`Remove ${r.name}`}

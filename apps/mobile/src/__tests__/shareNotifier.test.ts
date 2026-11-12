@@ -52,8 +52,8 @@ describe('onReceived', () => {
     await onReceived(tagged(1, 3), 2, 0, { deviceName: 'Pixel' });
     await onReceived(tagged(2, 3), 3, 1, { deviceName: 'Pixel' });
     expect(post).toHaveBeenCalledTimes(2);
-    expect(opts(0)).toEqual({ key: `share:peer1:${SHARE}`, silent: true });
-    expect(opts(1)).toEqual({ key: `share:peer1:${SHARE}`, silent: true });
+    expect(opts(0)).toEqual({ key: `share:peer1:${SHARE}`, silent: true, thread: `share:peer1:${SHARE}` });
+    expect(opts(1)).toEqual({ key: `share:peer1:${SHARE}`, silent: true, thread: `share:peer1:${SHARE}` });
     expect(body(0)).toBe('Received 2 files from Pixel');
     expect(body(1)).toBe('Received 5 files from Pixel');
   });
@@ -63,9 +63,51 @@ describe('onReceived', () => {
     await onReceived(tagged(2, 2), 1, 1);
     expect(post).toHaveBeenCalledTimes(2);
     expect(opts(1)?.silent).toBe(false);
-    // The share starts again from zero.
-    await onReceived(tagged(1, 2), 4, 2);
-    expect(body(2)).toContain('Received 4 files');
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('three batches with gaps above 3 minutes give one count of all files and one sound', async () => {
+    const gap = 3 * 60_000 + 1;
+    await onReceived(tagged(1, 3), 100, Date.now(), { deviceName: 'Pixel' });
+    await jest.advanceTimersByTimeAsync(gap);
+    await onReceived(tagged(2, 3), 100, Date.now(), { deviceName: 'Pixel' });
+    await jest.advanceTimersByTimeAsync(gap);
+    await onReceived(tagged(3, 3), 100, Date.now(), { deviceName: 'Pixel' });
+    await jest.advanceTimersByTimeAsync(10 * 60_000);
+    const sounds = post.mock.calls.filter((c) => c[2]?.silent === false);
+    expect(sounds).toHaveLength(1);
+    expect(body(post.mock.calls.length - 1)).toBe('Received 300 files from Pixel');
+    expect(post.mock.calls.every((c) => c[2]?.key === `share:peer1:${SHARE}`)).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('a batch sent again after the share closed changes nothing', async () => {
+    await onReceived(tagged(1, 2), 3, 0);
+    await onReceived(tagged(2, 2), 4, 1);
+    expect(post).toHaveBeenCalledTimes(2);
+    await onReceived(tagged(2, 2), 1, 2);
+    await onReceived(tagged(1, 2), 1, 3);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(body(1)).toContain('Received 7 files');
+  });
+
+  it('after the timer fired the share keeps its count and the last batch posts silent', async () => {
+    await onReceived(tagged(1, 3), 2, Date.now(), { deviceName: 'Pixel' });
+    await jest.advanceTimersByTimeAsync(3 * 60_000);
+    expect(opts(1)?.silent).toBe(false);
+    await jest.advanceTimersByTimeAsync(20_000);
+    await onReceived(tagged(2, 3), 3, Date.now(), { deviceName: 'Pixel' });
+    expect(opts(2)?.silent).toBe(true);
+    expect(body(2)).toBe('Received 5 files from Pixel');
+    // The timer fires once only. No new timer starts after the sound.
+    expect(jest.getTimerCount()).toBe(0);
+    // The last batch comes more than 10 s after the sound. It stays silent.
+    await jest.advanceTimersByTimeAsync(20_000);
+    await onReceived(tagged(3, 3), 4, Date.now(), { deviceName: 'Pixel' });
+    expect(opts(3)?.silent).toBe(true);
+    expect(body(3)).toBe('Received 9 files from Pixel');
+    expect(post).toHaveBeenCalledTimes(4);
   });
 
   it('batches that arrive out of order complete after the 3rd distinct k', async () => {
@@ -169,7 +211,7 @@ describe('onReceived', () => {
     expect(post).toHaveBeenCalledTimes(1);
     await jest.advanceTimersByTimeAsync(1);
     expect(post).toHaveBeenCalledTimes(2);
-    expect(opts(1)).toEqual({ key: `share:peer1:${SHARE}`, silent: false });
+    expect(opts(1)).toEqual({ key: `share:peer1:${SHARE}`, silent: false, thread: `share:peer1:${SHARE}` });
     expect(body(1)).toBe('Received 2 files from Pixel');
     expect(jest.getTimerCount()).toBe(0);
   });
