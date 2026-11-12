@@ -32,6 +32,13 @@ impl Staging {
                 .create_new(true)
                 .open(&dest)
                 .map_err(|e| {
+                    // A full disk keeps its kind, so the caller can report NO_SPACE.
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+                    ) {
+                        return crate::CoreError::Io(e);
+                    }
                     // No name in the text: a log can hold it, and it is user data.
                     crate::CoreError::Transfer(format!("cannot stage an item: {e}"))
                 })?;

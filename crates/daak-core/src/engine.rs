@@ -3674,6 +3674,15 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
     // without this guard cancel would report success for a row that does not
     // exist. The guard is load-bearing, not defensive noise.
     let row = require_outbox(db, &transfer_id)?;
+    // D3: a failed row has no drain. Its staged files stay only for a manual
+    // retry. A cancel ends the row, so the staged files go now. Before this a
+    // cancel of a failed row did nothing, and the files stayed for ever: a
+    // failed row counts as live in the staging sweep.
+    if row.state == "failed" {
+        db.set_transfer_state(&transfer_id, "canceled")?;
+        db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
+        return staging.cleanup(&row.payload_id);
+    }
     let won = db.mark_outbox_terminal_failed(&transfer_id, "cancelled")?;
     // B2: the outbox UPDATE is guarded on state IN ('pending','sending'), so a
     // row that is already 'done' (delivered) or 'awaiting_ack' LOST the race and
@@ -4927,6 +4936,42 @@ mod tests {
             "canceled",
             "a canceled share must stay canceled, not become done"
         );
+    }
+
+    // D3: the batch driver sends a failed batch again under a new id when the
+    // engine retry fails. Its cancel of the old row must remove the staged
+    // files. A failed row has no drain, so nothing reads them after the cancel.
+    #[test]
+    fn cancelling_a_failed_row_removes_its_staged_files() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join("a.bin");
+        std::fs::write(&f, b"data").unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![
+                crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[f]).unwrap();
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        assert!(db.mark_outbox_terminal_failed(&id, "gave up").unwrap());
+        db.set_transfer_state(&id, "failed").unwrap();
+        assert!(staging.staged_path(&manifest.payload_id, 0).exists());
+
+        cancel_with(&db, &staging, id).unwrap();
+
+        assert!(!root.path().join(hex::encode(manifest.payload_id)).exists());
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "failed");
     }
 
     // B2 (2): cancelling an already-DELIVERED row must not relabel it. The
