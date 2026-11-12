@@ -856,7 +856,32 @@ export function ThreadScreen({
     );
   }
 
-  const removeChip = (p: string) => (
+  // A folder chip has two targets: the name opens the review sheet, the x removes the folder.
+  const folderChip = (p: string) => (
+    <View key={p} style={ui.chip}>
+      <Pressable
+        onPress={() => { Keyboard.dismiss(); setReviewing(true); }}
+        accessibilityRole="button"
+        accessibilityLabel={`Review ${base(p)}`}
+        testID={`open-${base(p)}`}
+      >
+        <Text style={ui.chipLabel} numberOfLines={1}>
+          {`${base(p)} · ${plural(folders[p].files, 'file', 'files')}`}
+        </Text>
+      </Pressable>
+      <Pressable
+        onPress={() => remove(p)}
+        accessibilityRole="button"
+        accessibilityLabel={`Remove ${base(p)}`}
+        testID={`remove-${base(p)}`}
+        hitSlop={8}
+      >
+        <Text style={ui.chipLabelOn}>×</Text>
+      </Pressable>
+    </View>
+  );
+
+  const removeChip = (p: string) => folders[p] ? folderChip(p) : (
     <Pressable
       key={p}
       onPress={() => remove(p)}
@@ -866,7 +891,7 @@ export function ThreadScreen({
       style={({ pressed }) => [ui.chip, pressed ? ui.pressed : null]}
     >
       <Text style={ui.chipLabel} numberOfLines={1}>
-        {folders[p] ? `${base(p)} · ${plural(folders[p].files, 'file', 'files')}` : base(p)}
+        {base(p)}
       </Text>
       <Text style={ui.chipLabelOn}>×</Text>
     </Pressable>

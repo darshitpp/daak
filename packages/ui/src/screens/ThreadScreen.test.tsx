@@ -1098,6 +1098,18 @@ describe('ThreadScreen folder staging', () => {
     await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
   });
 
+  it('opens the review sheet when you tap the folder name and keeps the folder', async () => {
+    const host = phone();
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('open-album'));
+    expect(await screen.findByTestId('review-remove-album')).toBeTruthy();
+    expect(screen.getByText('12 files · 34.0 MB')).toBeTruthy();
+    expect(host.discardPickedCopy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('remove-album')).toBeTruthy();
+  });
+
   it('lists a folder as one row in the review sheet', async () => {
     const host = phone();
     const fileSizes = jest.fn(async (p: string[]) => p.map(() => 1024));
