@@ -190,7 +190,7 @@ describe('SettingsScreen shows the name the user typed', () => {
 describe('SettingsScreen sections', () => {
   const dev = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online' as const, paired: true };
 
-  it('shows the seven sections in the design order', async () => {
+  it('shows the six sections in the design order', async () => {
     await renderAsync(
       <EngineProvider engine={fakeEngine([dev])}>
         <SettingsScreen
@@ -200,7 +200,7 @@ describe('SettingsScreen sections', () => {
         />
       </EngineProvider>,
     );
-    const titles = ['Device name', 'This device', 'Save files to', 'Arrival messages', 'Paired devices', 'Connection', 'About Daak'];
+    const titles = ['Device name', 'Save files to', 'Arrival messages', 'Paired devices', 'Connection', 'About Daak'];
     await screen.findByText('Pixel 9');
     const tree = JSON.stringify(screen.toJSON());
     const at = titles.map((t) => tree.indexOf(JSON.stringify(t).slice(1, -1)));
@@ -272,7 +272,7 @@ describe('SettingsScreen sections', () => {
     expect(screen.queryByTestId('toast')).toBeNull();
   });
 
-  it('shows the saved name and the presence switch in This device', async () => {
+  it('shows the saved name under Device name', async () => {
     const engine = fakeEngine([]);
     engine.selfProfile = async () => ({ name: 'Desk', baseName: 'Desk', deviceId: 'dd'.repeat(16) });
     await renderAsync(
@@ -281,9 +281,16 @@ describe('SettingsScreen sections', () => {
       </EngineProvider>,
     );
     expect(await screen.findByText('Saved as Desk')).toBeTruthy();
-    expect(screen.getByText('This device')).toBeTruthy();
-    expect(screen.getByText('Are you using this device right now?')).toBeTruthy();
-    expect(screen.getByText('Other devices see this Mac as On this network.')).toBeTruthy();
+  });
+
+  it('does not show the presence switch', async () => {
+    await renderAsync(
+      <EngineProvider engine={fakeEngine([])}>
+        <SettingsScreen deviceNoun="Mac" />
+      </EngineProvider>,
+    );
+    expect(screen.queryByTestId('switch-presence')).toBeNull();
+    expect(screen.queryByText('Are you using this device right now?')).toBeNull();
   });
 
   // Design v2: macOS keeps "Change folder". iPhone has no picker in the
@@ -321,6 +328,7 @@ describe('SettingsScreen sections', () => {
         <SettingsScreen settingsHost={{ appInfo: async () => ({ version: '1.2.3', build: '45' }) }} />
       </EngineProvider>,
     );
+    fireEvent.press(screen.getByTestId('about-toggle'));
     expect(await screen.findByText('Version 1.2.3 (build 45)')).toBeTruthy();
   });
 });

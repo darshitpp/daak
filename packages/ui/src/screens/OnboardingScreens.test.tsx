@@ -219,15 +219,19 @@ describe('Cant reach any devices', () => {
     expect(screen.queryByText('Looking on this Wi-Fi')).toBeNull();
   });
 
-  it('mounts the tips only once the disclosure is opened', () => {
+  // The row used to start closed. A closed row showed only its label, which
+  // read like a sentence that stops. It starts open and the user can close it.
+  it('shows the tips at first and hides them when the disclosure is closed', () => {
     render(<CantReachScreen onRetry={noop} onOpenSettings={noop} />);
-    expect(screen.queryByTestId('cant-reach-more')).toBeNull();
-    fireEvent.press(screen.getByTestId('cant-reach-more-toggle'));
     expect(screen.getByTestId('cant-reach-more')).toBeTruthy();
     expect(screen.getByText('Turn Wi-Fi off, then back on.')).toBeTruthy();
     expect(
       screen.getByText('Check the other devices are on this Wi-Fi, not a guest network or mobile data.'),
     ).toBeTruthy();
+    expect(screen.getByText('▾')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('cant-reach-more-toggle'));
+    expect(screen.queryByTestId('cant-reach-more')).toBeNull();
+    expect(screen.getByText('▸')).toBeTruthy();
   });
 });
 

@@ -1507,6 +1507,8 @@ mod tests {
             received_at: 0,
             saved_paths: "{not json".into(),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         };
         assert!(inbox_entry_json(&row)["savedPaths"].is_null());
         // A real empty list stays an empty list.
@@ -1531,6 +1533,8 @@ mod tests {
             received_at: 0,
             saved_paths: "[]".into(),
             group_roots: vec!["/out/album".into()],
+            share: None,
+            batch: None,
         };
         assert_eq!(
             inbox_entry_json(&row)["groupRoots"],

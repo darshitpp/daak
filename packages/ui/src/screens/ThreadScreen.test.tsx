@@ -1,13 +1,15 @@
 import React from 'react';
 import { Keyboard, KeyboardAvoidingView, ScrollView, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import type { DaakEngine, DaakEvent, DeviceInfo, TransferSummary } from '@daak/core';
 import { EngineProvider } from '../EngineContext';
 import { fakeEngine } from '../testing/fakeEngine';
 import { threadItem, threadPage } from '../testing/threadFixtures';
 import { ToastProvider } from '../components/Toast';
 import { Note } from '../components/ds';
-import { ThreadScreen, splitExt } from './ThreadScreen';
+import { ThreadScreen, splitExt, type MediaRef } from './ThreadScreen';
+import type { BatchRowStatus } from './ThreadScreen';
+import * as progressModule from '../state/progress';
 
 const peer: DeviceInfo = {
   deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '', online: true, presence: 'online', paired: true,
@@ -1096,6 +1098,18 @@ describe('ThreadScreen folder staging', () => {
     await waitFor(() => expect(host.discardPickedCopy).toHaveBeenCalledWith(COPY));
   });
 
+  it('opens the review sheet when you tap the folder name and keeps the folder', async () => {
+    const host = phone();
+    mount(fakeEngine([peer]), host);
+    await screen.findByText('Nothing here yet');
+    await stageFolder();
+    fireEvent.press(screen.getByTestId('open-album'));
+    expect(await screen.findByTestId('review-remove-album')).toBeTruthy();
+    expect(screen.getByText('12 files · 34.0 MB')).toBeTruthy();
+    expect(host.discardPickedCopy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('remove-album')).toBeTruthy();
+  });
+
   it('lists a folder as one row in the review sheet', async () => {
     const host = phone();
     const fileSizes = jest.fn(async (p: string[]) => p.map(() => 1024));
@@ -1386,5 +1400,1105 @@ describe('ThreadScreen folder staging', () => {
     fireEvent.press(screen.getByTestId('remove-album'));
     await settle();
     expect(discardPickedCopy).not.toHaveBeenCalled();
+  });
+});
+
+// Task 11 (A1, A9): the bubbles of a running transfer are progress bars.
+describe('ThreadScreen progress in the bubbles', () => {
+  afterEach(async () => { await settle(0); });
+
+  const MIB = 1024 * 1024;
+  // Three files of 10 MiB each, in one running transfer.
+  const files3 = (p: Partial<Parameters<typeof threadItem>[0]> = {}) =>
+    [0, 1, 2].map((i) => threadItem({
+      transferId: TID, itemIndex: i, type: 'file', text: null, name: `f${i}.bin`, size: 10 * MIB,
+      direction: 'out', state: 'pending', transferState: 'active', ...p,
+    }));
+  const fillOf = (i: number) => screen.queryByTestId(`bubble-fill-${TID}:${i}`);
+  const nowOf = (i: number) => fillOf(i)?.props.accessibilityValue?.now;
+  const progress = (engine: DaakEngine, bytesDone: number, bytesTotal = 30 * MIB) =>
+    emit(engine, { type: 'transfer.progress', transferId: TID, bytesDone, bytesTotal });
+
+  it('a running send fills its bubbles from transfer.progress', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    await waitFor(() => expect(nowOf(0)).toBe(100));
+    expect(nowOf(1)).toBe(50);
+    expect(nowOf(2)).toBe(0);
+    // Bytes above the sum and a total of 0 give no NaN and no fill above 100.
+    progress(engine, 99 * MIB, 0);
+    await waitFor(() => expect(nowOf(2)).toBe(100));
+    expect(nowOf(0)).toBe(100);
+  });
+
+  it('a running receive does the same', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ direction: 'in', state: 'receiving' })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 25 * MIB);
+    await waitFor(() => expect(nowOf(2)).toBe(50));
+    expect(nowOf(0)).toBe(100);
+    expect(nowOf(1)).toBe(100);
+    // A receiver cannot stop the send of the peer.
+    expect(screen.queryByTestId('thread-stop-' + TID)).toBeNull();
+  });
+
+  it('uses the summary bytes before the first progress event', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary({ bytesDone: 5 * MIB, bytesTotal: 30 * MIB })]);
+    mount(engine);
+    await waitFor(() => expect(nowOf(0)).toBe(50));
+  });
+
+  it('during the warm-up the meta line shows the percent only', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    expect(await screen.findByText('50%')).toBeTruthy();
+    expect(screen.getByText('100%')).toBeTruthy();
+    expect(screen.queryByText(/MiB\/s/)).toBeNull();
+  });
+
+  // The hook reads Date.now. The test moves the clock by hand.
+  const warm = async (engine: DaakEngine, clock: { now: number }) => {
+    for (let i = 1; i <= 5; i++) {
+      clock.now += 500;
+      progress(engine, i * 3 * MIB);
+    }
+  };
+
+  it('the meta line shows the percent and the speed after the warm-up', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    const clock = { now: 1_000_000 };
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try {
+      mount(engine);
+      await screen.findByText('f0.bin');
+      await warm(engine, clock);
+      // 15 MiB done: f0 is full, f1 fills at 50%.
+      expect(await screen.findByText(/^50% · \d+\.\d MiB\/s/)).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('speed shows only on the bubble that is filling', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    const clock = { now: 1_000_000 };
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try {
+      mount(engine);
+      await screen.findByText('f0.bin');
+      await warm(engine, clock);
+      await screen.findByText(/MiB\/s/);
+      expect(screen.getAllByText(/MiB\/s/)).toHaveLength(1);
+      expect(screen.getByText('100%')).toBeTruthy();
+      expect(screen.getByText('0%')).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a 3-file transfer shows one Stop sending, on the first running bubble', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3()));
+    // The old card is still on the screen. It must not add a second Stop.
+    jest.spyOn(engine, 'listTransfers').mockResolvedValue([summary()]);
+    const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
+    mount(engine);
+    await screen.findByTestId('thread-active-' + TID);
+    await screen.findByText('f0.bin');
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+    expect(within(screen.getByTestId(`bubble-${TID}:0`)).getByTestId('thread-stop-' + TID)).toBeTruthy();
+    fireEvent.press(screen.getByTestId('thread-stop-' + TID));
+    fireEvent.press(screen.getByTestId('confirm-stop'));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(TID));
+  });
+
+  it('a 40-file transfer shows one Stop sending', async () => {
+    const engine = fakeEngine([peer]);
+    const items = Array.from({ length: 40 }, (_, i) => threadItem({
+      transferId: TID, itemIndex: i, type: 'file', text: null, name: `g${i}.bin`, size: MIB,
+      direction: 'out', state: 'pending', transferState: 'active',
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(items));
+    mount(engine);
+    await screen.findByText('g39.bin');
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+  });
+
+  it('a running sent folder carries the one Stop and fills by files', async () => {
+    const engine = fakeEngine([peer]);
+    const items = files3({ group: null }).map((it, i) => ({
+      ...it, group: { name: 'album', rel: `f${i}.bin`, files: 3, bytes: 30 * MIB },
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(items));
+    mount(engine);
+    await screen.findByTestId(`bubble-folder-${TID}:album`);
+    progress(engine, 20 * MIB);
+    expect(await screen.findByText('2 of 3 files')).toBeTruthy();
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+    expect(within(screen.getByTestId(`bubble-folder-${TID}:album`)).getByTestId('thread-stop-' + TID)).toBeTruthy();
+  });
+
+  it('a cut item list draws no fill', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ truncated: true })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    await settle();
+    expect(fillOf(0)).toBeNull();
+    expect(fillOf(1)).toBeNull();
+    // Stop still shows, once.
+    expect(screen.getAllByTestId('thread-stop-' + TID)).toHaveLength(1);
+  });
+
+  it('keeps the fill on a transfer that just finished, so the fill fades out', async () => {
+    const engine = fakeEngine([peer]);
+    const list = jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ direction: 'in', state: 'receiving' })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 25 * MIB);
+    await waitFor(() => expect(nowOf(2)).toBe(50));
+    list.mockResolvedValue(threadPage(files3({ direction: 'in', state: 'done', transferState: 'done' })));
+    emit(engine, { type: 'transfer.done', transferId: TID } as DaakEvent);
+    await waitFor(() => expect(nowOf(2)).toBe(100));
+    expect(screen.queryByText('100%')).toBeNull();
+  });
+
+  it('a cut item list draws no fill after the transfer ends', async () => {
+    const engine = fakeEngine([peer]);
+    const list = jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ truncated: true })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    progress(engine, 15 * MIB);
+    list.mockResolvedValue(threadPage(files3({ truncated: true, state: 'done', transferState: 'done' })));
+    emit(engine, { type: 'transfer.done', transferId: TID } as DaakEvent);
+    await waitFor(() => expect(screen.queryByTestId('thread-stop-' + TID)).toBeNull());
+    expect(fillOf(0)).toBeNull();
+  });
+
+  // Fix round 1: a folder shows the speed of its transfer.
+  const inFolder = (items: ReturnType<typeof files3>, n = items.length) => items.map((it, i) => (i < n
+    ? { ...it, group: { name: 'album', rel: `f${i}.bin`, files: n, bytes: n * 10 * MIB } }
+    : it));
+  const withClock = async (body: (clock: { now: number }) => Promise<void>) => {
+    const clock = { now: 1_000_000 };
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try { await body(clock); } finally { spy.mockRestore(); }
+  };
+
+  it('a folder send shows the speed after the warm-up', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3())));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByTestId(`bubble-folder-${TID}:album`);
+      await warm(engine, clock);
+      expect(await screen.findByText(/^1 of 3 files · \d+\.\d MiB\/s/)).toBeTruthy();
+    });
+  });
+
+  it('a folder receive shows the speed after the warm-up', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3({ direction: 'in', state: 'receiving' }))));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByTestId(`bubble-folder-${TID}:album`);
+      await warm(engine, clock);
+      expect(await screen.findByText(/^1 of 3 files · \d+\.\d MiB\/s/)).toBeTruthy();
+    });
+  });
+
+  it('during the warm-up the folder shows the count only', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3())));
+    mount(engine);
+    await screen.findByTestId(`bubble-folder-${TID}:album`);
+    progress(engine, 15 * MIB);
+    expect(await screen.findByText('1 of 3 files')).toBeTruthy();
+    expect(screen.queryByText(/MiB\/s/)).toBeNull();
+  });
+
+  it('a mixed transfer shows the speed on the folder while the folder fills', async () => {
+    const engine = fakeEngine([peer]);
+    // Items 0 and 1 are in the folder. Item 2 is a loose file.
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3(), 2)));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByText('f2.bin');
+      await warm(engine, clock);
+      expect(await screen.findByText(/^1 of 2 files · \d+\.\d MiB\/s/)).toBeTruthy();
+      expect(screen.getAllByText(/MiB\/s/)).toHaveLength(1);
+      expect(screen.getByText('0%')).toBeTruthy();
+    });
+  });
+
+  it('a mixed transfer shows the speed on the loose file when the folder is full', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(inFolder(files3(), 2)));
+    await withClock(async (clock) => {
+      mount(engine);
+      await screen.findByText('f2.bin');
+      // 5 steps of 5 MiB: 25 MiB done. The folder is full, f2 fills at 50%.
+      for (let i = 1; i <= 5; i++) {
+        clock.now += 500;
+        progress(engine, i * 5 * MIB);
+      }
+      expect(await screen.findByText(/^50% · \d+\.\d MiB\/s/)).toBeTruthy();
+      expect(screen.getAllByText(/MiB\/s/)).toHaveLength(1);
+      expect(screen.getByText('2 of 2 files')).toBeTruthy();
+    });
+  });
+
+  // Fix round 1: one percent pass for each transfer, not one for each row.
+  it('computes the percents once for each transfer on each render', async () => {
+    const engine = fakeEngine([peer]);
+    const items = Array.from({ length: 50 }, (_, i) => threadItem({
+      transferId: TID, itemIndex: i, type: 'file', text: null, name: `h${i}.bin`, size: MIB,
+      direction: 'out', state: 'pending', transferState: 'active',
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(items));
+    const spy = jest.spyOn(progressModule, 'itemPercents');
+    try {
+      mount(engine);
+      await screen.findByText('h49.bin');
+      progress(engine, 10 * MIB, 50 * MIB);
+      await waitFor(() => expect(nowOf(9)).toBe(100));
+      spy.mockClear();
+      progress(engine, 20 * MIB, 50 * MIB);
+      await waitFor(() => expect(nowOf(19)).toBe(100));
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('two sends at once show 2 Stops and keep their progress apart', async () => {
+    const engine = fakeEngine([peer]);
+    const T2 = 'ee'.repeat(16);
+    const two = [0, 1].map((i) => threadItem({
+      transferId: T2, itemIndex: i, type: 'file', text: null, name: `t${i}.bin`, size: 10 * MIB,
+      direction: 'out', state: 'pending', transferState: 'active', at: 1_700_000_100,
+    }));
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage([...files3(), ...two]));
+    const cancel = jest.spyOn(engine, 'cancel').mockResolvedValue();
+    mount(engine);
+    await screen.findByText('t1.bin');
+    progress(engine, 15 * MIB);
+    await waitFor(() => expect(nowOf(1)).toBe(50));
+    expect(screen.getByTestId(`bubble-fill-${T2}:0`).props.accessibilityValue.now).toBe(0);
+    expect(screen.getByTestId(`bubble-fill-${T2}:1`).props.accessibilityValue.now).toBe(0);
+    expect(within(screen.getByTestId(`bubble-${TID}:0`)).getByTestId('thread-stop-' + TID)).toBeTruthy();
+    expect(within(screen.getByTestId(`bubble-${T2}:0`)).getByTestId('thread-stop-' + T2)).toBeTruthy();
+    expect(screen.getAllByLabelText('Stop sending')).toHaveLength(2);
+    fireEvent.press(screen.getByTestId('thread-stop-' + T2));
+    fireEvent.press(screen.getByTestId('confirm-stop'));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(T2));
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('a done transfer from an earlier session draws no fill', async () => {
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'listThread').mockResolvedValue(threadPage(files3({ state: 'done', transferState: 'done' })));
+    mount(engine);
+    await screen.findByText('f0.bin');
+    expect(fillOf(0)).toBeNull();
+  });
+});
+
+// Task 8: Add photos and the simple path.
+describe('ThreadScreen add photos', () => {
+  afterEach(async () => { await settle(0); });
+
+  const refs = (...names: string[]) => names.map((n) => ({ token: `t-${n}`, name: n, size: 10 }));
+  const host = () => {
+    const media = {
+      pick: jest.fn<Promise<MediaRef[]>, []>(async () => refs('a.jpg', 'b.mov')),
+      materialize: jest.fn<Promise<string>, [string]>(async (t) => `/cache/daak-send/${t}`),
+      fits: jest.fn<Promise<boolean>, [MediaRef[]]>(async () => true),
+    };
+    return {
+      media,
+      onPickFiles: jest.fn(async () => [] as string[]),
+      onPickFolder: jest.fn(async (): Promise<string | null> => null),
+      discardPickedCopy: jest.fn(async () => {}),
+    };
+  };
+  const stage = async () => {
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    return screen.findByText('a.jpg');
+  };
+
+  it('the sheet shows Add photos only when media is set', async () => {
+    mount(fakeEngine([peer]), host());
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(screen.getByTestId('pick-menu-photos')).toBeTruthy();
+    expect(screen.getByText('Add photos')).toBeTruthy();
+  });
+
+  it('no media prop shows no Add photos button', async () => {
+    const { media: _unused, ...rest } = host();
+    mount(fakeEngine([peer]), rest);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    expect(screen.queryByTestId('pick-menu-photos')).toBeNull();
+  });
+
+  it('picking refs shows them in the composer and a second pick appends and drops a repeated token', async () => {
+    const h = host();
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    expect(screen.getByText('b.mov')).toBeTruthy();
+    h.media.pick.mockResolvedValueOnce([...refs('b.mov'), ...refs('c.png')]);
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    expect(await screen.findByText('c.png')).toBeTruthy();
+    expect(screen.getAllByText('b.mov')).toHaveLength(1);
+    expect(screen.getByTestId('send')).not.toBeDisabled();
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    expect(screen.queryByText('a.jpg')).toBeNull();
+  });
+
+  it('a selection that fits is materialized one at a time and sent with one engine.send call', async () => {
+    const h = host();
+    const order: string[] = [];
+    let open = 0;
+    let most = 0;
+    h.media.materialize.mockImplementation(async (t: string) => {
+      open += 1; most = Math.max(most, open);
+      await new Promise((r) => setTimeout(r, 5));
+      order.push(t);
+      open -= 1;
+      return `/cache/daak-send/${t}`;
+    });
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, initialFiles: ['/Users/d/x.pdf'] });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send).toHaveBeenCalledWith({
+      peerDeviceId: peer.deviceId,
+      files: ['/Users/d/x.pdf', '/cache/daak-send/t-a.jpg', '/cache/daak-send/t-b.mov'],
+    });
+    expect(order).toEqual(['t-a.jpg', 't-b.mov']);
+    expect(most).toBe(1);
+  });
+
+  it('the copies are discarded only after engine.send resolves', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    let finish: (v: { transferId: string; queued: boolean }) => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(() => new Promise((r) => { finish = r; }));
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(h.discardPickedCopy).not.toHaveBeenCalled();
+    await act(async () => { finish({ transferId: TID, queued: false }); });
+    await waitFor(() => expect(h.discardPickedCopy).toHaveBeenCalledTimes(2));
+    expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-a.jpg');
+    expect(screen.queryByText('a.jpg')).toBeNull();
+  });
+
+  it('a selection that does not fit shows the large-selection text and sends nothing', async () => {
+    const h = host();
+    h.media.fits.mockResolvedValue(false);
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Large selection is not supported yet')).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(h.media.materialize).not.toHaveBeenCalled();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('NO_SPACE:<n> shows the photo no-space text and discards the copies already made', async () => {
+    const h = host();
+    h.media.materialize
+      .mockResolvedValueOnce('/cache/daak-send/t-a.jpg')
+      .mockRejectedValueOnce(new Error('NO_SPACE:2254857830'));
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Not enough space to prepare these photos. Free 2.1 GB and try again.')).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-a.jpg');
+    expect(screen.getByText('b.mov')).toBeTruthy();
+  });
+
+  it('E_SOURCE_GONE shows its text', async () => {
+    const h = host();
+    h.media.materialize.mockRejectedValueOnce(new Error('E_SOURCE_GONE'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Some items can no longer be read. Pick them again.')).toBeTruthy();
+  });
+
+  it('NOT_DOWNLOADED shows the photo wording', async () => {
+    const h = host();
+    h.media.materialize.mockRejectedValueOnce(new Error('NOT_DOWNLOADED'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Some photos are not downloaded yet. Open the Photos app, download them, and try again.')).toBeTruthy();
+  });
+
+  it('a rejected engine.send discards the media copies made for that attempt', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send').mockRejectedValueOnce(new Error('refused'));
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await screen.findByText('That send did not go through');
+    expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-a.jpg');
+    expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-b.mov');
+    expect(h.discardPickedCopy).toHaveBeenCalledTimes(2);
+    send.mockResolvedValue({ transferId: TID, queued: false });
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(h.media.materialize).toHaveBeenCalledTimes(4);
+  });
+
+  it('unmounting while a photo is copied sends nothing and leaves no copy', async () => {
+    const h = host();
+    const gates: Array<(p: string) => void> = [];
+    h.media.materialize.mockImplementation(() => new Promise<string>((r) => { gates.push(r); }));
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    const { unmount } = mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(gates).toHaveLength(1));
+    unmount();
+    await act(async () => { gates[0]('/cache/daak-send/t-a.jpg'); });
+    await settle();
+    expect(send).not.toHaveBeenCalled();
+    expect(gates).toHaveLength(1);
+    expect(h.discardPickedCopy).toHaveBeenCalledWith('/cache/daak-send/t-a.jpg');
+  });
+
+  // The final review (I3): Android keeps a read grant for each picked item.
+  // The grant must go back when the composer no longer needs the ref.
+  it('release is called with the sent tokens after a simple send resolves, not before', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    let finish: (v: { transferId: string; queued: boolean }) => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(() => new Promise((r) => { finish = r; }));
+    mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(release).not.toHaveBeenCalled();
+    await act(async () => { finish({ transferId: TID, queued: false }); });
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+  });
+
+  it('a rejected simple send releases nothing', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'send').mockRejectedValue(new Error('no'));
+    mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await screen.findByText('That send did not go through');
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('removing a staged ref releases it', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    expect(release).toHaveBeenCalledWith(['t-a.jpg']);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('unmounting with staged refs releases them', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    unmount();
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+  });
+
+  // Item A: the host must know the refs that the composer holds now, so the
+  // end of a large send does not give back their access.
+  it('a pick holds each new token once, and each ref gives its hold back once', async () => {
+    const h = host();
+    const hold = jest.fn<void, [string[]]>();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, hold, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    expect(hold).toHaveBeenCalledTimes(1);
+    expect(hold).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+    // The same photos again add no ref, so they add no hold.
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    await settle();
+    expect(hold).toHaveBeenCalledTimes(1);
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    unmount();
+    expect(release.mock.calls).toEqual([['t-a.jpg'], ['t-b.mov']].map((t) => [t]));
+  });
+
+  it('a pick that ends after an unmount gives its refs back', async () => {
+    const h = host();
+    let finish: (r: MediaRef[]) => void = () => {};
+    h.media.pick.mockImplementation(() => new Promise((r) => { finish = r; }));
+    const hold = jest.fn<void, [string[]]>();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, hold, release } });
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    unmount();
+    await act(async () => { finish(refs('a.jpg')); });
+    await settle();
+    expect(hold.mock.calls.flatMap((c) => c[0])).toEqual(release.mock.calls.flatMap((c) => c[0]));
+    expect(release).toHaveBeenCalledWith(['t-a.jpg']);
+  });
+
+  it('a release that rejects or throws breaks nothing', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(() => { throw new Error('sync'); });
+    mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    expect(screen.queryByText('a.jpg')).toBeNull();
+    release.mockRejectedValue(new Error('async'));
+    fireEvent.press(screen.getByTestId('remove-media-t-b.mov'));
+    await settle();
+    expect(screen.queryByText('b.mov')).toBeNull();
+  });
+
+  it('a photo picked during the send stays staged after the send', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    let finish: (v: { transferId: string; queued: boolean }) => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(() => new Promise((r) => { finish = r; }));
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    // The second pick starts before the send and ends during the send.
+    let pickDone: (r: MediaRef[]) => void = () => {};
+    h.media.pick.mockImplementationOnce(() => new Promise<MediaRef[]>((r) => { pickDone = r; }));
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    await act(async () => { pickDone(refs('c.png')); });
+    await screen.findByText('c.png');
+    await act(async () => { finish({ transferId: TID, queued: false }); });
+    await waitFor(() => expect(screen.queryByText('a.jpg')).toBeNull());
+    expect(screen.getByText('c.png')).toBeTruthy();
+  });
+
+  it('the remove chips are disabled while sending', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    jest.spyOn(engine, 'send').mockImplementation(() => new Promise(() => {}));
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('remove-media-t-a.jpg')).toBeDisabled();
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('a good send clears the earlier media error', async () => {
+    const h = host();
+    h.media.materialize.mockRejectedValueOnce(new Error('E_SOURCE_GONE'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await screen.findByText('Some items can no longer be read. Pick them again.');
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(screen.queryByTestId('pick-error')).toBeNull());
+  });
+
+  it('a throw from fits shows the prepare text and sends nothing', async () => {
+    const h = host();
+    h.media.fits.mockRejectedValue(new Error('boom'));
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Daak could not prepare a file for sending.')).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.queryByText('Large selection is not supported yet')).toBeNull();
+  });
+
+  it('two send presses in the same tick send once', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    const btn = screen.getByTestId('send');
+    await act(async () => { fireEvent.press(btn); fireEvent.press(btn); });
+    await settle();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('a cancelled pick changes nothing', async () => {
+    const h = host();
+    h.media.pick.mockResolvedValue([]);
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    await waitFor(() => expect(h.media.pick).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.getByTestId('send')).toBeDisabled();
+    expect(screen.queryByTestId('pick-error')).toBeNull();
+  });
+});
+
+// Task 10c: a selection that does not fit starts a large send.
+describe('ThreadScreen large selection', () => {
+  afterEach(async () => { await settle(0); });
+
+  const refs = (...names: string[]) => names.map((n) => ({ token: `t-${n}`, name: n, size: 10 }));
+  const host = () => {
+    const media = {
+      pick: jest.fn<Promise<MediaRef[]>, []>(async () => refs('a.jpg', 'b.mov')),
+      materialize: jest.fn<Promise<string>, [string]>(async (t) => `/cache/daak-send/${t}`),
+      fits: jest.fn<Promise<boolean>, [MediaRef[]]>(async () => false),
+      startLarge: jest.fn<Promise<void>, [string, MediaRef[]]>(async () => {}),
+    };
+    return {
+      media,
+      onPickFiles: jest.fn(async () => [] as string[]),
+      onPickFolder: jest.fn(async (): Promise<string | null> => null),
+      discardPickedCopy: jest.fn(async () => {}),
+    };
+  };
+  const stage = async () => {
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    return screen.findByText('a.jpg');
+  };
+
+  it('a selection that does not fit calls startLarge with the staged refs and removes them', async () => {
+    const h = host();
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    expect(h.media.startLarge).toHaveBeenCalledWith(peer.deviceId, refs('a.jpg', 'b.mov'));
+    expect(h.media.materialize).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText('a.jpg')).toBeNull());
+    expect(screen.queryByText('b.mov')).toBeNull();
+  });
+
+  // Item A: the refs leave the composer when startLarge takes them, so the
+  // composer gives its hold back then. The host keeps the access that the
+  // plan holds. Before startLarge resolves, an unmount releases nothing.
+  it('a large send gives the refs back only after startLarge takes them, also after an unmount', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    let finish: () => void = () => {};
+    h.media.startLarge.mockImplementation(() => new Promise<void>((r) => { finish = r; }));
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    unmount();
+    await settle();
+    expect(release).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    await settle();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+  });
+
+  // F3: the note send runs before startLarge. An unmount in that wait must not
+  // release the refs, because startLarge gets them after the wait.
+  it('an unmount while the note send runs keeps the refs of the large send', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    let noteDone: () => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(
+      () => new Promise((r) => { noteDone = () => r({ transferId: 'n1', queued: false }); }),
+    );
+    const { unmount } = mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    unmount();
+    await settle();
+    expect(release).not.toHaveBeenCalled();
+    await act(async () => { noteDone(); });
+    await settle();
+    expect(h.media.startLarge).toHaveBeenCalledWith(peer.deviceId, refs('a.jpg', 'b.mov'));
+    // Only the hand-off gives the refs back, after startLarge took them.
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release.mock.invocationCallOrder[0]).toBeGreaterThan(h.media.startLarge.mock.invocationCallOrder[0]);
+  });
+
+  // F3: when the note send fails after an unmount, startLarge does not run.
+  // Nothing then holds the refs, so their access goes.
+  it('an unmount and a failed note send release the refs of the large send', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    let noteFail: () => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(
+      () => new Promise((_r, j) => { noteFail = () => j(new Error('down')); }),
+    );
+    const { unmount } = mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => { noteFail(); });
+    await settle();
+    expect(h.media.startLarge).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+  });
+
+  it('a large selection also sends the plain files and the note once', async () => {
+    const h = host();
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, initialFiles: ['/Users/d/x.pdf'] });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, files: ['/Users/d/x.pdf'] });
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, text: 'hello' });
+  });
+
+  it('PLAN_BUSY shows its text and keeps the refs', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('PLAN_BUSY'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('A large send is already running for this device.')).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+    expect(screen.getByText('b.mov')).toBeTruthy();
+  });
+
+  it('a failed startLarge keeps the refs even when plain files were sent first', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('PLAN_BUSY'));
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, initialFiles: ['/Users/d/x.pdf'] });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('A large send is already running for this device.')).toBeTruthy();
+    // The plain file went out. The photo refs stay staged, so the user can try again.
+    expect(send).toHaveBeenCalledWith({ peerDeviceId: peer.deviceId, files: ['/Users/d/x.pdf'] });
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+    expect(screen.getByText('b.mov')).toBeTruthy();
+  });
+
+  it('PLAN_TOO_LARGE shows its text', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('PLAN_TOO_LARGE'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Too many photos for one send. Pick fewer.')).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('a NO_SPACE error shows the photo no-space text', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('NO_SPACE:2254857830'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(
+      await screen.findByText('Not enough space to prepare these photos. Free some space and try again.'),
+    ).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('any other error shows the generic text', async () => {
+    const h = host();
+    h.media.startLarge.mockRejectedValue(new Error('boom'));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Daak could not prepare a file for sending.')).toBeTruthy();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('without startLarge the toast is unchanged', async () => {
+    const h = host();
+    const { startLarge: _unused, ...media } = h.media;
+    const engine = fakeEngine([peer]);
+    const send = jest.spyOn(engine, 'send');
+    mount(engine, { ...h, media });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.press(screen.getByTestId('send'));
+    expect(await screen.findByText('Large selection is not supported yet')).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByText('a.jpg')).toBeTruthy();
+  });
+
+  it('a refs list picked while startLarge runs stays staged', async () => {
+    const h = host();
+    let finish: () => void = () => {};
+    h.media.startLarge.mockImplementation(() => new Promise<void>((r) => { finish = r; }));
+    mount(fakeEngine([peer]), h);
+    await screen.findByText('Nothing here yet');
+    await stage();
+    let pickDone: (r: MediaRef[]) => void = () => {};
+    h.media.pick.mockImplementationOnce(() => new Promise<MediaRef[]>((r) => { pickDone = r; }));
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
+    await act(async () => { pickDone(refs('c.png')); });
+    await screen.findByText('c.png');
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.queryByText('a.jpg')).toBeNull());
+    expect(screen.getByText('c.png')).toBeTruthy();
+  });
+});
+
+describe('ThreadScreen batch row', () => {
+  const plan = (p: Partial<BatchRowStatus> = {}): BatchRowStatus => ({
+    share: 'cc'.repeat(16), batch: 2, of: 5, paused: false, remaining: 30, bytesDone: 50, bytesTotal: 200, ...p,
+  });
+  function mountBatch(initial: BatchRowStatus | null, extra: { retry?: () => Promise<void> | void; stop?: () => Promise<void> | void } = {}) {
+    let current = initial;
+    const subs = new Set<(peerId: string) => void>();
+    const unsub = jest.fn();
+    const batch = {
+      status: jest.fn((_id: string) => current),
+      retry: jest.fn(extra.retry ?? (async () => {})),
+      stop: jest.fn(extra.stop ?? (async () => {})),
+      subscribe: jest.fn((cb: (peerId: string) => void) => { subs.add(cb); return () => { subs.delete(cb); unsub(); }; }),
+    };
+    const engine = fakeEngine([peer]);
+    const utils = mount(engine, { batch });
+    const set = (n: BatchRowStatus | null, peerId = peer.deviceId) => {
+      current = n;
+      act(() => { subs.forEach((cb) => cb(peerId)); });
+    };
+    return { batch, subs, unsub, set, engine, ...utils };
+  }
+
+  it('no row without a plan', async () => {
+    mountBatch(null);
+    await screen.findByText('Nothing here yet');
+    expect(screen.queryByTestId('batch-row')).toBeNull();
+  });
+
+  it('the running row shows remaining, batch and of', async () => {
+    mountBatch(plan());
+    expect(await screen.findByText('30 more waiting - batch 2 of 5')).toBeTruthy();
+    expect(screen.getByTestId('batch-row').props.accessibilityLabel).toBe('30 more waiting - batch 2 of 5');
+    expect(screen.queryByTestId('batch-retry')).toBeNull();
+  });
+
+  it('a last batch with no remaining items shows Sending batch k of m', async () => {
+    mountBatch(plan({ batch: 5, remaining: 0 }));
+    expect(await screen.findByText('Sending batch 5 of 5')).toBeTruthy();
+  });
+
+  it('the bar value follows bytesDone over bytesTotal and a total of 0 draws no bar', async () => {
+    const { set } = mountBatch(plan({ bytesDone: 50, bytesTotal: 200 }));
+    const bar = await screen.findByTestId('batch-bar');
+    expect(bar.props.accessibilityValue).toEqual({ min: 0, max: 100, now: 25 });
+    set(plan({ bytesDone: 500, bytesTotal: 200 }));
+    expect(screen.getByTestId('batch-bar').props.accessibilityValue.now).toBe(100);
+    set(plan({ bytesDone: 0, bytesTotal: 0 }));
+    expect(screen.queryByTestId('batch-bar')).toBeNull();
+    expect(screen.getByTestId('batch-row')).toBeTruthy();
+  });
+
+  it('the paused row shows the title and the body for NO_SPACE with the size', async () => {
+    mountBatch(plan({ paused: true, error: 'NO_SPACE', neededBytes: 3 * 1024 ** 3 }));
+    expect(await screen.findByText('Batch 2 did not send')).toBeTruthy();
+    expect(screen.getByText('Not enough space for this batch. Free 3.0 GB and tap Retry.')).toBeTruthy();
+    expect(screen.queryByTestId('batch-bar')).toBeNull();
+  });
+
+  it('the paused row says some space when neededBytes is missing', async () => {
+    mountBatch(plan({ paused: true, error: 'NO_SPACE' }));
+    expect(await screen.findByText('Not enough space for this batch. Free some space and tap Retry.')).toBeTruthy();
+  });
+
+  it('the paused row shows the PLAN_LOST text', async () => {
+    mountBatch(plan({ paused: true, error: 'PLAN_LOST' }));
+    expect(await screen.findByText('Some items can no longer be read. Pick them again.')).toBeTruthy();
+  });
+
+  it('the paused row shows the CANCELED and FAILED texts', async () => {
+    const { set } = mountBatch(plan({ paused: true, error: 'CANCELED' }));
+    expect(await screen.findByText('This batch was canceled.')).toBeTruthy();
+    set(plan({ paused: true, error: 'FAILED' }));
+    expect(screen.getByText('Daak could not send this batch.')).toBeTruthy();
+  });
+
+  it('Retry and Stop call their props with the peer id and are disabled while the call runs', async () => {
+    let finish: () => void = () => {};
+    const { batch } = mountBatch(plan({ paused: true, error: 'FAILED' }), {
+      retry: () => new Promise<void>((r) => { finish = r; }),
+    });
+    fireEvent.press(await screen.findByTestId('batch-retry'));
+    expect(batch.retry).toHaveBeenCalledWith(peer.deviceId);
+    fireEvent.press(screen.getByTestId('batch-retry'));
+    fireEvent.press(screen.getByTestId('batch-stop'));
+    expect(batch.retry).toHaveBeenCalledTimes(1);
+    expect(batch.stop).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    await act(async () => { fireEvent.press(screen.getByTestId('batch-stop')); });
+    expect(batch.stop).toHaveBeenCalledWith(peer.deviceId);
+  });
+
+  // D7: the bytes of the batch on the wire move the bar, and the row says why
+  // when it has no speed.
+  it('the running row adds the live bytes of the batch transfer to the bar', async () => {
+    const { engine } = mountBatch(plan({ bytesDone: 50, bytesTotal: 200, transferId: TID }));
+    await screen.findByTestId('batch-bar');
+    expect(screen.getByTestId('batch-bar').props.accessibilityValue.now).toBe(25);
+    emit(engine, { type: 'transfer.progress', transferId: TID, bytesDone: 50, bytesTotal: 100 } as DaakEvent);
+    expect(screen.getByTestId('batch-bar').props.accessibilityValue.now).toBe(50);
+  });
+
+  it('a running row with no transfer on the wire says that the next batch is in preparation', async () => {
+    mountBatch(plan());
+    expect(await screen.findByText('Daak prepares the next batch.')).toBeTruthy();
+  });
+
+  it('a running row with a transfer and no speed yet says so', async () => {
+    mountBatch(plan({ transferId: TID }));
+    expect(await screen.findByText('No speed yet.')).toBeTruthy();
+  });
+
+  it('a running row with a transfer and an offline peer says that Daak waits for the peer', async () => {
+    const off: DeviceInfo = { ...peer, online: false, presence: 'offline' };
+    const batch = {
+      status: jest.fn(() => plan({ transferId: TID })),
+      retry: jest.fn(async () => {}),
+      stop: jest.fn(async () => {}),
+      subscribe: jest.fn(() => () => {}),
+    };
+    mount(fakeEngine([off]), { batch });
+    expect(await screen.findByText('Daak waits for Pixel 9.')).toBeTruthy();
+  });
+
+  it('the running row has a Stop that calls stop with the peer id and is disabled while the call runs', async () => {
+    let finish: () => void = () => {};
+    const { batch } = mountBatch(plan(), { stop: () => new Promise<void>((r) => { finish = r; }) });
+    const btn = await screen.findByTestId('batch-stop-running');
+    expect(screen.queryByTestId('batch-retry')).toBeNull();
+    fireEvent.press(btn);
+    expect(batch.stop).toHaveBeenCalledWith(peer.deviceId);
+    expect(screen.getByTestId('batch-stop-running')).toBeDisabled();
+    fireEvent.press(screen.getByTestId('batch-stop-running'));
+    expect(batch.stop).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(); });
+    expect(screen.getByTestId('batch-stop-running')).not.toBeDisabled();
+  });
+
+  it('the row updates when the subscribe callback fires and unsubscribes on unmount', async () => {
+    const { set, unsub, subs, unmount } = mountBatch(plan());
+    await screen.findByText('30 more waiting - batch 2 of 5');
+    set(plan({ batch: 3, remaining: 10 }));
+    expect(screen.getByText('10 more waiting - batch 3 of 5')).toBeTruthy();
+    set(plan({ batch: 4, remaining: 1 }), 'ff'.repeat(16));
+    expect(screen.getByText('10 more waiting - batch 3 of 5')).toBeTruthy();
+    unmount();
+    expect(unsub).toHaveBeenCalledTimes(1);
+    expect(subs.size).toBe(0);
+  });
+
+  it('the row disappears when the status becomes null', async () => {
+    const { set } = mountBatch(plan({ paused: true, error: 'FAILED' }));
+    await screen.findByTestId('batch-row');
+    set(null);
+    expect(screen.queryByTestId('batch-row')).toBeNull();
+  });
+
+  it('the row has no file names', async () => {
+    const engine = fakeEngine([peer]);
+    mount(engine, {
+      batch: {
+        status: () => plan({ paused: true, error: 'NO_SPACE', neededBytes: 1024 ** 3 }),
+        retry: jest.fn(), stop: jest.fn(), subscribe: () => () => {},
+      },
+    });
+    const row = await screen.findByTestId('batch-row');
+    const text = JSON.stringify(row.props.accessibilityLabel) + JSON.stringify(within(row).queryAllByText(/\.(jpg|png|mov|heic)/i));
+    expect(text).not.toMatch(/\.(jpg|png|mov|heic)/i);
+  });
+
+  it('no batch prop shows no row (desktop)', async () => {
+    mount(fakeEngine([peer]));
+    await screen.findByText('Nothing here yet');
+    expect(screen.queryByTestId('batch-row')).toBeNull();
   });
 });

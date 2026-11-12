@@ -49,6 +49,7 @@ jest.mock('@daak/platform', () => {
     realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
     onNotificationAction: jest.fn(() => () => {}),
     handleNotificationAction: real.handleNotificationAction,
+    createBatchDriver: jest.fn(() => ({ start: jest.fn(), onEvent: jest.fn(), retry: jest.fn(), stop: jest.fn(), status: jest.fn(() => null), resume: jest.fn(async () => {}), dispose: jest.fn() })),
   };
 });
 

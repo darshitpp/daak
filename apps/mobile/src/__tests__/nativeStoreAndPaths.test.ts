@@ -322,14 +322,12 @@ describe('fspaths reveal on Android', () => {
   // applicationId-derived on purpose: modules/rn-share already declares the
   // applicationId-derived one, and two providers cannot share an authority.
   it('declares the provider authority the module uses', () => {
-    const authority = /const val AUTHORITY = "([^"]+)"/.exec(kt)?.[1];
-    expect(authority).toBe('dev.darshit.daak.fileprovider');
-    expect(appManifest).toContain('android:authorities="dev.darshit.daak.fileprovider"');
+    const suffix = /const val AUTHORITY_SUFFIX = "([^"]+)"/.exec(kt)?.[1];
+    expect(suffix).toBe('.fileprovider');
+    // Derived from the application id, so a debug build with an id suffix
+    // installs beside the stable app.
+    expect(appManifest).toContain('android:authorities="${applicationId}.fileprovider"');
     expect(appManifest).toMatch(/androidx\.core\.content\.FileProvider/);
-    // The two providers must not collide, or the manifest merger fails the build.
-    expect(appManifest.split('${').join('DOLLAR')).not.toMatch(
-      /android:authorities="DOLLAR\{applicationId\}/,
-    );
   });
 
   // The resource name in the manifest has to exist in a merged resource set.
@@ -946,9 +944,10 @@ describe('iOS saves to the Photos library with add-only access', () => {
     expect(save).toMatch(/second album with the same name/);
   });
 
+  // The read key is for rn-share materialize only (a token of a restored
+  // plan). rn-fspaths still asks for add-only access.
   it('declares the add-only usage description', () => {
     expect(plist).toContain('<key>NSPhotoLibraryAddUsageDescription</key>');
-    expect(plist).not.toContain('NSPhotoLibraryUsageDescription');
   });
 });
 
@@ -1059,7 +1058,9 @@ describe('iOS folder pick, copy, and stats', () => {
     expect(share).toMatch(/\.cachesDirectory/);
     expect(share).toContain('"daak-send"');
     const copy = body(share, 'static func copyPickedFolder');
-    expect(copy).toContain('UUID().uuidString');
+    // The folder copy and materialize make the slot with the same helper.
+    expect(copy).toContain('DaakShare.newSendSlot()');
+    expect(body(share, 'static func newSendSlot(')).toContain('UUID().uuidString');
     expect(copy).toContain('lastPathComponent');
     expect(copy).toMatch(/copyItem\(at:/);
     expect(share).not.toMatch(/Data\(contentsOf: (e|entry|file|src)/);
@@ -1231,15 +1232,18 @@ describe('Android folder pick, copy, and stats', () => {
     const copy = body(share, 'private fun copyPickedFolder(');
     const list = copy.indexOf('listTree(');
     const empty = copy.indexOf('FolderPickError("EMPTY"');
-    const space = copy.indexOf('StatFs(');
+    const space = copy.indexOf('requireSpace(needed)');
     const write = copy.indexOf('mkdirs()');
     expect(list).toBeGreaterThan(-1);
     expect(empty).toBeGreaterThan(list);
     expect(space).toBeGreaterThan(empty);
     expect(write).toBeGreaterThan(space);
-    expect(copy).toContain('availableBytes');
     expect(copy).toMatch(/\* 1\.1/);
-    expect(copy).toContain('"NO_SPACE:$needed"');
+    // The check lives in requireSpace, which pickFolder and materialize share.
+    const req = body(share, 'private fun requireSpace(');
+    expect(req).toContain('StatFs(');
+    expect(req).toContain('availableBytes');
+    expect(req).toContain('"NO_SPACE:$needed"');
   });
 
   it('rejects with the codes the facade reads', () => {
@@ -1355,5 +1359,771 @@ describe('cleanup C native pins', () => {
     const line = move.slice(catchAt).split('\n')[1];
     expect(line).toMatch(/NSLog\("Daak: could not make a folder/);
     expect(line).not.toMatch(/\.path|\bpath\b/);
+  });
+});
+
+// Task 19: with no chosen folder, Android documents go to Download/Daak. No
+// Kotlin test target exists, so these are source-text pins in the style of the
+// tests above. They cannot run the Kotlin code.
+describe('Android documents go to Download/Daak when no folder is chosen', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\/?\*)/.test(l))
+      .join('\n');
+  const kt = strip(
+    read(repo + 'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt'),
+  );
+  const from = (name: string) => {
+    const at = kt.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    return kt.slice(at);
+  };
+
+  it('a user with no chosen folder gets Download/Daak', () => {
+    const name = from('override fun downloadFolderName(');
+    const body = name.slice(0, name.indexOf('override fun clearDownloadFolder('));
+    expect(kt).toContain('const val DEFAULT_FOLDER = "Download/Daak"');
+    expect(body).toMatch(/Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.Q/);
+    expect(body).toContain('DEFAULT_FOLDER');
+    const move = from('override fun moveReceivedFiles(');
+    expect(move.indexOf('saveDocuments(')).toBeGreaterThan(move.indexOf('treeUri == null'));
+    const doc = from('private fun saveDocument(');
+    expect(doc).toContain('MediaStore.Downloads.EXTERNAL_CONTENT_URI');
+    expect(doc).toMatch(/RELATIVE_PATH, if \(dirs\.isEmpty\(\)\) DEFAULT_FOLDER else "\$DEFAULT_FOLDER\/\$dirs"\)/);
+    expect(doc).toContain('if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return path');
+  });
+
+  it('a user with a chosen folder keeps it', () => {
+    const name = from('override fun downloadFolderName(');
+    const body = name.slice(0, name.indexOf('override fun clearDownloadFolder('));
+    expect(body).toContain('prefs().getString(KEY_TREE, null) ?: prefs().getString(KEY_NAME, null)');
+    // The default is only for a call with no saved tree.
+    const move = from('override fun moveReceivedFiles(');
+    const head = move.slice(0, move.indexOf('val resolver'));
+    expect(head).toMatch(
+      /if \(treeUri == null\) \{[\s\S]*SDK_INT < Build\.VERSION_CODES\.Q\) return@resolve writable\(input\)/,
+    );
+    expect(head).toContain('saveDocuments(');
+  });
+
+  it('a quarantined item is never relocated', () => {
+    const doc = from('private fun saveDocument(');
+    expect(doc).toContain('isQuarantined(src)');
+    const q = from('private fun isQuarantined(');
+    expect(q).toContain('File(dataDir(), "downloads/quarantine")');
+    expect(q).toContain('startsWith(');
+  });
+
+  it('a hostile name (.., 300 characters, a control character) is cleaned before the MediaStore insert', () => {
+    const doc = from('private fun saveDocument(');
+    expect(doc.indexOf('cleanName(')).toBeGreaterThan(-1);
+    expect(doc.indexOf('cleanName(')).toBeLessThan(doc.indexOf('resolver.insert('));
+    expect(doc).toContain('safeParts(subdir.split("/"))');
+    const clean = from('private fun cleanName(');
+    const body = clean.slice(0, clean.indexOf('private fun saveDocument('));
+    expect(body).toMatch(/isISOControl/);
+    expect(body).toContain("'\\\\'");
+    expect(body).toMatch(/== "\.\."/);
+    expect(body).toMatch(/MAX_NAME/);
+    expect(kt).toMatch(/const val MAX_NAME = \d+/);
+  });
+
+  it('a non-media file keeps application/octet-stream', () => {
+    const doc = from('private fun saveDocument(');
+    expect(doc).toContain('val mime = guessMime(src.name)');
+    expect(doc).toMatch(/mime\.startsWith\("image\/"\) \|\| mime\.startsWith\("video\/"\)\) return path/);
+    expect(doc).toContain('MediaStore.MediaColumns.MIME_TYPE, mime');
+    expect(kt).toContain('else -> "application/octet-stream"');
+  });
+
+  it('writes pending, clears it, requires 1 row, then deletes the source or the row', () => {
+    const doc = from('private fun saveDocument(');
+    const pending = doc.indexOf('IS_PENDING, 1');
+    const clear = doc.indexOf('IS_PENDING, 0');
+    const check = doc.indexOf('updated != 1', clear);
+    const del = doc.indexOf('src.delete()');
+    expect(pending).toBeGreaterThan(-1);
+    expect(clear).toBeGreaterThan(pending);
+    expect(check).toBeGreaterThan(clear);
+    expect(del).toBeGreaterThan(check);
+    expect(doc.indexOf('resolver.delete(uri, null, null)')).toBeGreaterThan(doc.indexOf('catch'));
+  });
+});
+
+describe('sendFilesTagged is wired through the native glue', () => {
+  it('the Android module calls the uniffi send_files_tagged with a bounded attempt', () => {
+    const kt = read(repo + 'apps/mobile/android/app/src/main/java/dev/darshit/daak/DaakModule.kt');
+    expect(kt).toMatch(/override fun sendFilesTagged\(/);
+    expect(kt).toContain('handle().sendFilesTagged(peerId, list, share, batch, attemptArg(attempt))');
+    expect(kt).toContain('attempt must be a whole number from 0 to 4294967295');
+    expect(kt).toContain('private fun attemptArg(');
+  });
+
+  it('the iOS module declares and forwards sendFilesTagged', () => {
+    const swift = read(repo + 'apps/mobile/ios/Daak.swift');
+    expect(swift).toMatch(/@objc func sendFilesTagged\(/);
+    expect(swift).toContain('need().sendFilesTagged(');
+    expect(swift).toContain('attempt must be a whole number from 0 to 4294967295');
+    expect(swift).toContain('DaakArgumentError(');
+    const desktop = read(repo + 'apps/desktop/macos/Daak-macOS/Daak.swift');
+    expect(desktop).toContain('attempt must be a whole number from 0 to 4294967295');
+    expect(desktop).toContain('DaakArgumentError(');
+    expect(read(repo + 'apps/mobile/ios/DaakModule.mm')).toContain('RCT_EXTERN_METHOD(sendFilesTagged:');
+  });
+});
+
+describe('the iOS notify post can be silent and can replace a notification in place', () => {
+  const swift = read(repo + 'modules/rn-notify/ios/DaakNotify.swift');
+  const mm = read(repo + 'modules/rn-notify/ios/DaakNotify.mm');
+  const delegate = read(repo + 'apps/mobile/ios/Daak/DaakNotificationDelegate.swift');
+  // These pins prove that a call is present. A device must prove the sound and the replacement.
+
+  it('sound is nil when silent and .default otherwise', () => {
+    expect(swift).toContain('content.sound = silent ? nil : .default');
+  });
+
+  it('the request identifier is the id', () => {
+    expect(swift).toContain('UNNotificationRequest(identifier: id, content: content, trigger: nil)');
+  });
+
+  it('DaakNotify.mm declares the sixth parameter', () => {
+    const decl = mm.slice(mm.indexOf('RCT_EXTERN_METHOD(post:'), mm.indexOf('RCT_EXTERN_METHOD(cancel:'));
+    expect(decl).toContain('payloadJson:(NSString *)payloadJson');
+    expect(decl).toContain('silent:(BOOL)silent');
+    expect(decl.indexOf('silent:')).toBeGreaterThan(decl.indexOf('payloadJson:'));
+    expect(decl.indexOf('silent:')).toBeLessThan(decl.indexOf('resolve:'));
+  });
+
+  it('the Swift post takes the silent parameter after payloadJson', () => {
+    expect(swift).toMatch(/payloadJson: String,\s*silent: Bool,/);
+  });
+
+  // D1: the notifications of one share form one thread in Notification Center.
+  it('the post takes a thread after silent and sets threadIdentifier when it is not empty', () => {
+    expect(swift).toMatch(/silent: Bool,\s*thread: String,/);
+    expect(swift).toMatch(/if !thread\.isEmpty \{ content\.threadIdentifier = thread \}/);
+    const decl = mm.slice(mm.indexOf('RCT_EXTERN_METHOD(post:'), mm.indexOf('RCT_EXTERN_METHOD(cancel:'));
+    expect(decl).toMatch(/silent:\(BOOL\)silent\s+thread:\(NSString \*\)thread\s+resolve:/);
+    const spec = read(repo + 'modules/rn-notify/js/NativeDaakNotify.ts');
+    expect(spec).toMatch(/payloadJson: string, silent: boolean, thread: string\): Promise<void>;/);
+    const kt = read(repo + 'modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt');
+    expect(kt).toMatch(/override fun post\(id: String, title: String, body: String, category: String, payloadJson: String, silent: Boolean, thread: String, promise: Promise\)/);
+  });
+
+  // The app has no willPresent. So the app never shows a banner or plays a sound
+  // while it is in front. A fixed option in a future willPresent must not
+  // ignore the silent flag.
+  it('no willPresent exists, so no fixed sound option exists', () => {
+    expect(delegate).not.toContain('func userNotificationCenter(_ center: UNUserNotificationCenter,\n                              willPresent');
+    expect(delegate).not.toMatch(/\.sound/);
+    expect(swift).not.toMatch(/willPresent/);
+  });
+});
+
+// Task 5: freeBytes. These pins prove only that the calls are in the source.
+// They do not run Kotlin or Swift. The Gradle and Xcode builds check the rest.
+describe('the fspaths module reports the free space of the send cache', () => {
+  const kt = read(
+    repo +
+      'modules/rn-fspaths/android/src/main/java/dev/darshit/daak/fspaths/DaakFsPathsModule.kt',
+  );
+  const ios = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.swift');
+  const macos = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.swift');
+  const spec = read(repo + 'modules/rn-fspaths/js/NativeDaakFsPaths.ts');
+  const body = kt.slice(kt.indexOf('override fun freeBytes'));
+  const fn = body.slice(0, body.indexOf('\n  }\n') + 5);
+
+  it('declares freeBytes as a required member of the Spec', () => {
+    expect(spec).toMatch(/^\s+freeBytes\(\): Promise<number>;/m);
+  });
+
+  // The final review: getAllocatableBytes counts cache that the system can
+  // clear, but requireSpace in rn-share uses StatFs. The send must use the
+  // same conservative value, so freeBytes reads StatFs only.
+  it('uses StatFs availableBytes of the cache folder and not getAllocatableBytes', () => {
+    expect(fn).toMatch(/StatFs\(cacheDir\.path\)\.availableBytes/);
+    expect(fn).toMatch(/reactApplicationContext\.cacheDir/);
+    expect(fn).not.toMatch(/getAllocatableBytes\(/);
+  });
+
+  it('runs off the main thread', () => {
+    expect(fn).toMatch(/thread\(name = "daak-free-bytes"\)/);
+  });
+
+  it('rejects without a path in the message', () => {
+    const rejects = fn.match(/promise\.reject\([^\n]*\)/g) ?? [];
+    expect(rejects.length).toBeGreaterThan(0);
+    for (const r of rejects) expect(r).not.toMatch(/\$|cacheDir|path/);
+  });
+
+  it('uses volumeAvailableCapacityForImportantUsageKey on iOS', () => {
+    expect(ios).toMatch(/volumeAvailableCapacityForImportantUsageKey/);
+    expect(ios).toMatch(/@objc func freeBytes\(/);
+    expect(ios).toMatch(/cachesDirectory/);
+  });
+
+  it('lists freeBytes in the iOS .mm method table', () => {
+    const mm = read(repo + 'modules/rn-fspaths/ios/DaakFsPaths.mm');
+    expect(mm).toMatch(/RCT_EXTERN_METHOD\(freeBytes:/);
+  });
+
+  it('implements freeBytes on macOS and lists it in the .mm', () => {
+    expect(macos).toMatch(/volumeAvailableCapacityForImportantUsageKey/);
+    expect(macos).toMatch(/@objc func freeBytes\(/);
+    const mm = read(repo + 'modules/rn-fspaths/macos/DaakFsPaths.mm');
+    expect(mm).toMatch(/RCT_EXTERN_METHOD\(freeBytes:/);
+  });
+});
+
+// Photo and video pick on Android (Part C, Task 6). The picker returns
+// references. materialize copies ONE item into <cacheDir>/daak-send/<uuid>/.
+// No JVM test source set exists. These pins prove only that a call is present
+// in the source. A device must prove the behaviour.
+describe('Android media pick and materialize', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+  const dir = repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/';
+  const share = strip(read(dir + 'DaakShareModule.kt'));
+  const inbox = strip(read(dir + 'ShareInbox.kt'));
+  const shareSpec = read(repo + 'modules/rn-share/js/NativeDaakShare.ts');
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest
+      .slice(1)
+      .search(/\n  (@ReactMethod\n  )?(override |private |internal )?(inline )?fun |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  it('uses MediaStore.ACTION_PICK_IMAGES when the photo picker is available, with EXTRA_PICK_IMAGES_MAX = getPickImagesMaxLimit()', () => {
+    const pick = body(share, 'override fun pickMedia(');
+    expect(pick).toContain('isPhotoPickerAvailable(');
+    expect(pick).toContain('MediaStore.ACTION_PICK_IMAGES');
+    expect(pick).toMatch(/putExtra\(MediaStore\.EXTRA_PICK_IMAGES_MAX, MediaStore\.getPickImagesMaxLimit\(\)\)/);
+    expect(pick).toContain('PICK_MEDIA');
+    expect(share).toMatch(/PICK_MEDIA = \d+/);
+    expect(share).not.toContain('com.google.android.gms');
+  });
+
+  it('isPhotoPickerAvailable checks SDK 33 or R extension 2 and resolveActivity', () => {
+    const fn = body(share, 'private fun isPhotoPickerAvailable(');
+    expect(fn).toMatch(/SDK_INT >= (33|Build\.VERSION_CODES\.TIRAMISU)/);
+    expect(fn).toContain('SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2');
+    expect(fn).toContain('resolveActivity(');
+  });
+
+  it('otherwise ACTION_OPEN_DOCUMENT with image/* and video/*, EXTRA_ALLOW_MULTIPLE and the persistable flag', () => {
+    const pick = body(share, 'override fun pickMedia(');
+    expect(pick).toContain('Intent.ACTION_OPEN_DOCUMENT');
+    expect(pick).toContain('Intent.CATEGORY_OPENABLE');
+    expect(pick).toContain('"image/*"');
+    expect(pick).toContain('"video/*"');
+    expect(pick).toContain('Intent.EXTRA_MIME_TYPES');
+    expect(pick).toMatch(/Intent\.EXTRA_ALLOW_MULTIPLE, true/);
+    expect(pick).toContain('FLAG_GRANT_PERSISTABLE_URI_PERMISSION');
+  });
+
+  it('every picked URI gets takePersistableUriPermission inside try/catch', () => {
+    const read = body(share, 'private fun describePicked(');
+    expect(read).toMatch(
+      /try \{\s*ctx\.contentResolver\.takePersistableUriPermission\(uri, Intent\.FLAG_GRANT_READ_URI_PERMISSION\)\s*\} catch \(_: Throwable\)/,
+    );
+  });
+
+  it('a picker URI reads PickerMediaColumns.SIZE and DISPLAY_NAME; any other URI reads OpenableColumns', () => {
+    const q = body(share, 'private fun queryNameAndSize(');
+    expect(q).toContain('uri.authority == MediaStore.AUTHORITY');
+    expect(q).toContain('isPhotoPickerAvailable(');
+    expect(q).not.toMatch(/SDK_INT >= 33 &&/);
+    expect(q).toContain('MediaStore.PickerMediaColumns.DISPLAY_NAME');
+    expect(q).toContain('MediaStore.PickerMediaColumns.SIZE');
+    expect(q).toContain('OpenableColumns.DISPLAY_NAME');
+    expect(q).toContain('OpenableColumns.SIZE');
+  });
+
+  it('a null size stays null', () => {
+    const q = body(share, 'private fun queryNameAndSize(');
+    expect(q).toMatch(/isNull\(\w+\)\) null/);
+    const d = body(share, 'private fun describePicked(');
+    expect(d).toContain('JSONObject.NULL');
+  });
+
+  it('materialize opens a MediaStore-authority URI with ContentResolver.openFileDescriptor (MediaStore has no such method in API 35) and any other with ContentResolver.openInputStream, inside use', () => {
+    const open = body(share, 'private fun openSource(');
+    expect(open).toContain('uri.authority == MediaStore.AUTHORITY');
+    expect(open).toContain('isPhotoPickerAvailable(');
+    expect(open).not.toMatch(/SDK_INT >= 33 &&/);
+    expect(open).toContain('ctx.contentResolver.openFileDescriptor(uri, "r")');
+    expect(open).not.toContain('MediaStore.openFileDescriptor');
+    expect(open).toContain('ctx.contentResolver.openInputStream(uri)');
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('openSource(uri)');
+    expect(mat).toMatch(/input\.use \{/);
+  });
+
+  it('materialize refuses a URI that is not content:// or that has the app\'s own authority', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('ShareInbox.requireForeignContentUri(ctx, uri)');
+    const check = body(inbox, 'internal fun requireForeignContentUri(');
+    expect(check).toContain('ContentResolver.SCHEME_CONTENT');
+    expect(check).toContain('ctx.packageName');
+    // copyToCache uses the same check and has no copy of the text.
+    expect(body(inbox, 'fun copyToCache(')).toContain('requireForeignContentUri(ctx, uri)');
+  });
+
+  it('materialize and pickFolder both call requireSpace', () => {
+    expect(body(share, 'private fun materializeToSlot(')).toContain('requireSpace(');
+    expect(body(share, 'private fun copyPickedFolder(')).toContain('requireSpace(needed)');
+    expect(body(share, 'private fun requireSpace(')).toContain('FolderPickError("NO_SPACE", "NO_SPACE:$needed")');
+  });
+
+  it('a failed copy deletes the slot directory', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toMatch(/catch \(t: Throwable\) \{\s*slot\.deleteRecursively\(\)/);
+  });
+
+  it('the slot is under cacheDir/daak-send', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('File(File(ctx.cacheDir, "daak-send"), UUID.randomUUID().toString())');
+  });
+
+  it('a source that no longer reads rejects E_SOURCE_GONE', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('SecurityException');
+    expect(mat).toContain('FileNotFoundException');
+    expect(mat).toContain('FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")');
+    expect(share).toContain('promise.reject("E_MATERIALIZE", "Daak could not prepare a file for sending.")');
+  });
+
+  it('safeLeaf is used for the file name', () => {
+    expect(body(share, 'private fun materializeToSlot(')).toContain('ShareInbox.safeLeaf(');
+    expect(inbox).toMatch(/internal fun safeLeaf\(/);
+  });
+
+  it('no log call contains the name or the uri', () => {
+    const media = [
+      body(share, 'override fun pickMedia('),
+      body(share, 'private fun describePicked('),
+      body(share, 'private fun queryNameAndSize('),
+      body(share, 'private fun openSource('),
+      body(share, 'private fun materializeToSlot('),
+      body(share, 'override fun materialize('),
+    ].join('\n');
+    expect(media).not.toMatch(/Log\./);
+    expect(media).not.toMatch(/println|printStackTrace/);
+  });
+
+  it('a second pickMedia call gets E_PICK_BUSY and the open picker stays, as on iOS', () => {
+    const pick = body(share, 'override fun pickMedia(');
+    const busy = pick.indexOf('if (mediaPromise != null) return promise.reject("E_PICK_BUSY", "a pick is open")');
+    expect(busy).toBeGreaterThan(-1);
+    // The check runs before the intent is built and before the promise is stored.
+    expect(busy).toBeLessThan(pick.indexOf('val intent'));
+    expect(busy).toBeLessThan(pick.indexOf('mediaPromise = promise'));
+    // The open promise is never rejected by a second call.
+    expect(pick).not.toContain('mediaPromise?.reject');
+    expect(body(share, 'override fun pickFolder(')).not.toContain('E_PICK_BUSY');
+    expect(body(share, 'override fun pickDocuments(')).not.toContain('E_PICK_BUSY');
+  });
+
+  it('more than MAX_MEDIA items reject E_TOO_MANY and do not cut the list', () => {
+    expect(share).toContain('promise.reject("E_TOO_MANY", "too many items; pick fewer")');
+    expect(share).toContain('clip.itemCount > MAX_MEDIA');
+    expect(share).not.toContain('minOf(clip.itemCount, MAX_MEDIA)');
+  });
+
+  it('materialize opens the source in its own try and maps only source failures to E_SOURCE_GONE', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    const open = mat.indexOf('openSource(uri)');
+    const gone = mat.indexOf('FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")');
+    expect(open).toBeGreaterThan(-1);
+    expect(gone).toBeGreaterThan(-1);
+    // The final catch deletes the slot and rethrows. It does not map a code.
+    const last = mat.slice(mat.lastIndexOf('catch (t: Throwable)'));
+    expect(last).not.toContain('E_SOURCE_GONE');
+    expect(mat).toMatch(/i\.read\(buffer\)/);
+    expect(mat).toMatch(/catch \(e: IOException\)/);
+  });
+
+  it('a write failure is E_MATERIALIZE, or NO_SPACE when the cause is ENOSPC', () => {
+    expect(share).toContain('OsConstants.ENOSPC');
+    expect(share).toContain('(e.cause as? ErrnoException)?.errno');
+    expect(body(share, 'private fun writeFailure(')).toContain('FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")');
+    expect(body(share, 'private fun writeFailure(')).toContain('"NO_SPACE:');
+  });
+
+  it('the copy counts bytes and stops above the size plus the margin', () => {
+    expect(share).toContain('MATERIALIZE_MARGIN = 16L * 1024 * 1024');
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('total > size + MATERIALIZE_MARGIN');
+    expect(mat).toContain('FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")');
+  });
+
+  it('an unknown size checks the free space after every 64 MiB', () => {
+    const mat = body(share, 'private fun materializeToSlot(');
+    expect(mat).toContain('64L * 1024 * 1024');
+    expect(mat).toContain('requireSpace(MATERIALIZE_MARGIN)');
+  });
+
+  it('the Spec declares pickMedia and materialize as required', () => {
+    expect(shareSpec).toMatch(/^ {2}pickMedia\(\): Promise<string>;/m);
+    expect(shareSpec).toMatch(/^ {2}materialize\(token: string\): Promise<string>;/m);
+    expect(shareSpec).not.toMatch(/(pickMedia|materialize)\?\(/);
+  });
+});
+
+// Photo and video pick on iOS (Part C, Task 7). The picker returns references.
+// materialize copies ONE item into <caches>/daak-send/<uuid>/. No Xcode test
+// target exists. These pins prove only that a call is present in the source.
+// A device must prove the behaviour.
+describe('iOS media pick and materialize', () => {
+  const strip = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n');
+  const share = strip(read(repo + 'modules/rn-share/ios/DaakShare.swift'));
+  const shareMm = read(repo + 'modules/rn-share/ios/DaakShare.mm');
+  const plist = read(repo + 'apps/mobile/ios/Daak/Info.plist');
+  // From the function name to the next member at the same indent.
+  const body = (src: string, name: string): string => {
+    const at = src.indexOf(name);
+    expect(at).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const next = rest.slice(1).search(/\n  (@objc )?(private )?(static )?func |\n}\n/);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+  const pick = () => body(share, '@objc func pickMedia(');
+  const finish = () => body(share, 'func picker(_ picker: PHPickerViewController, didFinishPicking');
+  const describeMedia = () => body(share, 'private func describeMedia(');
+  const mat = () => body(share, '@objc func materialize(');
+  const fromProvider = () => body(share, 'private func materializeProvider(');
+  const fromAsset = () => body(share, 'private func materializeAsset(');
+
+  it('uses PHPickerConfiguration(photoLibrary:) with selectionLimit 0 and .any(of: [.images, .videos])', () => {
+    expect(share).toContain('import PhotosUI');
+    expect(pick()).toContain('PHPickerConfiguration(photoLibrary: .shared())');
+    expect(pick()).toMatch(/\.selectionLimit = 0/);
+    expect(pick()).toContain('.filter = .any(of: [.images, .videos])');
+    expect(pick()).toMatch(/picker\.delegate = self/);
+    expect(pick()).toContain('present(picker');
+  });
+
+  it('sets preferredAssetRepresentationMode = .current and never .compatible', () => {
+    expect(pick()).toMatch(/\.preferredAssetRepresentationMode = \.current/);
+    expect(share).not.toContain('.compatible');
+  });
+
+  it('the module keeps the NSItemProvider of each pick in memory, keyed by token', () => {
+    expect(share).toContain('private var mediaProviders: [String: NSItemProvider] = [:]');
+    const d = describeMedia();
+    expect(d).toContain('r.assetIdentifier ?? "provider:" + UUID().uuidString');
+    expect(d).toContain('r.itemProvider');
+    expect(d).toContain('mediaProviders.merge(');
+    // A success keeps the provider. A second materialize of the same token
+    // must not go to the asset path, because that path can show the Photos prompt.
+    expect(share).not.toContain('mediaProviders[token] = nil');
+    expect(share).not.toMatch(/mediaProviders\.removeValue/);
+  });
+
+  it('pickMedia rejects E_PICK_BUSY for a second call', () => {
+    const p = pick();
+    const busy = p.indexOf('reject("E_PICK_BUSY", "a pick is open", nil)');
+    expect(busy).toBeGreaterThan(-1);
+    expect(busy).toBeLessThan(p.indexOf('present(picker'));
+    // The NEW call rejects. The open pick keeps its promise.
+    expect(p).not.toMatch(/mediaReject\?\(/);
+    expect(p).toContain('if self.mediaResolve != nil');
+    // A swipe cannot close the sheet without a delegate call.
+    expect(p).toContain('picker.isModalInPresentation = true');
+    // A cancel resolves [] and frees the slot for the next pick.
+    const f = finish();
+    expect(f).toContain('mediaResolve = nil');
+    expect(f).toContain('resolve("[]")');
+    expect(f).toContain('mediaPicker = nil');
+  });
+
+  it('a picker that closed without a delegate call does not keep the busy state', () => {
+    expect(share).toContain('private weak var mediaPicker: PHPickerViewController?');
+    const p = pick();
+    // The busy reject is only for a picker that is still on the screen.
+    expect(p).toContain('$0.presentingViewController != nil || $0.isBeingPresented');
+    const gone = p.indexOf('self.mediaResolve?("[]")');
+    expect(gone).toBeGreaterThan(-1);
+    expect(gone).toBeLessThan(p.indexOf('present(picker'));
+    expect(p).toContain('self.mediaPicker = picker');
+    // A presentation that did not open rejects E_PICK for this call.
+    expect(p).toContain('present(picker, animated: true) {');
+    expect(p).toContain('picker.presentingViewController == nil');
+    expect(p).toContain('reject("E_PICK", "the media picker did not open", nil)');
+  });
+
+  it('more than 5000 results reject E_TOO_MANY', () => {
+    expect(share).toContain('static let maxMedia = 5000');
+    const f = finish();
+    expect(f).toContain('results.count > Self.maxMedia');
+    expect(f).toContain('reject("E_TOO_MANY", "too many items; pick fewer", nil)');
+    expect(f.indexOf('E_TOO_MANY')).toBeLessThan(f.indexOf('describeMedia('));
+    expect(share).not.toMatch(/results\.prefix\(/);
+  });
+
+  it('the JSON is built with JSONSerialization', () => {
+    const d = describeMedia();
+    expect(d).toContain('JSONSerialization.data(withJSONObject: items)');
+    expect(d).toMatch(/"token": token/);
+    expect(d).toMatch(/"name": /);
+    expect(d).toMatch(/"size": /);
+    expect(d).not.toMatch(/\\"token\\"/);
+  });
+
+  it('size reads the asset resource fileSize and falls back to null', () => {
+    const size = body(share, 'static func resourceSize(');
+    expect(size).toContain('value(forKey: "fileSize")');
+    // value(forKey:) throws an Objective-C exception for an unknown key.
+    expect(size).toContain('responds(to: NSSelectorFromString("fileSize"))');
+    // A size of 0 is unknown, so the plan counts the default.
+    expect(size).toContain('.flatMap { $0 > 0 ? $0 : nil }');
+    const d = describeMedia();
+    expect(d).toContain('NSNull()');
+    expect(d).toContain('PHPhotoLibrary.authorizationStatus(for: .readWrite)');
+    expect(d).toContain('.authorized');
+    expect(d).toContain('.limited');
+    // The pick never asks for Photos access.
+    expect(pick() + finish() + d).not.toContain('requestAuthorization');
+  });
+
+  it('the name is the suggested name plus the type extension, cleaned by safeLeaf', () => {
+    const name = body(share, 'static func mediaName(');
+    expect(name).toContain('provider.suggestedName');
+    expect(name).toContain('preferredFilenameExtension');
+    expect(name).toContain('"media"');
+    expect(name).toContain('safeLeaf(');
+    const type = body(share, 'static func mediaType(');
+    expect(type).toContain('.conforms(to: .image)');
+    expect(type).toContain('.conforms(to: .movie)');
+    const leaf = body(share, 'static func safeLeaf(');
+    expect(leaf).toContain('maxLeafBytes');
+    expect(share).toContain('static let maxLeafBytes = 200');
+  });
+
+  it('materialize uses loadFileRepresentation and moves the temp file into <caches>/daak-send/<uuid>/ for a token in memory', () => {
+    const m = mat();
+    expect(m).toContain('DispatchQueue.global(');
+    expect(m).toContain('materializeProvider(');
+    const p = fromProvider();
+    expect(p).toContain('loadFileRepresentation(forTypeIdentifier: type)');
+    expect(p).toContain('DaakShare.newSendSlot()');
+    // The move is inside the handler, because the temp file goes when it returns.
+    const handler = p.indexOf('loadFileRepresentation(');
+    const create = p.indexOf('createDirectory(at: slot');
+    const move = p.indexOf('moveItem(at: url, to: dest)');
+    expect(create).toBeGreaterThan(handler);
+    expect(move).toBeGreaterThan(create);
+    expect(p).toContain('copyItem(at: url, to: dest)');
+    const slot = body(share, 'static func newSendSlot(');
+    expect(slot).toContain('.cachesDirectory');
+    expect(slot).toContain('"daak-send"');
+    expect(slot).toContain('UUID().uuidString');
+  });
+
+  it('for a token that is not in memory it requests Photos access and uses PHAssetResourceManager.writeData with isNetworkAccessAllowed true', () => {
+    const m = mat();
+    expect(m).toContain('materializeAsset(');
+    const a = fromAsset();
+    const ask = a.indexOf('PHPhotoLibrary.requestAuthorization(for: .readWrite)');
+    expect(ask).toBeGreaterThan(-1);
+    expect(a.indexOf('.notDetermined')).toBeLessThan(ask);
+    expect(a).toContain('PHAsset.fetchAssets(withLocalIdentifiers: [token], options: nil)');
+    expect(a).toContain('options.isNetworkAccessAllowed = true');
+    expect(a).toContain('PHAssetResourceManager.default().writeData(for: resource, toFile: dest, options: options)');
+    expect(a).toContain('safeLeaf(resource.originalFilename)');
+    // An edited asset sends the current version, as the provider path does.
+    expect(body(share, 'static func originalResource(')).toContain(
+      'let order: [PHAssetResourceType] = [.fullSizePhoto, .fullSizeVideo, .photo, .video]',
+    );
+    // The free space check runs before the write.
+    expect(a.indexOf('volumeAvailableCapacityForImportantUsage')).toBeLessThan(a.indexOf('writeData('));
+    expect(a).toContain('free < size + Self.mediaMargin');
+    // The code holds the size plus the margin, as on Android.
+    expect(a).toContain('MediaFailure.noSpace(size + Self.mediaMargin)');
+    expect(share).toContain('static let mediaMargin: Int64 = 16 * 1024 * 1024');
+  });
+
+  it('a missing asset or a refused access rejects with E_SOURCE_GONE', () => {
+    const a = fromAsset();
+    expect(a).toMatch(/status == \.authorized \|\| status == \.limited/);
+    expect((a.match(/\.sourceGone/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // A provider token that is not in memory cannot come back.
+    const m = mat();
+    expect(m).toContain('token.hasPrefix("provider:")');
+    expect(m).toContain('MediaFailure.sourceGone');
+    expect(share).toContain('reject("E_SOURCE_GONE", "E_SOURCE_GONE", nil)');
+  });
+
+  it('an iCloud failure rejects with NOT_DOWNLOADED', () => {
+    const p = fromProvider();
+    expect(p).toMatch(/guard let url, error == nil else/);
+    expect(p).toContain('.notDownloaded');
+    // A full disk in the system temp copy gives NO_SPACE, not NOT_DOWNLOADED.
+    expect(p).toContain('MediaFailure.from($0, size: nil, other: .notDownloaded)');
+    expect(fromAsset()).toContain('other: .notDownloaded');
+    expect(share).toContain('reject("NOT_DOWNLOADED", "NOT_DOWNLOADED", nil)');
+  });
+
+  it('a full disk rejects NO_SPACE and any other failure rejects E_MATERIALIZE with a fixed message', () => {
+    const from = body(share, 'static func from(');
+    expect(from).toContain('NSFileWriteOutOfSpaceError');
+    expect(from).toContain('ENOSPC');
+    expect(from).toContain('size.map { $0 + DaakShare.mediaMargin } ?? 0');
+    expect(share).toContain('reject("NO_SPACE", "NO_SPACE:\\(needed)", nil)');
+    expect(share).toContain(
+      'reject("E_MATERIALIZE", "Daak could not prepare a file for sending.", nil)',
+    );
+    expect(fromProvider()).toContain('other: .failed');
+  });
+
+  it('a failed materialize deletes the slot', () => {
+    expect((fromProvider().match(/try\? fm\.removeItem\(at: slot\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect((fromAsset().match(/try\? fm\.removeItem\(at: slot\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('the slot is never under Documents', () => {
+    const media = [mat(), fromProvider(), fromAsset(), body(share, 'static func newSendSlot(')].join('\n');
+    expect(media).not.toContain('documentDirectory');
+    expect(media).not.toContain('Documents');
+  });
+
+  it('no Swift log call in the new code prints a name, a token or a path', () => {
+    const media = [
+      pick(),
+      finish(),
+      describeMedia(),
+      mat(),
+      fromProvider(),
+      fromAsset(),
+      body(share, 'static func mediaName('),
+      body(share, 'static func resourceSize('),
+    ].join('\n');
+    expect(media).not.toMatch(/NSLog|print\(|os_log|Logger\(/);
+  });
+
+  it('the .mm lists both methods', () => {
+    expect(share).toMatch(/@objc func pickMedia\(_ resolve: @escaping RCTPromiseResolveBlock,\s*reject: @escaping RCTPromiseRejectBlock\)/);
+    expect(share).toMatch(/@objc func materialize\(_ token: String,\s*resolve: @escaping RCTPromiseResolveBlock,\s*reject: @escaping RCTPromiseRejectBlock\)/);
+    expect(shareMm).toContain(
+      'RCT_EXTERN_METHOD(pickMedia:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)',
+    );
+    expect(shareMm).toMatch(
+      /RCT_EXTERN_METHOD\(materialize:\(NSString \*\)token\s+resolve:\(RCTPromiseResolveBlock\)resolve reject:\(RCTPromiseRejectBlock\)reject\)/,
+    );
+  });
+
+  it('NSPhotoLibraryUsageDescription is in Info.plist', () => {
+    expect(plist).toMatch(
+      /<key>NSPhotoLibraryUsageDescription<\/key>\s*<string>Daak reads the photos and videos that you choose to send\.<\/string>/,
+    );
+  });
+});
+
+describe('the send plan methods are wired through the native glue', () => {
+  it('the Android module calls the uniffi methods and resolves null for the Unit ones', () => {
+    const kt = read(repo + 'apps/mobile/android/app/src/main/java/dev/darshit/daak/DaakModule.kt');
+    expect(kt).toContain('handle().saveSendPlan(peerId, share, json); null');
+    expect(kt).toContain('handle().listSendPlans(peerId)');
+    expect(kt).toContain('handle().deleteSendPlan(peerId, share); null');
+  });
+
+  it('the iOS module declares and forwards the three send plan methods', () => {
+    const swift = read(repo + 'apps/mobile/ios/Daak.swift');
+    const mm = read(repo + 'apps/mobile/ios/DaakModule.mm');
+    for (const m of ['saveSendPlan', 'listSendPlans', 'deleteSendPlan']) {
+      expect(swift).toMatch(new RegExp('@objc func ' + m + '\\('));
+      expect(swift).toContain('need().' + m + '(');
+      expect(mm).toContain('RCT_EXTERN_METHOD(' + m + ':');
+    }
+  });
+
+  // A Void method must end with `return nil as Void?`. Without it `run` resolves with a
+  // value that React Native cannot serialize. A syntax parse does not catch this.
+  it('the two Void Swift methods end with return nil as Void? in the iOS and macOS modules', () => {
+    for (const path of ['apps/mobile/ios/Daak.swift', 'apps/desktop/macos/Daak-macOS/Daak.swift']) {
+      const swift = read(repo + path);
+      for (const [name, call] of [
+        ['saveSendPlan', 'need().saveSendPlan('],
+        ['deleteSendPlan', 'need().deleteSendPlan('],
+      ]) {
+        const start = swift.indexOf('@objc func ' + name + '(');
+        expect(start).toBeGreaterThan(-1);
+        const end = swift.indexOf('@objc func ', start + 10);
+        const fn = swift.slice(start, end === -1 ? undefined : end);
+        expect(fn).toContain(call);
+        expect(fn).toContain('return nil as Void?');
+      }
+      // The method that returns a string must not return nil.
+      const list = swift.slice(swift.indexOf('@objc func listSendPlans('));
+      expect(list.slice(0, list.indexOf('@objc func ', 10))).not.toContain('return nil as Void?');
+    }
+  });
+});
+
+// The final review (I3): a picked item keeps a persisted read grant. Android
+// prunes the oldest grants above its limit, and the oldest grant is often the
+// download-folder tree. releaseMedia gives the grants of sent media back. These
+// pins prove only that the calls are in the source. The Gradle and Xcode builds
+// check the rest.
+describe('releaseMedia gives the persisted media grants back', () => {
+  const dir = repo + 'modules/rn-share/android/src/main/java/dev/darshit/daak/share/';
+  const kt = read(dir + 'DaakShareModule.kt');
+  const spec = read(repo + 'modules/rn-share/js/NativeDaakShare.ts');
+  const swift = read(repo + 'modules/rn-share/ios/DaakShare.swift');
+  const mm = read(repo + 'modules/rn-share/ios/DaakShare.mm');
+  const fnOf = (src: string, name: string) => {
+    const rest = src.slice(src.indexOf(name));
+    const end = rest.slice(1).search(/\n  (@ReactMethod\n  )?(@objc )?(override |private )?(fun|func) /);
+    return end === -1 ? rest : rest.slice(0, end + 1);
+  };
+  const code = (s: string) =>
+    s
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .join('\n');
+
+  it('the Spec lists releaseMedia as a required member', () => {
+    expect(spec).toMatch(/^\s+releaseMedia\(tokensJson: string\): Promise<void>;/m);
+  });
+
+  it('Android releases each token in its own try and catch', () => {
+    const fn = code(fnOf(kt, 'override fun releaseMedia('));
+    expect(fn).toContain('JSONArray(tokensJson)');
+    expect(fn).toMatch(
+      /try \{[^}]*releasePersistableUriPermission\(uri, Intent\.FLAG_GRANT_READ_URI_PERMISSION\)[^}]*\} catch/,
+    );
+    expect(fn).toMatch(/for \(i in 0 until /);
+  });
+
+  it('Android releases only a held grant that is not a tree uri', () => {
+    const fn = code(fnOf(kt, 'override fun releaseMedia('));
+    expect(fn).toContain('persistedUriPermissions');
+    expect(fn).toContain('DocumentsContract.isTreeUri(uri)');
+    expect(fn).toMatch(/scheme != "content"/);
+  });
+
+  it('Android runs off the main thread, resolves null and logs no token', () => {
+    const fn = code(fnOf(kt, 'override fun releaseMedia('));
+    expect(fn).toMatch(/thread\(name = "daak-release-media"\)/);
+    expect(fn).toContain('promise.resolve(null)');
+    expect(fn).not.toMatch(/Log\.|println|promise\.reject/);
+  });
+
+  it('iOS has a stub that resolves nil at once and the .mm lists it', () => {
+    const fn = fnOf(swift, '@objc func releaseMedia(');
+    expect(fn).toContain('resolve(nil)');
+    expect(fn).not.toContain('reject(');
+    expect(mm).toMatch(/RCT_EXTERN_METHOD\(releaseMedia:\(NSString \*\)tokensJson/);
   });
 });

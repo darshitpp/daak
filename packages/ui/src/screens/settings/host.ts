@@ -25,5 +25,10 @@ export interface SettingsHost {
    * text and puts the text in a fenced block.
    */
   reportIssue?: { copy: (text: string) => Promise<void> };
+  /**
+   * The OS and device lines of the report (`os:`, `device:`). Sync and never
+   * throws. The section puts them after the app line. Absent: no lines.
+   */
+  deviceInfo?: () => string;
 }
 

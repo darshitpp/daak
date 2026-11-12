@@ -36,6 +36,10 @@ const METHODS: (keyof DaakEngine)[] = [
   'backgroundWake',
   // The debug bundle text. It works before start.
   'exportDebugBundle',
+  // Part C: the saved plan of a batched send.
+  'saveSendPlan',
+  'listSendPlans',
+  'deleteSendPlan',
 ];
 
 // Compile-time only: adding, removing or renaming a DaakEvent member breaks tsc.
@@ -75,6 +79,7 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   acceptPairing: true,
   sendText: true,
   sendFiles: true,
+  sendFilesTagged: true,
   listDevices: true,
   revokePairing: true,
   confirmPairing: true,
@@ -95,6 +100,9 @@ const NATIVE_METHODS: Record<NativeMethods, true> = {
   setPresence: true,
   localPort: true,
   exportDebugBundle: true,
+  saveSendPlan: true,
+  listSendPlans: true,
+  deleteSendPlan: true,
   shutdown: true,
   addListener: true,
   removeListeners: true,
@@ -124,6 +132,7 @@ describe('contract types', () => {
       armCodePairing: true, codePairingStatus: true, cancelCodePairing: true,
       codePairingSupported: true,
       exportDebugBundle: true,
+      saveSendPlan: true, listSendPlans: true, deleteSendPlan: true,
     };
     // 13 = the union's 13 members. peer.incompatible and outbox.queued are
     // pinned by tsc alone, via this Record's exhaustiveness, and NOT by the
@@ -177,7 +186,10 @@ describe('contract types', () => {
     // method and a TurboModule override on all three native modules.
     // export_debug_bundle is the 35th: a UDL method and a TurboModule
     // override on all three native modules. It works before start.
-    expect(Object.keys(NATIVE_METHODS).length).toBe(35);
+    // send_files_tagged (Part C) is the 36th, on all three native modules.
+    // save_send_plan, list_send_plans, and delete_send_plan (Part C) are the
+    // 37th to 39th, on all three native modules.
+    expect(Object.keys(NATIVE_METHODS).length).toBe(39);
   });
 
   it('models a device without fabricating liveness (R11)', () => {
@@ -247,6 +259,9 @@ function fakeNative(over: Partial<NativeDaakSpec> = {}): NativeDaakSpec {
     localPort: async () => 1234,
     // The bundle is plain text, not JSON. The real method works before start.
     exportDebugBundle: async () => 'daak debug bundle\nengine: not started\n',
+    saveSendPlan: async () => {},
+    listSendPlans: async () => '[]',
+    deleteSendPlan: async () => {},
     pairingBundle: async () => '{}',
     // R-T10-3: an unknown id is an ERROR, not a silent success. The fake has to
     // model that, or the shared suite's rejection assertion would be testing
@@ -471,6 +486,58 @@ describe('InProcessEngine', () => {
     expect(calls).toEqual(['text:d1:hi', 'files:d1:/a,/b']);
   });
 
+  it('routes a send with share and batch to sendFilesTagged and keeps the plain send otherwise', async () => {
+    const calls: string[] = [];
+    const native = fakeNative({
+      sendFiles: async (peer: string, paths: string[]) => { calls.push(`files:${peer}:${paths.join()}`); return 'cc33dd44'; },
+      sendFilesTagged: async (peer: string, paths: string[], share: string, batch: string, attempt: number) => {
+        calls.push(`tagged:${peer}:${paths.join()}:${share}:${batch}:${attempt}`);
+        return 'ee55ff66';
+      },
+    });
+    const engine = new InProcessEngine(native, () => () => {});
+    expect(await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's', batch: '1/2', attempt: 3 }))
+      .toEqual({ transferId: 'ee55ff66', queued: true });
+    await engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's', batch: '1/2' });
+    await engine.send({ peerDeviceId: 'd1', files: ['/a'] });
+    await expect(engine.send({ peerDeviceId: 'd1', files: ['/a'], share: 's' })).rejects.toThrow(/set together/);
+    await expect(engine.send({ peerDeviceId: 'd1', files: ['/a'], batch: '1/2' })).rejects.toThrow(/set together/);
+    expect(calls).toEqual(['tagged:d1:/a:s:1/2:3', 'tagged:d1:/a:s:1/2:0', 'files:d1:/a']);
+  });
+
+  it('passes a send plan to the native module and keeps only well formed list entries', async () => {
+    const calls: string[] = [];
+    const native = fakeNative({
+      saveSendPlan: async (p: string, s: string, j: string) => { calls.push(`save:${p}:${s}:${j}`); },
+      deleteSendPlan: async (p: string, s: string) => { calls.push(`delete:${p}:${s}`); },
+      listSendPlans: async (p: string) => {
+        calls.push(`list:${p}`);
+        return JSON.stringify([
+          { share: 'aa', plan: '{"k":1}' },
+          { share: 'bb', plan: 5 },
+          { share: 7, plan: 'x' },
+          { plan: 'x' },
+          null,
+          'text',
+          { share: 'cc', plan: '' },
+        ]);
+      },
+    });
+    const engine = new InProcessEngine(native, () => () => {});
+    await engine.saveSendPlan('d1', 'aa', '{"k":1}');
+    expect(await engine.listSendPlans('d1')).toEqual([
+      { share: 'aa', plan: '{"k":1}' },
+      { share: 'cc', plan: '' },
+    ]);
+    await engine.deleteSendPlan('d1', 'aa');
+    expect(calls).toEqual(['save:d1:aa:{"k":1}', 'list:d1', 'delete:d1:aa']);
+  });
+
+  it('returns no plans when the native list is not an array', async () => {
+    const native = fakeNative({ listSendPlans: async () => '{}' });
+    expect(await new InProcessEngine(native, () => () => {}).listSendPlans('d1')).toEqual([]);
+  });
+
   it('refuses a send that carries both text and files (I2)', async () => {
     const engine = new InProcessEngine(fakeNative(), () => () => {});
     await expect(engine.send({ peerDeviceId: 'd1', text: 'hi', files: ['/a'] })).rejects.toThrow(/not both/);
@@ -643,6 +710,32 @@ describe('InProcessEngine', () => {
     const [row] = await engine.listInbox();
     const roots: string[] = row.groupRoots ?? [];
     expect(roots).toEqual(['/out/album']);
+  });
+
+  it('parses the optional share and batch tag', async () => {
+    const base = {
+      payloadId: 'aa'.repeat(16),
+      transferId: 'aa'.repeat(16),
+      peerDeviceId: 'bb'.repeat(16),
+      kind: 'media',
+      itemCount: 1,
+      summary: '1 file(s)',
+      receivedAt: 0,
+      savedPaths: ['/out/a.bin'],
+    };
+    const share = '00112233445566778899aabbccddeeff';
+    const engine = new InProcessEngine(
+      fakeNative({
+        listInbox: async () => JSON.stringify([{ ...base, share, batch: '2/7' }, base]),
+      }),
+      () => () => {},
+    );
+    const [tagged, plain] = await engine.listInbox();
+    const tag: { share?: string; batch?: string } = tagged;
+    expect(tag.share).toBe(share);
+    expect(tag.batch).toBe('2/7');
+    expect(plain.share).toBeUndefined();
+    expect(plain.batch).toBeUndefined();
   });
 
   it('rejects a list payload that is not an array instead of returning it typed', async () => {

@@ -205,10 +205,17 @@ describe('the failed-send category has its own channel and its own buttons', () 
       kotlin.indexOf('private fun ensureChannel'),
       kotlin.indexOf('override fun registerCategories'),
     );
-    expect(ensure).toMatch(/"daak\.received"|CHANNEL\b/);
+    expect(kotlin).toMatch(/const val CH_RECEIVED_V2 = "daak\.received\.v2"/);
+    expect(kotlin).toMatch(/const val CH_FAILED_V2 = "daak\.failed\.v2"/);
+    expect(kotlin).toMatch(/LEGACY_CHANNELS = listOf\("daak\.received", "daak\.failed"\)/);
+    expect(ensure).toContain('setSound(');
+    expect(ensure).toContain('DEFAULT_NOTIFICATION_URI');
+    expect(ensure).toContain('USAGE_NOTIFICATION');
+    expect(ensure).toContain('IMPORTANCE_NONE');
+    expect(ensure).toContain('deleteNotificationChannel');
     expect(ensure).toContain('"Received files"');
     expect(kotlin).toMatch(/const val CHANNEL_FAILED = "daak\.failed"/);
-    expect(ensure).toContain('CHANNEL_FAILED');
+    expect(ensure).toContain('CH_FAILED_V2');
     expect(ensure).toContain('"Send failures"');
     expect(ensure).toMatch(/IMPORTANCE_DEFAULT/);
   });
@@ -221,7 +228,7 @@ describe('the failed-send category has its own channel and its own buttons', () 
     expect(register).toMatch(/ensureChannels?\(/);
     const post = kotlin.slice(kotlin.indexOf('override fun post('), kotlin.indexOf('override fun cancel('));
     expect(post).toMatch(/channelFor\(category\)/);
-    expect(kotlin).toMatch(/private fun channelFor\(category: String\)[^\n]*\n?[^\n]*CHANNEL_FAILED[^\n]*CHANNEL/);
+    expect(kotlin).toMatch(/private fun channelFor\(category: String\)[^\n]*\n?[^\n]*CH_FAILED_V2[^\n]*CH_RECEIVED_V2/);
     expect(post).not.toMatch(/category\.ifEmpty/);
     expect(post).not.toMatch(/addAction/);
   });
@@ -476,5 +483,49 @@ describe('the notify modules answer appInfo from the app bundle', () => {
     expect(mac).toContain('RCT_EXPORT_METHOD(appInfo');
     expect(mac).toContain('CFBundleShortVersionString');
     expect(mac).toContain('CFBundleVersion');
+  });
+});
+
+describe('the Android post can be silent and can replace a notification in place', () => {
+  const kt = read(
+    '../../../../modules/rn-notify/android/src/main/java/dev/darshit/daak/notify/DaakNotifyModule.kt',
+  );
+  const post = kt.slice(kt.indexOf('override fun post('), kt.indexOf('override fun cancel('));
+  const cancel = kt.slice(kt.indexOf('override fun cancel('), kt.indexOf('override fun consumePendingAction('));
+  // These pins prove that a call is present. A device must prove that the sound plays.
+
+  it('post calls setSilent with the silent flag', () => {
+    expect(post).toContain('silent: Boolean');
+    expect(post).toContain('.setSilent(silent)');
+  });
+
+  it('post uses the string id as the notification tag and 0 as the id', () => {
+    expect(post).toContain('.notify(id, 0, notification)');
+  });
+
+  it('cancel uses the same tag', () => {
+    expect(cancel).toContain('.cancel(id, 0)');
+  });
+
+  it('the file never calls setOnlyAlertOnce(true)', () => {
+    expect(kt).not.toContain('setOnlyAlertOnce(true)');
+  });
+
+  it('the received channel stays daak.received.v2', () => {
+    expect(kt).toContain('const val CH_RECEIVED_V2 = "daak.received.v2"');
+  });
+
+  it('no notify call uses hashCode as the notification id', () => {
+    expect(kt).not.toContain('notify(id.hashCode()');
+    expect(kt).not.toContain('cancel(id.hashCode()');
+  });
+});
+
+describe('the native notify spec has the silent parameter', () => {
+  const spec = read('../../../../modules/rn-notify/js/NativeDaakNotify.ts');
+
+  // D1 added a seventh parameter, thread: string, after silent.
+  it('post has a sixth parameter silent: boolean and a seventh parameter thread: string', () => {
+    expect(spec).toMatch(/post\(id: string, title: string, body: string, category: string, payloadJson: string, silent: boolean, thread: string\): Promise<void>/);
   });
 });

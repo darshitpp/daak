@@ -140,6 +140,7 @@ describe('macOS runs the engine in-process', () => {
       'cancelCodePairing:',
       'sendText:',
       'sendFiles:',
+      'sendFilesTagged:',
       'listDevices:',
       'cancel:',
       'retry:',
@@ -151,6 +152,9 @@ describe('macOS runs the engine in-process', () => {
       'setPresence:',
       'localPort:',
       'exportDebugBundle:',
+      'saveSendPlan:',
+      'listSendPlans:',
+      'deleteSendPlan:',
       'shutdown:',
     ]) {
       expect(mm).toContain(m);

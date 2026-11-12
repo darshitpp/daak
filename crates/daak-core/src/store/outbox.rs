@@ -15,18 +15,38 @@ pub struct OutboxRow {
     pub updated_at: i64,
 }
 
-/// Exponential backoff with a 10-minute cap; jitter is caller-supplied seconds.
+/// The shortest time in seconds since the last attempt on a row before
+/// `wake_outbox_for_peer` makes that row due.
+pub const WAKE_MIN_IDLE_SECS: i64 = 30;
+
+/// The retry wait in seconds, with a 10-minute cap. The jitter is
+/// caller-supplied seconds.
 pub fn backoff_delay(attempts: u32, jitter: u64) -> i64 {
     backoff_delay_with(attempts, jitter, 600)
 }
 
-/// The same backoff curve as `backoff_delay`, with a caller-supplied cap in
+/// The same schedule as `backoff_delay`, with a caller-supplied cap in
 /// seconds. The drain uses a higher cap when the device is in battery-saver
 /// mode. `backoff_delay(attempts, jitter)` is exactly
 /// `backoff_delay_with(attempts, jitter, 600)`.
+///
+/// `attempts` is the number of the failed attempt, from 1. The jitter adds at
+/// most half of the step, so a 2 s step never waits more than 3 s.
 pub fn backoff_delay_with(attempts: u32, jitter: u64, cap_secs: i64) -> i64 {
-    let base = 15i64.saturating_mul(1i64 << attempts.min(6));
-    (base + jitter as i64).min(cap_secs)
+    // The user schedule: fast first, then slower. 100 attempts take about 37
+    // minutes of waiting, plus the dial time.
+    let step: i64 = match attempts {
+        0..=5 => 2,
+        6..=10 => 3,
+        11..=15 => 5,
+        16..=20 => 10,
+        21..=39 => 15,
+        _ => 30,
+    };
+    // Bound the jitter before the cast. A u64 above i64::MAX casts to a
+    // negative value.
+    let jitter = jitter.min(step as u64 / 2) as i64;
+    (step + jitter).min(cap_secs)
 }
 
 /// Shared by `enqueue_outbox` and the atomic two-table enqueue, so both write
@@ -102,6 +122,21 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Make the pending rows of ONE peer due now. The engine calls this once
+    /// for each offline-to-online change of the peer. The idle guard skips a
+    /// row that the drain tried less than `WAKE_MIN_IDLE_SECS` ago. It limits
+    /// a forged or flapping signal. This method does not change `attempts`.
+    /// It returns the number of rows changed.
+    pub fn wake_outbox_for_peer(&self, peer: &[u8; 16], now: i64) -> Result<usize> {
+        let n = self.conn().execute(
+            "UPDATE outbox SET next_attempt_at = ?2
+             WHERE state = 'pending' AND peer_device_id = ?1
+               AND next_attempt_at > ?2 AND updated_at <= ?2 - ?3",
+            rusqlite::params![&peer[..], now, WAKE_MIN_IDLE_SECS],
+        )?;
+        Ok(n)
+    }
+
     /// Every row of ONE peer, in any state. Used to prove a reconnect drained
     /// each queued row exactly once.
     pub fn list_outbox_for_peer(&self, peer: &[u8; 16]) -> Result<Vec<OutboxRow>> {
@@ -117,11 +152,14 @@ impl Db {
 
     /// The number of rows for one peer that are not yet sent. Used by the
     /// presence queue-depth signal, so the UI can show "N queued".
-    /// The payload ids of every outbox row that is not delivered. Their staged
-    /// files must survive the startup sweep: a `failed` row can still be retried.
+    /// The payload ids of every outbox row that is not delivered or canceled.
+    /// Their staged files must survive the startup sweep: a `failed` row can
+    /// still be retried. A `canceled` row never sends, so the sweep removes
+    /// what a failed cleanup left.
     pub fn live_outbox_payload_ids(&self) -> Result<Vec<[u8; 16]>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT payload_id FROM outbox WHERE state != 'done'")?;
+        let mut stmt =
+            conn.prepare("SELECT payload_id FROM outbox WHERE state NOT IN ('done','canceled')")?;
         let rows = stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -179,12 +217,26 @@ impl Db {
             crate::diag::short_id(id)
         );
         let n = self.conn().execute(
-            // Guards the "pending/sending -> failed" edge: cancel acts on a
-            // pending row and the drain's give-up path on a sending one; a row
+            // Guards the "pending/sending -> failed" edge: the drain's give-up
+            // path acts on a sending row (a cancel uses `cancel_outbox`); a row
             // already "failed" or "done" is left alone, so a late terminal
             // settle cannot relabel a delivered row.
             "UPDATE outbox SET state = 'failed', updated_at = ?2
              WHERE id = ?1 AND state IN ('pending','sending')",
+            rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Claim a row for a cancel. True only for the caller that moved the row
+    /// from `pending`, `sending`, or `failed` to `canceled`. The cancel deletes
+    /// the staged files only after this claim. A row in `awaiting_ack` or
+    /// `done` is not claimed. No query selects `canceled`, so the worker, a
+    /// drain settle, and a retry leave the row alone.
+    pub fn cancel_outbox(&self, id: &[u8; 16]) -> Result<bool> {
+        let n = self.conn().execute(
+            "UPDATE outbox SET state = 'canceled', updated_at = ?2
+             WHERE id = ?1 AND state IN ('pending','sending','failed')",
             rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
         )?;
         Ok(n > 0)
@@ -215,8 +267,8 @@ impl Db {
     /// True only if the row was re-armed. Guards the "failed -> pending" edge of
     /// the outbox state machine: manual retry must not re-arm a row a drain has
     /// already claimed ("sending" -> double drain) or already delivered ("done"
-    /// -> duplicate delivery). A canceled row lives in "failed", so cancel then
-    /// retry is still the intended undo path.
+    /// -> duplicate delivery). Every canceled row lives in "canceled". Its
+    /// staged files are gone, so it is not re-armed.
     pub fn retry_outbox_now(&self, id: &[u8; 16]) -> Result<bool> {
         let now = crate::manifest::now_ms() as i64 / 1000;
         let n = self.conn().execute(
@@ -337,6 +389,54 @@ mod tests {
         }
     }
 
+    // F5 and item B: a cancel claims a pending, sending, or failed row with
+    // one guarded UPDATE. Only one caller claims it. A row in awaiting_ack or
+    // done is not claimed, so its staged files stay.
+    #[test]
+    fn cancel_outbox_claims_a_pending_sending_or_failed_row_once() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        for (id, state) in [
+            (1u8, "pending"),
+            (2, "sending"),
+            (3, "failed"),
+            (4, "awaiting_ack"),
+            (5, "done"),
+        ] {
+            let mut r = row_for(id, 7);
+            r.state = state.into();
+            db.enqueue_outbox(&r).unwrap();
+            let claimed = db.cancel_outbox(&r.id).unwrap();
+            let want = matches!(state, "pending" | "sending" | "failed");
+            assert_eq!(claimed, want, "state {state}");
+            assert!(
+                !db.cancel_outbox(&r.id).unwrap(),
+                "only one caller claims the row ({state})"
+            );
+            let after = db.get_outbox(&r.id).unwrap().unwrap().state;
+            assert_eq!(after, if want { "canceled" } else { state });
+            if want {
+                assert!(
+                    !db.retry_outbox_now(&r.id).unwrap(),
+                    "a canceled row is not re-armed ({state})"
+                );
+            }
+        }
+        assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
+        assert_eq!(db.wake_outbox_for_peer(&[7u8; 16], i64::MAX).unwrap(), 0);
+        assert_eq!(db.count_outbox_for_peer(&[7u8; 16]).unwrap(), 0);
+    }
+
+    #[test]
+    fn live_outbox_payload_ids_skips_canceled_rows() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&row_for(1, 7)).unwrap();
+        db.enqueue_outbox(&row_for(2, 7)).unwrap();
+        assert!(db.cancel_outbox(&[2u8; 16]).unwrap());
+        assert_eq!(db.live_outbox_payload_ids().unwrap(), vec![[1u8; 16]]);
+    }
+
     #[test]
     fn live_outbox_payload_ids_skips_delivered_rows() {
         let db = Db::open_in_memory().unwrap();
@@ -362,8 +462,8 @@ mod tests {
             "newly queued is immediately due"
         );
 
-        // First failure at now=100: backoff_delay(attempts+1 = 1, 0) = 15 * 2^1 = 30,
-        // so next_attempt_at = 130.
+        // First failure at now=100: backoff_delay(attempts+1 = 1, 0) = 2,
+        // so next_attempt_at = 102.
         assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
         db.mark_outbox_failed(&[1u8; 16], 100, 0).unwrap();
         assert_eq!(
@@ -371,9 +471,9 @@ mod tests {
             0,
             "not due before backoff elapses"
         );
-        assert_eq!(db.due_outbox(129).unwrap().len(), 0);
+        assert_eq!(db.due_outbox(101).unwrap().len(), 0);
         assert_eq!(
-            db.due_outbox(130).unwrap().len(),
+            db.due_outbox(102).unwrap().len(),
             1,
             "due once backoff elapses"
         );
@@ -381,6 +481,48 @@ mod tests {
 
         assert!(backoff_delay(1, 0) <= backoff_delay(2, 0));
         assert!(backoff_delay(9, 0) <= 600, "backoff must cap at 10 minutes");
+    }
+
+    #[test]
+    fn the_wait_follows_the_table() {
+        let table = [
+            (1, 2),
+            (5, 2),
+            (6, 3),
+            (10, 3),
+            (11, 5),
+            (15, 5),
+            (16, 10),
+            (20, 10),
+            (21, 15),
+            (39, 15),
+            (40, 30),
+            (100, 30),
+        ];
+        for (n, want) in table {
+            assert_eq!(backoff_delay_with(n, 0, 600), want, "attempt {n}");
+        }
+    }
+
+    #[test]
+    fn the_jitter_is_at_most_half_of_the_step() {
+        assert_eq!(backoff_delay_with(1, 5, 600), 3);
+        assert_eq!(backoff_delay_with(1, 1, 600), 3);
+        assert_eq!(backoff_delay_with(40, 5, 600), 35);
+        assert_eq!(backoff_delay_with(40, 100, 600), 45);
+    }
+
+    #[test]
+    fn a_huge_jitter_does_not_make_the_wait_negative_or_shorter_than_the_step() {
+        // u64::MAX cast to i64 is -1. The bound must apply before the cast.
+        assert_eq!(backoff_delay_with(1, u64::MAX, 600), 3);
+        assert_eq!(backoff_delay_with(40, u64::MAX, 600), 45);
+        assert_eq!(backoff_delay_with(40, 1 << 63, 600), 45);
+    }
+
+    #[test]
+    fn the_cap_still_applies() {
+        assert_eq!(backoff_delay_with(40, 0, 20), 20);
     }
 
     #[test]
@@ -448,6 +590,75 @@ mod tests {
         db.delete_outbox(&[1u8; 16]).unwrap();
         assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
         assert!(db.list_outbox_for_peer(&[7u8; 16]).unwrap().is_empty());
+    }
+
+    fn backed_off(id: u8, peer: u8, attempts: u32, updated_at: i64) -> OutboxRow {
+        let mut r = row_for(id, peer);
+        r.attempts = attempts;
+        r.next_attempt_at = 600;
+        r.updated_at = updated_at;
+        r
+    }
+
+    #[test]
+    fn wake_makes_a_backed_off_row_due() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&backed_off(1, 3, 5, 7)).unwrap();
+        assert!(db.due_outbox_for_peer(&[3u8; 16], 100).unwrap().is_empty());
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 1);
+        let due = db.due_outbox_for_peer(&[3u8; 16], 100).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].attempts, 5);
+        assert_eq!(due[0].updated_at, 7);
+    }
+
+    #[test]
+    fn wake_leaves_other_states_alone() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        for id in 1..=4u8 {
+            db.enqueue_outbox(&row_for(id, 3)).unwrap();
+        }
+        // 1: sending. 2: awaiting_ack. 3: done. 4: terminal failed.
+        assert!(db.mark_outbox_sending(&[1u8; 16]).unwrap());
+        for id in [2u8, 3] {
+            assert!(db.mark_outbox_sending(&[id; 16]).unwrap());
+            assert!(db.mark_outbox_awaiting_ack(&[id; 16]).unwrap());
+        }
+        assert!(db.mark_outbox_done(&[3u8; 16]).unwrap());
+        assert!(db.mark_outbox_terminal_failed(&[4u8; 16], "test").unwrap());
+        // The state walk stamps the real clock. Push the fields back.
+        db.conn()
+            .execute(
+                "UPDATE outbox SET next_attempt_at = 600, updated_at = 0",
+                [],
+            )
+            .unwrap();
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 0);
+        for r in db.list_outbox_for_peer(&[3u8; 16]).unwrap() {
+            assert_eq!(r.next_attempt_at, 600, "state {}", r.state);
+        }
+    }
+
+    #[test]
+    fn wake_touches_only_the_named_peer() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&backed_off(1, 3, 0, 0)).unwrap();
+        db.enqueue_outbox(&backed_off(2, 4, 0, 0)).unwrap();
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 1);
+        let other = db.get_outbox(&[2u8; 16]).unwrap().unwrap();
+        assert_eq!(other.next_attempt_at, 600);
+    }
+
+    #[test]
+    fn wake_skips_a_row_tried_less_than_30_s_ago() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&backed_off(1, 3, 1, 90)).unwrap();
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 100).unwrap(), 0);
+        assert_eq!(db.wake_outbox_for_peer(&[3u8; 16], 120).unwrap(), 1);
     }
 
     fn row_for(id: u8, peer: u8) -> OutboxRow {

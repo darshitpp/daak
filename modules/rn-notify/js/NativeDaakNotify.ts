@@ -6,7 +6,14 @@ export interface Spec extends TurboModule {
   requestPermission(): Promise<boolean>;
   /** JSON array of `{ id, actions }`; installs OS categories/channels. */
   registerCategories(categoriesJson: string): Promise<void>;
-  post(id: string, title: string, body: string, category: string, payloadJson: string): Promise<void>;
+  /**
+   * `id` is the key of the notification. A second post with the same `id`
+   * replaces the first one in place. `silent` posts it with no sound.
+   * `thread` groups notifications in one thread on iOS (`threadIdentifier`).
+   * An empty `thread` sets no group. Android ignores it.
+   */
+  post(id: string, title: string, body: string, category: string, payloadJson: string, silent: boolean, thread: string): Promise<void>;
+  /** Cancels the notification whose key is `id`. */
   cancel(id: string): Promise<void>;
   /**
    * Drains an action that was tapped while JS was not alive. `RCTEventEmitter`

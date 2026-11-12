@@ -24,6 +24,9 @@ jest.mock('../PairingFlow', () => ({
   PairingFlow: () => null,
 }));
 jest.mock('../bootstrap', () => ({
+  // The driver does not exist before the engine starts. The thread shows no batch row.
+  batchDriver: () => { throw new Error('NOT_READY'); },
+  onBatchChange: jest.fn(() => () => {}),
   engine: jest.requireActual('@daak/ui').fakeEngine(),
   startEngine: async () => {},
   startEngineOnce: jest.fn(async () => {}),
@@ -86,6 +89,22 @@ it('reaches the platform folder picker from the Folder row', async () => {
   await waitFor(() => expect(screen.getByText('album · 12 files')).toBeTruthy());
   expect(pickFolder).toHaveBeenCalledTimes(1);
   expect(folderStats).toHaveBeenCalledWith('/cache/daak-send/U1/album');
+});
+
+// The Add photos row reaches the platform media picker.
+it('the Add photos button reaches the platform picker', async () => {
+  const { pickMedia } = jest.requireMock('@daak/platform');
+  pickMedia.mockResolvedValueOnce([{ token: 'tok1', name: 'IMG_1.jpg', size: 5 }]);
+  const pixel = { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001', online: true, presence: 'online' as const, paired: true };
+  jest.spyOn(engine, 'devices').mockResolvedValue([pixel]);
+  render(<App />);
+  fireEvent.press(await screen.findByTestId('open-' + pixel.deviceId));
+  await waitFor(() => expect(screen.getByTestId('pick-files')).toBeTruthy());
+  expect(pickMedia).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByTestId('pick-files'));
+  fireEvent.press(screen.getByTestId('pick-menu-photos'));
+  await waitFor(() => expect(screen.getByText('IMG_1.jpg')).toBeTruthy());
+  expect(pickMedia).toHaveBeenCalledTimes(1);
 });
 
 // No Xcode on this host, so the macOS sheet anchor is pinned at the SOURCE

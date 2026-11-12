@@ -59,6 +59,8 @@
 	<string>Daak finds and reaches other Daak devices on your local network.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Daak saves the photos and videos you receive to your Photos library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Daak reads the photos and videos that you choose to send.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIBackgroundModes</key>

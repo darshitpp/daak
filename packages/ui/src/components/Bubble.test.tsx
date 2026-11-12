@@ -1,7 +1,9 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { AccessibilityInfo, Animated, StyleSheet } from 'react-native';
+import { itemKey } from '../screens/thread-merge';
 import { threadItem } from '../testing/threadFixtures';
-import { Bubble, TEXT_PREVIEW_CHARS, bubbleKind, whenLabel } from './Bubble';
+import { Bubble, FAILED_FILL_OPACITY, TEXT_PREVIEW_CHARS, bubbleKind, whenLabel } from './Bubble';
 
 const file = (p = {}) => threadItem({ type: 'file', text: null, name: 'Q3-report.pdf', size: 4_400_000, destPath: '/d/Q3-report.pdf', ...p });
 
@@ -215,3 +217,146 @@ describe('Bubble', () => {
   });
 });
 
+
+describe('bubble fill', () => {
+  const { colors } = require('../theme');
+  const running = (p = {}) => file({ direction: 'out', state: 'receiving', transferState: 'running', ...p });
+  const fillStyle = () => StyleSheet.flatten(screen.getByTestId(`bubble-fill-${itemKey(running())}`).props.style);
+
+  type Rgba = [number, number, number, number];
+  const parse = (c: string): Rgba => {
+    if (c.startsWith('#')) return [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16), 1];
+    const m = c.match(/[\d.]+/g)!.map(Number);
+    return [m[0], m[1], m[2], m[3] ?? 1];
+  };
+  const over = (top: Rgba, base: Rgba): Rgba => [0, 1, 2].map((i) => top[i] * top[3] + base[i] * (1 - top[3])).concat(1) as Rgba;
+  const lum = (c: Rgba) => {
+    const [r, g, b] = [0, 1, 2].map((i) => { const v = c[i] / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: Rgba, b: Rgba) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+
+  it('fill colors keep text at 4.5 to 1', () => {
+    const paper = parse(colors.paper);
+    const incoming = paper;
+    // The outgoing and failed bubbles are translucent. They sit on the screen colour.
+    const screenBg = parse(colors.bg);
+    const outgoing = over(parse(colors.hover), screenBg);
+    const fill = parse(colors.fill);
+    const failed = over(parse(colors.warnTint), screenBg);
+    const tint = parse(colors.errTint);
+    const failedFill = over([tint[0], tint[1], tint[2], tint[3] * FAILED_FILL_OPACITY], failed);
+    const cases = {
+      'fg on outgoing': ratio(parse(colors.fg), outgoing),
+      'fg on outgoing fill': ratio(parse(colors.fg), over(fill, outgoing)),
+      'fg on incoming fill': ratio(parse(colors.fg), over(fill, incoming)),
+      'muted on outgoing fill': ratio(parse(colors.muted), over(fill, outgoing)),
+      'muted on incoming fill': ratio(parse(colors.muted), over(fill, incoming)),
+      'warnInk on failed fill': ratio(parse(colors.warnInk), failedFill),
+    };
+    for (const [name, x] of Object.entries(cases)) expect([name, x >= 4.5]).toEqual([name, true]);
+  });
+
+  it('progress 40 sets transform scaleX 0.4 on the fill', () => {
+    render(<Bubble item={running()} progress={40} />);
+    expect(fillStyle().transform).toEqual([{ scaleX: 0.4 }]);
+    expect(fillStyle().transformOrigin).toBe('left');
+  });
+  it('accessibilityValue now is 40', () => {
+    render(<Bubble item={running()} progress={40} />);
+    expect(screen.getByTestId(`bubble-fill-${itemKey(running())}`).props.accessibilityValue).toEqual({ min: 0, max: 100, now: 40 });
+  });
+  it('clamps progress to 0 to 100 and draws no fill for NaN', () => {
+    for (const [given, scale] of [[250, 1], [-5, 0]]) {
+      const view = render(<Bubble item={running()} progress={given} />);
+      expect(fillStyle().transform).toEqual([{ scaleX: scale }]);
+      view.unmount();
+    }
+    render(<Bubble item={running()} progress={NaN} />);
+    expect(screen.queryByTestId(`bubble-fill-${itemKey(running())}`)).toBeNull();
+  });
+  it('a text bubble ignores progress', () => {
+    const t = threadItem({ state: 'receiving' });
+    render(<Bubble item={t} progress={40} />);
+    expect(screen.queryByTestId(`bubble-fill-${itemKey(t)}`)).toBeNull();
+  });
+  it('a waiting bubble draws no fill', () => {
+    const w = running({ transferState: 'queued', state: 'pending' });
+    render(<Bubble item={w} progress={40} />);
+    expect(screen.queryByTestId(`bubble-fill-${itemKey(w)}`)).toBeNull();
+  });
+  it('a failed bubble keeps the fill and uses the error tint', () => {
+    const f = running({ transferState: 'failed' });
+    render(<Bubble item={f} progress={40} />);
+    const s = StyleSheet.flatten(screen.getByTestId(`bubble-fill-${itemKey(f)}`).props.style);
+    expect(s.backgroundColor).toBe(colors.errTint);
+    expect(s.transform).toEqual([{ scaleX: 0.4 }]);
+  });
+  it('progress going down animates the scale back down', async () => {
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+    const timing = jest.spyOn(Animated, 'timing');
+    const view = render(<Bubble item={running()} progress={60} />);
+    await act(async () => {});
+    view.rerender(<Bubble item={running()} progress={20} />);
+    expect(timing.mock.calls.some(([, c]) => c.toValue === 0.2)).toBe(true);
+    jest.restoreAllMocks();
+  });
+  it('a done bubble hides the Stop control', () => {
+    const d = running({ state: 'done', transferState: 'done' });
+    render(<Bubble item={d} progress={100} onStopRunning={jest.fn()} />);
+    expect(screen.queryByTestId(`thread-stop-${d.transferId}`)).toBeNull();
+  });
+  it('a failed bubble hides the Stop control', () => {
+    const f = running({ transferState: 'failed' });
+    render(<Bubble item={f} progress={40} onStopRunning={jest.fn()} />);
+    expect(screen.queryByTestId(`thread-stop-${f.transferId}`)).toBeNull();
+  });
+  it('a normal bubble fills with colors.fill', () => {
+    render(<Bubble item={running()} progress={40} />);
+    expect(fillStyle().backgroundColor).toBe(colors.fill);
+  });
+  it('a done bubble ends with fill opacity 0', async () => {
+    const timing = jest.spyOn(Animated, 'timing');
+    const d = running({ state: 'done', transferState: 'done' });
+    render(<Bubble item={d} progress={100} />);
+    await act(async () => {});
+    expect(timing.mock.calls.some(([, cfg]) => cfg.toValue === 0 && cfg.useNativeDriver === true)).toBe(true);
+    timing.mockRestore();
+  });
+  it('reduce motion sets the value without animation', async () => {
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
+    const timing = jest.spyOn(Animated, 'timing');
+    const view = render(<Bubble item={running()} progress={40} />);
+    await act(async () => {});
+    view.rerender(<Bubble item={running()} progress={70} />);
+    expect(timing).not.toHaveBeenCalled();
+    expect(fillStyle().transform).toEqual([{ scaleX: 0.7 }]);
+    timing.mockRestore();
+    jest.restoreAllMocks();
+  });
+  it('without reduce motion a new progress animates the fill', async () => {
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+    const timing = jest.spyOn(Animated, 'timing');
+    const view = render(<Bubble item={running()} progress={40} />);
+    await act(async () => {});
+    view.rerender(<Bubble item={running()} progress={70} />);
+    expect(timing.mock.calls.some(([, c]) => c.toValue === 0.7 && c.useNativeDriver === true)).toBe(true);
+    jest.restoreAllMocks();
+  });
+  it('the meta text shows', () => {
+    render(<Bubble item={running()} progress={40} meta="1.2 MB of 4 MB" />);
+    expect(screen.getByText('1.2 MB of 4 MB')).toBeTruthy();
+  });
+  it('a running bubble with no fill still shows Stop', () => {
+    render(<Bubble item={running()} onStopRunning={jest.fn()} />);
+    expect(screen.queryByTestId(`bubble-fill-${itemKey(running())}`)).toBeNull();
+    expect(screen.getByTestId(`thread-stop-${running().transferId}`)).toBeTruthy();
+  });
+  it('onStopRunning shows Stop sending with the transfer test id', () => {
+    const stop = jest.fn();
+    render(<Bubble item={running()} progress={40} onStopRunning={stop} />);
+    fireEvent.press(screen.getByTestId(`thread-stop-${running().transferId}`));
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Stop sending')).toBeTruthy();
+  });
+});

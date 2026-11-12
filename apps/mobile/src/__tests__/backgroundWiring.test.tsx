@@ -28,6 +28,7 @@ jest.mock('@daak/platform', () => ({
   enqueueDrain: jest.fn(async () => {}),
   requestBatteryExemption: jest.fn(async () => {}),
   sweepPickedCopies: jest.fn(async () => {}),
+  createBatchDriver: jest.fn(() => ({ start: jest.fn(), onEvent: jest.fn(), retry: jest.fn(), stop: jest.fn(), status: jest.fn(() => null), resume: jest.fn(async () => {}), dispose: jest.fn() })),
 }));
 
 import {

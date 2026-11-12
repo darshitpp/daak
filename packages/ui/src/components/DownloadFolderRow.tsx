@@ -22,10 +22,16 @@ const shrink = { flexShrink: 1 } as const;
  * `choose` absent means the host has no picker: the row shows the iPhone
  * prototype words and no button.
  */
-export function DownloadFolderRow({ load, choose, reset, title, chooseLabel, hideNote }: {
+export function DownloadFolderRow({ load, choose, reset, canReset, title, chooseLabel, hideNote }: {
   load: () => Promise<string | null>;
   choose?: () => Promise<string | null>;
   reset?: () => Promise<void>;
+  /**
+   * The host says whether a name is one the user can reset. The reset button
+   * shows only when this returns true. A host can return false for its default
+   * folder, because a reset does not change that folder. Default: always true.
+   */
+  canReset?: (name: string) => boolean;
   title?: string;
   chooseLabel?: string;
   /** Removes the "Files are moved, not copied" note. The onboarding step has its own note. Default false. */
@@ -41,8 +47,8 @@ export function DownloadFolderRow({ load, choose, reset, title, chooseLabel, hid
       (stored) => {
         if (!cancelled) setName(stored);
       },
-      // A read that fails leaves the row saying the app's own storage, which is
-      // true whenever no folder is remembered.
+      // A read that fails leaves the row saying the app's own storage. The
+      // host can return null when it has no public folder to name.
       () => {
         if (!cancelled) setName(null);
       },
@@ -102,13 +108,17 @@ export function DownloadFolderRow({ load, choose, reset, title, chooseLabel, hid
             .then(() => setBusy(false));
         }}
       />
-      {name && reset ? (
+      {name && reset && (canReset === undefined || canReset(name)) ? (
         <Btn
           block
-          label="Use the app's own storage"
+          label="Use the default folder"
           testID="download-folder-reset"
           onPress={() => {
-            void reset().then(() => setName(null), () => {});
+            // After a reset the host can name a default folder. Read the name
+            // again. Do not assume null.
+            void reset()
+              .then(() => load().then((n) => n, () => null))
+              .then((n) => setName(n), () => {});
           }}
         />
       ) : null}

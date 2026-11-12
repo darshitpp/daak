@@ -6,10 +6,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
@@ -39,6 +41,11 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
     const val NAME = "DaakNotify"
     const val CHANNEL = "daak.received"
     const val CHANNEL_FAILED = "daak.failed"
+    // The v1 channels were created without a sound. Android keeps a channel
+    // sound after the first create, so new ids are the only fix.
+    const val CH_RECEIVED_V2 = "daak.received.v2"
+    const val CH_FAILED_V2 = "daak.failed.v2"
+    val LEGACY_CHANNELS = listOf("daak.received", "daak.failed")
 
     const val ACTION_OPEN = "daak.open"
     const val ACTION_SHARE = "daak.share"
@@ -199,23 +206,37 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
   private fun ensureChannel(id: String) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val nm = ctx.getSystemService(NotificationManager::class.java)
+    // Migrate the legacy channel of this id first. Read the importance before
+    // the delete. A user who blocked the legacy channel keeps the new one blocked.
+    var blocked = false
+    val legacy = if (id == CH_FAILED_V2) LEGACY_CHANNELS[1] else LEGACY_CHANNELS[0]
+    val old = try { nm.getNotificationChannel(legacy) } catch (t: Throwable) { null }
+    if (old != null) {
+      blocked = old.importance == NotificationManager.IMPORTANCE_NONE
+      try { nm.deleteNotificationChannel(legacy) } catch (t: Throwable) { Log.w(TAG, "legacy channel delete failed", t) }
+    }
     if (nm.getNotificationChannel(id) == null) {
-      val name = if (id == CHANNEL_FAILED) "Send failures" else "Received files"
-      nm.createNotificationChannel(
-          NotificationChannel(id, name, NotificationManager.IMPORTANCE_DEFAULT))
+      val name = if (id == CH_FAILED_V2) "Send failures" else "Received files"
+      val importance =
+          if (blocked) NotificationManager.IMPORTANCE_NONE else NotificationManager.IMPORTANCE_DEFAULT
+      val channel = NotificationChannel(id, name, importance)
+      channel.setSound(
+          Settings.System.DEFAULT_NOTIFICATION_URI,
+          AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build())
+      nm.createNotificationChannel(channel)
     }
   }
 
-  /** The channel for a category id. An unknown id gets the received channel. */
+  /** The channel id for a category id. An unknown id gets the received channel. */
   private fun channelFor(category: String): String =
-      if (category == CHANNEL_FAILED) CHANNEL_FAILED else CHANNEL
+      if (category == CHANNEL_FAILED) CH_FAILED_V2 else CH_RECEIVED_V2
 
   override fun registerCategories(categoriesJson: String, promise: Promise) {
     // Android action buttons are per-notification, not per-category, so the
     // channels are the only thing to install here. The JSON is still parsed so a
     // malformed caller is loud at registration rather than at every post.
-    ensureChannel(CHANNEL)
-    ensureChannel(CHANNEL_FAILED)
+    ensureChannel(CH_RECEIVED_V2)
+    ensureChannel(CH_FAILED_V2)
     try {
       JSONArray(categoriesJson)
     } catch (t: Throwable) {
@@ -225,7 +246,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
     promise.resolve(null)
   }
 
-  override fun post(id: String, title: String, body: String, category: String, payloadJson: String, promise: Promise) {
+  // `thread` is for iOS only. Android replaces the notification of a share in
+  // place under the same id, so a share has one notification and no group.
+  override fun post(id: String, title: String, body: String, category: String, payloadJson: String, silent: Boolean, thread: String, promise: Promise) {
     // R36: no permission means no banner, not a broken receive. Resolving rather
     // than rejecting is what keeps a denied permission off the inbox path.
     if (!notificationsEnabled()) {
@@ -240,6 +263,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         .setContentText(body)
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         .setAutoCancel(true)
+        // A silent post makes no sound. Do NOT set the only-alert-once flag here:
+        // it would mute the sound of the last update of the same notification.
+        .setSilent(silent)
         // NO action buttons. Open did nothing whenever the app was not already
         // in front, and Share built a URI for a path the download-folder move
         // had deleted. A button is a promise, so both are withheld until they
@@ -263,7 +289,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
         }
         .build()
     try {
-      NotificationManagerCompat.from(ctx).notify(id.hashCode(), notification)
+      // The string id is the tag, and the id is always 0. A second post with the
+      // same tag replaces the first notification in place.
+      NotificationManagerCompat.from(ctx).notify(id, 0, notification)
     } catch (t: Throwable) {
       // A SecurityException when an OEM lies about the grant, and a dead
       // NotificationManager: neither may take down a receive.
@@ -273,7 +301,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
   }
 
   override fun cancel(id: String, promise: Promise) {
-    NotificationManagerCompat.from(ctx).cancel(id.hashCode())
+    NotificationManagerCompat.from(ctx).cancel(id, 0)
     promise.resolve(null)
   }
 
@@ -306,6 +334,9 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
   // The body tap launches an activity directly. A receiver that a notification
   // tap triggers cannot start an activity when the app targets Android 12 or
   // higher. The old broadcast route therefore left the app closed.
+  // FLAG_UPDATE_CURRENT: a share notification is posted again under the same
+  // id with a new count and new paths. Without the flag Android keeps the
+  // extras of the first PendingIntent. The creator can update an IMMUTABLE one.
   private fun openPending(id: String, payload: String): PendingIntent {
     val intent = Intent(ctx, ShareTrampolineActivity::class.java).apply {
       action = ACTION_OPEN
@@ -314,7 +345,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
       putExtra(EXTRA_PAYLOAD, payload)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    return PendingIntent.getActivity(ctx, (id + ":" + ACTION_OPEN).hashCode(), intent, IMMUTABLE)
+    return PendingIntent.getActivity(ctx, (id + ":" + ACTION_OPEN).hashCode(), intent, IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   }
 
   private fun actionPending(id: String, action: String, payload: String): PendingIntent {
@@ -324,7 +355,7 @@ class DaakNotifyModule(private val ctx: ReactApplicationContext) : NativeDaakNot
       putExtra(EXTRA_ID, id)
       putExtra(EXTRA_PAYLOAD, payload)
     }
-    return PendingIntent.getBroadcast(ctx, (id + ":" + action).hashCode(), intent, IMMUTABLE)
+    return PendingIntent.getBroadcast(ctx, (id + ":" + action).hashCode(), intent, IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
   }
 
   /**

@@ -7,6 +7,7 @@ export function fakeEngine(devices: DeviceInfo[] = [
   { deviceId: 'aa'.repeat(16), name: 'Pixel 9', addr: '192.168.1.9:40001' },
 ]): DaakEngine {
   const handlers = new Set<(e: DaakEvent) => void>();
+  const plans = new Map<string, string>();
   const engine = {
     start: async () => {},
     stop: async () => {},
@@ -71,6 +72,17 @@ export function fakeEngine(devices: DeviceInfo[] = [
     setDisplayName: async () => {},
     setPresence: async () => {},
     revokePairing: async () => {},
+    // The plans of a batched send live in a map, so a test can save, list, and delete them.
+    saveSendPlan: async (peer: string, share: string, json: string) => {
+      plans.set(`${peer}:${share}`, json);
+    },
+    listSendPlans: async (peer: string) =>
+      [...plans.entries()]
+        .filter(([key]) => key.startsWith(`${peer}:`))
+        .map(([key, plan]) => ({ share: key.slice(peer.length + 1), plan })),
+    deleteSendPlan: async (peer: string, share: string) => {
+      plans.delete(`${peer}:${share}`);
+    },
     confirmPairing: async () => {},
     // A no-op is the honest fake: the wake only pokes an outbox drain the
     // fake does not have, so it can neither fail nor prove anything.

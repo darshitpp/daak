@@ -150,9 +150,12 @@ export function folderSub(row: Pick<FolderRow, 'files'>, size: string): string {
   return [`${row.files} ${row.files === 1 ? 'file' : 'files'}`, size].filter(Boolean).join(' · ');
 }
 
-/** The state word of a folder. null for a done folder: the saved line stands there. */
-export function folderStateWord(row: Pick<FolderRow, 'state' | 'files' | 'children' | 'direction'>): string | null {
-  const done = row.children.filter((c) => c.state === 'done').length;
+/**
+ * The state word of a folder. null for a done folder: the saved line stands there.
+ * `doneCount` replaces the count of children in state `done`.
+ */
+export function folderStateWord(row: Pick<FolderRow, 'state' | 'files' | 'children' | 'direction'>, doneCount?: number): string | null {
+  const done = doneCount ?? row.children.filter((c) => c.state === 'done').length;
   const failed = row.children.filter((c) => bubbleKind(c) === 'failed').length;
   switch (row.state) {
     case 'receiving':

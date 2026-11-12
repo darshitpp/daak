@@ -15,11 +15,13 @@ import { askForPhotosIfUndetermined, libraryOf, photosHost } from './photosHost'
 import {
   chooseDownloadFolder,
   clearDownloadFolder,
+  DEFAULT_PUBLIC_FOLDER_LABEL,
   downloadFolderName,
   discardPickedCopy,
   folderStats,
   isMedia,
   appInfo,
+  deviceInfo,
   copyToClipboard,
   loadNotifyPrefs,
   readOnboarding,
@@ -35,7 +37,7 @@ import {
 import { OnboardingFlow } from './OnboardingFlow';
 import { PairingFlow } from './PairingFlow';
 import { BackgroundSyncNotice } from './BackgroundSyncNotice';
-import { pickAttachedFiles, pickAttachedFolder } from './SendFlow';
+import { attachedMedia, batchHost, pickAttachedFiles, pickAttachedFolder } from './SendFlow';
 import { mobileInboxActions } from './inbox-actions';
 import { onDeepLink, type DeepLink } from './deeplink';
 import { peerOfPayload } from './notification-route';
@@ -88,6 +90,8 @@ export default function App() {
     load: downloadFolderName,
     choose: chooseDownloadFolder,
     reset: clearDownloadFolder,
+    // A reset does not change the default public folder, so no button shows.
+    canReset: (name: string) => name !== DEFAULT_PUBLIC_FOLDER_LABEL,
   };
   // The Settings inputs that packages/ui may not import. The OS grant is the
   // answer onboarding stored (readOnboarding().alerts). It does not change
@@ -111,6 +115,7 @@ export default function App() {
           if (!(await copyToClipboard(text))) throw new Error('clipboard refused');
         },
       },
+      deviceInfo,
     }),
     [],
   );
@@ -412,12 +417,13 @@ export default function App() {
               <BackgroundSyncNotice />
             </>
           }
-          pair={
+          pair={(onPaired) => (
             <PairingFlow
               bundle={link.kind === 'pair' ? link.bundle : undefined}
               addr={link.kind === 'pair' ? link.addr : undefined}
+              onPaired={onPaired}
             />
-          }
+          )}
           // pickAttachedFiles is the real picker: iOS a
           // UIDocumentPickerViewController (asCopy: true), Android
           // ACTION_OPEN_DOCUMENT. It is INJECTED rather than called inside
@@ -427,6 +433,8 @@ export default function App() {
           // The paperclip menu: Files or Folder. A folder is copied first, and
           // the composer discards the copy after the send.
           onPickFolder={pickAttachedFolder}
+          media={attachedMedia}
+          batch={batchHost}
           folderStats={folderStats}
           discardPickedCopy={discardPickedCopy}
           inboxActions={mobileInboxActions}

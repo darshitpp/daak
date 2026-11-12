@@ -57,6 +57,37 @@ beforeEach(() => {
 });
 
 describe('notifyReceived', () => {
+  it('notifyReceived passes options.key and options.silent to the native post', async () => {
+    await notifyReceived(entry, null, { key: 'batch:abc', silent: true });
+    expect(native.post).toHaveBeenCalledWith(
+      'batch:abc',
+      'Daak',
+      'movie.mov + 1 more',
+      DAK_RECEIVED_CATEGORY,
+      JSON.stringify(entry),
+      true,
+      '',
+    );
+  });
+
+  // D1: iOS groups the notifications of one share by the thread identifier.
+  it('notifyReceived passes options.thread as the seventh argument', async () => {
+    await notifyReceived(entry, null, { key: 'share:abc', silent: true, thread: 'share:abc' });
+    expect(native.post.mock.calls[0]?.[6]).toBe('share:abc');
+  });
+
+  it('without options the call is unchanged (id is payloadId, silent false)', async () => {
+    await notifyReceived(entry);
+    expect(native.post.mock.calls[0]?.[0]).toBe('p1');
+    expect(native.post.mock.calls[0]?.[5]).toBe(false);
+  });
+
+  it('the early return when arrival is off still skips the post, with options', async () => {
+    prefs.mockResolvedValue({ arrival: false });
+    await notifyReceived(entry, null, { key: 'k', silent: true });
+    expect(native.post).not.toHaveBeenCalled();
+  });
+
   it('posts under the received category with a JSON payload', async () => {
     await notifyReceived(entry);
     expect(native.post).toHaveBeenCalledWith(
@@ -65,6 +96,8 @@ describe('notifyReceived', () => {
       'movie.mov + 1 more',
       DAK_RECEIVED_CATEGORY,
       JSON.stringify(entry),
+      false,
+      '',
     );
   });
 
@@ -77,12 +110,14 @@ describe('notifyReceived', () => {
       'album · 12 files',
       DAK_RECEIVED_CATEGORY,
       JSON.stringify(entry),
+      false,
+      '',
     );
   });
 
   it('cleans the summary of a peer in the fallback body', async () => {
     await notifyReceived({ ...entry, summary: 'a\nb\u202E\u200B' });
-    expect(native.post).toHaveBeenCalledWith('p1', 'Daak', 'a b', DAK_RECEIVED_CATEGORY, expect.any(String));
+    expect(native.post).toHaveBeenCalledWith('p1', 'Daak', 'a b', DAK_RECEIVED_CATEGORY, expect.any(String), false, '');
   });
 
   it('posts nothing when the arrival preference is off', async () => {
@@ -193,12 +228,25 @@ describe('initNotifications', () => {
 // no-op or a rejection. The inbox is the source of truth, so a failed post is
 // an observable drop, never a throw back into the engine's event handler.
 describe('notifyReceived with no notification permission (R36)', () => {
+  it('the warn text holds no share key', async () => {
+    native.post.mockRejectedValue(new Error('denied'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await notifyReceived(entry, null, { key: 'share:peer1:' + 'ab'.repeat(16), silent: true });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).not.toMatch(/share:|peer1|abab|denied/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('does not throw and reports the dropped notification', async () => {
     native.post.mockRejectedValue(new Error('permission denied'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       await expect(notifyReceived(entry)).resolves.toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('p1'));
+      // A fixed text: the key can name a peer and a share, and the error can hold more.
+      expect(warn).toHaveBeenCalledWith('daak: a received notification was not posted');
     } finally {
       warn.mockRestore();
     }
@@ -316,7 +364,14 @@ describe('notifyFailedSend', () => {
       'Open Daak to try again.',
       DAK_FAILED_CATEGORY,
       JSON.stringify({ transferId: '11'.repeat(16), peerDeviceId: 'aa'.repeat(16) }),
+      false,
+      '',
     );
+  });
+
+  it('notifyFailedSend passes silent false', async () => {
+    await notifyFailedSend(notice);
+    expect(native.post.mock.calls[0]?.[5]).toBe(false);
   });
 
   it('does not throw when the native post rejects', async () => {

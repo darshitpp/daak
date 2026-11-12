@@ -12,6 +12,25 @@ use crate::store::Db;
 
 pub use crate::store::outbox::backoff_delay_with;
 
+/// The error text of a full disk while staging. The batch driver reads it and
+/// pauses the plan as NO_SPACE, so the user can free space and tap Retry.
+pub const STAGE_NO_SPACE: &str = "NO_SPACE: the staged copy does not fit";
+
+/// A full disk becomes one stable text. The other errors stay as they are.
+fn stage_error(e: crate::CoreError) -> crate::CoreError {
+    match &e {
+        crate::CoreError::Io(io)
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+            ) =>
+        {
+            crate::CoreError::Transfer(STAGE_NO_SPACE.into())
+        }
+        _ => e,
+    }
+}
+
 pub fn enqueue(
     db: &Db,
     staging: &Staging,
@@ -26,7 +45,14 @@ pub fn enqueue(
         if let Some(src) = files.get(item.index as usize) {
             // Staging keys the file on its item index, not on a name. Two
             // names can collide on a case-insensitive file system.
-            staging.stage(&manifest.payload_id, src, item.index)?;
+            if let Err(e) = staging.stage(&manifest.payload_id, src, item.index) {
+                // The items before this one are staged. Nothing refers to them
+                // after the error, so remove them now and not at the next start.
+                if let Err(c) = staging.cleanup(&manifest.payload_id) {
+                    tracing::warn!("staging cleanup failed: {}", crate::diag::log_err(&c));
+                }
+                return Err(stage_error(e));
+            }
         }
     }
     // R-T10-11: the row id IS the payload id. Every other transfer id in the
@@ -115,7 +141,7 @@ pub struct DrainPolicy {
 impl Default for DrainPolicy {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(5),
+            poll_interval: Duration::from_secs(1),
             max_backoff_secs: 600,
             jitter_secs: 5,
             battery_saver: false,
@@ -166,6 +192,9 @@ impl OutboxWorker {
         let poll = policy.effective_poll_interval();
         let task = tokio::spawn(async move {
             let mut tick = tokio::time::interval(poll);
+            // After a long app freeze, skip the missed ticks. Do not run one
+            // due_outbox query for each missed tick.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             // consume the immediate first tick so a drain is notify-driven, not poll-driven
             tick.tick().await;
             loop {
@@ -331,6 +360,65 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].state, "pending");
         assert!(staging.staged_path(&manifest.payload_id, 0).exists());
+    }
+
+    // D2: a full disk while staging must reach the batch driver as NO_SPACE,
+    // so the plan pauses NO_SPACE and Retry works after the user frees space.
+    #[test]
+    fn a_full_disk_while_staging_gives_a_no_space_error() {
+        for kind in [
+            std::io::ErrorKind::StorageFull,
+            std::io::ErrorKind::QuotaExceeded,
+        ] {
+            let e = stage_error(crate::CoreError::Io(std::io::Error::from(kind)));
+            assert!(e.to_string().contains("NO_SPACE"), "{kind:?}: {e}");
+        }
+        let other = stage_error(crate::CoreError::Io(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )));
+        assert!(!other.to_string().contains("NO_SPACE"));
+    }
+
+    // The final review (I2): a staging failure left the staged files of the
+    // items before it on disk until the next app start. Item 1 has no source
+    // file, so its stage fails after item 0 was staged.
+    #[test]
+    fn a_staging_failure_removes_the_partial_staged_directory() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let src = tempfile::tempdir().unwrap();
+        let a = src.path().join("a.bin");
+        let b = src.path().join("b.bin");
+        std::fs::write(&a, b"first").unwrap();
+        std::fs::write(&b, b"second").unwrap();
+        let manifest = crate::manifest::Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![
+                crate::manifest::Item::from_file(0, &a, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+                crate::manifest::Item::from_file(1, &b, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        // The source of item 1 goes away after the manifest is built.
+        std::fs::remove_file(&b).unwrap();
+
+        let result = enqueue(&db, &staging, &[9u8; 16], &manifest, &[a, b]);
+
+        assert!(result.is_err());
+        let dir = root.path().join(hex::encode(manifest.payload_id));
+        assert!(
+            !dir.exists(),
+            "the staged directory of the payload must be removed"
+        );
+        assert!(db.get_outbox(&manifest.payload_id).unwrap().is_none());
+        assert!(db.list_outbox_for_peer(&[9u8; 16]).unwrap().is_empty());
     }
 
     // R-A: the brief's only test never exercises the worker loop, so the drain

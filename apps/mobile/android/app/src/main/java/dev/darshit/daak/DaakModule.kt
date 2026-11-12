@@ -204,6 +204,32 @@ class DaakModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    override fun sendFilesTagged(
+        peerId: String,
+        paths: ReadableArray,
+        share: String,
+        batch: String,
+        attempt: Double,
+        promise: Promise,
+    ) {
+        val list = List(paths.size()) { paths.getString(it)!! }
+        resolve(promise) { handle().sendFilesTagged(peerId, list, share, batch, attemptArg(attempt)) }
+    }
+
+    @ReactMethod
+    override fun saveSendPlan(peerId: String, share: String, json: String, promise: Promise) =
+        // The trailing null is load-bearing, the same as revokePairing().
+        resolve(promise) { handle().saveSendPlan(peerId, share, json); null }
+
+    @ReactMethod
+    override fun listSendPlans(peerId: String, promise: Promise) =
+        resolve(promise) { handle().listSendPlans(peerId) }
+
+    @ReactMethod
+    override fun deleteSendPlan(peerId: String, share: String, promise: Promise) =
+        resolve(promise) { handle().deleteSendPlan(peerId, share); null }
+
+    @ReactMethod
     override fun listDevices(promise: Promise) = resolve(promise) { handle().listDevices() }
 
     @ReactMethod
@@ -368,6 +394,18 @@ class DaakModule(reactContext: ReactApplicationContext) :
             "itemIndex must be a whole number in 0..$UINT_MAX, got $itemIndex"
         }
         return itemIndex.toInt().toUInt()
+    }
+
+    // The attempt is a whole number from 0 to 4294967295. Any other value is
+    // rejected, because a clamp would send the wrong batch id.
+    private fun attemptArg(attempt: Double): UInt {
+        require(
+            attempt.isFinite() && attempt >= 0.0 &&
+                attempt == Math.floor(attempt) && attempt <= UINT_MAX
+        ) {
+            "attempt must be a whole number from 0 to 4294967295"
+        }
+        return attempt.toLong().toUInt()
     }
 
     // 4294967295.0. Spelled out rather than UInt.MAX_VALUE.toDouble() because

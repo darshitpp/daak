@@ -6,6 +6,11 @@
 import Foundation
 import daak_ffiFFI
 
+/// An argument that the native module refuses. `run` rejects it with E_DAAK.
+private struct DaakArgumentError: Error, CustomStringConvertible {
+  let description: String
+}
+
 @objc(Daak)
 final class Daak: RCTEventEmitter, EventSink {
   // One serial queue owns the engine for the promise-returning methods: start,
@@ -151,6 +156,46 @@ final class Daak: RCTEventEmitter, EventSink {
                        resolve: @escaping RCTPromiseResolveBlock,
                        reject: @escaping RCTPromiseRejectBlock) {
     run(resolve, reject) { try self.need().sendFiles(peerId: peerId, paths: paths) }
+  }
+
+  @objc func sendFilesTagged(_ peerId: String, paths: [String], share: String,
+                             batch: String, attempt: Double,
+                             resolve: @escaping RCTPromiseResolveBlock,
+                             reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      // A bad attempt is an error. A clamp would send the wrong batch id.
+      guard attempt.isFinite, attempt >= 0, attempt <= 4294967295,
+            attempt == attempt.rounded(.down) else {
+        throw DaakArgumentError(description: "attempt must be a whole number from 0 to 4294967295")
+      }
+      return try self.need().sendFilesTagged(
+        peerId: peerId, paths: paths, share: share, batch: batch,
+        attempt: UInt32(attempt))
+    }
+  }
+
+  @objc func saveSendPlan(_ peerId: String, share: String, json: String,
+                          resolve: @escaping RCTPromiseResolveBlock,
+                          reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().saveSendPlan(peerId: peerId, share: share, json: json)
+      return nil as Void?
+    }
+  }
+
+  @objc func listSendPlans(_ peerId: String,
+                           resolve: @escaping RCTPromiseResolveBlock,
+                           reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) { try self.need().listSendPlans(peerId: peerId) }
+  }
+
+  @objc func deleteSendPlan(_ peerId: String, share: String,
+                            resolve: @escaping RCTPromiseResolveBlock,
+                            reject: @escaping RCTPromiseRejectBlock) {
+    run(resolve, reject) {
+      try self.need().deleteSendPlan(peerId: peerId, share: share)
+      return nil as Void?
+    }
   }
 
   @objc func listDevices(_ resolve: @escaping RCTPromiseResolveBlock,

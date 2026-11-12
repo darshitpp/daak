@@ -4,18 +4,27 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.ext.SdkExtensions
 import android.os.StatFs
+import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.system.ErrnoException
+import android.system.OsConstants
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import androidx.core.content.FileProvider
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
 import kotlin.concurrent.thread
 import kotlin.math.ceil
+import org.json.JSONArray
+import org.json.JSONObject
 
 @ReactModule(name = DaakShareModule.NAME)
 class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShareSpec(ctx), ActivityEventListener {
@@ -23,10 +32,17 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     const val NAME = "DaakShare"
     private const val PICK = 4711
     private const val PICK_FOLDER = 4712
+    private const val PICK_MEDIA = 4713
+    // The photo picker allows up to 5000 items. The JSON size follows this cap.
+    private const val MAX_MEDIA = 5000
+    // Room for the file system, on top of the size of one item. A copy that
+    // grows past the reported size plus this margin stops.
+    private const val MATERIALIZE_MARGIN = 16L * 1024 * 1024
   }
 
   private var pickPromise: Promise? = null
   private var folderPromise: Promise? = null
+  private var mediaPromise: Promise? = null
 
   /** Why a folder copy stopped. JS reads the reject code and the message. */
   private class FolderPickError(val code: String, message: String) : Exception(message)
@@ -112,6 +128,89 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     }
   }
 
+  /**
+   * Ask the user for photos and videos. The result holds references only. The
+   * system photo picker is the first choice. A device without it uses the
+   * document picker. See materialize for the copy.
+   */
+  override fun pickMedia(promise: Promise) {
+    val activity = currentActivity ?: return promise.reject("E_NO_ACTIVITY", "no foreground activity")
+    // A second call gets the error and the open picker stays, as on iOS.
+    if (mediaPromise != null) return promise.reject("E_PICK_BUSY", "a pick is open")
+    val intent = if (isPhotoPickerAvailable(activity)) {
+      Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+        putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit())
+      }
+    } else {
+      Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "*/*"
+        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+      }
+    }
+    mediaPromise = promise
+    try {
+      activity.startActivityForResult(intent, PICK_MEDIA)
+    } catch (_: Throwable) {
+      mediaPromise = null
+      promise.reject("E_PICK", "the media picker did not open")
+    }
+  }
+
+  @android.annotation.SuppressLint("NewApi")
+  private fun isPhotoPickerAvailable(context: android.content.Context): Boolean {
+    val ok = Build.VERSION.SDK_INT >= 33 ||
+      (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+        SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2)
+    return ok && Intent(MediaStore.ACTION_PICK_IMAGES).resolveActivity(context.packageManager) != null
+  }
+
+  /** Copy ONE picked item into the send cache. See materializeToSlot. */
+  override fun materialize(token: String, promise: Promise) {
+    // The copy can take minutes. It must not block the main thread.
+    thread(name = "daak-materialize") {
+      try {
+        promise.resolve(materializeToSlot(token).absolutePath)
+      } catch (e: FolderPickError) {
+        promise.reject(e.code, e.message)
+      } catch (_: Throwable) {
+        promise.reject("E_MATERIALIZE", "Daak could not prepare a file for sending.")
+      }
+    }
+  }
+
+  /**
+   * Give back the persisted read grants of sent media. Android keeps a limited
+   * count of grants and prunes the oldest. The oldest is often the tree grant of
+   * the download folder, so a grant that is not needed must go back.
+   * rn-share cannot read the download-folder setting of rn-fspaths. So this
+   * releases a token only when it is a content URI, the system lists it as a
+   * persisted grant, and it is not a tree URI. A tree URI is never a media token.
+   * A bad entry is ignored. Nothing is logged, because a token is user data.
+   */
+  override fun releaseMedia(tokensJson: String, promise: Promise) {
+    thread(name = "daak-release-media") {
+      try {
+        val tokens = JSONArray(tokensJson)
+        val held = ctx.contentResolver.persistedUriPermissions.map { it.uri }.toSet()
+        for (i in 0 until tokens.length()) {
+          try {
+            val uri = Uri.parse(tokens.get(i) as String)
+            if (uri.scheme != "content" || DocumentsContract.isTreeUri(uri) || uri !in held) continue
+            ctx.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          } catch (_: Throwable) {
+            // A bad entry or a grant that is already gone. The next token goes on.
+          }
+        }
+      } catch (_: Throwable) {
+        // The text is not a JSON array. Nothing is released.
+      }
+      promise.resolve(null)
+    }
+  }
+
   override fun consumePendingInbox(promise: Promise) = promise.resolve(ShareInbox.drainToJson(ctx))
 
   override fun consumeIntentSends(promise: Promise) =
@@ -171,6 +270,30 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       }
       return
     }
+    if (requestCode == PICK_MEDIA) {
+      val promise = mediaPromise ?: return
+      mediaPromise = null
+      val uris = mutableListOf<Uri>()
+      if (resultCode == Activity.RESULT_OK && data != null) {
+        val clip = data.clipData
+        if (clip != null) {
+          // A cut list would send fewer items than the user picked, in silence.
+          if (clip.itemCount > MAX_MEDIA) return promise.reject("E_TOO_MANY", "too many items; pick fewer")
+          for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
+        } else {
+          data.data?.let { uris.add(it) }
+        }
+      }
+      if (uris.isEmpty()) return promise.resolve("[]")
+      thread(name = "daak-pick-media") {
+        try {
+          promise.resolve(describePicked(uris))
+        } catch (_: Throwable) {
+          promise.reject("E_PICK", "the media selection could not be read")
+        }
+      }
+      return
+    }
     if (requestCode != PICK) return
     val promise = pickPromise ?: return
     pickPromise = null
@@ -205,9 +328,7 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
       val files = entries.filter { !it.isDir }
       if (files.isEmpty()) throw FolderPickError("EMPTY", "EMPTY")
       val needed = ceil(files.sumOf { it.size } * 1.1).toLong()
-      if (StatFs(ctx.cacheDir.path).availableBytes < needed) {
-        throw FolderPickError("NO_SPACE", "NO_SPACE:$needed")
-      }
+      requireSpace(needed)
       if (!dest.mkdirs()) throw IOException("could not make the copy folder")
       // listTree puts each folder before its contents, so a parent exists.
       for (entry in entries) {
@@ -230,6 +351,142 @@ class DaakShareModule(private val ctx: ReactApplicationContext) : NativeDaakShar
     } catch (t: Throwable) {
       slot.deleteRecursively()
       throw t
+    }
+  }
+
+  /** Throws NO_SPACE when the cache has less than `needed` bytes free. */
+  private fun requireSpace(needed: Long) {
+    if (StatFs(ctx.cacheDir.path).availableBytes < needed) {
+      throw FolderPickError("NO_SPACE", "NO_SPACE:$needed")
+    }
+  }
+
+  /**
+   * Build the JSON text for the picked URIs: one token, one name, and one size
+   * each. The size is null when the provider gives none. Nothing is copied.
+   * The picker grant ends when the app stops, so each URI gets a persistable
+   * grant. A failure of that call is ignored.
+   */
+  private fun describePicked(uris: List<Uri>): String {
+    val out = JSONArray()
+    for (uri in uris) {
+      try {
+        ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      } catch (_: Throwable) {
+        // Some providers give no persistable grant. The pick still works now.
+      }
+      val (name, size) = queryNameAndSize(uri)
+      out.put(JSONObject()
+        .put("token", uri.toString())
+        .put("name", name ?: "media")
+        .put("size", size ?: JSONObject.NULL))
+    }
+    return out.toString()
+  }
+
+  /** The display name and the size of one URI. Each is null when missing. */
+  private fun queryNameAndSize(uri: Uri): Pair<String?, Long?> {
+    // PickerMediaColumns needs API 33. Its strings equal the OpenableColumns strings.
+    val picker = isPhotoPickerAvailable(ctx) && uri.authority == MediaStore.AUTHORITY &&
+      Build.VERSION.SDK_INT >= 33
+    val nameCol = if (picker) MediaStore.PickerMediaColumns.DISPLAY_NAME else OpenableColumns.DISPLAY_NAME
+    val sizeCol = if (picker) MediaStore.PickerMediaColumns.SIZE else OpenableColumns.SIZE
+    return try {
+      ctx.contentResolver.query(uri, arrayOf(nameCol, sizeCol), null, null, null)?.use { c ->
+        if (!c.moveToFirst()) return@use null to null
+        val name = if (c.isNull(0)) null else c.getString(0)
+        val size = if (c.isNull(1)) null else c.getLong(1).takeIf { it >= 0 }
+        name to size
+      } ?: (null to null)
+    } catch (_: Throwable) {
+      null to null
+    }
+  }
+
+  /**
+   * A picker URI opens as a file descriptor. The Android docs name
+   * MediaStore.openFileDescriptor, but API 35 has no such method. The resolver
+   * call is the real one. Any other URI opens as a stream.
+   */
+  private fun openSource(uri: Uri): java.io.InputStream? {
+    if (isPhotoPickerAvailable(ctx) && uri.authority == MediaStore.AUTHORITY) {
+      val fd = ctx.contentResolver.openFileDescriptor(uri, "r") ?: return null
+      return android.os.ParcelFileDescriptor.AutoCloseInputStream(fd)
+    }
+    return ctx.contentResolver.openInputStream(uri)
+  }
+
+  /**
+   * Copy one picked item into `<cacheDir>/daak-send/<uuid>/<cleaned name>`.
+   * DaakFsPathsModule.discardPickedCopy and the startup sweep use the same
+   * folder. Any failure deletes the whole slot, so no partial file stays.
+   */
+  private fun materializeToSlot(token: String): File {
+    val uri = Uri.parse(token)
+    ShareInbox.requireForeignContentUri(ctx, uri)
+    val (name, size) = queryNameAndSize(uri)
+    // An unknown size skips the check. A full disk then fails in the copy.
+    if (size != null) requireSpace(size + MATERIALIZE_MARGIN)
+    val slot = File(File(ctx.cacheDir, "daak-send"), UUID.randomUUID().toString())
+    try {
+      if (!slot.mkdirs()) throw IOException("could not make the copy folder")
+      val out = File(slot, ShareInbox.safeLeaf(name ?: "media"))
+      // E_SOURCE_GONE comes only from the source: open and read.
+      val input = try {
+        openSource(uri) ?: throw FileNotFoundException("no stream")
+      } catch (e: SecurityException) {
+        throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+      } catch (e: FileNotFoundException) {
+        throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+      }
+      input.use { i ->
+        FileOutputStream(out).use { o ->
+          val buffer = ByteArray(64 * 1024)
+          var total = 0L
+          var sinceCheck = 0L
+          while (true) {
+            val n = try {
+              i.read(buffer)
+            } catch (e: SecurityException) {
+              throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+            } catch (e: IOException) {
+              throw FolderPickError("E_SOURCE_GONE", "E_SOURCE_GONE")
+            }
+            if (n < 0) break
+            try {
+              o.write(buffer, 0, n)
+            } catch (e: IOException) {
+              throw writeFailure(e, size)
+            }
+            total += n
+            if (size != null) {
+              if (total > size + MATERIALIZE_MARGIN) throw FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")
+            } else {
+              sinceCheck += n
+              if (sinceCheck >= 64L * 1024 * 1024) {
+                requireSpace(MATERIALIZE_MARGIN)
+                sinceCheck = 0L
+              }
+            }
+          }
+        }
+      }
+      return out
+    } catch (t: Throwable) {
+      slot.deleteRecursively()
+      throw t
+    }
+  }
+
+  /** A failed write of the local copy. A full disk is NO_SPACE. Any other cause is E_MATERIALIZE. */
+  private fun writeFailure(e: IOException, size: Long?): FolderPickError {
+    val full = (e.cause as? ErrnoException)?.errno == OsConstants.ENOSPC ||
+      e.message?.contains("ENOSPC") == true
+    val needed = (size ?: 0L) + MATERIALIZE_MARGIN
+    return if (full) {
+      FolderPickError("NO_SPACE", "NO_SPACE:$needed")
+    } else {
+      FolderPickError("E_MATERIALIZE", "E_MATERIALIZE")
     }
   }
 

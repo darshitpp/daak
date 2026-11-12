@@ -21,6 +21,22 @@ impl Db {
         Ok(())
     }
 
+    /// Every setting whose key starts with `prefix`, in key order. The match
+    /// compares text, so `%` and `_` in the prefix are plain characters.
+    pub fn list_settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT key, value FROM settings
+             WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn delete_setting(&self, key: &str) -> Result<()> {
         self.conn().execute(
             "DELETE FROM settings WHERE key = ?1",
@@ -56,5 +72,24 @@ mod tests {
 
         db.delete_setting("theme").unwrap();
         assert!(db.get_setting("theme").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_prefix_list_treats_percent_and_underscore_as_plain_characters() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.set_setting("a_b:1", b"x").unwrap();
+        db.set_setting("axb:1", b"y").unwrap();
+        db.set_setting("a_b:2", b"z").unwrap();
+        let keys = |p: &str| -> Vec<String> {
+            db.list_settings_with_prefix(p)
+                .unwrap()
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect()
+        };
+        assert_eq!(keys("a_b:"), vec!["a_b:1", "a_b:2"]);
+        assert!(keys("a%").is_empty());
+        assert_eq!(keys("").len(), 3);
     }
 }

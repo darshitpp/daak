@@ -34,6 +34,7 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
     acceptPairing: async () => '123456',
     sendText: async (peer, text) => { calls.push(['sendText', peer, text]); return 'aa'.repeat(16); },
     sendFiles: async (peer, paths) => { calls.push(['sendFiles', peer, paths]); return 'bb'.repeat(16); },
+    sendFilesTagged: async (peer, paths, share, batch, attempt) => { calls.push(['sendFilesTagged', peer, paths, share, batch, attempt]); return 'cc'.repeat(16); },
     listInbox: async () => '[]',
     listTransfers: async () => '[]',
     listThread: async () => JSON.stringify({ items: [], olderCursor: null }),
@@ -50,6 +51,9 @@ function fakeNative(calls: unknown[][]): NativeDaakSpec {
       JSON.stringify({ name: 'Test Device', baseName: 'Test Device', deviceId: 'dd'.repeat(16) }),
     localPort: async () => 40001,
     exportDebugBundle: async () => 'daak debug bundle\n',
+    saveSendPlan: async (peer, share, json) => { calls.push(['saveSendPlan', peer, share, json]); },
+    listSendPlans: async () => '[]',
+    deleteSendPlan: async (peer, share) => { calls.push(['deleteSendPlan', peer, share]); },
     addListener: () => {},
     removeListeners: () => {},
   };

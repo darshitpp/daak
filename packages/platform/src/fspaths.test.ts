@@ -9,6 +9,7 @@ vi.mock('@daak/rn-fspaths', () => ({
     folderStats: vi.fn(),
     discardPickedCopy: vi.fn(),
     sweepPickedCopies: vi.fn(),
+    freeBytes: vi.fn(),
   },
 }));
 
@@ -18,6 +19,7 @@ import {
   discardPickedCopy,
   fileSizes,
   folderStats,
+  freeBytes,
   openFile,
   sweepPickedCopies,
 } from './fspaths';
@@ -104,5 +106,24 @@ describe('folder picker facade', () => {
     expect(folderMocks.sweepPickedCopies).toHaveBeenCalledTimes(1);
     folderMocks.sweepPickedCopies.mockRejectedValueOnce(new Error('boom'));
     await expect(sweepPickedCopies()).resolves.toBeUndefined();
+  });
+});
+
+describe('freeBytes', () => {
+  it('freeBytes returns the native number', async () => {
+    native.freeBytes.mockResolvedValueOnce(5 * 1024 ** 3);
+    await expect(freeBytes()).resolves.toBe(5 * 1024 ** 3);
+  });
+
+  it('a native rejection is not swallowed', async () => {
+    native.freeBytes.mockRejectedValueOnce(new Error('E_FREE_BYTES'));
+    await expect(freeBytes()).rejects.toThrow('E_FREE_BYTES');
+  });
+
+  it('a NaN, negative, or non-number value rejects', async () => {
+    for (const bad of [NaN, Infinity, -1, '7', null, undefined]) {
+      native.freeBytes.mockResolvedValueOnce(bad as never);
+      await expect(freeBytes()).rejects.toThrow(/free space/);
+    }
   });
 });

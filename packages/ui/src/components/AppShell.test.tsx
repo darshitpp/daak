@@ -50,6 +50,38 @@ describe('AppShell tabs', () => {
     expect(screen.getByTestId('pair-a-device')).toBeTruthy();
   });
 
+  it('pair as a function: onPaired pops to the device list', async () => {
+    let done: () => void = () => {};
+    await shell(fakeEngine([]), {
+      pair: (onPaired) => {
+        done = onPaired;
+        return <Text>pair-ui</Text>;
+      },
+    });
+    await fireEventAsync.press(await screen.findByTestId('pair-a-device'));
+    expect(screen.getByText('pair-ui')).toBeTruthy();
+    await act(async () => done());
+    expect(screen.queryByText('pair-ui')).toBeNull();
+    expect(screen.getByTestId('pair-a-device')).toBeTruthy();
+  });
+
+  it('onPaired does nothing when the top route is not pair', async () => {
+    let done: () => void = () => {};
+    const pair = (onPaired: () => void) => {
+      done = onPaired;
+      return <Text>pair-ui</Text>;
+    };
+    const view = await shell(fakeEngine([peer]), { pair });
+    await fireEventAsync.press(await screen.findByTestId('pair-a-device'));
+    expect(screen.getByText('pair-ui')).toBeTruthy();
+    // A link opens a thread. The pair route is gone and a thread is on top.
+    await view.again({ pair, initialPeerDeviceId: peer.deviceId });
+    expect(await screen.findByTestId('thread-back')).toBeTruthy();
+    // A late call from the old pair flow must not pop the thread.
+    await act(async () => done());
+    expect(screen.getByTestId('thread-back')).toBeTruthy();
+  });
+
   it('routes a pair link into the pair slot', async () => {
     await shell(fakeEngine([]), { pair: <Text>pair-ui</Text>, pairBundle: '{"cbor":"aabb"}' });
     expect(screen.getByText('pair-ui')).toBeTruthy();

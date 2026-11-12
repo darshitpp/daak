@@ -186,4 +186,21 @@ describe('FolderSheet', () => {
       expect(screen.queryByText(/In Daak|In Photos/)).toBeNull();
     });
   });
+
+  it('each file row in the open folder gets its own fill from percentOf', () => {
+    const a = kid('a.bin', { itemIndex: 0, state: 'receiving', transferState: 'running' });
+    const b = kid('b.bin', { itemIndex: 1, state: 'receiving', transferState: 'running' });
+    mount(row([a, b], { state: 'receiving' }), { percentOf: (i: ThreadItem) => (i.itemIndex === 0 ? 100 : 40) });
+    const t = (id: string) => StyleSheet.flatten(screen.getByTestId(id).props.style).transform;
+    expect(t('folder-file-fill-a.bin')).toEqual([{ scaleX: 1 }]);
+    expect(t('folder-file-fill-b.bin')).toEqual([{ scaleX: 0.4 }]);
+  });
+
+  it('a file row draws no fill without percentOf or for a done file', () => {
+    const a = kid('a.bin', { itemIndex: 0, state: 'receiving', transferState: 'running' });
+    const d = kid('d.bin', { itemIndex: 1 });
+    mount(row([a, d], { state: 'receiving' }), { percentOf: (i: ThreadItem) => (i.itemIndex === 0 ? undefined : 100) });
+    expect(screen.queryByTestId('folder-file-fill-a.bin')).toBeNull();
+    expect(screen.queryByTestId('folder-file-fill-d.bin')).toBeNull();
+  });
 });

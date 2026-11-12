@@ -15,6 +15,9 @@ const OTHER = 'cc'.repeat(16);
 const BUNDLE = JSON.stringify({ cbor: 'aabbcc', name: 'Pixel 9', device_id: PEER });
 
 jest.mock('../bootstrap', () => ({
+  // The driver does not exist before the engine starts. The thread shows no batch row.
+  batchDriver: () => { throw new Error('NOT_READY'); },
+  onBatchChange: jest.fn(() => () => {}),
   engine: jest.requireActual('@daak/ui').fakeEngine(),
   startEngine: async () => {},
   startEngineOnce: jest.fn(async () => {}),

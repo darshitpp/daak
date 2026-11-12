@@ -264,6 +264,8 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
         received_at: 1_700_000_000,
         saved_paths: "[]".into(),
         group_roots: Vec::new(),
+        share: None,
+        batch: None,
     };
     let mapped = to_ffi_event(EngineEvent::InboxReceived(row));
     let FfiEvent::InboxReceived { data } = mapped else {
@@ -282,6 +284,8 @@ fn engine_events_map_onto_the_ffi_union_with_hex_ids() {
             received_at: 1_700_000_000,
             saved_paths: "[]".into(),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         }),
         "the event payload must be the SAME InboxEntry the list endpoint returns"
     );
@@ -304,6 +308,8 @@ fn an_unparsable_saved_paths_is_null_in_the_event_payload_never_an_empty_list() 
         received_at: 0,
         saved_paths: "{not json".into(),
         group_roots: Vec::new(),
+        share: None,
+        batch: None,
     };
     let FfiEvent::InboxReceived { data } = to_ffi_event(EngineEvent::InboxReceived(row.clone()))
     else {
@@ -728,6 +734,8 @@ fn the_inbox_entry_carries_the_group_roots() {
         received_at: 0,
         saved_paths: "[]".into(),
         group_roots: vec!["/out/album".into()],
+        share: None,
+        batch: None,
     };
     let FfiEvent::InboxReceived { data } = to_ffi_event(EngineEvent::InboxReceived(row.clone()))
     else {
@@ -739,4 +747,35 @@ fn the_inbox_entry_carries_the_group_roots() {
         daak_ffi::inbox_entry_json(&row)["groupRoots"],
         serde_json::json!(["/out/album"])
     );
+}
+
+// The share tag reaches JS in the `inbox.received` event. A row with no tag
+// has no `share` and no `batch` key.
+#[test]
+fn the_inbox_entry_carries_the_share_tag_only_when_it_has_one() {
+    let mut row = daak_core::store::inbox::InboxRow {
+        id: [1u8; 16],
+        transfer_id: [1u8; 16],
+        peer_device_id: [2u8; 16],
+        kind: "media".into(),
+        item_count: 1,
+        summary: "1 file(s)".into(),
+        received_at: 0,
+        saved_paths: "[]".into(),
+        group_roots: Vec::new(),
+        share: Some("00112233445566778899aabbccddeeff".into()),
+        batch: Some("2/7".into()),
+    };
+    let FfiEvent::InboxReceived { data } = to_ffi_event(EngineEvent::InboxReceived(row.clone()))
+    else {
+        panic!("expected an inbox event");
+    };
+    let json: serde_json::Value = serde_json::from_str(&data.payload_json).unwrap();
+    assert_eq!(json["share"], "00112233445566778899aabbccddeeff");
+    assert_eq!(json["batch"], "2/7");
+    row.share = None;
+    row.batch = None;
+    let json = daak_ffi::inbox_entry_json(&row);
+    assert!(json.get("share").is_none());
+    assert!(json.get("batch").is_none());
 }

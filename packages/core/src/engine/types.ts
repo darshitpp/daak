@@ -76,6 +76,14 @@ export interface InboxEntry {
    * After a move to Photos or Gallery, `listInbox` returns `[]` for a folder.
    */
   groupRoots?: string[];
+  /**
+   * The share tag of a tagged send, 32 lowercase hex characters. Present only
+   * on the `inbox.received` event, when every file carried the same valid tag.
+   * `listInbox` never returns it.
+   */
+  share?: string;
+  /** The batch position as `k/m` text. It goes with `share`. */
+  batch?: string;
 }
 
 export type DaakEvent =
@@ -115,6 +123,12 @@ export interface SendRequest {
   peerDeviceId: string;
   text?: string;
   files?: string[];
+  /** Share tag (32 hex characters) of a batch. Only the in-process engine uses it. */
+  share?: string;
+  /** Batch position as `k/m`. Set with `share`. */
+  batch?: string;
+  /** Retry count of the batch. It changes the payload id. Default 0. */
+  attempt?: number;
 }
 
 export interface TransferSummary {
@@ -378,5 +392,14 @@ export interface DaakEngine {
    * returns no text.
    */
   exportDebugBundle(): Promise<string>;
+  /**
+   * Keep the plan of a batched send as opaque text. `share` is 32 lower case
+   * hex characters. The plan is at most 1 MiB. Only a paired peer can have
+   * a plan. A second save for the same share replaces the first.
+   */
+  saveSendPlan(peerDeviceId: string, share: string, json: string): Promise<void>;
+  /** The saved plans of one peer. `plan` is the saved text. */
+  listSendPlans(peerDeviceId: string): Promise<Array<{ share: string; plan: string }>>;
+  deleteSendPlan(peerDeviceId: string, share: string): Promise<void>;
   on(cb: (event: DaakEvent) => void): () => void;
 }

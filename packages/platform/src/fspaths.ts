@@ -74,6 +74,9 @@ export async function chooseDownloadFolder(): Promise<string | null> {
   return raw === null ? null : friendlyFolderName(raw);
 }
 
+// Resolves the name of the folder that receives files. It resolves null when
+// the platform has no public folder to name. It does not mean "not chosen":
+// Android API 29 and later returns the default public folder after a reset.
 export async function downloadFolderName(): Promise<string | null> {
   const raw = (await NativeDaakFsPaths.downloadFolderName()) ?? null;
   return raw === null ? null : friendlyFolderName(raw);
@@ -151,6 +154,14 @@ export function friendlyFolderName(raw: string): string {
   if (parts.length === 0) return raw;
   return capMiddle(parts.slice(-2).join(' / '));
 }
+
+/**
+ * The name of the default public folder on Android 29 and later. The native
+ * module returns the raw value `Download/Daak` when the user chose no folder.
+ * The host uses this label to see that default. It comes from
+ * `friendlyFolderName`, so the two cannot differ.
+ */
+export const DEFAULT_PUBLIC_FOLDER_LABEL = friendlyFolderName('Download/Daak');
 
 export async function clearDownloadFolder(): Promise<void> {
   return NativeDaakFsPaths.clearDownloadFolder();
@@ -495,6 +506,19 @@ export async function folderStats(path: string): Promise<{ files: number; bytes:
   } catch {
     return null;
   }
+}
+
+/**
+ * The free bytes for the send cache. A native failure rejects. This function
+ * does not hide it, because the caller decides what to do. A value that is not
+ * a finite number of 0 or more also rejects.
+ */
+export async function freeBytes(): Promise<number> {
+  const bytes: unknown = await NativeDaakFsPaths.freeBytes();
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
+    throw new Error('the native free space is not a number of 0 or more');
+  }
+  return bytes;
 }
 
 /**

@@ -16,6 +16,11 @@ pub struct InboxRow {
     /// `Engine::list_inbox` and the `InboxReceived` event fill it from
     /// `group_roots`.
     pub group_roots: Vec<String>,
+    /// The share tag of a tagged send. Not stored. `record_inbox` computes it
+    /// when the transfer arrives. `list_inbox` gives `None`.
+    pub share: Option<String>,
+    /// The original `k/m` text that goes with `share`. Not stored.
+    pub batch: Option<String>,
 }
 
 impl Db {
@@ -263,6 +268,8 @@ fn row_to_inbox(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxRow> {
         received_at: r.get(6)?,
         saved_paths: r.get(7)?,
         group_roots: Vec::new(),
+        share: None,
+        batch: None,
     })
 }
 
@@ -281,6 +288,8 @@ mod tests {
             received_at: at,
             saved_paths: "[]".into(),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         }
     }
 
@@ -932,6 +941,8 @@ mod dedupe_tests {
             received_at: 1,
             saved_paths: "[]".into(),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         }
     }
 

@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import type { DeviceInfo } from '@daak/core';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
-import { ThreadScreen } from '../screens/ThreadScreen';
+import { ThreadScreen, type BatchHost, type MediaHost } from '../screens/ThreadScreen';
 import { QuarantineScreen } from '../screens/QuarantineScreen';
 import type { InboxActions } from '../inbox-actions';
 import type { PhotosHost } from './PhotosAccessRow';
@@ -69,9 +69,11 @@ export function AppShell({
   folderStats,
   discardPickedCopy,
   pickLabel,
+  media,
+  batch,
 }: {
   background?: React.ReactNode;
-  pair?: React.ReactNode;
+  pair?: React.ReactNode | ((onPaired: () => void) => React.ReactNode);
   /**
    * A BLOCKING screen that replaces everything: update-required and
    * can't-reach. A slot, because the facts live on the host. It shows only
@@ -93,6 +95,7 @@ export function AppShell({
     load: () => Promise<string | null>;
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
+    canReset?: (name: string) => boolean;
   };
   /** The Photos verbs for the Settings row. Injected: access is a platform call. */
   photos?: PhotosHost;
@@ -132,6 +135,9 @@ export function AppShell({
   discardPickedCopy?: (path: string) => Promise<void>;
   /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
   pickLabel?: string;
+  media?: MediaHost;
+  /** The state of a large send. Absent when the host has no batch driver. */
+  batch?: BatchHost;
 }) {
   const [root, setRoot] = useState<Tab>('devices');
   const [stack, setStack] = useState<Route[]>([]);
@@ -141,6 +147,8 @@ export function AppShell({
   const route = (b: RouteBody): Route => ({ ...b, id: (ids.current += 1) });
   const push = (b: RouteBody) => setStack((s) => [...s, route(b)]);
   const pop = () => setStack((s) => s.slice(0, -1));
+  // The pair flow calls this when pairing ends. It pops only the pair route.
+  const popPair = () => setStack((s) => (s[s.length - 1]?.name === 'pair' ? s.slice(0, -1) : s));
   const goRoot = (t: Tab) => {
     setRoot(t);
     setStack([]);
@@ -279,12 +287,14 @@ export function AppShell({
         folderStats={folderStats}
         discardPickedCopy={discardPickedCopy}
         pickLabel={pickLabel}
+        media={media}
+        batch={batch}
       />
     );
   } else if (shown !== undefined) {
     screen = (
       <View style={ui.screen}>
-        {pair}
+        {typeof pair === 'function' ? pair(popPair) : pair}
         <View style={{ padding: spacing.lg, paddingTop: 0 }}>
           <Btn variant="ghost" block testID="pair-back" label="Back to devices" onPress={pop} />
         </View>

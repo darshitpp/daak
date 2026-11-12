@@ -40,6 +40,12 @@ export interface Spec extends TurboModule {
    * implement all three.
    */
   folderStats(path: string): Promise<{ files: number; bytes: number } | null>;
+  /**
+   * The free bytes that the app can use for its send cache. It counts space
+   * that the system can clear. It rejects when the OS gives no value. The
+   * message has no path. Required on iOS, Android, and macOS.
+   */
+  freeBytes(): Promise<number>;
   /** Delete the private copy that `pickFolder` made. A no-op on macOS. */
   discardPickedCopy(path: string): Promise<void>;
   /** Delete every private copy that an earlier run left. A no-op on macOS. */

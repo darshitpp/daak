@@ -47,8 +47,14 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     openFile: jest.fn(async () => true),
     fileSizes: jest.fn(async (p: string[]) => p.map(() => null)),
     pickFolder: jest.fn(async () => null),
+    pickMedia: jest.fn(async () => []),
+    materializeMedia: jest.fn(async () => ''),
     folderStats: jest.fn(async () => null),
+    freeBytes: jest.fn(async () => 10 * 1024 ** 3),
+    fits: jest.fn(() => true),
+    DEFAULT_ITEM_BYTES: 50 * 1024 ** 2,
     discardPickedCopy: jest.fn(async () => undefined),
+    releaseMedia: jest.fn(async () => undefined),
     sweepPickedCopies: jest.fn(async () => undefined),
     presentShare: jest.fn(async () => true),
     copyToClipboard: jest.fn(async () => {}),
@@ -78,9 +84,12 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     loadNotifyPrefs: jest.fn(async () => ({ arrival: true })),
     saveNotifyPrefs: jest.fn(async () => undefined),
     appInfo: jest.fn(async () => ({ version: '0.1.0', build: '1' })),
+    deviceInfo: jest.fn(() => 'os: android 16 (API 36)\n'),
     formatAppInfo: jest.fn(
       (i: { version: string; build: string }) => `Version ${i.version} (build ${i.build})`,
     ),
+    // The batch driver of bootstrap. A test about a large send replaces it.
+    createBatchDriver: jest.fn(() => ({ start: jest.fn(), onEvent: jest.fn(), retry: jest.fn(), stop: jest.fn(), status: jest.fn(() => null), resume: jest.fn(async () => {}), dispose: jest.fn() })),
     ...overrides,
   };
 }

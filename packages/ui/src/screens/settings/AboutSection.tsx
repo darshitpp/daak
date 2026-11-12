@@ -11,7 +11,7 @@ type Info = { version: string; build: string };
  * A reject, a sync throw, or `version: 'unknown'` (the P2 fallback) hides it.
  */
 export function AboutSection({ appInfo }: { appInfo?: () => Promise<Info> }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [info, setInfo] = useState<Info | null>(null);
   useEffect(() => {
@@ -71,6 +71,9 @@ export function AboutSection({ appInfo }: { appInfo?: () => Promise<Info> }) {
                 </View>
               ) : null}
             </View>
+            <Text style={ui.hint}>
+              Apps with storage access can read the files that you receive. On iOS, the Documents folder is in the device backup.
+            </Text>
             <View style={ui.cardTight} testID="about-links">
               {ABOUT_LINKS.map((l, i) => (
                 <Pressable

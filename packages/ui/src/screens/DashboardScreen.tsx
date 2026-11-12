@@ -155,13 +155,30 @@ export function DashboardScreen({ onOpenThread, onPair, onCheckConnection, pendi
   useEffect(() => {
     alive.current = true;
     refresh();
-    void engine.selfProfile().then((p) => { if (alive.current) setSelfName(p.name); }, () => {});
+    // The engine can reject selfProfile right after an app update. Try again
+    // up to 5 times, 1 s apart. The warning has the error kind and no name.
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const readName = (tries: number) => {
+      engine.selfProfile().then(
+        (p) => { if (alive.current) setSelfName(p.name); },
+        (e: unknown) => {
+          if (!alive.current) return;
+          if (tries >= 5) {
+            console.warn('daak: device name read failed:', e instanceof Error ? e.name : typeof e);
+            return;
+          }
+          retry = setTimeout(() => readName(tries + 1), 1000);
+        },
+      );
+    };
+    readName(1);
     const off = engine.on((e) => {
       if (e.type === 'outbox.queued') setQueueDepth((q) => ({ ...q, [e.deviceId]: e.queued }));
       if (REFRESH_ON.has(e.type)) scheduleRefresh();
     });
     return () => {
       alive.current = false;
+      if (retry !== null) clearTimeout(retry);
       if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; }
       burstAt.current = null;
       off();

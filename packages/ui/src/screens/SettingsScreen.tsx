@@ -9,7 +9,6 @@ import { ArrivalSection } from './settings/ArrivalSection';
 import { ConnectionSection } from './settings/ConnectionSection';
 import { ReportIssueSection } from './settings/ReportIssueSection';
 import { AboutSection } from './settings/AboutSection';
-import { PresenceSection } from './settings/PresenceSection';
 import { useConnection } from '../state/useConnection';
 import { useToast } from '../components/Toast';
 import type { SettingsHost } from './settings/host';
@@ -47,13 +46,15 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
   /**
    * R42p: where received files go. Injected for the same reason `background`
    * is a slot -- the folder picker is a platform call, and packages/ui reaches
-   * no TurboModule. `name` is null until the user chooses one, and the default
-   * then is the app's own storage, which is what the copy below says.
+   * no TurboModule. `load` returns the name that the native module reports. It
+   * returns null only when the module has no folder, and the row then says the
+   * app's own storage.
    */
   downloadFolder?: {
     load: () => Promise<string | null>;
     choose?: () => Promise<string | null>;
     reset?: () => Promise<void>;
+    canReset?: (name: string) => boolean;
   };
   /** R42g. PairedSection revokes the pairing itself and then calls this hook. */
   onUnpair?: (d: DeviceInfo) => void;
@@ -236,8 +237,6 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
           </View>
         </Section>
 
-        <PresenceSection deviceNoun={deviceNoun} />
-
         {downloadFolder ? (
           <DownloadFolderRow
             title="Save files to"
@@ -245,6 +244,7 @@ export function SettingsScreen({ background, onCheckConnection, downloadFolder, 
             load={downloadFolder.load}
             choose={downloadFolder.choose}
             reset={downloadFolder.reset}
+            canReset={downloadFolder.canReset}
             // The design has no "Files are moved, not copied" note here.
             hideNote
           />

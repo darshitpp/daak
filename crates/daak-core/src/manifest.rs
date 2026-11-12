@@ -520,6 +520,113 @@ pub fn from_picked_paths(
     picked: &[PathBuf],
     chunk_size: u32,
 ) -> Result<(Manifest, Vec<PathBuf>)> {
+    from_picked_paths_inner(sender, picked, chunk_size, None)
+}
+
+/// Check a share tag. Only the canonical form is valid. `share` is exactly
+/// 32 lower case hex characters. `batch` is `k/m`. Each number is decimal,
+/// has no sign, and has no leading zero. `1 <= k <= m <= 1000`. Returns
+/// `(k, m)`. The error text holds no value, because a log line must not carry
+/// data from a peer or a user.
+pub fn parse_batch_tag(share: &str, batch: &str) -> Result<(u32, u32)> {
+    let bad = || CoreError::Protocol("invalid share tag".into());
+    if share.len() != 32
+        || !share
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(bad());
+    }
+    let (k, m) = batch.split_once('/').ok_or_else(bad)?;
+    let number = |t: &str| {
+        !t.is_empty()
+            && t.len() <= 4
+            && !t.starts_with('0')
+            && t.bytes().all(|b| b.is_ascii_digit())
+    };
+    if !number(k) || !number(m) {
+        return Err(bad());
+    }
+    let (k, m): (u32, u32) = (k.parse().map_err(|_| bad())?, m.parse().map_err(|_| bad())?);
+    if k > m || m > 1000 {
+        return Err(bad());
+    }
+    Ok((k, m))
+}
+
+/// The share tag of a received transfer. Only binary items count. Every binary
+/// item must carry the same `attrs["share"]` and `attrs["batch"]` as CBOR
+/// text, and `parse_batch_tag` must accept the pair. The text is not changed
+/// first. Any other case gives `None`. Returns `(share, k, m)`.
+pub fn parse_tag(items: &[Item]) -> Option<(String, u32, u32)> {
+    let mut found: Option<(&str, &str)> = None;
+    for item in items.iter().filter(|i| i.is_binary()) {
+        let (Some(ciborium::value::Value::Text(share)), Some(ciborium::value::Value::Text(batch))) =
+            (item.attrs.get("share"), item.attrs.get("batch"))
+        else {
+            return None;
+        };
+        match found {
+            None => found = Some((share, batch)),
+            Some(first) if first == (share.as_str(), batch.as_str()) => {}
+            Some(_) => return None,
+        }
+    }
+    let (share, batch) = found?;
+    let (k, m) = parse_batch_tag(share, batch).ok()?;
+    Some((share.to_string(), k, m))
+}
+
+/// The payload id of a tagged send: the first 16 bytes of a keyed BLAKE2s.
+/// The input is the peer id (16 bytes), the share (16 decoded bytes), `k`
+/// (4 bytes), and `attempt` (4 bytes). The same input gives the same id. Two
+/// peers give two ids. `share` must be a canonical share tag.
+pub fn tagged_payload_id(peer: &[u8; 16], share: &str, k: u32, attempt: u32) -> Result<[u8; 16]> {
+    let share_bytes =
+        hex::decode(share).map_err(|_| CoreError::Protocol("invalid share tag".into()))?;
+    if share_bytes.len() != 16 {
+        return Err(CoreError::Protocol("invalid share tag".into()));
+    }
+    let mut base = [0u8; 32];
+    let label = b"daak/share-batch-id/v1";
+    base[..label.len()].copy_from_slice(label);
+    let mut info = peer.to_vec();
+    info.extend_from_slice(&share_bytes);
+    info.extend_from_slice(&k.to_be_bytes());
+    info.extend_from_slice(&attempt.to_be_bytes());
+    let key = crate::crypto::keys::derive_key(&base, &info, 0);
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&key[..16]);
+    Ok(id)
+}
+
+/// Like `from_picked_paths`. Each binary item also gets `attrs["share"]` and
+/// `attrs["batch"]` (`k/m`), and the payload id comes from `peer`, `share`,
+/// `k`, and `attempt`. A repeated call with the same input gives the same id.
+#[allow(clippy::too_many_arguments)]
+pub fn from_picked_paths_tagged(
+    sender: DeviceRef,
+    picked: &[PathBuf],
+    chunk_size: u32,
+    peer: &[u8; 16],
+    share: &str,
+    k: u32,
+    m: u32,
+    attempt: u32,
+) -> Result<(Manifest, Vec<PathBuf>)> {
+    let batch = format!("{k}/{m}");
+    let (pk, pm) = parse_batch_tag(share, &batch)?;
+    debug_assert_eq!((pk, pm), (k, m));
+    let id = tagged_payload_id(peer, share, k, attempt)?;
+    from_picked_paths_inner(sender, picked, chunk_size, Some((share, &batch, id)))
+}
+
+fn from_picked_paths_inner(
+    sender: DeviceRef,
+    picked: &[PathBuf],
+    chunk_size: u32,
+    tag: Option<(&str, &str, [u8; 16])>,
+) -> Result<(Manifest, Vec<PathBuf>)> {
     let mut items: Vec<Item> = Vec::new();
     let mut sources: Vec<PathBuf> = Vec::new();
     // B1/F2: item names are unique per MANIFEST, not per folder. Loose files
@@ -621,7 +728,20 @@ pub fn from_picked_paths(
             "nothing to send: the picked paths hold no files".into(),
         ));
     }
-    let manifest = Manifest::batch(sender, items)?;
+    let mut payload_id = None;
+    if let Some((share, batch, id)) = tag {
+        for item in items.iter_mut().filter(|i| i.is_binary()) {
+            item.attrs
+                .insert("share".into(), ciborium::value::Value::Text(share.into()));
+            item.attrs
+                .insert("batch".into(), ciborium::value::Value::Text(batch.into()));
+        }
+        payload_id = Some(id);
+    }
+    let mut manifest = Manifest::batch(sender, items)?;
+    if let Some(id) = payload_id {
+        manifest.payload_id = id;
+    }
     Ok((manifest, sources))
 }
 
@@ -1520,5 +1640,158 @@ mod tests {
             !text.contains("private-diary"),
             "the error names the path: {text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod parse_batch_tag_tests {
+    use super::{parse_batch_tag, parse_tag, Item, ItemType};
+
+    const SHARE: &str = "00112233445566778899aabbccddeeff";
+
+    #[test]
+    fn parse_batch_tag_accepts_a_valid_tag() {
+        assert_eq!(parse_batch_tag(SHARE, "2/7").unwrap(), (2, 7));
+        assert_eq!(parse_batch_tag(SHARE, "1000/1000").unwrap(), (1000, 1000));
+        assert_eq!(parse_batch_tag(SHARE, "1/1").unwrap(), (1, 1));
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_a_bad_share() {
+        assert!(parse_batch_tag(&SHARE[..31], "1/3").is_err());
+        assert!(parse_batch_tag(&format!("{SHARE}0"), "1/3").is_err());
+        assert!(parse_batch_tag("0011223344556677889900aabbccddeg", "1/3").is_err());
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_an_upper_case_share() {
+        assert!(parse_batch_tag(&SHARE.to_ascii_uppercase(), "1/3").is_err());
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_a_leading_zero_and_a_zero_k() {
+        for b in ["01/03", "0001/0003", "1/03", "01/3", "0/3"] {
+            assert!(parse_batch_tag(SHARE, b).is_err(), "{b}");
+        }
+    }
+
+    #[test]
+    fn parse_batch_tag_refuses_a_bad_batch() {
+        for b in [
+            "0/3", "4/3", "1/1001", "", "1", "a/b", "1/3/4", "+1/3", "-1/3", " 1/3",
+        ] {
+            assert!(parse_batch_tag(SHARE, b).is_err(), "{b}");
+        }
+    }
+
+    #[test]
+    fn parse_batch_tag_error_does_not_hold_the_values() {
+        let err = parse_batch_tag("secretvalue", "9/1")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("secretvalue") && !err.contains("9/1"));
+    }
+
+    // The tests for `parse_tag`.
+    const TAG: &str = "00112233445566778899aabbccddeeff";
+
+    fn tagged(share: &str, batch: &str) -> Item {
+        let mut item = Item {
+            item_type: ItemType::Document,
+            ..Default::default()
+        };
+        item.attrs
+            .insert("share".into(), ciborium::value::Value::Text(share.into()));
+        item.attrs
+            .insert("batch".into(), ciborium::value::Value::Text(batch.into()));
+        item
+    }
+
+    fn plain() -> Item {
+        Item {
+            item_type: ItemType::Document,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn parse_tag_gives_the_share_and_the_batch() {
+        let items = vec![tagged(TAG, "2/7"), tagged(TAG, "2/7")];
+        assert_eq!(parse_tag(&items), Some((TAG.to_string(), 2, 7)));
+    }
+
+    #[test]
+    fn parse_tag_gives_none_for_an_untagged_or_text_only_transfer() {
+        assert_eq!(parse_tag(&[plain()]), None);
+        assert_eq!(parse_tag(&[]), None);
+        assert_eq!(parse_tag(&[Item::text(0, "hi")]), None);
+    }
+
+    #[test]
+    fn parse_tag_ignores_a_text_item_with_no_tag() {
+        let items = vec![Item::text(0, "hi"), tagged(TAG, "1/1")];
+        assert_eq!(parse_tag(&items), Some((TAG.to_string(), 1, 1)));
+    }
+
+    #[test]
+    fn parse_tag_ignores_a_tag_on_a_text_item_that_disagrees() {
+        let mut text = Item::text(0, "hi");
+        text.attrs
+            .insert("share".into(), ciborium::value::Value::Text("f".repeat(32)));
+        text.attrs
+            .insert("batch".into(), ciborium::value::Value::Text("1/9".into()));
+        let items = vec![text, tagged(TAG, "2/7")];
+        assert_eq!(parse_tag(&items), Some((TAG.to_string(), 2, 7)));
+    }
+
+    #[test]
+    fn parse_tag_ignores_a_share_of_31_or_33_characters() {
+        assert_eq!(parse_tag(&[tagged(&TAG[..31], "1/2")]), None);
+        assert_eq!(parse_tag(&[tagged(&format!("{TAG}0"), "1/2")]), None);
+    }
+
+    #[test]
+    fn parse_tag_ignores_an_uppercase_or_non_hex_share() {
+        assert_eq!(parse_tag(&[tagged(&TAG.to_uppercase(), "1/2")]), None);
+        assert_eq!(parse_tag(&[tagged(&"g".repeat(32), "1/2")]), None);
+    }
+
+    #[test]
+    fn parse_tag_ignores_a_bad_batch() {
+        for b in ["0/3", "4/3", "1/1001", "01/03", "text", "1/", "/3", "-1/3"] {
+            assert_eq!(parse_tag(&[tagged(TAG, b)]), None, "{b}");
+        }
+    }
+
+    #[test]
+    fn parse_tag_gives_none_when_items_disagree() {
+        let a = vec![tagged(TAG, "1/3"), tagged(TAG, "2/3")];
+        assert_eq!(parse_tag(&a), None);
+        let other = "ffeeddccbbaa99887766554433221100";
+        let b = vec![tagged(TAG, "1/3"), tagged(other, "1/3")];
+        assert_eq!(parse_tag(&b), None);
+    }
+
+    #[test]
+    fn parse_tag_gives_none_for_a_tagged_item_and_an_untagged_binary_item() {
+        assert_eq!(parse_tag(&[tagged(TAG, "1/3"), plain()]), None);
+        assert_eq!(parse_tag(&[plain(), tagged(TAG, "1/3")]), None);
+    }
+
+    #[test]
+    fn parse_tag_gives_none_for_a_missing_key_or_a_non_text_value() {
+        let mut no_batch = tagged(TAG, "1/3");
+        no_batch.attrs.remove("batch");
+        assert_eq!(parse_tag(&[no_batch]), None);
+        let mut number = tagged(TAG, "1/3");
+        number
+            .attrs
+            .insert("batch".into(), ciborium::value::Value::Integer(3.into()));
+        assert_eq!(parse_tag(&[number]), None);
+        let mut bytes = tagged(TAG, "1/3");
+        bytes
+            .attrs
+            .insert("share".into(), ciborium::value::Value::Bytes(vec![0; 16]));
+        assert_eq!(parse_tag(&[bytes]), None);
     }
 }

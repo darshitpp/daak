@@ -197,6 +197,9 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            // A second id (the name is in src/debug/res), so the test build installs beside the
+            // stable app. Its data and identity are separate; pair it again.
+            applicationIdSuffix ".test"
         }
         release {
             // The upload key, never the debug key. See the note at the top of

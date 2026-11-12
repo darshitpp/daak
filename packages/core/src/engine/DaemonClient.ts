@@ -187,6 +187,8 @@ export class DaemonClientEngine implements DaakEngine {
     const hasFiles = (req.files?.length ?? 0) > 0;
     if (hasText && hasFiles) throw new Error('send takes text or files, not both');
     if (!hasText && !hasFiles) throw new Error('refusing an empty send');
+    // The share tag fields (share, batch, attempt) are ignored here: the
+    // daemon protocol has no tag, so a tagged request goes out as a plain send.
     const r = JSON.parse(
       await this.json({ Send: { peer_device_id: req.peerDeviceId, text: req.text ?? null, files: req.files ?? [] } }),
     ) as { transferId?: string; queued?: boolean };
@@ -319,6 +321,19 @@ export class DaemonClientEngine implements DaakEngine {
   // Do not change the IPC shape. No shipped app uses this client.
   async exportDebugBundle(): Promise<string> {
     throw new Error('exportDebugBundle is not supported by the daemon client');
+  }
+
+  // No IpcRequest keeps a send plan. The daemon shape is not on a live path.
+  async saveSendPlan(_peerDeviceId: string, _share: string, _json: string): Promise<void> {
+    throw new Error('send plans are unsupported by the daemon client');
+  }
+
+  async listSendPlans(_peerDeviceId: string): Promise<Array<{ share: string; plan: string }>> {
+    throw new Error('send plans are unsupported by the daemon client');
+  }
+
+  async deleteSendPlan(_peerDeviceId: string, _share: string): Promise<void> {
+    throw new Error('send plans are unsupported by the daemon client');
   }
 
   on(cb: (e: DaakEvent) => void): () => void {

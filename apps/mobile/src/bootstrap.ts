@@ -2,16 +2,20 @@ import { Alert, Platform } from 'react-native';
 import {
   consumeIntentSends,
   consumePendingShare,
+  createBatchDriver,
   createEngine,
+  discardPickedCopy,
   downloadFolderName,
+  freeBytes,
   initBackgroundSync,
   handleNotificationAction,
   initNotifications,
+  materializeMedia,
   notifyFailedSend,
-  notifyReceived,
   onNotificationAction,
   presentShare,
   realReceiveDeps,
+  releaseMedia,
   relocateReceivedFiles,
   routeInboxEntry,
   startTransferForeground,
@@ -20,12 +24,13 @@ import {
   syncShortcutTargets,
 } from '@daak/platform';
 import type { DaakEngine, InboxEntry } from '@daak/core';
-import type { InboundShareItem } from '@daak/platform';
+import type { BatchDriver, InboundShareItem } from '@daak/platform';
 // A deep import: actions.ts imports nothing, so it is safe on mobile. The
 // package barrel is the TurboModule and is not needed here.
 import { failedSendNotice, failureKey, receivedFolders, receivedText } from '@daak/rn-notify/js/actions';
 import type { ReceivedPlaces } from '@daak/rn-notify/js/actions';
 import { isLibraryPath } from '@daak/ui';
+import { onReceived } from './shareNotifier';
 import { libraryOf, photosHost } from './photosHost';
 
 export const engine: DaakEngine = createEngine();
@@ -65,6 +70,60 @@ export function onIncompatiblePeer(cb: (peer: IncompatiblePeer) => void): () => 
   return () => {
     incompatibleListeners.delete(cb);
   };
+}
+
+// The ONE batch driver of the app process. It sends a large photo selection in
+// batches. A second driver could run the same plan twice, so startEngine builds
+// it once and every caller reads it here.
+let driver: BatchDriver | undefined;
+
+// The tokens that a composer holds now, with one count for each composer.
+// The release of the driver skips them, so the end of a plan does not give
+// back the access of a photo that a composer shows (item A). It exists before
+// the engine starts, so a hold is never lost.
+const composerTokens = new Map<string, number>();
+
+export function holdComposerMedia(tokens: string[]): void {
+  for (const t of tokens) composerTokens.set(t, (composerTokens.get(t) ?? 0) + 1);
+}
+
+export function dropComposerMedia(tokens: string[]): void {
+  for (const t of tokens) {
+    const n = composerTokens.get(t) ?? 0;
+    if (n <= 1) composerTokens.delete(t);
+    else composerTokens.set(t, n - 1);
+  }
+}
+
+async function releaseFreeMedia(tokens: string[]): Promise<void> {
+  const free = tokens.filter((t) => !composerTokens.has(t));
+  if (free.length > 0) await releaseMedia(free);
+}
+
+/** The batch driver. It exists after startEngine has built it. */
+export function batchDriver(): BatchDriver {
+  if (driver === undefined) throw new Error('NOT_READY');
+  return driver;
+}
+
+// The screens that redraw a waiting row. The driver calls `onChange` for one
+// peer. This list fans that out. It is not a second engine subscription.
+const batchListeners = new Set<(peerId: string) => void>();
+
+export function onBatchChange(cb: (peerId: string) => void): () => void {
+  batchListeners.add(cb);
+  return () => {
+    batchListeners.delete(cb);
+  };
+}
+
+/** 32 lower case hex characters. A share id is not a secret, so a weak fallback is fine. */
+function randomShare(): string {
+  const bytes = new Uint8Array(16);
+  const c = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } }).crypto;
+  if (c?.getRandomValues) c.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // Re-entry handle for the pairing.done subscription. startEngine is *meant* to
@@ -156,7 +215,21 @@ async function notifyAfterRelocate(engine: DaakEngine, entry: InboxEntry): Promi
   // The places line reads the paths after the move.
   const places = receivedFolders(entry).length > 0 ? await receivedPlaces() : undefined;
   const text = receivedText(entry, moved ?? entry.savedPaths, places);
-  await notifyReceived(moved ? { ...entry, savedPaths: moved } : entry, text);
+  const count = (moved ?? entry.savedPaths ?? []).length;
+  await onReceived(moved ? { ...entry, savedPaths: moved } : entry, count, Date.now(), {
+    text,
+    // Only a tagged entry shows the name, so only it pays for the lookup.
+    deviceName: entry.share ? await senderName(engine, entry.peerDeviceId) : undefined,
+  });
+}
+
+/** The name of the sender, for the line of a batched share. Never throws. */
+async function senderName(engine: DaakEngine, peerDeviceId: string): Promise<string | undefined> {
+  try {
+    return (await engine.devices()).find((d) => d.deviceId === peerDeviceId)?.name;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -211,8 +284,11 @@ export async function startEngine(): Promise<void> {
   // can pick a folder. It is not awaited: a large copy must not delay the
   // engine. The native sweep keeps a copy that a pick makes during the sweep.
   // It is cleanup, so every error is caught and the start continues.
+  // The batch resume below waits for this promise. The sweep must not delete the
+  // copy of a batch that a resume starts.
+  let sweepDone: Promise<void> = Promise.resolve();
   try {
-    void sweepPickedCopies().catch(() => {});
+    sweepDone = sweepPickedCopies().catch(() => {});
   } catch {
     // No native module. Nothing to sweep.
   }
@@ -260,7 +336,23 @@ export async function startEngine(): Promise<void> {
   // without done/failed leaves its id in the set, which is a stale
   // notification and not a lost send (the outbox retries).
   const inFlight = new Set<string>();
+  driver ??= createBatchDriver({
+    engine,
+    // `release` gives back the Android read grants of the sources when a plan
+    // ends, except the grants that a composer holds.
+    media: { materialize: materializeMedia, discard: discardPickedCopy, freeBytes, release: releaseFreeMedia },
+    platform: Platform.OS === 'ios' ? 'ios' : 'android',
+    randomShare,
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),
+    onChange: (peerId) => {
+      for (const cb of [...batchListeners]) cb(peerId);
+    },
+  });
+  const batches = driver;
   unsubscribeEngine = engine.on((e) => {
+    // The driver reads the state of a transfer when it ends. It ignores the other events.
+    batches.onEvent(e);
     // The compatibility signal, on the ONE subscription like every other
     // event. A peer that is out of step is otherwise INVISIBLE: the engine
     // skips it, so it never appears in devices() and the user sees an empty
@@ -308,6 +400,14 @@ export async function startEngine(): Promise<void> {
     // Task 12: the failed-send banner, on the ONE subscription.
     if (e.type === 'transfer.failed') void notifyFailedOnce(engine, e.transferId);
   });
+  // Continue the plans that a restart cut. This waits for the sweep, and it does
+  // not delay the start. A failure here is not a startup failure.
+  void sweepDone
+    .then(async () => {
+      const paired = (await engine.devices()).filter((d) => d.paired).map((d) => d.deviceId);
+      await batches.resume(paired);
+    })
+    .catch(() => {});
   // R25: the ONE real send call site. ShareTargetActivity and the Siri intent
   // both stage into share-inbox/intent-sends/ and launch/foreground the app,
   // so draining here picks them up. consumePendingShare is NOT called: see

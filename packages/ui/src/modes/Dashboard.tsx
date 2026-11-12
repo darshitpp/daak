@@ -7,6 +7,7 @@ import { AppShell } from '../components/AppShell';
 import type { DeviceNoun } from '../components/ds';
 import type { PhotosHost } from '../components/PhotosAccessRow';
 import type { SettingsHost } from '../screens/settings/host';
+import type { BatchHost, MediaHost } from '../screens/ThreadScreen';
 import { EngineProvider } from '../EngineContext';
 import { ui } from '../theme';
 
@@ -23,13 +24,13 @@ import { ui } from '../theme';
  * so nothing here reads it) only so the host's re-render on store changes still
  * lands. ponytail: drop the prop once nothing reads it.
  */
-export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel }: {
+export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActions, pair, alert, alertRouteToken, settingsRouteToken, onCheckConnection, onUnpair, downloadFolder, photos, deviceNoun, windowChrome, keyboardAvoiding, settingsHost, initialFiles, initialShareToken, onShareSend, onCancelShare, onPickFolder, folderStats, discardPickedCopy, pickLabel, media, batch }: {
   state: UiState; engine: DaakEngine; peerDeviceId?: string;
   onPickFiles?: () => Promise<string[]>;
   inboxActions?: InboxActions;
   // The pairing route's content, for the same reason. The shell below is
   // where that route renders it.
-  pair?: React.ReactNode;
+  pair?: React.ReactNode | ((onPaired: () => void) => React.ReactNode);
   /* See DaakUiApp. These four reach AppShell unchanged; this layer only adds
      the EngineProvider the screens read from. */
   alert?: React.ReactNode;
@@ -41,6 +42,7 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
     load: () => Promise<string | null>;
     choose: () => Promise<string | null>;
     reset?: () => Promise<void>;
+    canReset?: (name: string) => boolean;
   };
   photos?: PhotosHost;
   /** "phone" or "Mac" in copy. A prop, because this package has no platform check. */
@@ -64,6 +66,9 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
   discardPickedCopy?: (path: string) => Promise<void>;
   /** The label of the add button when there is no folder menu. macOS sets `Add files or folders`. */
   pickLabel?: string;
+  media?: MediaHost;
+  /** The state of a large send. Absent when the host has no batch driver. */
+  batch?: BatchHost;
 }) {
   void state;
   return (
@@ -77,6 +82,8 @@ export function Dashboard({ state, engine, peerDeviceId, onPickFiles, inboxActio
           folderStats={folderStats}
           discardPickedCopy={discardPickedCopy}
           pickLabel={pickLabel}
+          media={media}
+            batch={batch}
           inboxActions={inboxActions}
           pair={pair}
           alert={alert}

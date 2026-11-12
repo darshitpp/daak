@@ -362,7 +362,8 @@ pub fn presence_str(p: PresenceState) -> &'static str {
 /// through as a quoted blob. A value that will not parse becomes `null`, NOT
 /// `[]`: `[]` is a real answer ("this payload saved no files") and a corrupt
 /// row must not be indistinguishable from it -- saved_paths is the one field
-/// the inbox row exists to carry. daakd mirrors this exactly.
+/// the inbox row exists to carry. daakd mirrors this, except that it does not
+/// emit the share tag (the daemon ignores the tag).
 pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::Value {
     let saved_paths: serde_json::Value = match serde_json::from_str(&row.saved_paths) {
         Ok(v) => v,
@@ -370,7 +371,7 @@ pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::
         // signal. Matches daakd's identical function exactly.
         Err(_) => serde_json::Value::Null,
     };
-    serde_json::json!({
+    let mut json = serde_json::json!({
         "payloadId": to_hex(&row.id),
         "transferId": to_hex(&row.transfer_id),
         "peerDeviceId": to_hex(&row.peer_device_id),
@@ -380,7 +381,14 @@ pub fn inbox_entry_json(row: &daak_core::store::inbox::InboxRow) -> serde_json::
         "receivedAt": row.received_at,
         "savedPaths": saved_paths,
         "groupRoots": row.group_roots,
-    })
+    });
+    // The tag is computed on receive and is not stored. Leave the keys out
+    // when it is absent.
+    if let (Some(share), Some(batch)) = (&row.share, &row.batch) {
+        json["share"] = serde_json::json!(share);
+        json["batch"] = serde_json::json!(batch);
+    }
+    json
 }
 
 /// The identity store: one 0600 file per key under <data_dir>/keys, so the
@@ -714,6 +722,51 @@ impl DaakEngine {
             .block_on(engine.enqueue_outbox_send(parse_id(&peer_id)?, manifest, sources))
             .map_err(engine_err)?;
         Ok(to_hex(&id))
+    }
+
+    pub fn send_files_tagged(
+        &self,
+        peer_id: String,
+        paths: Vec<String>,
+        share: String,
+        batch: String,
+        attempt: u32,
+    ) -> Result<String, FfiError> {
+        let picked: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+        let id = self
+            .rt
+            .block_on(self.engine()?.send_files_tagged(
+                parse_id(&peer_id)?,
+                picked,
+                share,
+                batch,
+                attempt,
+            ))
+            .map_err(engine_err)?;
+        Ok(to_hex(&id))
+    }
+
+    pub fn save_send_plan(
+        &self,
+        peer_id: String,
+        share: String,
+        json: String,
+    ) -> Result<(), FfiError> {
+        self.engine()?
+            .save_send_plan(parse_id(&peer_id)?, &share, &json)
+            .map_err(engine_err)
+    }
+
+    pub fn list_send_plans(&self, peer_id: String) -> Result<String, FfiError> {
+        self.engine()?
+            .list_send_plans(parse_id(&peer_id)?)
+            .map_err(engine_err)
+    }
+
+    pub fn delete_send_plan(&self, peer_id: String, share: String) -> Result<(), FfiError> {
+        self.engine()?
+            .delete_send_plan(parse_id(&peer_id)?, &share)
+            .map_err(engine_err)
     }
 
     pub fn list_devices(&self) -> Result<String, FfiError> {

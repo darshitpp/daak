@@ -579,6 +579,45 @@ async fn note_found(
 /// accept loop hands it to `handle_inbound`. R42d.
 pub(crate) type SharedDevices = Arc<Mutex<HashMap<[u8; 16], DeviceInfo>>>;
 
+/// The largest saved send plan: 1 MiB. A pick of 5000 Android photo-picker
+/// URIs makes a plan of about 450 KB.
+const SEND_PLAN_MAX_BYTES: usize = 1024 * 1024;
+/// A peer can have at most this many saved plans at one time. So the list of
+/// one peer holds at most 4 MiB.
+const SEND_PLAN_MAX_PER_PEER: usize = 4;
+
+fn send_plan_prefix(peer: &[u8; 16]) -> String {
+    format!("sendplan:{}:", hex::encode(peer))
+}
+
+/// The settings key of a send plan. `share` must be 32 lower case hex
+/// characters. The error does not hold the value.
+fn send_plan_key(peer: &[u8; 16], share: &str) -> Result<String> {
+    if share.len() != 32
+        || !share
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(CoreError::Protocol("invalid share tag".into()));
+    }
+    Ok(format!("{}{share}", send_plan_prefix(peer)))
+}
+
+/// Remove every saved send plan of a peer. A failure is logged and does not
+/// stop the revoke.
+fn delete_send_plans_of(db: &Db, peer: &[u8; 16]) {
+    let result = db
+        .list_settings_with_prefix(&send_plan_prefix(peer))
+        .and_then(|rows| rows.iter().try_for_each(|(key, _)| db.delete_setting(key)));
+    if let Err(e) = result {
+        tracing::warn!(
+            peer = %short_id(peer),
+            "send plan delete failed during revoke: {}",
+            log_err(&e)
+        );
+    }
+}
+
 /// The protocol version that each trusted peer announced over mDNS. An
 /// untrusted or revoked peer has no entry, and the sender then sends every
 /// chunk. The send path reads it: a peer of version 101 or more gets the
@@ -657,6 +696,8 @@ pub struct Engine {
     /// then disagree, and the next launch would advertise a name no peer has
     /// ever seen. crates/daak-core/tests/display_name_persist.rs pins it.
     rename_lock: tokio::sync::Mutex<()>,
+    /// Serialises `send_files_tagged`, so one id gives one outbox row.
+    tagged_send_lock: tokio::sync::Mutex<()>,
     identity: Arc<Identity>,
     db: Arc<Db>,
     staging: Arc<Staging>,
@@ -744,6 +785,16 @@ pub struct QuarantineReport {
     pub held_path: String,
 }
 
+/// Reset the backoff of the pending rows for a peer that came online. Then wake
+/// the outbox drain for that peer. A failed reset is not fatal.
+fn peer_came_online(db: &Db, outbox: &OutboxWorker, peer: &[u8; 16]) {
+    let now = (crate::manifest::now_ms() / 1000) as i64;
+    if let Err(e) = db.wake_outbox_for_peer(peer, now) {
+        tracing::warn!(peer = %short_id(peer), "outbox backoff reset failed: {}", log_err(&e));
+    }
+    outbox.notify_peer_online(*peer);
+}
+
 impl Engine {
     /// The ONE place a pairing becomes real, on all four paths (the joiner's
     /// `pair_with` / `pair_with_code` and the host's QR / code branches in
@@ -783,6 +834,8 @@ impl Engine {
         // A new pairing replaces an undelivered unpair notice. Delivering the
         // old one later would unpair the new pairing.
         db.clear_unpair_notice(&pairing.peer_device_id)?;
+        // A new pairing is a new relationship: the plans of an older one end here.
+        delete_send_plans_of(db, &pairing.peer_device_id);
         if let Some((devices, addr)) = devices {
             // R42d: the device map is RAM and starts empty on every launch, so
             // a paired peer had no address after a restart and every send failed
@@ -1066,7 +1119,9 @@ impl Engine {
                         .filter(|p| p.state == "trusted")
                         .ok_or_else(|| CoreError::Protocol("peer is not paired".into()))?;
                     let secret = zeroize::Zeroizing::new(identity.static_secret().to_bytes());
-                    let conn = tcp::dial(addr).await?;
+                    let conn = tokio::time::timeout(SEND_CONNECT_DEADLINE, tcp::dial(addr))
+                        .await
+                        .map_err(|_| CoreError::Protocol("connect timed out".into()))??;
                     crate::net::secure::open_secure(
                         conn,
                         &secret,
@@ -1280,9 +1335,17 @@ impl Engine {
                         addr,
                         paired,
                     };
+                    // `start` seeds a paired peer into `seeded` and `devices`.
+                    // Then `note_found` returns false for that peer. A seeded
+                    // peer that announces is still a peer that came online.
+                    // Read `seeded` before `note_found` removes the peer.
+                    let was_seeded = seeded.lock().await.contains(&device_id);
                     let is_new = note_found(&db, &devices, &seeded, &info).await;
                     if is_new {
                         let _ = tx.send(EngineEvent::DeviceFound(info));
+                    }
+                    if is_new || was_seeded {
+                        peer_came_online(&db, &outbox, &device_id);
                     }
                     // Wake on EVERY announce, not just the first: a peer that
                     // dropped off the map and reappeared is exactly the
@@ -1374,6 +1437,9 @@ impl Engine {
                                 c.state == Liveness::Online,
                             )
                             .await;
+                            if c.state == Liveness::Online {
+                                peer_came_online(&db, &outbox, &c.device_id);
+                            }
                             let queued = db.count_outbox_for_peer(&c.device_id).unwrap_or(0);
                             let _ = tx.send(EngineEvent::QueueDepth {
                                 device_id: c.device_id,
@@ -1477,6 +1543,7 @@ impl Engine {
             devices,
             profile,
             rename_lock: Mutex::new(()),
+            tagged_send_lock: Mutex::new(()),
             browser,
             accept_task,
             discovery_task,
@@ -1560,7 +1627,7 @@ impl Engine {
             // A peer that just came online drains its own due rows on the spot,
             // instead of waiting for the next poll tick and its backoff.
             if c.state == Liveness::Online {
-                self.outbox.notify_peer_online(p.device_id);
+                peer_came_online(&self.db, &self.outbox, &p.device_id);
             }
         }
         // A return inside the flap window emits no change, so re-announce
@@ -1700,6 +1767,7 @@ impl Engine {
     ) -> Result<()> {
         db.revoke_pairing(&peer)?;
         forget_peer_version(versions, &peer);
+        delete_send_plans_of(db, &peer);
         db.delete_outbox_for_peer(&peer)?;
         db.cancel_outbound_transfers_for_peer(&peer)?;
         // The peer just connected to us, so it is on the network. It stays in the
@@ -1820,6 +1888,7 @@ impl Engine {
         if was_trusted && !delivered {
             self.db.add_unpair_notice(&peer_device_id)?;
         }
+        delete_send_plans_of(&self.db, &peer_device_id);
         self.db.delete_outbox_for_peer(&peer_device_id)?;
         // The transfers rows stay as history, but the open outbound ones can
         // never move now that the outbox rows are gone. Close them.
@@ -1837,7 +1906,7 @@ impl Engine {
                 );
             }
         }
-        self.sessions.lock().await.remove(&peer_device_id);
+        self.sessions.lock().await.revoke(&peer_device_id);
         self.status.lock().await.forget(&peer_device_id);
 
         // A peer that the network showed us stays in the list as a nearby device
@@ -2509,6 +2578,99 @@ impl Engine {
         Ok(payload_id)
     }
 
+    /// Queue a send of one batch of a larger share. Each item carries the
+    /// share tag. The payload id comes from the peer, the tag, and `attempt`.
+    /// The text of `share` can be in upper case. The engine stores it in lower
+    /// case.
+    ///
+    /// A row for the id can already exist in any state: pending, sending,
+    /// failed, canceled, or done. Then the call returns `Ok(id)` and adds no
+    /// second row and no second staged copy. To send the batch again after a
+    /// cancel or a failure, call with `attempt + 1`, or retry the transfer.
+    /// Two calls with the same id at the same time give one row.
+    pub async fn send_files_tagged(
+        &self,
+        peer_device_id: [u8; 16],
+        paths: Vec<PathBuf>,
+        share: String,
+        batch: String,
+        attempt: u32,
+    ) -> Result<[u8; 16]> {
+        let share = share.to_ascii_lowercase();
+        let (k, m) = crate::manifest::parse_batch_tag(&share, &batch)?;
+        let id = crate::manifest::tagged_payload_id(&peer_device_id, &share, k, attempt)?;
+        // One tagged send at a time. The check, the staging, and the enqueue
+        // are one step. Without the guard, two calls can both see no row.
+        let _guard = self.tagged_send_lock.lock().await;
+        if self.db.get_outbox(&id)?.is_some() {
+            return Ok(id);
+        }
+        // No row: a staged directory for this id is an orphan from a crash.
+        if let Err(e) = self.staging.cleanup(&id) {
+            tracing::warn!("orphan staging cleanup failed: {}", log_err(&e));
+        }
+        let sender = crate::manifest::DeviceRef {
+            device_id: self.identity.device_id(),
+            name: self.display_name().await,
+        };
+        let (manifest, sources) = crate::manifest::from_picked_paths_tagged(
+            sender,
+            &paths,
+            crate::manifest::CHUNK_SIZE_DEFAULT,
+            &peer_device_id,
+            &share,
+            k,
+            m,
+            attempt,
+        )?;
+        self.enqueue_outbox_send(peer_device_id, manifest, sources)
+            .await
+    }
+
+    /// Keep the plan of a batched send. The text is opaque: the engine does
+    /// not parse it. A second save for the same peer and share replaces the
+    /// first. Only a trusted peer can have a plan.
+    pub fn save_send_plan(&self, peer: [u8; 16], share: &str, json: &str) -> Result<()> {
+        let key = send_plan_key(&peer, share)?;
+        if json.len() > SEND_PLAN_MAX_BYTES {
+            return Err(CoreError::Protocol("send plan is too large".into()));
+        }
+        if !self.db.is_trusted(&peer) {
+            return Err(CoreError::Protocol("peer is not paired".into()));
+        }
+        // A save for a share that exists replaces it. A new share counts.
+        let existing = self
+            .db
+            .list_settings_with_prefix(&send_plan_prefix(&peer))?;
+        if existing.len() >= SEND_PLAN_MAX_PER_PEER && !existing.iter().any(|(k, _)| *k == key) {
+            return Err(CoreError::Protocol("too many send plans".into()));
+        }
+        self.db.set_setting(&key, json.as_bytes())
+    }
+
+    /// The saved plans of one peer as JSON text:
+    /// `[{"share":"<hex>","plan":"<plan text>"}]`. Each plan is a JSON string.
+    pub fn list_send_plans(&self, peer: [u8; 16]) -> Result<String> {
+        let prefix = send_plan_prefix(&peer);
+        let mut out = Vec::new();
+        for (key, value) in self.db.list_settings_with_prefix(&prefix)? {
+            let Some(share) = key.strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            // A value that is not UTF-8 cannot come from `save_send_plan`.
+            let Ok(plan) = String::from_utf8(value) else {
+                continue;
+            };
+            out.push(serde_json::json!({ "share": share, "plan": plan }));
+        }
+        serde_json::to_string(&out).map_err(|e| CoreError::Protocol(e.to_string()))
+    }
+
+    /// Remove the plan of one share. A missing plan is not an error.
+    pub fn delete_send_plan(&self, peer: [u8; 16], share: &str) -> Result<()> {
+        self.db.delete_setting(&send_plan_key(&peer, share)?)
+    }
+
     /// A platform told the daemon to drain now: a timer, a network change or a
     /// SIGUSR1. The trigger drains every due row.
     pub fn background_wake(&self) {
@@ -2778,6 +2940,8 @@ impl Engine {
             // of an item that was remapped into quarantine.
             saved_paths: json_string_array(saved_paths),
             group_roots: Vec::new(),
+            share: None,
+            batch: None,
         };
         // The roots are read now, before any move. The UI gets them in the
         // event. A later list_inbox reads the paths after the move.
@@ -2790,10 +2954,18 @@ impl Engine {
             );
             Vec::new()
         });
+        // The tag is computed here from the manifest. It is not stored. Only
+        // the event row carries it.
+        let (share, batch) = match crate::manifest::parse_tag(&manifest.items) {
+            Some((share, k, m)) => (Some(share), Some(format!("{k}/{m}"))),
+            None => (None, None),
+        };
         if db.add_inbox_once(&row)? {
             return Ok((
                 InboxRow {
                     group_roots: roots,
+                    share,
+                    batch,
                     ..row
                 },
                 true,
@@ -2805,6 +2977,8 @@ impl Engine {
             Some(merged) => Ok((
                 InboxRow {
                     group_roots: roots,
+                    share,
+                    batch,
                     ..merged
                 },
                 true,
@@ -2812,6 +2986,8 @@ impl Engine {
             None => Ok((
                 InboxRow {
                     group_roots: roots,
+                    share,
+                    batch,
                     ..row
                 },
                 false,
@@ -3328,10 +3504,6 @@ const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// session and retries exactly ONCE through `get_or_connect`, which re-dials.
 /// One retry, not a loop -- an unbounded reconnect loop against a peer that
 /// refuses connections is a DoS.
-// ponytail: the registry lock is held across a full dial + Noise handshake, so
-// a cold peer serializes every other peer's connect. N is small (a room's worth
-// of devices) and a LAN handshake is ~ms; shard the registry per peer, or dial
-// outside the lock, if that ever stops being true.
 /// The engine reports progress at most once per this interval, plus one final
 /// event for the last chunk. Without the gate, every 1 MiB chunk would cross
 /// the FFI or the IPC boundary.
@@ -3393,7 +3565,7 @@ async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     db: &Db,
     resume: Option<std::time::Duration>,
 ) -> Result<()> {
-    let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
+    let handle = SessionRegistry::get_or_connect(sessions, peer_device_id).await?;
     match send_on_session(&handle, manifest, paths, tx, db, resume).await {
         Ok(()) => return Ok(()),
         // B4: a hash mismatch is a PERMANENT verdict on bytes the receiver
@@ -3405,7 +3577,7 @@ async fn send_secure_with<T: crate::net::FrameTransport + Send>(
     // A version 101 receiver names the chunks that it still lacks, so this
     // second attempt sends only those. A version 100 peer gets every chunk.
     sessions.lock().await.remove(&peer_device_id);
-    let handle = sessions.lock().await.get_or_connect(peer_device_id).await?;
+    let handle = SessionRegistry::get_or_connect(sessions, peer_device_id).await?;
     send_on_session(&handle, manifest, paths, tx, db, resume).await?;
     Ok(())
 }
@@ -3473,12 +3645,18 @@ struct DrainCtx<T = TcpConn> {
     peer_versions: PeerVersions,
 }
 
-/// Give up on a row after this many failed delivery attempts. 8 with the 4.3
-/// backoff (15s doubling, 10min cap) spans roughly 35 minutes of retrying, which
-/// covers a peer that is briefly away without pinning a staged file forever.
-// ponytail: fixed cap, no adaptive heuristics; raise it only alongside a UI
-// affordance for surfacing permanently-failed rows.
-const MAX_DELIVERY_ATTEMPTS: u32 = 8;
+/// The send path gives up a TCP connect after this time. The send path
+/// must not wait on a peer that does not answer.
+const SEND_CONNECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Give up on a row after this many failed delivery attempts. 100 attempts with
+/// the schedule in `backoff_delay_with` span about 36 to 50 minutes, with the
+/// dial time. This covers a peer that is briefly away without pinning a staged
+/// file forever.
+// The user chose 100 attempts on 2026-11-11. A send to a peer that comes
+// back must start in a few seconds. So the retries are fast, and the count is
+// high so that the rows still wait about 35 minutes or more for the peer.
+const MAX_DELIVERY_ATTEMPTS: u32 = 100;
 
 /// R-T10-3: the UPDATEs in cancel/retry match zero rows for an unknown id, so
 /// without this guard both would silently 'succeed' on garbage.
@@ -3496,27 +3674,24 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
     // without this guard cancel would report success for a row that does not
     // exist. The guard is load-bearing, not defensive noise.
     let row = require_outbox(db, &transfer_id)?;
-    let won = db.mark_outbox_terminal_failed(&transfer_id, "cancelled")?;
-    // B2: the outbox UPDATE is guarded on state IN ('pending','sending'), so a
-    // row that is already 'done' (delivered) or 'awaiting_ack' LOST the race and
-    // the transfers row must keep saying so. Writing 'canceled' unconditionally
-    // is how an already-delivered share was relabelled as cancelled.
-    if won {
-        // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
-        // brief's "cancelled"; do not "fix" it back.
-        db.set_transfer_state(&transfer_id, "canceled")?;
-        // F4: a cancel ends the payload, so its stored receive destinations
-        // go. Only an outbound id can match here, because cancel reads the
-        // outbox. An inbound list with the same payload id is rare.
-        db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
-    } else {
-        // The row was already done (delivered) or awaiting_ack. Cancel did
-        // not win, so the outbox is the authority and the staged copy is
-        // still wanted: a delivered share's staging is what a later retry
-        // would re-send from. Deleting it here would turn a no-op cancel into
-        // silent data loss while the row still reads `done`.
+    // One guarded UPDATE claims a `pending`, `sending`, or `failed` row as
+    // `canceled` (F5, item B). The staged files go only after this claim.
+    // Before this a cancel of a pending row left the row `failed`, and a
+    // later Retry re-armed a row with no staged files. A drain that runs now
+    // loses each of its settle guards, so it ends with no state write.
+    // B2: a row that is already `done` or `awaiting_ack` is not claimed. The
+    // outbox is then the authority, and the transfers row keeps its state.
+    // A row in `awaiting_ack` can still fail, so its staged copy stays. The
+    // drain already deleted the staged copy of a `done` row.
+    if !db.cancel_outbox(&transfer_id)? {
         return Ok(());
     }
+    // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
+    // brief's "cancelled"; do not "fix" it back.
+    db.set_transfer_state(&transfer_id, "canceled")?;
+    // F4: a cancel ends the payload, so its stored receive destinations go.
+    // Only an outbound id can match here, because cancel reads the outbox.
+    db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
     staging.cleanup(&row.payload_id)
 }
 
@@ -3747,11 +3922,12 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 .staging
                 .find_staged(&row.payload_id, item.index, item.name.as_deref());
             // B3: a staged file that is NOT THERE will still not be there on
-            // the next attempt, so retrying burns all 8 attempts over ~35
-            // minutes to arrive at the same failure. The reachable way to get
-            // here is cancel (which removes staging) followed by retry, which
-            // re-arms the row -- the SEMANTICS of that pair are parked for the
-            // user, but the harm (a 35 minute silent burn) is not. Terminal on
+            // the next attempt, so retrying burns all 100 attempts over about
+            // 36 to 50 minutes to arrive at the same failure. The reachable
+            // way to get here is cancel (which removes staging) followed by
+            // retry, which re-arms the row -- the SEMANTICS of that pair are
+            // parked for the user, but the harm (a silent burn of 36 to 50
+            // minutes) is not. Terminal on
             // the first attempt, exactly like an undecodable manifest above.
             if !path.exists() {
                 // An old staged path ends in the user file name, so neither
@@ -3801,6 +3977,16 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                     target: "outbox".into(),
                     message: format!("drain delivered {}", hex::encode(row.id)),
                 });
+                // The peer has the data and the row is done. A done row never
+                // sends again, so the staged copy is not needed. Without this
+                // step, delivered sends fill the disk until the next start.
+                // A failed cleanup must not change the result of the send.
+                if let Err(e) = ctx.staging.cleanup(&row.payload_id) {
+                    tracing::warn!(
+                        "staging cleanup after a delivered send failed: {}",
+                        log_err(&e)
+                    );
+                }
                 // F4: the transfers row enqueue wrote has to follow the row to
                 // its end, or a delivered share stays "queued" in the UI
                 // forever. Same best-effort treatment as the settles beside it:
@@ -3825,8 +4011,8 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
             // B4: the receiver QUARANTINED an item. That is a verdict about
             // these exact bytes, not a transport hiccup, so it must not enter
             // the retry path: retrying re-sends the same payload, the receiver
-            // recomputes the same hash, and the sender burns all 8 attempts
-            // over ~35 minutes before a row that was never going to succeed
+            // recomputes the same hash, and the sender burns all 100 attempts
+            // over about 36 to 50 minutes before a row that cannot succeed
             // reads 'failed'. Record what the receiver said, settle once, stop.
             //
             // Only the item the ack NAMES is marked. The receiver reports the
@@ -3861,7 +4047,7 @@ async fn drain_outbox_row<T: crate::net::FrameTransport + Send + 'static>(
                 //    `why` below is consumed by tracing::warn! alone. The
                 //    user-visible effect of this whole branch is therefore
                 //    that a quarantined share fails IMMEDIATELY instead of
-                //    after ~35 minutes of retries -- the wording, not the
+                //    after about 36 to 50 minutes of retries -- the wording, not the
                 //    timing, is what Phase 4 has to add.
                 match manifest.items.iter().find(|i| i.index == item_index) {
                     Some(item) => {
@@ -4530,6 +4716,43 @@ mod tests {
         assert!(!db.has_unpair_notice(&peer));
     }
 
+    // A new pairing is a new relationship. The saved plans of an older pairing
+    // of the same peer must not carry over.
+    #[tokio::test]
+    async fn a_new_pairing_removes_the_old_send_plans_of_that_peer() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let (tx, _rx) = broadcast::channel(8);
+        let (peer, other) = ([7u8; 16], [8u8; 16]);
+        let share = "ab".repeat(16);
+        db.set_setting(&send_plan_key(&peer, &share).unwrap(), b"old")
+            .unwrap();
+        db.set_setting(&send_plan_key(&other, &share).unwrap(), b"keep")
+            .unwrap();
+
+        let pairing = Pairing {
+            peer_device_id: peer,
+            state: "trusted".into(),
+            paired_at: 0,
+            verify_key: [1u8; 32],
+            static_dh_pub: [2u8; 32],
+            label: Some("peer".into()),
+        };
+        Engine::commit_pairing(&db, &pairing, &tx, None, false)
+            .await
+            .unwrap();
+        assert!(db
+            .list_settings_with_prefix(&send_plan_prefix(&peer))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.list_settings_with_prefix(&send_plan_prefix(&other))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn commit_pairing_seeds_the_bundle_name_not_the_hex_id() {
         let db = Db::open_in_memory().unwrap();
@@ -4702,6 +4925,129 @@ mod tests {
         );
     }
 
+    // D3: the batch driver sends a failed batch again under a new id when the
+    // engine retry fails. Its cancel of the old row must remove the staged
+    // files. A failed row has no drain, so nothing reads them after the cancel.
+    #[test]
+    fn cancelling_a_failed_row_removes_its_staged_files() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join("a.bin");
+        std::fs::write(&f, b"data").unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![
+                crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[f]).unwrap();
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        assert!(db.mark_outbox_terminal_failed(&id, "gave up").unwrap());
+        db.set_transfer_state(&id, "failed").unwrap();
+        assert!(staging.staged_path(&manifest.payload_id, 0).exists());
+
+        cancel_with(&db, &staging, id).unwrap();
+
+        assert!(!root.path().join(hex::encode(manifest.payload_id)).exists());
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        // F5: the cancel claims the row. A later retry cannot re-arm a row
+        // whose staged files are gone.
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(retry_with(&db, id).unwrap(), None);
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        // A second cancel finds no row to claim. It changes nothing.
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+    }
+
+    // Item B: a cancel of a `pending` row deleted the staged files but left
+    // the outbox row `failed`. A later Retry then re-armed a row with no files.
+    // The cancel now marks the row `canceled`, so no query and no retry
+    // selects it again.
+    #[test]
+    fn cancelling_a_pending_row_marks_it_canceled_so_a_retry_cannot_rearm_it() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join("a.bin");
+        std::fs::write(&f, b"data").unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![
+                crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[f]).unwrap();
+        assert!(staging.staged_path(&manifest.payload_id, 0).exists());
+
+        cancel_with(&db, &staging, id).unwrap();
+
+        assert!(!root.path().join(hex::encode(manifest.payload_id)).exists());
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(
+            retry_with(&db, id).unwrap(),
+            None,
+            "no re-arm without files"
+        );
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
+        assert_eq!(db.count_outbox_for_peer(&[3u8; 16]).unwrap(), 0);
+        assert!(
+            !db.live_outbox_payload_ids()
+                .unwrap()
+                .contains(&manifest.payload_id),
+            "the startup sweep may remove what is left of a canceled row"
+        );
+        // A second cancel finds nothing to claim. It changes nothing.
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+    }
+
+    // Item B: a cancel during a drain claims the `sending` row as `canceled`.
+    // Every settle of that drain loses its guard, so the drain ends as before.
+    #[test]
+    fn a_cancel_during_a_drain_leaves_the_row_canceled_for_every_settle() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let id =
+            crate::outbox::enqueue(&db, &staging, &[3u8; 16], &Manifest::text("d"), &[]).unwrap();
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(
+            settle_failed_attempt(&db, &id, 0, 0, 600, None).unwrap(),
+            None
+        );
+        assert_eq!(
+            settle_failed_attempt(&db, &id, MAX_DELIVERY_ATTEMPTS - 1, 0, 600, None).unwrap(),
+            None
+        );
+        assert!(!db.mark_outbox_awaiting_ack(&id).unwrap());
+        assert!(!db.mark_outbox_done(&id).unwrap());
+        assert_eq!(db.reset_inflight_outbox().unwrap(), 0);
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+    }
+
     // B2 (2): cancelling an already-DELIVERED row must not relabel it. The
     // outbox UPDATE is guarded on state IN ('pending','sending') and loses, so
     // the transfers write must not happen either.
@@ -4785,13 +5131,10 @@ mod tests {
         );
     }
 
-    // B3: cancel removes the staged bytes but leaves the outbox row in
-    // 'failed', which retry accepts -- so cancel->retry on a FILE share
-    // re-arms a row whose payload no longer exists. The SEMANTICS of that pair
-    // are a parked user decision; the HARM is not: the drain used to burn all
-    // 8 attempts over ~35 minutes to reach the same failure. A staged path
-    // that is absent is permanent (exactly like an undecodable manifest), so
-    // it settles terminally on the FIRST attempt.
+    // B3: a row whose staged bytes are gone must not burn all 100 attempts
+    // over about 36 to 50 minutes. A staged path that is absent is permanent
+    // (exactly like an undecodable manifest), so it settles terminally on the
+    // FIRST attempt. A cancel is final now, so this test removes the files by hand.
     #[tokio::test]
     async fn a_rearmed_row_with_no_staged_file_settles_on_the_first_attempt() {
         let db = Arc::new(Db::open_in_memory().unwrap());
@@ -4820,9 +5163,9 @@ mod tests {
         )
         .unwrap();
 
-        cancel_with(&db, &staging, id).unwrap();
-        // Phase 3 ruling R-T10-3, unchanged: retry DOES re-arm a canceled row.
-        assert_eq!(retry_with(&db, id).unwrap(), Some([9u8; 16]));
+        // A cancel is final now, so a row cannot lose its files that way.
+        // Remove the staged files by hand: any other cleanup gives the same state.
+        staging.cleanup(&manifest.payload_id).unwrap();
         assert!(db.mark_outbox_sending(&id).unwrap());
 
         let row = db.get_outbox(&id).unwrap().unwrap();
@@ -4954,7 +5297,7 @@ mod tests {
     // ---------------------------------------------------------------- B4 ---
     // A receiver-side QUARANTINE is a verdict, not a transport failure. The
     // old code returned the same Err for both, so the generic retry path
-    // burned the whole budget (~35 min) and the sender's UI said "failed" for
+    // burned the whole budget (about 36 to 50 min) and the sender's UI said "failed" for
     // a file the receiver deliberately held. Socket-free: a MemConn-backed
     // registry plus a stub peer answers the ack, like session.rs's own test.
     fn stub_peer_registry(

@@ -21,13 +21,15 @@ export const colors = {
   warn: '#eab308',
   // The amber measures 1.75:1 on cream, so an icon in it would be invisible.
   // Status is always carried by the word beside the dot, never by colour alone.
-  warnInk: '#8f6202',
+  warnInk: '#876002',
   err: '#dc2626',
   hover: 'rgba(28, 28, 28, 0.04)',
   okTint: 'rgba(22, 163, 74, 0.10)',
   warnTint: 'rgba(234, 179, 8, 0.14)',
   errTint: 'rgba(220, 38, 38, 0.09)',
   paper: '#fcfbf8',
+  // The progress fill of a file bubble: a darker shade of the bubble colour.
+  fill: 'rgba(0, 0, 0, 0.08)',
 };
 
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24, xxxl: 32 };

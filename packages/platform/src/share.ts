@@ -50,6 +50,91 @@ export async function pickFolder(): Promise<string | null> {
   }
 }
 
+export type MediaRef = { token: string; name: string; size: number | null };
+
+const isMediaRef = (v: unknown): v is MediaRef => {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as { token?: unknown; name?: unknown; size?: unknown };
+  return (
+    typeof r.token === 'string' &&
+    typeof r.name === 'string' &&
+    (r.size === null || (typeof r.size === 'number' && Number.isFinite(r.size) && r.size >= 0))
+  );
+};
+
+/**
+ * Ask the user for photos and videos. Resolves references only: a token, a
+ * name, and a size. Nothing is copied until `materializeMedia`. A cancelled
+ * pick gives `[]`. More than 5000 items reject `E_TOO_MANY`. A second pick while
+ * one is open rejects `E_PICK_BUSY`. An entry that
+ * fails validation is dropped.
+ */
+export async function pickMedia(): Promise<MediaRef[]> {
+  if (typeof NativeDaakShare.pickMedia !== 'function') {
+    throw new Error('pickMedia is not available on this platform');
+  }
+  let raw: unknown;
+  try {
+    raw = await NativeDaakShare.pickMedia();
+  } catch (e) {
+    const err = e as { code?: unknown; message?: unknown };
+    if (err.code === 'E_TOO_MANY' || err.message === 'E_TOO_MANY') throw new Error('E_TOO_MANY');
+    if (err.code === 'E_PICK_BUSY' || err.message === 'a pick is open') throw new Error('E_PICK_BUSY');
+    throw e;
+  }
+  if (typeof raw !== 'string') return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  return Array.isArray(parsed) ? parsed.filter(isMediaRef) : [];
+}
+
+/**
+ * Copy one picked item into the send cache and resolve the path of the copy.
+ * Rejects with an `Error` whose message is `NO_SPACE:<needed bytes>`,
+ * `E_SOURCE_GONE`, `NOT_DOWNLOADED`, or `E_MATERIALIZE`. The message holds no name and no URI.
+ */
+export async function materializeMedia(token: string): Promise<string> {
+  if (typeof NativeDaakShare.materialize !== 'function') {
+    throw new Error('materialize is not available on this platform');
+  }
+  try {
+    return await NativeDaakShare.materialize(token);
+  } catch (e) {
+    const err = e as { code?: unknown; message?: unknown };
+    const message = typeof err.message === 'string' ? err.message : '';
+    if (message.startsWith('NO_SPACE:') && /^NO_SPACE:\d+$/.test(message)) throw new Error(message);
+    if (err.code === 'NO_SPACE') throw new Error(`NO_SPACE:${message.replace(/\D/g, '')}`);
+    if (err.code === 'E_SOURCE_GONE' || message === 'E_SOURCE_GONE') {
+      throw new Error('E_SOURCE_GONE');
+    }
+    // An iCloud item that did not download keeps its own code: the screen has its text.
+    if (err.code === 'NOT_DOWNLOADED' || message === 'NOT_DOWNLOADED') {
+      throw new Error('NOT_DOWNLOADED');
+    }
+    // Any other error gets a fixed message, so no name or URI can pass through.
+    throw new Error('E_MATERIALIZE');
+  }
+}
+
+/**
+ * Give back the persisted read grants of picked media (Android). A grant that
+ * is not needed must go back: Android prunes the oldest grants above its limit,
+ * and that can be the download-folder grant. iOS and macOS have nothing to
+ * release. Best effort: this never throws.
+ */
+export async function releaseMedia(tokens: string[]): Promise<void> {
+  if (tokens.length === 0 || typeof NativeDaakShare.releaseMedia !== 'function') return;
+  try {
+    await NativeDaakShare.releaseMedia(JSON.stringify(tokens));
+  } catch {
+    // A grant that stays is a small cost. The send must not fail for it.
+  }
+}
+
 /** Raw JSON array of staged inbound items; `inbound.ts` (Task 5) parses it. */
 export async function consumePendingInbox(): Promise<string> {
   return NativeDaakShare.consumePendingInbox();

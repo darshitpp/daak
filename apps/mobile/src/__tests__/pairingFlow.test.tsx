@@ -34,6 +34,7 @@ jest.mock('@daak/platform', () => {
     notifyReceived: jest.fn(async () => {}),
     routeInboxEntry: jest.fn(async () => {}),
     realReceiveDeps: { clipboard: { setString: jest.fn(async () => true) } },
+    createBatchDriver: jest.fn(() => ({ start: jest.fn(), onEvent: jest.fn(), retry: jest.fn(), stop: jest.fn(), status: jest.fn(() => null), resume: jest.fn(async () => {}), dispose: jest.fn() })),
     pairingBundle: jest.fn(async () =>
       JSON.stringify({ cbor: 'aabb', name: 'me', device_id: 'bb'.repeat(16) }),
     ),
@@ -1008,3 +1009,92 @@ describe('the app flow drives code pairing', () => {
   });
 });
 
+describe('the flow tells the shell that pairing is done', () => {
+  const renderWith = async (props: React.ComponentProps<typeof PairingFlow>) =>
+    await renderAsync(
+      <EngineProvider engine={engine}>
+        <ToastProvider>
+          <PairingFlow {...props} />
+        </ToastProvider>
+      </EngineProvider>,
+    );
+  const toSas = async () => {
+    await fireEventAsync.press(screen.getByText('Scan a code'));
+    await waitFor(() => expect(screen.getByText('123 456')).toBeTruthy());
+  };
+
+  it('confirming calls onPaired once', async () => {
+    const onPaired = jest.fn();
+    await renderWith({ onPaired });
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    await waitFor(() => expect(onPaired).toHaveBeenCalledTimes(1));
+  });
+
+  it('a failed confirm does not call onPaired', async () => {
+    const onPaired = jest.fn();
+    jest.spyOn(engine, 'confirmPairing').mockRejectedValueOnce(new Error('no pending pairing to confirm'));
+    await renderWith({ onPaired });
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    expect(await screen.findByText(/no pending pairing to confirm/)).toBeTruthy();
+    expect(onPaired).not.toHaveBeenCalled();
+  });
+
+  it('embedded mode does not call onPaired', async () => {
+    const onPaired = jest.fn();
+    const confirmPairing = jest.spyOn(engine, 'confirmPairing');
+    await renderWith({ onPaired, embedded: true });
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    await waitFor(() => expect(confirmPairing).toHaveBeenCalledWith(PEER_ID));
+    await waitFor(() => expect(screen.getByText('Show my code')).toBeTruthy());
+    expect(onPaired).not.toHaveBeenCalled();
+  });
+
+  it('a flow that unmounts before confirm settles does not call onPaired', async () => {
+    const onPaired = jest.fn();
+    let release!: () => void;
+    jest.spyOn(engine, 'confirmPairing').mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const view = await renderWith({ onPaired });
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    await view.unmountAsync();
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    expect(onPaired).not.toHaveBeenCalled();
+  });
+
+  it('the toast reads Paired with <name> when engine.devices lists the peer', async () => {
+    await renderWith({ onPaired: jest.fn() });
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    expect(await screen.findByText('Paired with Pixel 9')).toBeTruthy();
+  });
+
+  it('the toast reads Paired when the name is unknown', async () => {
+    jest.spyOn(engine, 'devices').mockResolvedValueOnce([]);
+    await renderWith({ onPaired: jest.fn() });
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    expect(await screen.findByText('Paired')).toBeTruthy();
+  });
+
+  it('pairing the same device a second time calls onPaired once for each confirm', async () => {
+    const onPaired = jest.fn();
+    await renderWith({ onPaired });
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    await waitFor(() => expect(onPaired).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('Show my code')).toBeTruthy());
+    await toSas();
+    await fireEventAsync.press(screen.getByTestId('confirm'));
+    await waitFor(() => expect(onPaired).toHaveBeenCalledTimes(2));
+  });
+});

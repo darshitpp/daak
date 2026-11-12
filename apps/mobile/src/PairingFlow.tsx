@@ -56,7 +56,12 @@ const pad = { padding: 16, gap: 24 } as const;
  * "Pairing cancelled" is the shared toast. The first-run flow renders instead of
  * the shell, so `PairingFlow` adds its own provider when it is embedded.
  */
-type PairingFlowProps = { bundle?: string; addr?: string; embedded?: boolean };
+type PairingFlowProps = {
+  bundle?: string;
+  addr?: string;
+  embedded?: boolean;
+  onPaired?: () => void;
+};
 
 export function PairingFlow(props: PairingFlowProps = {}) {
   const body = <PairingFlowBody {...props} />;
@@ -64,7 +69,7 @@ export function PairingFlow(props: PairingFlowProps = {}) {
   return props.embedded ? <ToastProvider layout="bar">{body}</ToastProvider> : body;
 }
 
-function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
+function PairingFlowBody({ bundle, addr, embedded = false, onPaired }: PairingFlowProps) {
   const engine = useEngine();
   const toast = useToast();
   const [phase, setPhase] = useState<Phase>({ kind: 'choose' });
@@ -472,6 +477,17 @@ function PairingFlowBody({ bundle, addr, embedded = false }: PairingFlowProps) {
         setPeerId('');
         setBusy(null);
         setPhase({ kind: 'choose' });
+        // The first-run flow has no device list to return to.
+        if (embedded || unmounted.current) return;
+        void engine
+          .devices()
+          .then((list) => list.find((d) => d.deviceId === id)?.name)
+          .catch(() => undefined)
+          .then((name) => {
+            if (unmounted.current) return;
+            toast.show(name ? `Paired with ${name}` : 'Paired');
+            onPaired?.();
+          });
       },
       (e: unknown) => {
         pendingRef.current = id;

@@ -119,7 +119,15 @@ export class InProcessEngine implements DaakEngine {
     if (hasText) {
       return { transferId: await this.native.sendText(req.peerDeviceId, req.text as string), queued: true };
     }
-    return { transferId: await this.native.sendFiles(req.peerDeviceId, req.files ?? []), queued: true };
+    const files = req.files ?? [];
+    const hasShare = typeof req.share === 'string';
+    const hasBatch = typeof req.batch === 'string';
+    if (hasShare !== hasBatch) throw new Error('share and batch must be set together');
+    if (typeof req.share === 'string' && typeof req.batch === 'string') {
+      const id = await this.native.sendFilesTagged(req.peerDeviceId, files, req.share, req.batch, req.attempt ?? 0);
+      return { transferId: id, queued: true };
+    }
+    return { transferId: await this.native.sendFiles(req.peerDeviceId, files), queued: true };
   }
 
   async cancel(transferId: string): Promise<void> {
@@ -224,6 +232,26 @@ export class InProcessEngine implements DaakEngine {
 
   async setPresence(state: 'online' | 'away'): Promise<void> {
     await this.native.setPresence(state);
+  }
+
+  async saveSendPlan(peerDeviceId: string, share: string, json: string): Promise<void> {
+    await this.native.saveSendPlan(peerDeviceId, share, json);
+  }
+
+  async listSendPlans(peerDeviceId: string): Promise<Array<{ share: string; plan: string }>> {
+    const parsed: unknown = JSON.parse(await this.native.listSendPlans(peerDeviceId));
+    if (!Array.isArray(parsed)) return [];
+    const out: Array<{ share: string; plan: string }> = [];
+    for (const e of parsed) {
+      if (e !== null && typeof e === 'object' && typeof e.share === 'string' && typeof e.plan === 'string') {
+        out.push({ share: e.share, plan: e.plan });
+      }
+    }
+    return out;
+  }
+
+  async deleteSendPlan(peerDeviceId: string, share: string): Promise<void> {
+    await this.native.deleteSendPlan(peerDeviceId, share);
   }
 
   exportDebugBundle(): Promise<string> {

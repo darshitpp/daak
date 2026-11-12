@@ -173,16 +173,17 @@ describe('cant-reach', () => {
   });
 
   // Same button, same affordance, the other honest answer: there IS somebody
-  // there, so the devices tab was already right and the screen must not appear
-  // beside a populated device list.
-  it('stays on Settings when the check finds devices', async () => {
+  // there. The tap still gets an answer, and it is not the "cannot reach"
+  // wall. Back returns to Settings.
+  it('says the devices are showing when the check finds devices, and Back returns to Settings', async () => {
     jest.spyOn(engine, 'devices').mockResolvedValue([peerA]);
     render(<App />);
     fireEvent.press(await screen.findByText('Settings'));
     fireEvent.press(await screen.findByTestId('settings-check-connection'));
-    await act(async () => {});
+    expect(await screen.findByText('Your paired devices are showing')).toBeTruthy();
     expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
-    expect(screen.getByTestId('save-name')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Back'));
+    expect(await screen.findByTestId('save-name')).toBeTruthy();
   });
 
   // "Nobody is home" and "the check itself failed" are different problems, and

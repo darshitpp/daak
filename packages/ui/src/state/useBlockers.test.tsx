@@ -152,16 +152,17 @@ describe('useBlockers, the reachability check', () => {
     expect(result.current.alertRouteToken).toBe('cant-reach');
   });
 
-  // Somebody is there: the device list was already telling the truth, so a
-  // "cannot reach" wall beside it would be the app contradicting itself.
-  it('stays quiet when the engine finds a peer', async () => {
+  // Somebody is there. The tap must still get an answer, and the answer must
+  // not be the "cannot reach" wall: it says the devices are showing.
+  it('says the devices are showing when the engine finds a peer', async () => {
     const engine = stubEngine({ devices: jest.fn(async () => [peer('bb')]) });
-    const { result } = renderHook(() => useBlockers(engine, []));
+    const h = await mountWithAlert(engine);
     await act(async () => {
-      result.current.onCheckConnection();
+      h.current().onCheckConnection();
     });
-    expect(result.current.alert).toBeUndefined();
-    expect(result.current.alertRouteToken).toBeUndefined();
+    expect(screen.getByText('Your paired devices are showing')).toBeTruthy();
+    expect(screen.queryByText("Daak can't reach any devices")).toBeNull();
+    expect(screen.queryByTestId('cant-reach-retry')).toBeNull();
     // ONE real call. A second one here would double a daemon round trip.
     expect(engine.devices).toHaveBeenCalledTimes(1);
   });
@@ -193,14 +194,30 @@ describe('useBlockers, the reachability check', () => {
     expect(result.current.alertRouteToken).toBe('cant-reach');
   });
 
-  it('stays quiet when every paired device is online, and ignores a nearby unpaired device', async () => {
+  it('says the devices are showing when every paired device is online, and ignores a nearby unpaired device', async () => {
     const list = [paired('aa', true), { deviceId: 'cc', paired: false, online: true }];
     const engine = stubEngine({ devices: jest.fn(async () => list) });
-    const { result } = renderHook(() => useBlockers(engine, []));
+    const h = await mountWithAlert(engine);
     await act(async () => {
-      result.current.onCheckConnection();
+      h.current().onCheckConnection();
     });
-    expect(result.current.alert).toBeUndefined();
+    expect(screen.getByText('Your paired devices are showing')).toBeTruthy();
+  });
+
+  it('opens the screen again after Back, even when the second check finds every device', async () => {
+    const devices = jest.fn<Promise<{ deviceId: string }[]>, []>(async () => []);
+    const h = await mountWithAlert(stubEngine({ devices }));
+    await act(async () => { h.current().onCheckConnection(); });
+    expect(screen.getByText("Daak can't reach any devices")).toBeTruthy();
+    act(() => { fireEvent.press(screen.getByLabelText('Back')); });
+    expect(h.current().alert).toBeUndefined();
+    devices.mockResolvedValue([peer('bb')]);
+    await act(async () => { h.current().onCheckConnection(); });
+    expect(screen.getByText('Your paired devices are showing')).toBeTruthy();
+    act(() => { fireEvent.press(screen.getByLabelText('Back')); });
+    devices.mockResolvedValue([]);
+    await act(async () => { h.current().onCheckConnection(); });
+    expect(screen.getByText("Daak can't reach any devices")).toBeTruthy();
   });
 
   // A rejected check is NOT nobody at home. The engine is up and not answering,
@@ -324,6 +341,25 @@ describe('useBlockers, Open Settings', () => {
     });
     h.press('cant-reach-settings');
     expect(h.current().settingsRouteToken).toBe('2');
+  });
+});
+
+describe('useBlockers, Back on the cannot-reach screen', () => {
+  // The Devices link and the Settings route both forward the one
+  // onCheckConnection value. SettingsScreen only passes the prop on. The hook
+  // has no other entry, so one test covers both.
+  it('back clears the alert from the check-connection screen', async () => {
+    const h = await mountWithAlert(stubEngine({ devices: jest.fn(async () => []) }));
+    await act(async () => {
+      h.current().onCheckConnection();
+    });
+    expect(screen.getByLabelText('Back')).toBeTruthy();
+    act(() => {
+      fireEvent.press(screen.getByLabelText('Back'));
+    });
+    expect(h.current().alert).toBeUndefined();
+    expect(h.current().alertRouteToken).toBeUndefined();
+    expect(h.current().settingsRouteToken).toBeUndefined();
   });
 });
 

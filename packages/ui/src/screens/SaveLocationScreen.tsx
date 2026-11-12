@@ -11,6 +11,8 @@ export interface SaveLocationFolder {
   /** Omitted on a platform where the user cannot choose a folder. */
   choose?: () => Promise<string | null>;
   reset?: () => Promise<void>;
+  /** False for a name that a reset does not change. Default: true. */
+  canReset?: (name: string) => boolean;
 }
 
 /**
@@ -68,6 +70,7 @@ export function SaveLocationScreen({ folder, photos, onContinue, onBack, footer 
             load={folder.load}
             choose={folder.choose}
             reset={folder.reset}
+            canReset={folder.canReset}
             title="Save files to"
             chooseLabel="Change folder"
             hideNote

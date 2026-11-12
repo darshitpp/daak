@@ -16,6 +16,7 @@ import {
   INITIAL_ONBOARDING,
   chooseDownloadFolder,
   clearDownloadFolder,
+  DEFAULT_PUBLIC_FOLDER_LABEL,
   downloadFolderName,
   readOnboarding,
   withNotificationReask,
@@ -294,6 +295,7 @@ export function OnboardingFlow({ onComplete, onReady }: {
           load: downloadFolderName,
           choose: chooseDownloadFolder,
           reset: clearDownloadFolder,
+          canReset: (name) => name !== DEFAULT_PUBLIC_FOLDER_LABEL,
         }}
         photos={photosHost}
         onBack={() => setStep('permissions')}
