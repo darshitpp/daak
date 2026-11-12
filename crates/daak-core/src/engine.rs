@@ -5131,13 +5131,10 @@ mod tests {
         );
     }
 
-    // B3: cancel removes the staged bytes but leaves the outbox row in
-    // 'failed', which retry accepts -- so cancel->retry on a FILE share
-    // re-arms a row whose payload no longer exists. The SEMANTICS of that pair
-    // are a parked user decision; the HARM is not: the drain used to burn all
-    // 100 attempts over about 36 to 50 minutes to reach the same failure. A staged path
-    // that is absent is permanent (exactly like an undecodable manifest), so
-    // it settles terminally on the FIRST attempt.
+    // B3: a row whose staged bytes are gone must not burn all 100 attempts
+    // over about 36 to 50 minutes. A staged path that is absent is permanent
+    // (exactly like an undecodable manifest), so it settles terminally on the
+    // FIRST attempt. A cancel is final now, so this test removes the files by hand.
     #[tokio::test]
     async fn a_rearmed_row_with_no_staged_file_settles_on_the_first_attempt() {
         let db = Arc::new(Db::open_in_memory().unwrap());
@@ -5166,9 +5163,9 @@ mod tests {
         )
         .unwrap();
 
-        cancel_with(&db, &staging, id).unwrap();
-        // Phase 3 ruling R-T10-3, unchanged: retry DOES re-arm a canceled row.
-        assert_eq!(retry_with(&db, id).unwrap(), Some([9u8; 16]));
+        // A cancel is final now, so a row cannot lose its files that way.
+        // Remove the staged files by hand: any other cleanup gives the same state.
+        staging.cleanup(&manifest.payload_id).unwrap();
         assert!(db.mark_outbox_sending(&id).unwrap());
 
         let row = db.get_outbox(&id).unwrap().unwrap();
