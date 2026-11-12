@@ -61,6 +61,11 @@ export type BatchDriver = {
   onEvent(event: DaakEvent): void;
   retry(peerId: string): Promise<void>;
   stop(peerId: string): Promise<void>;
+  /**
+   * Give back the access to the sources that no plan holds. A composer calls
+   * this, so it does not remove a grant that a plan still needs.
+   */
+  release(tokens: string[]): Promise<void>;
   status(peerId: string): PlanStatus | null;
   resume(peers: string[]): Promise<void>;
   dispose(): void;
@@ -90,6 +95,8 @@ type SavedPlan = {
 type Entry = {
   /** Null while `start` computes the plan. */
   plan: SavedPlan | null;
+  /** The tokens of a `start` while its plan is null. */
+  startTokens?: string[];
   /** The steps of one plan run in this order. */
   chain: Promise<void>;
   stopped: boolean;
@@ -179,6 +186,10 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
   const entries = new Map<string, Entry>();
   let poll: unknown = null;
   let disposed = false;
+  // Before the first resume the saved plans are not read. A release then waits
+  // in `held`, because a saved plan can hold the token.
+  let resumed = false;
+  const held: string[] = [];
   const log = (msg: string) => deps.log?.(msg);
   const changed = (peerId: string) => deps.onChange?.(peerId);
 
@@ -245,9 +256,20 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     }
   }
 
-  async function release(p: SavedPlan): Promise<void> {
+  // The one release path. A token that a plan holds keeps its access.
+  async function release(tokens: string[]): Promise<void> {
+    if (!resumed) {
+      held.push(...tokens);
+      return;
+    }
+    const inUse = new Set<string>();
+    for (const e of entries.values()) {
+      for (const t of e.plan ? allTokens(e.plan) : (e.startTokens ?? [])) inUse.add(t);
+    }
+    const free = [...new Set(tokens)].filter((t) => !inUse.has(t));
+    if (free.length === 0) return;
     try {
-      await media.release?.(allTokens(p));
+      await media.release?.(free);
     } catch {
       log('batch driver: the release failed');
     }
@@ -367,8 +389,9 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     } catch {
       log('batch driver: the plan delete failed');
     }
-    await release(p);
+    // The entry goes first, so the release does not count its own tokens.
     if (entries.get(p.peerId) === e) entries.delete(p.peerId);
+    await release(allTokens(p));
     changed(p.peerId);
   }
 
@@ -428,13 +451,22 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     }
   }
 
-  // True when the peer is online, false when it is not, undefined when the
-  // engine does not answer.
+  // True when the engine re-armed the failed row. `Engine::retry` resolves
+  // also when it refuses: the row then stays `failed`. A read that fails is
+  // no information, so it counts as re-armed: the poll reads the row again.
+  async function rearm(p: SavedPlan, transferId: string): Promise<boolean> {
+    await engine.retry(transferId);
+    return (await stateOf(p, transferId)) !== 'failed';
+  }
+
+  // True when the peer is online or away, false when it is not, undefined when
+  // the engine does not answer.
   async function peerOnline(peerId: string): Promise<boolean | undefined> {
     try {
       const d = (await engine.devices()).find((x) => x.deviceId === peerId);
       if (!d) return false;
-      return d.presence !== undefined ? d.presence === 'online' : d.online === true;
+      // An away peer is on the LAN, and the outbox delivers to it.
+      return d.presence !== undefined ? d.presence !== 'offline' : d.online === true;
     } catch {
       log('batch driver: the device list failed');
       return undefined;
@@ -459,9 +491,11 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     if (e.waitPeer) {
       e.waitPeer = false;
       try {
-        await engine.retry(transferId);
-        changed(p.peerId);
-        return;
+        if (await rearm(p, transferId)) {
+          changed(p.peerId);
+          return;
+        }
+        log('batch driver: the engine did not re-arm the row');
       } catch {
         log('batch driver: the re-arm after the wait failed');
       }
@@ -477,7 +511,13 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     const gate = new Promise<void>((resolve) => {
       open = resolve;
     });
-    const e: Entry = { plan: null, chain: gate, stopped: false, polling: false };
+    const e: Entry = {
+      plan: null,
+      startTokens: refs.map((r) => r.token),
+      chain: gate,
+      stopped: false,
+      polling: false,
+    };
     entries.set(peerId, e);
     const share = deps.randomShare();
     try {
@@ -515,11 +555,8 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
   }
 
   function onEvent(event: DaakEvent): void {
-    // A peer that comes online ends the wait of a failed batch at once.
-    if (
-      (event.type === 'device.state' && event.state === 'online') ||
-      (event.type === 'device.presence' && event.presence === 'online')
-    ) {
+    // A peer that comes online or away ends the wait of a failed batch at once.
+    if ((event.type === 'device.state' && event.state === 'online') || event.type === 'device.presence') {
       const e = entries.get(event.deviceId);
       const id = e?.plan?.inflight?.transferId;
       if (e && e.waitPeer && id !== undefined) void step(e, () => check(e, id));
@@ -547,20 +584,22 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
       if (id !== undefined && state === 'failed') {
         try {
           // The row still holds its staged file.
-          await engine.retry(id);
-          await save(p);
-          changed(peerId);
-          return;
-        } catch {
-          // The staged file can be gone. Send the batch again below.
-          log('batch driver: the engine retry failed');
-          // The new send has a new id. The cancel makes the engine remove the
-          // staged batch of the old failed row. Best effort.
-          try {
-            await engine.cancel(id);
-          } catch {
-            log('batch driver: the cancel of the old row failed');
+          if (await rearm(p, id)) {
+            await save(p);
+            changed(peerId);
+            return;
           }
+          log('batch driver: the engine did not re-arm the row');
+        } catch {
+          log('batch driver: the engine retry failed');
+        }
+        // Send the batch again below. The new send has a new id. The cancel
+        // makes the engine remove the staged batch of the old failed row.
+        // Best effort.
+        try {
+          await engine.cancel(id);
+        } catch {
+          log('batch driver: the cancel of the old row failed');
         }
       } else if (id !== undefined && state !== null && state !== 'canceled') {
         // The row is alive again. Read it as a poll does.
@@ -634,7 +673,7 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     if (!paired) {
       for (const p of valid) {
         await engine.deleteSendPlan(peerId, p.share);
-        await release(p);
+        await release(allTokens(p));
       }
       return;
     }
@@ -644,14 +683,8 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     for (const p of extra) {
       await engine.deleteSendPlan(peerId, p.share);
       // Keep the access to a source that the kept plan also sends.
-      const own = allTokens(p).filter((t) => !kept.has(t));
-      if (own.length > 0) {
-        try {
-          await media.release?.(own);
-        } catch {
-          log('batch driver: the release failed');
-        }
-      }
+      // The entry of the kept plan does not exist yet.
+      await release(allTokens(p).filter((t) => !kept.has(t)));
     }
     if (entries.has(peerId)) return;
     const e: Entry = { plan: keep, chain: Promise.resolve(), stopped: false, polling: false };
@@ -677,6 +710,10 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
         log('batch driver: a resume failed');
       }
     }
+    // The saved plans are read now. The releases that waited go, except the
+    // tokens that a plan holds.
+    resumed = true;
+    await release(held.splice(0));
   }
 
   function dispose(): void {
@@ -685,5 +722,5 @@ export function createBatchDriver(deps: BatchDriverDeps): BatchDriver {
     poll = null;
   }
 
-  return { start, onEvent, retry, stop, status, resume, dispose };
+  return { start, onEvent, retry, stop, release, status, resume, dispose };
 }

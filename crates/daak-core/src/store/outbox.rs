@@ -225,6 +225,19 @@ impl Db {
         Ok(n > 0)
     }
 
+    /// Claim a failed row for a cancel. True only for the caller that moved
+    /// the row from `failed` to `canceled`. A retry that re-armed the row
+    /// first wins, so the cancel must not delete its staged files. No query
+    /// selects `canceled`, so the worker and a retry leave the row alone.
+    pub fn cancel_failed_outbox(&self, id: &[u8; 16]) -> Result<bool> {
+        let n = self.conn().execute(
+            "UPDATE outbox SET state = 'canceled', updated_at = ?2
+             WHERE id = ?1 AND state = 'failed'",
+            rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
+        )?;
+        Ok(n > 0)
+    }
+
     // ponytail: no engine caller yet; wire it in when outbox rows are pruned.
     pub fn delete_outbox(&self, id: &[u8; 16]) -> Result<()> {
         self.conn().execute(
@@ -250,8 +263,10 @@ impl Db {
     /// True only if the row was re-armed. Guards the "failed -> pending" edge of
     /// the outbox state machine: manual retry must not re-arm a row a drain has
     /// already claimed ("sending" -> double drain) or already delivered ("done"
-    /// -> duplicate delivery). A canceled row lives in "failed", so cancel then
-    /// retry is still the intended undo path.
+    /// -> duplicate delivery). A canceled pending row lives in "failed", so
+    /// cancel then retry is still the intended undo path. A canceled failed
+    /// row lives in "canceled" (F5). Its staged files are gone, so it is not
+    /// re-armed.
     pub fn retry_outbox_now(&self, id: &[u8; 16]) -> Result<bool> {
         let now = crate::manifest::now_ms() as i64 / 1000;
         let n = self.conn().execute(
@@ -370,6 +385,35 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         }
+    }
+
+    // F5: the cancel of a failed row claims it with one guarded UPDATE. A row
+    // that a retry re-armed first is not claimed, so its staged files stay.
+    #[test]
+    fn cancel_failed_outbox_claims_only_a_failed_row_once() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut r = row();
+        r.state = "failed".into();
+        db.enqueue_outbox(&r).unwrap();
+        assert!(db.retry_outbox_now(&r.id).unwrap());
+        assert!(
+            !db.cancel_failed_outbox(&r.id).unwrap(),
+            "a re-armed row is not claimed"
+        );
+        assert_eq!(db.get_outbox(&r.id).unwrap().unwrap().state, "pending");
+        assert!(db.mark_outbox_sending(&r.id).unwrap());
+        assert!(db.mark_outbox_terminal_failed(&r.id, "gave up").unwrap());
+        assert!(db.cancel_failed_outbox(&r.id).unwrap());
+        assert!(
+            !db.cancel_failed_outbox(&r.id).unwrap(),
+            "only one caller claims the row"
+        );
+        assert_eq!(db.get_outbox(&r.id).unwrap().unwrap().state, "canceled");
+        assert!(
+            !db.retry_outbox_now(&r.id).unwrap(),
+            "a canceled row is not re-armed"
+        );
     }
 
     #[test]

@@ -649,6 +649,8 @@ export function ThreadScreen({
     let sendFiles = files;
     // True when the photos go to startLarge after the plain files and the note.
     let large = false;
+    // True when startLarge took the refs. Then the driver owns them.
+    let handedOff = false;
     try {
       if (sentRefs.length > 0 && media) {
         let ok = false;
@@ -656,6 +658,9 @@ export function ThreadScreen({
         try { ok = await media.fits(sentRefs); } catch (e) { fitError = e ?? new Error('fits'); }
         if (fitError === null && !ok && media.startLarge) {
           large = true;
+          // The unmount cleanup must not release these refs while the plain
+          // files and the note send. The final block below gives them back.
+          sentTokens.forEach((t) => largeTokens.current.add(t));
         } else if (fitError !== null || !ok) {
           say(fitError !== null ? 'Daak could not prepare a file for sending.' : 'Large selection is not supported yet');
           if (alive.current && fitError !== null) setPickError('Daak could not prepare a file for sending.');
@@ -712,17 +717,13 @@ export function ThreadScreen({
           setText('');
         }
         if (large && media?.startLarge) {
-          sentTokens.forEach((t) => largeTokens.current.add(t));
           try {
             await media.startLarge(peerDeviceId, sentRefs);
           } catch (e) {
             if (alive.current) setPickError(largeSendError(e));
-            // A closed screen keeps no refs, so their access goes now.
-            else release([...sentTokens]);
             return;
-          } finally {
-            sentTokens.forEach((t) => largeTokens.current.delete(t));
           }
+          handedOff = true;
           setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
         }
         say(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
@@ -741,6 +742,12 @@ export function ThreadScreen({
       } finally {
       sendingRef.current = false;
       if (alive.current) setSending(false);
+      if (large) {
+        sentTokens.forEach((t) => largeTokens.current.delete(t));
+        // The refs stay in the composer when startLarge did not take them. A
+        // closed screen keeps no refs, so their access goes now.
+        if (!handedOff && !alive.current) release([...sentTokens]);
+      }
     }
   };
 

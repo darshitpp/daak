@@ -16,7 +16,6 @@ import {
   pickFiles,
   pickFolder,
   pickMedia,
-  releaseMedia,
 } from '@daak/platform';
 import type { BatchHost, MediaHost } from '@daak/ui';
 import { Platform } from 'react-native';
@@ -35,8 +34,18 @@ export const pickAttachedFolder = (): Promise<string | null> => pickFolder();
 export const attachedMedia: MediaHost = {
   pick: pickMedia,
   materialize: materializeMedia,
-  // Gives back the Android read grants of refs that left the composer.
-  release: releaseMedia,
+  // Gives back the Android read grants of refs that left the composer. The
+  // driver keeps the grants that a plan holds (F2). Before the engine starts
+  // no saved plan is read, so nothing is given back.
+  release: async (tokens) => {
+    let d: ReturnType<typeof batchDriver>;
+    try {
+      d = batchDriver();
+    } catch {
+      return;
+    }
+    await d.release(tokens);
+  },
   fits: async (refs) => {
     const total = refs.reduce((n, r) => n + (r.size ?? DEFAULT_ITEM_BYTES), 0);
     return fits(total * (Platform.OS === 'android' ? 2 : 1), await freeBytes());

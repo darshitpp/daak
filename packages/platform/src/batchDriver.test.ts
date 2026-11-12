@@ -171,6 +171,8 @@ describe('the batch driver', () => {
 
   it('stop cancels the in-flight transfer, deletes the plan, releases the tokens', async () => {
     const s = setup();
+    // The app resumes at start. A release waits until then (F2).
+    await s.driver.resume([]);
     await s.driver.start(PEER, twoBatches);
     s.onChange.mockClear();
     await s.driver.stop(PEER);
@@ -380,6 +382,8 @@ describe('the batch driver', () => {
 
   it('the last batch done deletes the plan and releases the tokens', async () => {
     const s = setup();
+    // The app resumes at start. A release waits until then (F2).
+    await s.driver.resume([]);
     await s.driver.start(PEER, twoBatches);
     await finish(s, 't1');
     expect(s.fe.engine.deleteSendPlan).not.toHaveBeenCalled();
@@ -816,6 +820,38 @@ describe('the batch driver and a peer that is offline for a long time (D5)', () 
     s.driver.dispose();
   });
 
+  // F1: an away peer is on the LAN. The outbox delivers to it.
+  const away = (s: ReturnType<typeof setup>) =>
+    s.fe.engine.devices.mockResolvedValue([
+      { deviceId: PEER, name: 'p', addr: '', paired: true, online: true, presence: 'away' },
+    ]);
+
+  it('a failure while the peer is away pauses FAILED, as for an online peer', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    away(s);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    s.driver.dispose();
+  });
+
+  it('a device.presence away event ends the wait and re-arms the row', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    offline(s);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    away(s);
+    s.driver.onEvent({ type: 'device.presence', deviceId: PEER, presence: 'away' });
+    await flush();
+    expect(s.fe.engine.retry).toHaveBeenCalledWith('t1');
+    expect(s.driver.status(PEER)).toMatchObject({ paused: false, batch: 1 });
+    s.driver.dispose();
+  });
+
   it('a devices() failure keeps the batch waiting and does not pause', async () => {
     const s = setup();
     await s.driver.start(PEER, twoBatches);
@@ -829,13 +865,18 @@ describe('the batch driver and a peer that is offline for a long time (D5)', () 
 });
 
 describe('the batch driver retry fallback (D3)', () => {
-  it('cancels the old failed row so the engine removes its staged batch, then sends again', async () => {
+  // F4: `Engine::retry` resolves also when it does not re-arm the row
+  // (`retry_with` returns None). The row then stays failed. The fake does the
+  // same: its retry resolves and leaves the state.
+  const refuse = (s: ReturnType<typeof setup>) => s.fe.engine.retry.mockImplementationOnce(async () => {});
+
+  it('a retry that leaves the row failed cancels the old row, then sends again', async () => {
     const s = setup();
     await s.driver.start(PEER, twoBatches);
     s.fe.setState('t1', 'failed');
     s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
     await flush();
-    s.fe.engine.retry.mockRejectedValueOnce(new Error('db busy'));
+    refuse(s);
     await s.driver.retry(PEER);
     expect(s.fe.engine.cancel).toHaveBeenCalledWith('t1');
     const cancelAt = s.fe.engine.cancel.mock.invocationCallOrder[0];
@@ -845,13 +886,31 @@ describe('the batch driver retry fallback (D3)', () => {
     s.driver.dispose();
   });
 
+  it('a re-arm after the wait that leaves the row failed pauses FAILED', async () => {
+    const s = setup();
+    await s.driver.start(PEER, twoBatches);
+    s.fe.engine.devices.mockResolvedValueOnce([
+      { deviceId: PEER, name: 'p', addr: '', paired: true, online: false, presence: 'offline' },
+    ]);
+    s.fe.setState('t1', 'failed');
+    s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
+    await flush();
+    expect(s.driver.status(PEER)).toMatchObject({ paused: false });
+    refuse(s);
+    s.driver.onEvent({ type: 'device.state', deviceId: PEER, state: 'online' });
+    await flush();
+    expect(s.fe.engine.retry).toHaveBeenCalledTimes(1);
+    expect(s.driver.status(PEER)).toMatchObject({ paused: true, error: 'FAILED' });
+    s.driver.dispose();
+  });
+
   it('a cancel that rejects does not stop the new send', async () => {
     const s = setup();
     await s.driver.start(PEER, twoBatches);
     s.fe.setState('t1', 'failed');
     s.driver.onEvent({ type: 'transfer.failed', transferId: 't1', error: 'x' });
     await flush();
-    s.fe.engine.retry.mockRejectedValueOnce(new Error('db busy'));
+    refuse(s);
     s.fe.engine.cancel.mockRejectedValueOnce(new Error('gone'));
     await s.driver.retry(PEER);
     expect(s.fe.engine.send).toHaveBeenCalledTimes(2);
@@ -904,6 +963,7 @@ describe('the batch driver after the second review', () => {
 
   it('a stop during the first plan save leaves no plan and sends nothing', async () => {
     const s = setup();
+    await s.driver.resume([]);
     const gate = deferred<void>();
     const save = s.fe.engine.saveSendPlan.getMockImplementation()!;
     s.fe.engine.saveSendPlan.mockImplementationOnce(async (p, sh, json) => {
@@ -943,5 +1003,62 @@ describe('the plan size limit', () => {
     const terms = (m?.[1] ?? '').split('*').map((t) => Number(t.trim().replace(/_/g, '')));
     expect(terms.every((t) => Number.isInteger(t) && t > 0)).toBe(true);
     expect(terms.reduce((a, b) => a * b, 1)).toBe(PLAN_MAX_BYTES);
+  });
+});
+
+// F2: one release must not remove a grant that a plan of the driver still needs.
+describe('the batch driver release check (F2)', () => {
+  it('release gives back only the tokens that no plan holds', async () => {
+    const s = setup();
+    await s.driver.resume([]);
+    await s.driver.start(PEER, [ref('a', 1), ref('b', 1)]);
+    await s.driver.release(['a', 'z']);
+    expect(s.media.release).toHaveBeenCalledWith(['z']);
+    s.media.release.mockClear();
+    await s.driver.release(['b']);
+    expect(s.media.release).not.toHaveBeenCalled();
+    s.driver.dispose();
+  });
+
+  it('release holds the tokens of a start that is still in its plan step', async () => {
+    const s = setup();
+    await s.driver.resume([]);
+    const free = deferred<number>();
+    s.media.freeBytes.mockImplementationOnce(() => free.promise);
+    const started = s.driver.start(PEER, [ref('a', 1)]);
+    await flush();
+    await s.driver.release(['a']);
+    expect(s.media.release).not.toHaveBeenCalled();
+    free.resolve(100 * GIB);
+    await started;
+    s.driver.dispose();
+  });
+
+  it('release before the first resume keeps the tokens, and the resume gives them back then', async () => {
+    const s = setup();
+    const plan = JSON.stringify({
+      v: 1, share: SHARE, peerId: PEER, platform: 'ios', cursor: 1, inflight: null, sending: null,
+      paused: { error: 'FAILED' }, attempt: 0,
+      batches: [{ index: 1, of: 1, tokens: ['a'], bytes: 1 }],
+    });
+    s.fe.plans.set(`${PEER}|${SHARE}`, plan);
+    // The saved plan holds `a`. The driver has not read it yet.
+    await s.driver.release(['a', 'z']);
+    expect(s.media.release).not.toHaveBeenCalled();
+    await s.driver.resume([PEER]);
+    expect(s.media.release).toHaveBeenCalledTimes(1);
+    expect(s.media.release).toHaveBeenCalledWith(['z']);
+    s.driver.dispose();
+  });
+
+  it('the end of one plan does not release a token that the plan of another peer holds', async () => {
+    const s = setup({ randomShare: (() => { let n = 0; return () => String(++n).repeat(32); })() });
+    await s.driver.resume([]);
+    await s.driver.start(PEER, [ref('a', 1), ref('b', 1)]);
+    await s.driver.start(PEER2, [ref('b', 1), ref('c', 1)]);
+    await s.driver.stop(PEER);
+    expect(s.media.release).toHaveBeenCalledTimes(1);
+    expect(s.media.release).toHaveBeenCalledWith(['a']);
+    s.driver.dispose();
   });
 });

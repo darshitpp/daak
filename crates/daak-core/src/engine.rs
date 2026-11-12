@@ -3678,7 +3678,10 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
     // retry. A cancel ends the row, so the staged files go now. Before this a
     // cancel of a failed row did nothing, and the files stayed for ever: a
     // failed row counts as live in the staging sweep.
-    if row.state == "failed" {
+    // F5: one guarded UPDATE claims the row first. A retry that re-armed the
+    // row between the read above and this UPDATE wins. Then this cancel takes
+    // the path for a pending row below.
+    if db.cancel_failed_outbox(&transfer_id)? {
         db.set_transfer_state(&transfer_id, "canceled")?;
         db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
         return staging.cleanup(&row.payload_id);
@@ -4971,7 +4974,14 @@ mod tests {
 
         assert!(!root.path().join(hex::encode(manifest.payload_id)).exists());
         assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
-        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "failed");
+        // F5: the cancel claims the row. A later retry cannot re-arm a row
+        // whose staged files are gone.
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(retry_with(&db, id).unwrap(), None);
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        // A second cancel finds no failed row. It changes nothing.
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
     }
 
     // B2 (2): cancelling an already-DELIVERED row must not relabel it. The

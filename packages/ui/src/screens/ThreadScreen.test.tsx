@@ -2106,6 +2106,53 @@ describe('ThreadScreen large selection', () => {
     expect(release).not.toHaveBeenCalled();
   });
 
+  // F3: the note send runs before startLarge. An unmount in that wait must not
+  // release the refs, because startLarge gets them after the wait.
+  it('an unmount while the note send runs keeps the refs of the large send', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    let noteDone: () => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(
+      () => new Promise((r) => { noteDone = () => r({ transferId: 'n1', queued: false }); }),
+    );
+    const { unmount } = mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => { noteDone(); });
+    await settle();
+    expect(h.media.startLarge).toHaveBeenCalledWith(peer.deviceId, refs('a.jpg', 'b.mov'));
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  // F3: when the note send fails after an unmount, startLarge does not run.
+  // Nothing then holds the refs, so their access goes.
+  it('an unmount and a failed note send release the refs of the large send', async () => {
+    const h = host();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const engine = fakeEngine([peer]);
+    let noteFail: () => void = () => {};
+    jest.spyOn(engine, 'send').mockImplementation(
+      () => new Promise((_r, j) => { noteFail = () => j(new Error('down')); }),
+    );
+    const { unmount } = mount(engine, { ...h, media: { ...h.media, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    fireEvent.changeText(screen.getByPlaceholderText('Or type a note'), 'hello');
+    fireEvent.press(screen.getByTestId('send'));
+    await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => { noteFail(); });
+    await settle();
+    expect(h.media.startLarge).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+  });
+
   it('a large selection also sends the plain files and the note once', async () => {
     const h = host();
     const engine = fakeEngine([peer]);

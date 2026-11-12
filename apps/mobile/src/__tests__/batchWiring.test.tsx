@@ -12,6 +12,7 @@ jest.mock('@daak/platform', () => {
     onEvent: jest.fn(),
     retry: jest.fn(async () => {}),
     stop: jest.fn(async () => {}),
+    release: jest.fn(async () => {}),
     status: jest.fn(() => null),
     resume: jest.fn(async () => {}),
     dispose: jest.fn(),
@@ -159,7 +160,22 @@ describe('the batch driver wiring', () => {
     expect(deps?.media.release).toBe(releaseMedia);
   });
 
-  it('the composer media host releases through releaseMedia', () => {
-    expect(attachedMedia.release).toBe(releaseMedia);
+  // F2: the driver removes the tokens that a plan holds before the native call.
+  it('the composer media host releases through the driver', async () => {
+    await startEngine();
+    await attachedMedia.release?.(['t1']);
+    expect(driver().release).toHaveBeenCalledWith(['t1']);
+    expect(releaseMedia).not.toHaveBeenCalled();
+  });
+
+  it('a release before the engine starts gives back nothing, because no plan is read yet', async () => {
+    let fresh!: typeof import('../SendFlow');
+    jest.isolateModules(() => {
+      fresh = require('../SendFlow');
+    });
+    await expect(fresh.attachedMedia.release?.(['t1'])).resolves.toBeUndefined();
+    const isolated = jest.requireMock('@daak/platform') as { releaseMedia: jest.Mock };
+    expect(isolated.releaseMedia).not.toHaveBeenCalled();
+    expect(releaseMedia).not.toHaveBeenCalled();
   });
 });
