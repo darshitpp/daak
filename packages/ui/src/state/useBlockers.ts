@@ -48,6 +48,9 @@ export interface BlockerHost {
  */
 export const CANT_REACH_TOKEN = 'cant-reach';
 
+/** The reason that means: the check ran and every paired device is showing. */
+const ALL_SHOWING = 'all-showing';
+
 export function useBlockers(
   engine: DaakEngine,
   incompatible: IncompatiblePeer[],
@@ -226,7 +229,9 @@ export function useBlockers(
    */
   const openReachabilityCheck = useCallback(() => {
     void checkReachability().then((outcome) => {
-      if (outcome === 'reachable') setNoDevices(undefined);
+      // A check that finds every paired device must still answer the tap.
+      // The screen then says so, and Back closes it.
+      if (outcome === 'reachable') setNoDevices(ALL_SHOWING);
     });
   }, [checkReachability]);
 
@@ -270,6 +275,7 @@ export function useBlockers(
         queued,
         retrying,
         error: noDevices.startsWith('failed:') ? noDevices.slice('failed:'.length) : '',
+        allShowing: noDevices === ALL_SHOWING,
         onRetry: retryReachability,
         onOpenSettings: openSettingsFromAlert,
         onBack: () => setNoDevices(undefined),

@@ -244,12 +244,14 @@ export function KvCard({ rows }: { rows: { k: string; v: string; nowrap?: boolea
  * disclosure works. The trigger stays in the tree while collapsed, so finding
  * the label alone is not a proof.
  */
-export function Accordion({ label, testID, children }: {
+export function Accordion({ label, testID, children, defaultOpen = false }: {
   label: string;
   testID?: string;
   children: React.ReactNode;
+  /** Start open. A closed row with only its label reads like text that stops. */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <View style={ui.stackSm}>
       <Pressable
@@ -260,7 +262,10 @@ export function Accordion({ label, testID, children }: {
         style={({ pressed }) => [pressed ? ui.pressed : null]}
         testID={testID === undefined ? undefined : `${testID}-toggle`}
       >
-        <Text style={ui.btnLabel}>{label}</Text>
+        <View style={ui.row}>
+          <Text style={ui.btnLabel}>{label}</Text>
+          <Text style={ui.btnLabel}>{open ? '▾' : '▸'}</Text>
+        </View>
       </Pressable>
       {open ? (
         <View style={ui.cardTight} testID={testID}>

@@ -222,6 +222,19 @@ describe('the connection check opens the cannot-reach screen on the phone', () =
     await act(async () => {});
   });
 
+  it('opens the screen again when you go back and tap the link a second time', async () => {
+    jest.spyOn(engine, 'devices').mockResolvedValue([]);
+    render(<App />);
+    fireEvent.press(await screen.findByTestId('tab-devices'));
+    fireEvent.press(screen.getByTestId('devices-check-connection'));
+    await waitFor(() => expect(screen.getByTestId('screen-cant-reach')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Back'));
+    await waitFor(() => expect(screen.queryByTestId('screen-cant-reach')).toBeNull());
+    fireEvent.press(await screen.findByTestId('devices-check-connection'));
+    await waitFor(() => expect(screen.getByTestId('screen-cant-reach')).toBeTruthy());
+    await act(async () => {});
+  });
+
   // The screen must NOT appear before the user asks. Daak answers "nobody" on
   // a healthy LAN whenever the other device is asleep, so a mount-time check
   // would put a wall in front of a working app. This is the control for the

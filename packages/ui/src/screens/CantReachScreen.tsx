@@ -30,6 +30,7 @@ export function CantReachScreen({
   retrying = false,
   error = '',
   deviceNoun = 'device',
+  allShowing = false,
 }: {
   queued?: QueuedTransfer[];
   onRetry: () => void;
@@ -46,6 +47,8 @@ export function CantReachScreen({
   error?: string;
   /** The word for this device. The host sets it, because ui has no platform check. */
   deviceNoun?: DeviceNoun | 'device';
+  /** The check ran and found every paired device. The screen says so and offers only Back. */
+  allShowing?: boolean;
 }) {
   // The design shows a hint after the first retry that finds nobody. This
   // screen unmounts when a retry finds a device, so a finished retry that
@@ -63,15 +66,21 @@ export function CantReachScreen({
       <ScrollView contentContainerStyle={ui.pad}>
         <Hero
           glyph={ONB_GLYPHS.noConnection}
-          title={error === '' ? "Daak can't reach any devices" : 'Daak could not finish the search'}
+          title={
+            allShowing
+              ? 'Your paired devices are showing'
+              : error === '' ? "Daak can't reach any devices" : 'Daak could not finish the search'
+          }
           lead={
-            error === ''
+            allShowing
+              ? 'Daak found every device you paired on this Wi-Fi. If one still does not show in a conversation, wait a few seconds and look again.'
+              : error === ''
               ? "Daak only works between devices on the same Wi-Fi. Right now it can't find one."
               : 'Daak looked for devices on this Wi-Fi and did not get an answer back, so it cannot tell you whether anyone is there.'
           }
         />
 
-        {error === '' ? (
+        {allShowing ? null : error === '' ? (
           <Note
             tone="warn"
             title="Looking on this Wi-Fi"
@@ -128,6 +137,7 @@ export function CantReachScreen({
           </Section>
         )}
 
+        {allShowing ? null : (
         <View style={ui.stackSm}>
           <Btn
             variant="primary"
@@ -142,16 +152,19 @@ export function CantReachScreen({
             <Text style={ui.hint}>Still nothing on this Wi-Fi. Wait a few seconds, then look again.</Text>
           ) : null}
         </View>
+        )}
 
-        <Accordion label="If this keeps happening" testID="cant-reach-more">
-          <Bullets
-            items={[
-              'Turn Wi-Fi off, then back on.',
-              'Check the other devices are on this Wi-Fi, not a guest network or mobile data.',
-              'If you just came back from another app, wait a few seconds and try again.',
-            ]}
-          />
-        </Accordion>
+        {allShowing ? null : (
+          <Accordion label="If this keeps happening" testID="cant-reach-more" defaultOpen>
+            <Bullets
+              items={[
+                'Turn Wi-Fi off, then back on.',
+                'Check the other devices are on this Wi-Fi, not a guest network or mobile data.',
+                'If you just came back from another app, wait a few seconds and try again.',
+              ]}
+            />
+          </Accordion>
+        )}
       </ScrollView>
     </View>
   );
