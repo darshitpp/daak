@@ -243,7 +243,7 @@ it('puts the app, OS, device, and paired lines before the log, with no peer name
       <ReportIssueSection
         host={{
           appInfo: async () => ({ version: '0.1.4', build: '7' }),
-          deviceInfo: () => 'os: android 16 (API 36)\ndevice: OnePlus CPH2573\n',
+          deviceInfo: () => 'os: android 16 (API 36)\ndevice: Acme Phone X1\n',
           reportIssue: { copy },
         }}
       />
@@ -251,7 +251,7 @@ it('puts the app, OS, device, and paired lines before the log, with no peer name
   );
   await tap();
   expect(copy).toHaveBeenCalledWith(
-    fenced('app: 0.1.4 (build 7)\nos: android 16 (API 36)\ndevice: OnePlus CPH2573\npaired: 2 (online 1, away 0, offline 1)\nLOG'),
+    fenced('app: 0.1.4 (build 7)\nos: android 16 (API 36)\ndevice: Acme Phone X1\npaired: 2 (online 1, away 0, offline 1)\nLOG'),
   );
   expect(copy.mock.calls[0][0]).not.toContain('Secret Phone');
   expect(copy.mock.calls[0][0]).not.toContain('10.0.0');

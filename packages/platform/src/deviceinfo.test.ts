@@ -6,9 +6,9 @@ describe('describePlatform', () => {
     const out = describePlatform({
       OS: 'android',
       Version: 36,
-      constants: { Release: '16', Manufacturer: 'OnePlus', Model: 'CPH2573', reactNativeVersion: { major: 0, minor: 76, patch: 1 } },
+      constants: { Release: '16', Manufacturer: 'Acme', Model: 'Phone X1', reactNativeVersion: { major: 0, minor: 76, patch: 1 } },
     });
-    expect(out).toBe('os: android 16 (API 36)\ndevice: OnePlus CPH2573\nreact_native: 0.76.1\n');
+    expect(out).toBe('os: android 16 (API 36)\ndevice: Acme Phone X1\nreact_native: 0.76.1\n');
   });
 
   it('names the Apple system and the idiom', () => {
