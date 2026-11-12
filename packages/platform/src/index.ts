@@ -4,6 +4,7 @@ export * from './batchDriver';
 export * from './bgsched';
 export * from './clipboard';
 export * from './daemon';
+export * from './deviceinfo';
 export * from './fspaths';
 export * from './inbound';
 export * from './notify';

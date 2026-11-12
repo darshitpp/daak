@@ -73,7 +73,9 @@ it('copies the app version line and the debug bundle through copyToClipboard whe
   await openSettings();
   await fireEventAsync.press(await screen.findByTestId('report-issue'));
   await waitFor(() =>
-    expect(copyToClipboard).toHaveBeenCalledWith('```text\napp: 0.0.0-test (build 1)\nBUNDLE TEXT\n```'),
+    expect(copyToClipboard).toHaveBeenCalledWith(
+      expect.stringMatching(/^```text\napp: 0\.0\.0-test \(build 1\)\nos: android 16 \(API 36\)\n(paired: .*\n)?BUNDLE TEXT\n```$/),
+    ),
   );
   expect(bundle).toHaveBeenCalledTimes(1);
 });

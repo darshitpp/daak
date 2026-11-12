@@ -21,6 +21,7 @@ import {
   folderStats,
   isMedia,
   appInfo,
+  deviceInfo,
   copyToClipboard,
   loadNotifyPrefs,
   readOnboarding,
@@ -114,6 +115,7 @@ export default function App() {
           if (!(await copyToClipboard(text))) throw new Error('clipboard refused');
         },
       },
+      deviceInfo,
     }),
     [],
   );

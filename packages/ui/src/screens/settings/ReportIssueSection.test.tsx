@@ -63,7 +63,7 @@ it('shows the row and the hint', () => {
   expect(screen.getByText('Something went wrong?')).toBeTruthy();
   expect(
     screen.getByText(
-      'Copies a short log of what Daak did recently, then opens GitHub. Paste the log into a new issue. Issues are public, so read the log first. Daak sends nothing by itself.',
+      'Copies the app version, the OS, the device model, and a short log of what Daak did recently, then opens GitHub. Paste it into a new issue. Issues are public, so read the log first. Daak sends nothing by itself.',
     ),
   ).toBeTruthy();
 });
@@ -228,4 +228,45 @@ it('keeps a report at the limit unchanged', async () => {
   await tap();
   expect(copy).toHaveBeenCalledWith(fenced(text));
   expect(copy.mock.calls[0][0].length).toBe(MAX_REPORT_CHARS);
+});
+
+it('puts the app, OS, device, and paired lines before the log, with no peer name', async () => {
+  const copy = jest.fn(async (_t: string) => {});
+  const engine = fakeEngine([
+    { deviceId: 'd1', name: 'Secret Phone', addr: '10.0.0.9:1', paired: true, presence: 'online' },
+    { deviceId: 'd2', name: 'Other Mac', addr: '10.0.0.8:1', paired: true, presence: 'offline' },
+    { deviceId: 'd3', name: 'Stranger', addr: '10.0.0.7:1', paired: false },
+  ]);
+  jest.spyOn(engine, 'exportDebugBundle').mockResolvedValue('LOG');
+  render(
+    <EngineProvider engine={engine}>
+      <ReportIssueSection
+        host={{
+          appInfo: async () => ({ version: '0.1.4', build: '7' }),
+          deviceInfo: () => 'os: android 16 (API 36)\ndevice: OnePlus CPH2573\n',
+          reportIssue: { copy },
+        }}
+      />
+    </EngineProvider>,
+  );
+  await tap();
+  expect(copy).toHaveBeenCalledWith(
+    fenced('app: 0.1.4 (build 7)\nos: android 16 (API 36)\ndevice: OnePlus CPH2573\npaired: 2 (online 1, away 0, offline 1)\nLOG'),
+  );
+  expect(copy.mock.calls[0][0]).not.toContain('Secret Phone');
+  expect(copy.mock.calls[0][0]).not.toContain('10.0.0');
+});
+
+it('still copies when deviceInfo throws or devices() rejects', async () => {
+  const copy = jest.fn(async (_t: string) => {});
+  const engine = fakeEngine([]);
+  jest.spyOn(engine, 'exportDebugBundle').mockResolvedValue('LOG');
+  jest.spyOn(engine, 'devices').mockRejectedValue(new Error('down'));
+  render(
+    <EngineProvider engine={engine}>
+      <ReportIssueSection host={{ deviceInfo: () => { throw new Error('x'); }, reportIssue: { copy } }} />
+    </EngineProvider>,
+  );
+  await tap();
+  expect(copy).toHaveBeenCalledWith(fenced('LOG'));
 });

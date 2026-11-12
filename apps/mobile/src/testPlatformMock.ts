@@ -84,6 +84,7 @@ export function mockPlatformHost(overrides: Record<string, unknown> = {}) {
     loadNotifyPrefs: jest.fn(async () => ({ arrival: true })),
     saveNotifyPrefs: jest.fn(async () => undefined),
     appInfo: jest.fn(async () => ({ version: '0.1.0', build: '1' })),
+    deviceInfo: jest.fn(() => 'os: android 16 (API 36)\n'),
     formatAppInfo: jest.fn(
       (i: { version: string; build: string }) => `Version ${i.version} (build ${i.build})`,
     ),

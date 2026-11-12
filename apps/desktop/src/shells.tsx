@@ -22,6 +22,7 @@ import {
 import { desktopPickFiles } from './picker';
 import { desktopInboxActions } from './inbox-actions';
 import { appInfo, formatAppInfo, type AppInfo } from '@daak/platform/src/appinfo';
+import { deviceInfo } from '@daak/platform/src/deviceinfo';
 import { loadNotifyPrefs, saveNotifyPrefs } from '@daak/platform/src/notify-prefs';
 // Deep import, never the @daak/rn-share barrel (see inbox-actions.ts).
 import { copyText } from '@daak/rn-share/js/system-share';
@@ -189,6 +190,7 @@ export function DaakDashboardShell({ engine, runtime }: {
           if (!(await copyText(text))) throw new Error('clipboard refused');
         },
       },
+      deviceInfo,
     }),
     [],
   );

@@ -57,6 +57,27 @@ async function appLine(host?: SettingsHost): Promise<string> {
 }
 
 /**
+ * The device lines of the host, then one `paired:` line. It counts the paired
+ * devices by presence only. No line shows when no device is paired. It names no device and gives no address.
+ */
+async function environmentLines(host: SettingsHost | undefined, engine: ReturnType<typeof useEngine>): Promise<string> {
+  let out = '';
+  try {
+    out += host?.deviceInfo?.() ?? '';
+  } catch {
+    // A failed read never stops the report.
+  }
+  try {
+    const paired = (await engine.devices()).filter((d) => d.paired === true);
+    const count = (p: string) => paired.filter((d) => (d.presence ?? 'offline') === p).length;
+    if (paired.length > 0) out += `paired: ${paired.length} (online ${count('online')}, away ${count('away')}, offline ${count('offline')})\n`;
+  } catch {
+    // No line when the engine does not answer.
+  }
+  return out;
+}
+
+/**
  * Settings "Report an issue". A press asks the engine for the debug bundle,
  * then hands the fenced text to the host copy step. Then it shows a toast and
  * opens the GitHub new-issue page. A failed copy never opens the page.
@@ -87,7 +108,7 @@ export function ReportIssueSection({ host }: { host?: SettingsHost }) {
     let copied = false;
     try {
       const bundle = await engine.exportDebugBundle();
-      const text = fitText((await appLine(host)) + bundle, MAX_REPORT_CHARS - FENCE_OPEN.length - FENCE_CLOSE.length);
+      const text = fitText((await appLine(host)) + (await environmentLines(host, engine)) + bundle, MAX_REPORT_CHARS - FENCE_OPEN.length - FENCE_CLOSE.length);
       await copy(FENCE_OPEN + text + FENCE_CLOSE);
       copied = true;
       toast.show('Copied · paste it into the issue');
@@ -118,7 +139,7 @@ export function ReportIssueSection({ host }: { host?: SettingsHost }) {
         </View>
       </View>
       <Text style={ui.hint}>
-        Copies a short log of what Daak did recently, then opens GitHub. Paste the log into a new issue. Issues are public, so read the log first. Daak sends nothing by itself.
+        Copies the app version, the OS, the device model, and a short log of what Daak did recently, then opens GitHub. Paste it into a new issue. Issues are public, so read the log first. Daak sends nothing by itself.
       </Text>
       {error !== null ? (
         <Note tone="err" title={error.title} body={error.body} testID="report-issue-error" />
