@@ -77,6 +77,29 @@ export function onIncompatiblePeer(cb: (peer: IncompatiblePeer) => void): () => 
 // it once and every caller reads it here.
 let driver: BatchDriver | undefined;
 
+// The tokens that a composer holds now, with one count for each composer.
+// The release of the driver skips them, so the end of a plan does not give
+// back the access of a photo that a composer shows (item A). It exists before
+// the engine starts, so a hold is never lost.
+const composerTokens = new Map<string, number>();
+
+export function holdComposerMedia(tokens: string[]): void {
+  for (const t of tokens) composerTokens.set(t, (composerTokens.get(t) ?? 0) + 1);
+}
+
+export function dropComposerMedia(tokens: string[]): void {
+  for (const t of tokens) {
+    const n = composerTokens.get(t) ?? 0;
+    if (n <= 1) composerTokens.delete(t);
+    else composerTokens.set(t, n - 1);
+  }
+}
+
+async function releaseFreeMedia(tokens: string[]): Promise<void> {
+  const free = tokens.filter((t) => !composerTokens.has(t));
+  if (free.length > 0) await releaseMedia(free);
+}
+
 /** The batch driver. It exists after startEngine has built it. */
 export function batchDriver(): BatchDriver {
   if (driver === undefined) throw new Error('NOT_READY');
@@ -315,8 +338,9 @@ export async function startEngine(): Promise<void> {
   const inFlight = new Set<string>();
   driver ??= createBatchDriver({
     engine,
-    // `release` gives back the Android read grants of the sources when a plan ends.
-    media: { materialize: materializeMedia, discard: discardPickedCopy, freeBytes, release: releaseMedia },
+    // `release` gives back the Android read grants of the sources when a plan
+    // ends, except the grants that a composer holds.
+    media: { materialize: materializeMedia, discard: discardPickedCopy, freeBytes, release: releaseFreeMedia },
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
     randomShare,
     setInterval: (fn, ms) => setInterval(fn, ms),

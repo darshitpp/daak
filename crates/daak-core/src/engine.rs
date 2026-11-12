@@ -3674,40 +3674,24 @@ pub fn cancel_with(db: &Db, staging: &Staging, transfer_id: [u8; 16]) -> Result<
     // without this guard cancel would report success for a row that does not
     // exist. The guard is load-bearing, not defensive noise.
     let row = require_outbox(db, &transfer_id)?;
-    // D3: a failed row has no drain. Its staged files stay only for a manual
-    // retry. A cancel ends the row, so the staged files go now. Before this a
-    // cancel of a failed row did nothing, and the files stayed for ever: a
-    // failed row counts as live in the staging sweep.
-    // F5: one guarded UPDATE claims the row first. A retry that re-armed the
-    // row between the read above and this UPDATE wins. Then this cancel takes
-    // the path for a pending row below.
-    if db.cancel_failed_outbox(&transfer_id)? {
-        db.set_transfer_state(&transfer_id, "canceled")?;
-        db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
-        return staging.cleanup(&row.payload_id);
-    }
-    let won = db.mark_outbox_terminal_failed(&transfer_id, "cancelled")?;
-    // B2: the outbox UPDATE is guarded on state IN ('pending','sending'), so a
-    // row that is already 'done' (delivered) or 'awaiting_ack' LOST the race and
-    // the transfers row must keep saying so. Writing 'canceled' unconditionally
-    // is how an already-delivered share was relabelled as cancelled.
-    if won {
-        // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
-        // brief's "cancelled"; do not "fix" it back.
-        db.set_transfer_state(&transfer_id, "canceled")?;
-        // F4: a cancel ends the payload, so its stored receive destinations
-        // go. Only an outbound id can match here, because cancel reads the
-        // outbox. An inbound list with the same payload id is rare.
-        db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
-    } else {
-        // The row was already done (delivered) or awaiting_ack. Cancel did
-        // not win, so the outbox is the authority. A row in `awaiting_ack`
-        // can still fail, so its staged copy stays. A `done` row never
-        // retries, because `retry_outbox_now` accepts only `pending` and
-        // `failed`. The drain already deleted the staged copy of a `done`
-        // row, so this cancel has nothing to delete.
+    // One guarded UPDATE claims a `pending`, `sending`, or `failed` row as
+    // `canceled` (F5, item B). The staged files go only after this claim.
+    // Before this a cancel of a pending row left the row `failed`, and a
+    // later Retry re-armed a row with no staged files. A drain that runs now
+    // loses each of its settle guards, so it ends with no state write.
+    // B2: a row that is already `done` or `awaiting_ack` is not claimed. The
+    // outbox is then the authority, and the transfers row keeps its state.
+    // A row in `awaiting_ack` can still fail, so its staged copy stays. The
+    // drain already deleted the staged copy of a `done` row.
+    if !db.cancel_outbox(&transfer_id)? {
         return Ok(());
     }
+    // "canceled" is spec 4.2's transfers.state enum (ONE 'l'), not the
+    // brief's "cancelled"; do not "fix" it back.
+    db.set_transfer_state(&transfer_id, "canceled")?;
+    // F4: a cancel ends the payload, so its stored receive destinations go.
+    // Only an outbound id can match here, because cancel reads the outbox.
+    db.delete_setting(&crate::store::transfers::dest_key(&row.payload_id))?;
     staging.cleanup(&row.payload_id)
 }
 
@@ -4979,9 +4963,89 @@ mod tests {
         assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
         assert_eq!(retry_with(&db, id).unwrap(), None);
         assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
-        // A second cancel finds no failed row. It changes nothing.
+        // A second cancel finds no row to claim. It changes nothing.
         cancel_with(&db, &staging, id).unwrap();
         assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+    }
+
+    // Item B: a cancel of a `pending` row deleted the staged files but left
+    // the outbox row `failed`. A later Retry then re-armed a row with no files.
+    // The cancel now marks the row `canceled`, so no query and no retry
+    // selects it again.
+    #[test]
+    fn cancelling_a_pending_row_marks_it_canceled_so_a_retry_cannot_rearm_it() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let src = tempfile::tempdir().unwrap();
+        let f = src.path().join("a.bin");
+        std::fs::write(&f, b"data").unwrap();
+        let manifest = Manifest::batch(
+            crate::manifest::DeviceRef {
+                device_id: [9u8; 16],
+                name: "local".into(),
+            },
+            vec![
+                crate::manifest::Item::from_file(0, &f, crate::manifest::CHUNK_SIZE_DEFAULT)
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        let id = crate::outbox::enqueue(&db, &staging, &[3u8; 16], &manifest, &[f]).unwrap();
+        assert!(staging.staged_path(&manifest.payload_id, 0).exists());
+
+        cancel_with(&db, &staging, id).unwrap();
+
+        assert!(!root.path().join(hex::encode(manifest.payload_id)).exists());
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(
+            retry_with(&db, id).unwrap(),
+            None,
+            "no re-arm without files"
+        );
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
+        assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
+        assert_eq!(db.count_outbox_for_peer(&[3u8; 16]).unwrap(), 0);
+        assert!(
+            !db.live_outbox_payload_ids()
+                .unwrap()
+                .contains(&manifest.payload_id),
+            "the startup sweep may remove what is left of a canceled row"
+        );
+        // A second cancel finds nothing to claim. It changes nothing.
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+    }
+
+    // Item B: a cancel during a drain claims the `sending` row as `canceled`.
+    // Every settle of that drain loses its guard, so the drain ends as before.
+    #[test]
+    fn a_cancel_during_a_drain_leaves_the_row_canceled_for_every_settle() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging::new(root.path().to_path_buf());
+        let id =
+            crate::outbox::enqueue(&db, &staging, &[3u8; 16], &Manifest::text("d"), &[]).unwrap();
+        assert!(db.mark_outbox_sending(&id).unwrap());
+        cancel_with(&db, &staging, id).unwrap();
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(
+            settle_failed_attempt(&db, &id, 0, 0, 600, None).unwrap(),
+            None
+        );
+        assert_eq!(
+            settle_failed_attempt(&db, &id, MAX_DELIVERY_ATTEMPTS - 1, 0, 600, None).unwrap(),
+            None
+        );
+        assert!(!db.mark_outbox_awaiting_ack(&id).unwrap());
+        assert!(!db.mark_outbox_done(&id).unwrap());
+        assert_eq!(db.reset_inflight_outbox().unwrap(), 0);
+        assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+        assert_eq!(db.get_transfer(&id).unwrap().unwrap().state, "canceled");
     }
 
     // B2 (2): cancelling an already-DELIVERED row must not relabel it. The

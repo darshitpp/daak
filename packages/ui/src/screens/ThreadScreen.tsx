@@ -86,9 +86,15 @@ export type MediaHost = {
    */
   startLarge?: (peerId: string, refs: MediaRef[]) => Promise<void>;
   /**
-   * Give back the access to the sources of refs that left the composer
-   * (Android read grants). Best effort. A large send does not call it: the
-   * driver releases its refs when the plan ends.
+   * The composer holds these refs now. The host must not give back their
+   * access while the composer holds them, also when a large send ends.
+   */
+  hold?: (tokens: string[]) => void;
+  /**
+   * The refs left the composer. The composer calls this once for each held
+   * token, also when startLarge takes the refs. The host gives back the
+   * access (Android read grants) that no large send and no composer holds.
+   * Best effort.
    */
   release?: (tokens: string[]) => Promise<void>;
 };
@@ -422,28 +428,41 @@ export function ThreadScreen({
     discardPickedCopy(path).catch(() => {});
   }, [discardPickedCopy]);
 
+  // The tokens that this composer holds. A pick holds each new token once.
+  // `release` gives each one back once, so the host count stays correct.
+  const heldTokens = useRef<Set<string>>(new Set());
+
   // Best effort. A host error must not break the composer.
-  const release = (tokens: string[]) => {
-    if (tokens.length === 0 || !media?.release) return;
+  const hold = (tokens: string[]) => {
+    tokens.forEach((t) => heldTokens.current.add(t));
+    if (tokens.length === 0 || !media?.hold) return;
     try {
-      media.release(tokens).catch(() => {});
+      media.hold(tokens);
+    } catch {
+      // See above.
+    }
+  };
+  const release = (tokens: string[]) => {
+    const mine = tokens.filter((t) => heldTokens.current.delete(t));
+    if (mine.length === 0 || !media?.release) return;
+    try {
+      media.release(mine).catch(() => {});
     } catch {
       // See above.
     }
   };
 
-  // The staged copies go with the composer. The staged refs give back their
-  // access, except the refs of a large send that is starting: the driver owns them.
+  // The staged copies go with the composer. The held refs give back their
+  // access, except the refs of a large send that is starting: `submit` gives
+  // them back when it ends.
   const discardRef = useRef(discard);
   discardRef.current = discard;
   const releaseRef = useRef(release);
   releaseRef.current = release;
-  const refsNow = useRef<MediaRef[]>([]);
-  refsNow.current = mediaRefs;
   const largeTokens = useRef<Set<string>>(new Set());
   useEffect(() => () => {
     for (const p of [...copies.current]) if (!inFlight.current.has(p)) discardRef.current(p);
-    releaseRef.current(refsNow.current.map((r) => r.token).filter((t) => !largeTokens.current.has(t)));
+    releaseRef.current([...heldTokens.current].filter((t) => !largeTokens.current.has(t)));
   }, []);
 
   const loadOlder = async () => {
@@ -581,8 +600,16 @@ export function ThreadScreen({
     setPickError(null);
     void media.pick()
       .then((picked) => {
+        const fresh = [...new Map(picked.map((r) => [r.token, r])).values()]
+          .filter((r) => !heldTokens.current.has(r.token));
+        hold(fresh.map((r) => r.token));
+        // A closed screen keeps no refs, so their access goes now.
+        if (!alive.current) {
+          release(fresh.map((r) => r.token));
+          return;
+        }
         setMediaRefs((cur) => {
-          const next = [...cur, ...picked.filter((r) => !cur.some((c) => c.token === r.token))];
+          const next = [...cur, ...fresh.filter((r) => !cur.some((c) => c.token === r.token))];
           return next.length === cur.length ? cur : next;
         });
       })
@@ -725,6 +752,9 @@ export function ThreadScreen({
           }
           handedOff = true;
           setMediaRefs((cur) => cur.filter((r) => !sentTokens.has(r.token)));
+          // The refs left the composer. The host keeps the access that the
+          // large send holds.
+          release([...sentTokens]);
         }
         say(waiting ? `Will send when ${name} is back` : `Sent to ${name}`);
         stick.current = true;

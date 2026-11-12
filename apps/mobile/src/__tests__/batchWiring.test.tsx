@@ -153,11 +153,41 @@ describe('the batch driver wiring', () => {
     expect(fits).toHaveBeenLastCalledWith(10, 0);
   });
 
-  it('the driver gets releaseMedia as media.release', async () => {
-    // One driver for the process: the deps are kept from the first start.
+  // One driver for the process: the deps are kept from the first start.
+  const driverRelease = () =>
+    (globalThis as unknown as { __batchDeps: { media: { release: (t: string[]) => Promise<void> } } }).__batchDeps
+      .media.release;
+
+  it('the media.release of the driver calls releaseMedia', async () => {
     await startEngine();
-    const deps = (globalThis as unknown as { __batchDeps?: { media: { release?: unknown } } }).__batchDeps;
-    expect(deps?.media.release).toBe(releaseMedia);
+    await driverRelease()(['t1']);
+    expect(releaseMedia).toHaveBeenCalledWith(['t1']);
+  });
+
+  // Item A: the end of a plan must not give back a token that a composer holds now.
+  it('the release of the driver skips a token that a composer holds, until the composer gives it back', async () => {
+    await startEngine();
+    attachedMedia.hold?.(['t1']);
+    await driverRelease()(['t1', 't2']);
+    expect(releaseMedia).toHaveBeenCalledTimes(1);
+    expect(releaseMedia).toHaveBeenCalledWith(['t2']);
+    await driverRelease()(['t1']);
+    expect(releaseMedia).toHaveBeenCalledTimes(1);
+    await attachedMedia.release?.(['t1']);
+    await driverRelease()(['t1']);
+    expect(releaseMedia).toHaveBeenLastCalledWith(['t1']);
+  });
+
+  it('two composers that hold one token keep it until both give it back', async () => {
+    await startEngine();
+    attachedMedia.hold?.(['t1']);
+    attachedMedia.hold?.(['t1']);
+    await attachedMedia.release?.(['t1']);
+    await driverRelease()(['t1']);
+    expect(releaseMedia).not.toHaveBeenCalled();
+    await attachedMedia.release?.(['t1']);
+    await driverRelease()(['t1']);
+    expect(releaseMedia).toHaveBeenCalledWith(['t1']);
   });
 
   // F2: the driver removes the tokens that a plan holds before the native call.

@@ -1949,6 +1949,44 @@ describe('ThreadScreen add photos', () => {
     expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
   });
 
+  // Item A: the host must know the refs that the composer holds now, so the
+  // end of a large send does not give back their access.
+  it('a pick holds each new token once, and each ref gives its hold back once', async () => {
+    const h = host();
+    const hold = jest.fn<void, [string[]]>();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, hold, release } });
+    await screen.findByText('Nothing here yet');
+    await stage();
+    expect(hold).toHaveBeenCalledTimes(1);
+    expect(hold).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
+    // The same photos again add no ref, so they add no hold.
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    await settle();
+    expect(hold).toHaveBeenCalledTimes(1);
+    fireEvent.press(screen.getByTestId('remove-media-t-a.jpg'));
+    unmount();
+    expect(release.mock.calls).toEqual([['t-a.jpg'], ['t-b.mov']].map((t) => [t]));
+  });
+
+  it('a pick that ends after an unmount gives its refs back', async () => {
+    const h = host();
+    let finish: (r: MediaRef[]) => void = () => {};
+    h.media.pick.mockImplementation(() => new Promise((r) => { finish = r; }));
+    const hold = jest.fn<void, [string[]]>();
+    const release = jest.fn<Promise<void>, [string[]]>(async () => {});
+    const { unmount } = mount(fakeEngine([peer]), { ...h, media: { ...h.media, hold, release } });
+    await screen.findByText('Nothing here yet');
+    fireEvent.press(screen.getByTestId('pick-files'));
+    fireEvent.press(screen.getByTestId('pick-menu-photos'));
+    unmount();
+    await act(async () => { finish(refs('a.jpg')); });
+    await settle();
+    expect(hold.mock.calls.flatMap((c) => c[0])).toEqual(release.mock.calls.flatMap((c) => c[0]));
+    expect(release).toHaveBeenCalledWith(['t-a.jpg']);
+  });
+
   it('a release that rejects or throws breaks nothing', async () => {
     const h = host();
     const release = jest.fn<Promise<void>, [string[]]>(() => { throw new Error('sync'); });
@@ -2090,7 +2128,10 @@ describe('ThreadScreen large selection', () => {
     expect(screen.queryByText('b.mov')).toBeNull();
   });
 
-  it('a large send does not release the refs: the driver owns them, also after an unmount', async () => {
+  // Item A: the refs leave the composer when startLarge takes them, so the
+  // composer gives its hold back then. The host keeps the access that the
+  // plan holds. Before startLarge resolves, an unmount releases nothing.
+  it('a large send gives the refs back only after startLarge takes them, also after an unmount', async () => {
     const h = host();
     const release = jest.fn<Promise<void>, [string[]]>(async () => {});
     let finish: () => void = () => {};
@@ -2101,9 +2142,12 @@ describe('ThreadScreen large selection', () => {
     fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(h.media.startLarge).toHaveBeenCalledTimes(1));
     unmount();
-    await act(async () => { finish(); });
     await settle();
     expect(release).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    await settle();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith(['t-a.jpg', 't-b.mov']);
   });
 
   // F3: the note send runs before startLarge. An unmount in that wait must not
@@ -2123,10 +2167,14 @@ describe('ThreadScreen large selection', () => {
     fireEvent.press(screen.getByTestId('send'));
     await waitFor(() => expect(engine.send).toHaveBeenCalledTimes(1));
     unmount();
+    await settle();
+    expect(release).not.toHaveBeenCalled();
     await act(async () => { noteDone(); });
     await settle();
     expect(h.media.startLarge).toHaveBeenCalledWith(peer.deviceId, refs('a.jpg', 'b.mov'));
-    expect(release).not.toHaveBeenCalled();
+    // Only the hand-off gives the refs back, after startLarge took them.
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release.mock.invocationCallOrder[0]).toBeGreaterThan(h.media.startLarge.mock.invocationCallOrder[0]);
   });
 
   // F3: when the note send fails after an unmount, startLarge does not run.

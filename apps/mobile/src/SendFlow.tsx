@@ -19,7 +19,7 @@ import {
 } from '@daak/platform';
 import type { BatchHost, MediaHost } from '@daak/ui';
 import { Platform } from 'react-native';
-import { batchDriver, onBatchChange } from './bootstrap';
+import { batchDriver, dropComposerMedia, holdComposerMedia, onBatchChange } from './bootstrap';
 
 export const pickAttachedFiles = (): Promise<string[]> => pickFiles(true);
 
@@ -34,10 +34,13 @@ export const pickAttachedFolder = (): Promise<string | null> => pickFolder();
 export const attachedMedia: MediaHost = {
   pick: pickMedia,
   materialize: materializeMedia,
+  // The driver does not give back the grant of a ref that a composer holds (item A).
+  hold: holdComposerMedia,
   // Gives back the Android read grants of refs that left the composer. The
-  // driver keeps the grants that a plan holds (F2). Before the engine starts
-  // no saved plan is read, so nothing is given back.
+  // driver keeps the grants that a plan or another composer holds (F2, item A).
+  // Before the engine starts no saved plan is read, so nothing is given back.
   release: async (tokens) => {
+    dropComposerMedia(tokens);
     let d: ReturnType<typeof batchDriver>;
     try {
       d = batchDriver();

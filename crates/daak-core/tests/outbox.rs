@@ -207,8 +207,11 @@ fn cancel_and_retry_reject_an_unknown_transfer_id() {
     ));
 }
 
+// Item B: a cancel ends the row. It deletes the staged files, so a retry must
+// not re-arm the row. Before this the cancel left the row `failed`, and a
+// retry re-armed a row with no staged files.
 #[test]
-fn cancel_fails_the_row_removes_staging_and_retry_rearms_it() {
+fn cancel_ends_the_row_removes_staging_and_retry_does_not_rearm_it() {
     let db = Db::open_in_memory().unwrap();
     db.migrate().unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -221,17 +224,20 @@ fn cancel_fails_the_row_removes_staging_and_retry_rearms_it() {
     assert!(staged.exists(), "enqueue staged the file");
 
     daak_core::engine::cancel_with(&db, &staging, id).unwrap();
-    assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "failed");
+    assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
     assert!(!staged.exists(), "cancel must not leak the staged file");
     assert!(
         db.due_outbox(i64::MAX).unwrap().is_empty(),
-        "a failed row is not due"
+        "a canceled row is not due"
     );
 
-    let peer = daak_core::engine::retry_with(&db, id).unwrap().unwrap();
-    assert_eq!(peer, [6u8; 16], "retry reports the peer to notify");
-    assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "pending");
-    assert_eq!(db.due_outbox(i64::MAX).unwrap().len(), 1);
+    assert_eq!(
+        daak_core::engine::retry_with(&db, id).unwrap(),
+        None,
+        "a row with no staged files is not re-armed"
+    );
+    assert_eq!(db.get_outbox(&id).unwrap().unwrap().state, "canceled");
+    assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
 
     db.delete_outbox(&id).unwrap();
     assert!(db.get_outbox(&id).unwrap().is_none());
@@ -287,7 +293,7 @@ fn settle_on_a_cancelled_row_is_a_no_op() {
     // re-pend the canceled row.
     db.mark_outbox_failed(&id, 100, 0).unwrap();
     let row = db.get_outbox(&id).unwrap().unwrap();
-    assert_eq!(row.state, "failed");
+    assert_eq!(row.state, "canceled");
     assert_eq!(row.attempts, 0, "no backoff was applied");
     assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
 }
@@ -340,7 +346,7 @@ fn success_settle_cannot_overwrite_a_cancel() {
 
     let row = db.get_outbox(&id).unwrap().unwrap();
     assert_eq!(
-        row.state, "failed",
+        row.state, "canceled",
         "a canceled row must not read delivered"
     );
     assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
@@ -369,12 +375,12 @@ fn enqueue_id_is_the_payload_id_so_cancel_and_retry_are_reachable() {
     assert_eq!(row.id, manifest.payload_id);
     assert_eq!(row.payload_id, manifest.payload_id);
 
-    // Round trip keyed on the id a caller actually holds.
-    daak_core::engine::cancel_with(&db, &staging, manifest.payload_id).unwrap();
-    assert_eq!(
-        db.get_outbox(&manifest.payload_id).unwrap().unwrap().state,
-        "failed"
-    );
+    // Round trip keyed on the id a caller actually holds. The drain gives up
+    // first, so the retry has a failed row to re-arm.
+    assert!(db.mark_outbox_sending(&manifest.payload_id).unwrap());
+    assert!(db
+        .mark_outbox_terminal_failed(&manifest.payload_id, "gave up")
+        .unwrap());
     let peer = daak_core::engine::retry_with(&db, manifest.payload_id)
         .unwrap()
         .unwrap();
@@ -382,5 +388,10 @@ fn enqueue_id_is_the_payload_id_so_cancel_and_retry_are_reachable() {
     assert_eq!(
         db.get_outbox(&manifest.payload_id).unwrap().unwrap().state,
         "pending"
+    );
+    daak_core::engine::cancel_with(&db, &staging, manifest.payload_id).unwrap();
+    assert_eq!(
+        db.get_outbox(&manifest.payload_id).unwrap().unwrap().state,
+        "canceled"
     );
 }

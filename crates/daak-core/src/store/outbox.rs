@@ -152,11 +152,14 @@ impl Db {
 
     /// The number of rows for one peer that are not yet sent. Used by the
     /// presence queue-depth signal, so the UI can show "N queued".
-    /// The payload ids of every outbox row that is not delivered. Their staged
-    /// files must survive the startup sweep: a `failed` row can still be retried.
+    /// The payload ids of every outbox row that is not delivered or canceled.
+    /// Their staged files must survive the startup sweep: a `failed` row can
+    /// still be retried. A `canceled` row never sends, so the sweep removes
+    /// what a failed cleanup left.
     pub fn live_outbox_payload_ids(&self) -> Result<Vec<[u8; 16]>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT payload_id FROM outbox WHERE state != 'done'")?;
+        let mut stmt =
+            conn.prepare("SELECT payload_id FROM outbox WHERE state NOT IN ('done','canceled')")?;
         let rows = stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -214,8 +217,8 @@ impl Db {
             crate::diag::short_id(id)
         );
         let n = self.conn().execute(
-            // Guards the "pending/sending -> failed" edge: cancel acts on a
-            // pending row and the drain's give-up path on a sending one; a row
+            // Guards the "pending/sending -> failed" edge: the drain's give-up
+            // path acts on a sending row (a cancel uses `cancel_outbox`); a row
             // already "failed" or "done" is left alone, so a late terminal
             // settle cannot relabel a delivered row.
             "UPDATE outbox SET state = 'failed', updated_at = ?2
@@ -225,14 +228,15 @@ impl Db {
         Ok(n > 0)
     }
 
-    /// Claim a failed row for a cancel. True only for the caller that moved
-    /// the row from `failed` to `canceled`. A retry that re-armed the row
-    /// first wins, so the cancel must not delete its staged files. No query
-    /// selects `canceled`, so the worker and a retry leave the row alone.
-    pub fn cancel_failed_outbox(&self, id: &[u8; 16]) -> Result<bool> {
+    /// Claim a row for a cancel. True only for the caller that moved the row
+    /// from `pending`, `sending`, or `failed` to `canceled`. The cancel deletes
+    /// the staged files only after this claim. A row in `awaiting_ack` or
+    /// `done` is not claimed. No query selects `canceled`, so the worker, a
+    /// drain settle, and a retry leave the row alone.
+    pub fn cancel_outbox(&self, id: &[u8; 16]) -> Result<bool> {
         let n = self.conn().execute(
             "UPDATE outbox SET state = 'canceled', updated_at = ?2
-             WHERE id = ?1 AND state = 'failed'",
+             WHERE id = ?1 AND state IN ('pending','sending','failed')",
             rusqlite::params![&id[..], crate::manifest::now_ms() as i64 / 1000],
         )?;
         Ok(n > 0)
@@ -263,10 +267,8 @@ impl Db {
     /// True only if the row was re-armed. Guards the "failed -> pending" edge of
     /// the outbox state machine: manual retry must not re-arm a row a drain has
     /// already claimed ("sending" -> double drain) or already delivered ("done"
-    /// -> duplicate delivery). A canceled pending row lives in "failed", so
-    /// cancel then retry is still the intended undo path. A canceled failed
-    /// row lives in "canceled" (F5). Its staged files are gone, so it is not
-    /// re-armed.
+    /// -> duplicate delivery). Every canceled row lives in "canceled". Its
+    /// staged files are gone, so it is not re-armed.
     pub fn retry_outbox_now(&self, id: &[u8; 16]) -> Result<bool> {
         let now = crate::manifest::now_ms() as i64 / 1000;
         let n = self.conn().execute(
@@ -387,33 +389,52 @@ mod tests {
         }
     }
 
-    // F5: the cancel of a failed row claims it with one guarded UPDATE. A row
-    // that a retry re-armed first is not claimed, so its staged files stay.
+    // F5 and item B: a cancel claims a pending, sending, or failed row with
+    // one guarded UPDATE. Only one caller claims it. A row in awaiting_ack or
+    // done is not claimed, so its staged files stay.
     #[test]
-    fn cancel_failed_outbox_claims_only_a_failed_row_once() {
+    fn cancel_outbox_claims_a_pending_sending_or_failed_row_once() {
         let db = Db::open_in_memory().unwrap();
         db.migrate().unwrap();
-        let mut r = row();
-        r.state = "failed".into();
-        db.enqueue_outbox(&r).unwrap();
-        assert!(db.retry_outbox_now(&r.id).unwrap());
-        assert!(
-            !db.cancel_failed_outbox(&r.id).unwrap(),
-            "a re-armed row is not claimed"
-        );
-        assert_eq!(db.get_outbox(&r.id).unwrap().unwrap().state, "pending");
-        assert!(db.mark_outbox_sending(&r.id).unwrap());
-        assert!(db.mark_outbox_terminal_failed(&r.id, "gave up").unwrap());
-        assert!(db.cancel_failed_outbox(&r.id).unwrap());
-        assert!(
-            !db.cancel_failed_outbox(&r.id).unwrap(),
-            "only one caller claims the row"
-        );
-        assert_eq!(db.get_outbox(&r.id).unwrap().unwrap().state, "canceled");
-        assert!(
-            !db.retry_outbox_now(&r.id).unwrap(),
-            "a canceled row is not re-armed"
-        );
+        for (id, state) in [
+            (1u8, "pending"),
+            (2, "sending"),
+            (3, "failed"),
+            (4, "awaiting_ack"),
+            (5, "done"),
+        ] {
+            let mut r = row_for(id, 7);
+            r.state = state.into();
+            db.enqueue_outbox(&r).unwrap();
+            let claimed = db.cancel_outbox(&r.id).unwrap();
+            let want = matches!(state, "pending" | "sending" | "failed");
+            assert_eq!(claimed, want, "state {state}");
+            assert!(
+                !db.cancel_outbox(&r.id).unwrap(),
+                "only one caller claims the row ({state})"
+            );
+            let after = db.get_outbox(&r.id).unwrap().unwrap().state;
+            assert_eq!(after, if want { "canceled" } else { state });
+            if want {
+                assert!(
+                    !db.retry_outbox_now(&r.id).unwrap(),
+                    "a canceled row is not re-armed ({state})"
+                );
+            }
+        }
+        assert!(db.due_outbox(i64::MAX).unwrap().is_empty());
+        assert_eq!(db.wake_outbox_for_peer(&[7u8; 16], i64::MAX).unwrap(), 0);
+        assert_eq!(db.count_outbox_for_peer(&[7u8; 16]).unwrap(), 0);
+    }
+
+    #[test]
+    fn live_outbox_payload_ids_skips_canceled_rows() {
+        let db = Db::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.enqueue_outbox(&row_for(1, 7)).unwrap();
+        db.enqueue_outbox(&row_for(2, 7)).unwrap();
+        assert!(db.cancel_outbox(&[2u8; 16]).unwrap());
+        assert_eq!(db.live_outbox_payload_ids().unwrap(), vec![[1u8; 16]]);
     }
 
     #[test]
