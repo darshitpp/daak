@@ -1,0 +1,1 @@
+Add photos sends a batch of photos and videos. A send starts at once when a device comes back, and it retries for about 35 minutes. Report an issue adds the app version and the device. A staged folder has a separate remove button.

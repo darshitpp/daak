@@ -44,8 +44,12 @@ const openSettings = async () => {
   await fireEventAsync.press(await screen.findByTestId('tab-settings'));
 };
 
+// The version row is inside the About section, which starts closed.
+const openAbout = async () => fireEventAsync.press(await screen.findByTestId('about-toggle'));
+
 it('shows the version that the platform module reports', async () => {
   await openSettings();
+  await openAbout();
   expect(await screen.findByText('Version 0.0.0-test (build 1)')).toBeTruthy();
   expect(appInfo).toHaveBeenCalled();
 });
@@ -53,7 +57,8 @@ it('shows the version that the platform module reports', async () => {
 it('shows no version row when the platform module rejects', async () => {
   (appInfo as jest.Mock).mockRejectedValueOnce(new Error('no native module'));
   await openSettings();
-  await screen.findByText('About Daak');
+  await openAbout();
+  await screen.findByText('This Wi-Fi only');
   await waitFor(() => expect(appInfo).toHaveBeenCalled());
   expect(screen.queryByText(/^Version /)).toBeNull();
 });
