@@ -215,8 +215,9 @@ What stays manual:
 - After the first F-Droid release, the F-Droid bot adds the new `Builds` entries
   (`AutoUpdateMode: Version`). It copies the last two entries and changes only
   `versionName`, `versionCode`, and `commit`. Do not put a version in any other
-  field of the recipe. Stage 12 stops when `metadata/dev.darshit.daak.yml`
-  exists upstream.
+  field of the recipe. Stage 12 does nothing when `metadata/dev.darshit.daak.yml`
+  exists upstream. The bot adds the entries from the new tag. For 0.1.5 it did so
+  one day after the release.
 - The recipe has `binary:` for each build. The F-Droid bot copies it to new
   entries. The release assets must exist before the bot builds the tag.
 - Run `fdroid checkupdates` to see that a new tag exists.

@@ -286,7 +286,16 @@ if run 11; then
 fi
 
 # -------------------------------------------------- 12: OUT: F-Droid merge ---
-if run 12; then
+# After the first release the recipe is upstream. The F-Droid bot (AutoUpdateMode:
+# Version) then reads the new tag and adds the Builds entries. Nothing is left to open.
+upstream_recipe() {
+  curl -fsSI "https://gitlab.com/fdroid/fdroiddata/-/raw/master/metadata/$APP_ID.yml" >/dev/null 2>&1
+}
+if run 12 && upstream_recipe; then
+  say 12 "F-Droid: nothing to do"
+  echo "metadata/$APP_ID.yml exists upstream. The F-Droid bot adds the $TAG entries"
+  echo "from the tag. Check with: fdroid checkupdates $APP_ID (or the upstream history)."
+elif run 12; then
   say 12 "OUT: open the fdroiddata merge request"
   need glab "Run: brew install glab, then glab auth login"
   need fdroid "Run: brew install fdroidserver"
